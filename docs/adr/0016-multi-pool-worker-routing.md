@@ -146,28 +146,30 @@ The corresponding Pkl contract (the first key is the main worker, which runs `an
 the dedicated pools come after it):
 
 ```pkl
-pools {
-  ["default"] = new Pool {
-    keda { minReplicaCount = 1 }
-  }
-  ["heavy"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 30 }
-    resources = new ResourceConfig {
-      requests { ["memory"] = "20Gi" }
-      limits   { ["memory"] = "24Gi" }
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      keda { minReplicaCount = 1 }
     }
-  }
-  ["lineage"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 30 }
-    resources = new ResourceConfig {
-      requests { ["memory"] = "700Mi" }
+    ["heavy"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+      resources = new ResourceConfig {
+        requests { ["memory"] = "20Gi" }
+        limits   { ["memory"] = "24Gi" }
+      }
+    }
+    ["lineage"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+      resources = new ResourceConfig {
+        requests { ["memory"] = "700Mi" }
+      }
     }
   }
 }
 ```
 
 **Pool key alignment:** the string in `@task(pool="heavy")` **must exactly match** the key in
-`pools { ["heavy"] = ... }`, and that key must not be the first one (see Design Principle 2).
+`deploy.pools { ["heavy"] = ... }`, and that key must not be the first one (see Design Principle 2).
 This is enforced by conformance rule **K032 TaskPoolNotDeployed** — a blocking CI check, not a
 warning.
 
@@ -267,7 +269,7 @@ The contract-toolkit makes the **first** `pools` key the app's main worker. That
 base queue `atlan-<app>-<deployment>`, not `atlan-<app>-<deployment>-<key>`. Only keys after the
 first render a dedicated worker pool. So K032 also fails a `pool=` that names the first key, and
 K033 never flags it. A `deploy.workerPools[].name` in a hand-written `atlan.yaml`, or a pool with
-an explicit `ATLAN_POOL_<POOL>_QUEUE`, also counts as routable.
+a non-empty `ATLAN_POOL_<POOL>_QUEUE` override, also counts as routable.
 
 This replaces the earlier proposal (PR #1991) of a generated `worker_profiles.py` artifact.
 The conformance-rule approach achieves the same build-time safety without adding a generated file

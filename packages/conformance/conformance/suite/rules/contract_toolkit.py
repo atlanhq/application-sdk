@@ -2360,7 +2360,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "pool is a ``deploy.pools`` key **after the first** in "
             "``contract/**/*.pkl`` (or, with no contract pools, in the "
             "``pools:`` mirror of ``atlan.yaml``), a ``deploy.workerPools[]`` "
-            "``name`` in ``atlan.yaml``, or a pool with an explicit "
+            "``name`` in ``atlan.yaml``, or a pool with a non-empty "
             "``ATLAN_POOL_<POOL>_QUEUE``. The first ``pools`` key is the app's "
             "main worker: it polls ``atlan-<app>-<deployment>``, not "
             "``atlan-<app>-<deployment>-<key>``, so naming it in ``pool=`` "

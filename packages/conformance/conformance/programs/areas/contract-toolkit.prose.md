@@ -68,7 +68,7 @@ description: >
   a queue nothing polls) and K033 (a dedicated pool no @task(pool=) routes to)
   are migration rules (autofixable = false): the right name, or whether the pool
   should exist, is the app owner's call, so the lane hands a brief to a human.
-  K009, K011, K012, K015 and K032 are
+  K003, K009, K011, K012, K015 and K032 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
@@ -1176,7 +1176,7 @@ when there is one, and otherwise on the key in `atlan.yaml`. An app with only
 
 **K032 TaskPoolNotDeployed** — a `@task(pool="x")` names a pool that is not a
 dedicated worker pool: not a `deploy.pools` key after the first, not a
-`deploy.workerPools[].name` in `atlan.yaml`, and with no explicit
+`deploy.workerPools[].name` in `atlan.yaml`, and with no non-empty
 `ATLAN_POOL_<POOL>_QUEUE`. The first `pools` key is the main worker, which polls
 the base queue, so naming it is a finding too. The task's activities go to
 `atlan-<app>-<deployment>-x`, which nothing polls, and hang until their timeout.

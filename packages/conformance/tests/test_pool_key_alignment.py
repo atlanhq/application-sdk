@@ -299,3 +299,43 @@ def test_pkl_mapping_keys_ignores_comments_strings_and_nested_maps() -> None:
         ("main", 4),
         ("side", 7),
     ]
+
+
+# -- ATLAN_POOL_<POOL>_QUEUE overrides and config-only apps --------------------
+
+
+def test_empty_yaml_override_is_not_routable(tmp_path: Path) -> None:
+    """``resolve_pool_queue`` ignores an empty override and derives ``…-haevy``."""
+    atlan = 'deploy:\n  env:\n    ATLAN_POOL_HAEVY_QUEUE: ""\n'
+    findings = _scan(tmp_path, atlan=atlan, code=_app('@task(pool="haevy")'))
+    assert len(_active(findings, "K032")) == 1
+
+
+def test_pkl_override_needs_a_non_empty_value(tmp_path: Path) -> None:
+    def contract(value: str) -> str:
+        return _contract("default").replace(
+            "  pools {\n",
+            f"  pools {{\n"
+            f'    ["default"] {{ env {{ ["ATLAN_POOL_COLD_QUEUE"] = {value} }} }}\n',
+            1,
+        )
+
+    code = _app('@task(pool="cold")')
+    assert _scan(tmp_path, contract=contract('"cold-queue"'), code=code) == []
+    for empty in ('""', '""  // unset'):
+        findings = _scan(tmp_path, contract=contract(empty), code=code)
+        assert len(_active(findings, "K032")) == 1, empty
+
+
+def test_commented_override_is_not_routable(tmp_path: Path) -> None:
+    contract = _contract("default").replace(
+        "  pools {\n", '  // ["ATLAN_POOL_COLD_QUEUE"] = "q"\n  pools {\n', 1
+    )
+    findings = _scan(tmp_path, contract=contract, code=_app('@task(pool="cold")'))
+    assert len(_active(findings, "K032")) == 1
+
+
+def test_unused_pool_reported_for_an_app_with_no_python(tmp_path: Path) -> None:
+    findings = _scan(tmp_path, atlan="pools:\n  default: {}\n  spare: {}\n")
+    [k033] = _active(findings, "K033")
+    assert (k033.file, k033.line) == ("atlan.yaml", 3)

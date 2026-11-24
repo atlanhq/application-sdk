@@ -13,7 +13,7 @@ the activity sits unscheduled until its timeout.
 * **K032** (BLOCK) — a ``pool=`` value that names no dedicated pool. A pool is
   dedicated when it is a ``pools`` key after the first (in the contract or, with
   no contract pools, the ``pools:`` mirror in ``atlan.yaml``), a
-  ``deploy.workerPools[].name`` in ``atlan.yaml``, or has an explicit
+  ``deploy.workerPools[].name`` in ``atlan.yaml``, or has a non-empty
   ``ATLAN_POOL_<POOL>_QUEUE`` in the contract or ``atlan.yaml``.
 * **K033** (WARN) — a dedicated ``pools`` key no ``@task(pool=)`` routes to.
   Its worker deployment, and its on-demand mirror, scale for a queue nothing is
@@ -54,7 +54,7 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.checks._ast_common import discover as discover_python
 from conformance.suite.checks._ast_common._directives_pkl import _PklIgnoreDirective
-from conformance.suite.checks._ast_common._pkl import pkl_mapping_keys
+from conformance.suite.checks._ast_common._pkl import pkl_code_lines, pkl_mapping_keys
 from conformance.suite.schema.findings import Finding
 
 SERIES = "K"
@@ -68,7 +68,12 @@ __all__ = ["SERIES", "discover", "main", "scan_all"]
 _TASK_DECORATOR = frozenset(
     {"application_sdk.app.task", "application_sdk.app.task.task"}
 )
-_POOL_OVERRIDE_RE = re.compile(r"\bATLAN_POOL_([A-Z0-9_]+)_QUEUE\b")
+_OVERRIDE_KEY_RE = re.compile(r"^ATLAN_POOL_([A-Z0-9_]+)_QUEUE$")
+_PKL_OVERRIDE_RE = re.compile(r'\[\s*"ATLAN_POOL_([A-Z0-9_]+)_QUEUE"\s*\]\s*=(.*)$')
+# A pkl value that is the empty string (``""``, ``#""#``, ``""""""``) and not
+# the start of a concatenation. A value continued on the next line is unknown,
+# so it is taken as set.
+_PKL_EMPTY_VALUE_RE = re.compile(r'^\s*(#*)("""|")\2\1(?!\s*\+)')
 _DASH_NAME_RE = re.compile(r"^(?P<indent>[ ]*)-[ ]+name[ \t]*:(?P<value>.*)$")
 _DASH_RE = re.compile(r"^(?P<indent>[ ]*)-[ ]")
 
@@ -110,13 +115,17 @@ class _Pools:
 
 
 def discover(root: Path) -> list[Path]:
-    """App Python sources, for a repo with ``atlan.yaml`` or a ``contract/`` pkl.
+    """``atlan.yaml``, the contract pkl and the app's Python sources.
 
-    Without either there is no deployment shape to check ``pool=`` against.
+    ``[]`` without ``atlan.yaml`` or a ``contract/`` pkl: there is no deployment
+    shape to check ``pool=`` against. The config files are returned too, so an
+    app with no Python still reaches :func:`scan_all` (and K033).
     """
-    if not ((root / "atlan.yaml").is_file() or contract_files(root)):
+    atlan = root / "atlan.yaml"
+    config = ([atlan] if atlan.is_file() else []) + contract_files(root)
+    if not config:
         return []
-    return discover_python(root)
+    return config + discover_python(root)
 
 
 # ---------------------------------------------------------------------------
@@ -315,8 +324,39 @@ def _yaml_worker_pools(text: str) -> set[str]:
     return names
 
 
-def _overrides(text: str) -> set[str]:
-    return {g.lower().replace("_", "-") for g in _POOL_OVERRIDE_RE.findall(text)}
+def _pool_of_override(var_suffix: str) -> str:
+    """``COLD_TIER`` (from ``ATLAN_POOL_COLD_TIER_QUEUE``) -> ``cold-tier``."""
+    return var_suffix.lower().replace("_", "-")
+
+
+def _pkl_overrides(text: str) -> set[str]:
+    """Pools a contract gives a non-empty ``["ATLAN_POOL_<POOL>_QUEUE"] =`` value.
+
+    ``resolve_pool_queue`` ignores an empty value and falls back to the derived
+    queue, so an empty override does not make a pool routable.
+    """
+    pools: set[str] = set()
+    for raw, code in zip(text.splitlines(), pkl_code_lines(text)):
+        m = _PKL_OVERRIDE_RE.search(raw)
+        # The masked code keeps a real entry's ``[``; a comment's is blanked.
+        if m is None or code[m.start() : m.start() + 1] != "[":
+            continue
+        if _PKL_EMPTY_VALUE_RE.match(m.group(2)) is None:
+            pools.add(_pool_of_override(m.group(1)))
+    return pools
+
+
+def _yaml_overrides(text: str) -> set[str]:
+    """Pools ``atlan.yaml`` gives a non-empty ``ATLAN_POOL_<POOL>_QUEUE`` value."""
+    pools: set[str] = set()
+    for raw in text.splitlines():
+        m = YAML_KV_RE.match(raw)
+        key = _OVERRIDE_KEY_RE.match(m.group("key")) if m is not None else None
+        if m is None or key is None:
+            continue
+        if _yaml_value(m.group("value")) not in ("", "null", "~"):
+            pools.add(_pool_of_override(key.group(1)))
+    return pools
 
 
 def _read_pools(root: Path) -> _Pools:
@@ -331,7 +371,7 @@ def _read_pools(root: Path) -> _Pools:
             _Declared(key, rel, line)
             for key, line in pkl_mapping_keys(text, "pools", within="deploy")
         )
-        pools.routable_extra |= _overrides(text)
+        pools.routable_extra |= _pkl_overrides(text)
     atlan = root / "atlan.yaml"
     atlan_text = safe_read_text(atlan) if atlan.is_file() else None
     declared = contract_keys
@@ -340,7 +380,9 @@ def _read_pools(root: Path) -> _Pools:
     elif atlan_text is not None:
         declared = [_Declared(k, "atlan.yaml", n) for k, n in _yaml_pools(atlan_text)]
     if atlan_text is not None:
-        pools.routable_extra |= _yaml_worker_pools(atlan_text) | _overrides(atlan_text)
+        pools.routable_extra |= _yaml_worker_pools(atlan_text) | _yaml_overrides(
+            atlan_text
+        )
     if declared:
         pools.main = declared[0].key
         seen = {pools.main}
@@ -404,7 +446,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Cross-check every ``@task(pool=)`` against the pools the app deploys."""
     if not paths:
         return []
-    uses = _collect_uses(paths, root)
+    uses = _collect_uses([p for p in paths if p.suffix == ".py"], root)
     pools = _read_pools(root)
     routable = pools.routable()
     findings: list[Finding] = [
