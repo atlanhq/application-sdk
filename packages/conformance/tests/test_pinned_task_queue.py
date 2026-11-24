@@ -78,7 +78,7 @@ def test_rule_metadata() -> None:
 def test_atlan_yaml_only_deploy_env_pin(tmp_path: Path) -> None:
     findings = _active(_scan(tmp_path, atlan=_ATLAN_DEPLOY_PIN))
     assert [(f.file, f.line) for f in findings] == [("atlan.yaml", 4)]
-    assert "Delete this line from atlan.yaml" in findings[0].message
+    assert "delete the line from atlan.yaml" in findings[0].message
 
 
 def test_atlan_yaml_deploy_and_pool_pins(tmp_path: Path) -> None:
@@ -91,7 +91,7 @@ def test_contract_pin_wins_over_atlan_yaml(tmp_path: Path) -> None:
         _scan(tmp_path, contracts={"app.pkl": _CONTRACT_PIN}, atlan=_ATLAN_DEPLOY_PIN)
     )
     assert [(f.file, f.line) for f in findings] == [("contract/app.pkl", 5)]
-    assert "Delete this line and regenerate" in findings[0].message
+    assert "delete the line and regenerate" in findings[0].message
 
 
 def test_stale_atlan_yaml_with_clean_contract(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ def test_stale_atlan_yaml_with_clean_contract(tmp_path: Path) -> None:
         _scan(tmp_path, contracts={"app.pkl": _CONTRACT_CLEAN}, atlan=_ATLAN_DEPLOY_PIN)
     )
     assert [(f.file, f.line) for f in findings] == [("atlan.yaml", 4)]
-    assert "generated — do not edit it" in findings[0].message
+    assert "atlan.yaml is generated, do not edit it" in findings[0].message
 
 
 def test_no_pin(tmp_path: Path) -> None:
