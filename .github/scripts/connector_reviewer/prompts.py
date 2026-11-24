@@ -49,6 +49,10 @@ Principles
 - Every finding either rests on a principle or is a concrete bug. When it rests on a principle, set the
   comment's `principle` to that id (one listed for its file). A finding of category bug or security may
   omit it. Any other finding with no applicable principle is dropped in code, so do not report it.
+- A finding that rests on a principle is graded by that principle's Severity line, not by the general
+  scale under Severity below. Set `severity_case` to the case your scenario meets: high only when it meets
+  the line's High case (quote those words in `severity_basis`), otherwise medium. Do not stretch a
+  scenario to reach the High case; a finding that meets it is graded high in code.
 
 Facts
 - <regression_facts> and <history_facts> are computed in code before you start: each changed function's

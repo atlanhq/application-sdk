@@ -285,11 +285,13 @@ was read and every finding is closed.
 |---|---|---|
 | A nit | Keeps the status red | The same, now by decision: the design's verdict table puts "only medium or low open" at failure, "not ready". |
 | A changed file skipped for size (`over 1500 changed lines`) or past the bundle cap | Listed under "not reviewed"; the status can still go green | Unread source (`review.unread_skips`, by the reasons `UNREAD_REASONS`). `PRState.unread` (path -> why) holds them; while it is not empty the status is `error`. Each unread file rides along, whole, with every later review, so a later round re-decides and an incremental round never reviews only the slice the new commits touched. A retry cannot help, so they are not `pending_files`, and the summary says to split the change or waive, not to retry. Excluded, binary, deletion-only and secret-bearing files are skipped on purpose and are not unread, with one exception: a test file deleted outright that weakens an expectation, in a round with no line review at all (`review.WEAKENED_UNREVIEWED`). No prompt could carry its facts and it has no line to comment on, so it is unread until a person waives it, never a silent green. |
+| Past the bundle cap | Bundles sorted by their riskiest file and the rest set aside, "bundle cap (lowest-risk code, after re-packing)" | `review.plan_bundles` (FND-5316). A test file joins the cluster of the source it tests (`bundle._module_key`), so on a large pull request test tokens filled the bundles that held app code, and more bundles held app code than the cap allowed: app code could be cut while tests were read. Still over the cap after re-packing, the code the app ships (`risk_rank` below `tests/`: app, contract, build files, CI) and the rest (tests, then other files) are packed apart, shipped first, so the cap cuts tests and other files before any app code. Under the cap nothing changes. Each skip names what was not read (`review._cap_skips`): `bundle cap: not reviewed, past the N-bundle cap`, or for a file reviewed in parts `bundle cap: lines A-B, … not reviewed, the rest was`. The incomplete reason lists up to 20 unread files (was 5), the summary's list counts any past 50, and both say once what the cap reviews first (`CAP_NOTE`). A state written with the old reason still starts `bundle cap`, so it is still unread. On the replayed pull request every app file was already reviewed and part of one test file was still cut, so that review stays incomplete: whether capped tests should keep a review incomplete is not decided here. |
 | What the status reads | `res.incomplete` of the run | `review.incomplete_reasons`: the run's reasons plus the state's (`pending_files`, `unread`). A dismissal or a re-check builds a fresh result, so in lens dismissing the last finding could turn an incomplete review green; here it stays `error`. The run report and the CLI's reaction read the same list. |
 | The round cap or a spent budget stops `/review` on a new head | No status on that head | `error` on that head (`_no_verdict`), "not reviewed — round cap …" or "review incomplete — PR budget … spent; `/review waive` …". A head already reviewed keeps its verdict. |
 | A crash, a cancel or a timeout | The `pending` status stays | `finalize.py`, new: `python -m connector_reviewer finalize` reads the latest `connector-reviewer` status (`GitHub.status_of`, read-only, paginated up to `STATUS_PAGES` pages of 100) of the pull request's current head and of the head this run set `pending` on, and turns each into `error` only when it is `pending` and links to this run (`GITHUB_RUN_ID`). It rewrites a progress note this run left behind into the failure note. Everything else is left alone, so it is safe after any outcome. The review's own crash handler calls it too, before it replaces the progress note. A push during the run moves the current head, so `review.run` calls `on_pending(head)` the moment it sets `pending`, and the CLI records that head on its progress note as a hidden marker (`finalize.progress_with_head`); finalize reads it only from a note the reviewer's App posted. Known limit: when the progress note could not be posted, only the current head is checked. |
 | A finding that names no principle | Kept | `agent.cite`, after placement and before the fact-check: `Finding.rule_id` (from the comment's new optional `principle` field, or an applicable id written in its title or content) stands only when it names a principle that applies to the finding's own file (a bundle can mix `app/` code and its tests, and FP01 does not apply to the test). A finding left without one is dropped unless its category is `bug` or `security` (`CONCRETE_CATEGORIES`). `BundleResult.uncited` and the run report count them. The tool schema has no per-bundle enum, so the cached prefix stays the same for every bundle. |
 | A finding in a test file | Capped at low unless `security` | Also not capped when it rests on a principle (`rule_id`): that principle's Severity line grades it (FP15 says high for a deleted test that covered changed code). |
+| The severity of a finding that rests on a principle | The model's, from the general scale | Set from the cited principle's Severity line (FND-5316). A replayed finding met a principle's "High when …" case and came out medium, so it did not block. The comment has two optional fields, `severity_case` (`high` or `medium`: the case of the line the scenario meets) and `severity_basis` (the words it meets), and `REVIEW_SYSTEM` says a principle's Severity line, not the general scale, grades such a finding. `agent.grade_by_principle`, after `cite` and the fact-check and before `calibrate`, raises a medium or low finding to high when the case is `high`, the basis is not empty, the comment's `principle` is the one the finding still cites, and that principle's Severity line has a High case. It never lowers a finding, and critical stays critical. `calibrate`'s caps still win, and a finding raised to high is a new blocker, so the skeptic checks it. Verify is not where this lands: it runs only from round 2 and judges fixed, moot or open, never severity. |
 | The approach check | First, before the line review; the bundles see `<pr_understanding>` | Alongside the line review, in a thread of its own (at most `concurrency` + 1 calls in flight), on a ledger of its own carved out of the round's (`APPROACH_SHARE`, 15%), so it can never spend a bundle's share. On the round it runs the bundles do not see its reading of the PR; later rounds do, from the state. Its requests are listed after the line review's in the run report. Still advisory: it never changes the status. |
 | A slow bundle | Bounded by turns, context and its budget share | Also by wall time: `[agent] bundle_time_limit_s` (default 120; 0 turns it off), measured from the bundle's start, plan turn included. Past it the next turn is the final one. `BundleResult.forced` names why the final turn was forced and `seconds` how long the bundle took; both are in the run report. Bundles still run four at a time. |
 
@@ -401,8 +403,21 @@ reviews a connector app, and many connector bugs are a misuse of the SDK
 source at the exact version the app pins, read-only, beside the app. lens has no
 equivalent.
 
-- **Which version.** `sdk_source.py` reads the app's `uv.lock` from the trusted
-  base checkout (never the pull request's) with `tomllib`. A registry pin of
+- **Which version.** `sdk_source.py` reads the pull request head's `uv.lock`
+  (FND-5316) with `tomllib`. It was the trusted base checkout's, which is the
+  caller's default branch as it is today: a replay of a historical pull request
+  that pinned an older SDK resolved today's SDK instead, and the review reasoned
+  from the wrong source. The head's lock is read through the REST API as data
+  (`sdk_source.head_lock`, `GitHub.raw_file_at`: the raw media type, because the
+  JSON contents reply carries no content past 1 MB and an app's lock gets near
+  that), never checked out. When the head has no lock or it cannot be read
+  there is no ref and the reason is said; there is no fallback to the default
+  branch's lock. The ref is therefore the pull request author's choice, bounded
+  by the checks below to a release tag or a locked commit of
+  atlanhq/application-sdk, read as text and never run.
+  `atlan-application-sdk-api` (packages/api) ships from this repository at the
+  SDK's own tag, so a lock that has only it resolves the same way
+  (`SdkPin.package` names which). A registry pin of
   `X.Y.Z` or `X.Y.ZrcN` is the release tag `vX.Y.Z` (the scheme of every
   application-sdk release tag). A git pin of `github.com/atlanhq/application-sdk`
   is the locked commit uv writes after `#`. Anything else is no ref, with a
@@ -414,14 +429,47 @@ equivalent.
   version characters: a TOML string can hold a newline (a second line in
   `$GITHUB_OUTPUT`) or a quote (out of the prompt's attribute). The prompt
   escapes the label as well.
-- **Workflow.** `python -m connector_reviewer sdk-ref --root repo` writes `ref`
-  and `label` to `$GITHUB_OUTPUT` and always exits 0. A third checkout, of
+- **Other Atlan SDK packages (FND-5316).** An app can pin an Atlan SDK package
+  that does not ship from this repository: on the replay above, a `server/`
+  package pinned `atlan-server-sdk` by a direct git reference to its own
+  private repository, in `server/pyproject.toml` and in no lock. The workflow's
+  tokens cannot read that repository, so `sdk:` cannot cover it.
+  `sdk_source.other_pins` finds every `atlan-…sdk…` package other than the SDK,
+  its api package and the conformance tool, in the head's lock and in each
+  `pyproject.toml` path the workspace knows (at most 20), every one read at the
+  head under review (`review.sdk_pins_block`: the pull request's own text for a
+  file it changed, `GitHub.raw_file_at` at the head otherwise), never from the
+  checkout, which is the default branch. When the head's lock cannot be read,
+  nothing comes from a lock (lens F-d40fdc). `pins_block` puts an
+  `<other_sdk_packages>` block in the line review's context, with or without
+  the SDK source: `sdk:` covers only application-sdk (which version), the
+  package and how it is pinned, and not to judge its calls from application-sdk
+  source. What is shown of a pin is plain text by pattern, and escaped.
+- **Workflow.** `python -m connector_reviewer sdk-ref --repo … --event-name …
+  --event-path …` runs after the App token is minted (reading the pull request
+  needs `pull-requests` scope, which the job's own token lacks), takes the pull
+  request from the event, writes `ref`, `label` and the `head` it read to
+  `$GITHUB_OUTPUT` and always exits 0. `--root <dir>` alone still reads a local
+  checkout's lock. A third checkout, of
   `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
   (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,
   with `persist-credentials: false` and the job's read-only token. Both steps
   have `continue-on-error: true`: a ref that does not exist fails only the
   checkout. The Review step always gets `CONNECTOR_REVIEWER_SDK_SOURCE`
   (`--sdk-source`), the checkout's path, whether or not it exists.
+- **One head (lens F-f65a20, F-9e1332).** The pull request can move between the
+  resolve step and the review, so the review does not trust the step's ref.
+  `review.run(sdk_dir=…, sdk_head=…)` reads the lock again at the exact head
+  this round reviews (`sdk_source.head_lock_at`), resolves its pin, and
+  `SdkSource.open` uses the checkout only when it is at the commit that pin
+  names (`sdk_source.checkout_at`: `git rev-parse` of `HEAD` and of the ref,
+  an annotated tag peeled, in the checkout alone, with `GIT_CEILING_DIRECTORIES`
+  so it never reads an enclosing repository). A directory that merely holds
+  `application_sdk/` is no longer enough. When a push moved the pin, the review
+  runs without the SDK source and its note names the two heads
+  (`CONNECTOR_REVIEWER_SDK_HEAD`, the step's `head`) and says `/review force`
+  reviews with the right one. When the push left the pin alone, the checkout
+  is still that head's source and is used.
 - **Tools.** One prefix on the existing tools, not new tools: a `file_path` of
   `read_file`, a `path_glob` of `search_code`, or a `name` of `find_symbol` that
   starts `sdk:` goes to the SDK source (`tools.SdkSource`), e.g.
@@ -472,21 +520,21 @@ above; "typing" means only the annotations described under Typing.
 | `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`; the skeptic counts and checks (FND-5332). |
 | `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `Finding.contested`. |
 | `triage.py` | Typing (one annotation). |
-| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331). |
+| `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; the comment's optional `severity_case` and `severity_basis` (FND-5316); `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331); `Workspace.sdk_pins` and `SdkSource.package` (FND-5316). |
 | `trace.py` | Names, typing. |
 | `select.py` | `DEFAULT_EXCLUDE`, and `excluded` (the pattern match, public for `review.changed_tests`). |
 | `config.py` | Docstring, `raw_hash`, typing; the `[access]`, `[exempt]`, `[facts]` and `[skeptic]` tables. |
 | `bundle.py` | `_module_key` and the module docstring. |
 | `llm.py` | Names (the gateway key variable, the User-Agent, log text), typing. |
-| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits` and `commit_patches` added. |
+| `github.py` | Names, typing, four methods removed with the approval step; `can_push`, `safe_body`, `status_of`, `pr_commit_messages`, `recent_commits`, `commit_patches` and `raw_file_at` (FND-5316) added. |
 | `event.py` | Rewritten around who may ask (FND-5310); the command grammar is lens's plus `waive`. The unknown-word check is the same in both, under each copy's own names: `REVIEW_USAGE` and `REVIEW_OPTIONS` here, `LENS_USAGE` and `LENS_OPTIONS` in lens. Two differences (FND-5314): here the subcommand (`dismiss`, `recheck`, `waive`) is read from the first line only, so a note on a later line that starts with one of those words still reviews (ids and reason may continue below a first line that names the subcommand), where lens reads the comment's second word wherever it is; and `force` counts in either order with `verify-budget`, where lens forces only when `force` comes first. |
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331). |
-| `prompts.py` | The review prompt's opening, "Repository layout", "Principles" and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331). |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331). |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316); `grade_by_principle` (FND-5316). |
+| `prompts.py` | The review prompt's opening, "Repository layout", "Principles" (with the Severity-line grading of FND-5316) and "Facts" sections; the removals; typing. |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316). |
 | `__init__.py` | Docstring. |
 | `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |

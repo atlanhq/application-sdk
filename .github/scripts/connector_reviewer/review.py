@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, exempt, holistic, prompts, skeptic, trace
+from . import advisory, baseline, exempt, holistic, prompts, sdk_source, skeptic, trace
 from . import context as code_context
 from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -507,6 +507,32 @@ def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     return None, ""
 
 
+def sdk_pins_block(
+    ws: Workspace,
+    lock: sdk_source.HeadLock,
+    at_head: Callable[[str], str | None],
+) -> str:
+    """The `<other_sdk_packages>` block for the line review (FND-5316): the
+    Atlan SDK packages the head under review pins that `sdk:` cannot read;
+    "" when it pins none. Everything is read at that head, never from the
+    checkout, which is the default branch: the lock is `lock` (read at the
+    head; when it could not be read, nothing comes from a lock), and each
+    `pyproject.toml` path the workspace knows (at most
+    `sdk_source.MAX_PYPROJECTS`) is read with `at_head`, or taken from the
+    pull request's own text when it changed the file."""
+    paths = [p for p in ws.files() if sdk_source.is_pyproject(p)]
+    pyprojects: dict[str, str] = {}
+    for p in sorted(paths)[: sdk_source.MAX_PYPROJECTS]:
+        try:
+            text = ws.head_text[p] if p in ws.head_text else at_head(p)
+        except Exception:  # noqa: BLE001 - a failed read leaves the file out
+            text = None
+        if text:
+            pyprojects[p] = text
+    others = sdk_source.other_pins(lock.text, pyprojects)
+    return sdk_source.pins_block(others, ws.sdk.label if ws.sdk else None)
+
+
 def run(
     *,
     gh: GitHub,
@@ -522,12 +548,17 @@ def run(
     on_pending: Callable[[str], None] | None = None,
     sdk: SdkSource | None = None,
     sdk_note: str = "",
+    sdk_dir: str | None = None,
+    sdk_head: str = "",
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
-    `finalize` must check if this run never posts a verdict. `sdk` is the
-    pinned SDK source the tools can read; `sdk_note` says why it is missing
-    when one was asked for (FND-5331)."""
+    `finalize` must check if this run never posts a verdict. `sdk_dir` is the
+    SDK checkout the workflow made (FND-5331), opened here against the
+    `uv.lock` of the very head this round reviews, and only when the checkout
+    is at the ref that lock pins; `sdk_head` is the head the workflow chose the
+    checkout's ref from, named when the two differ (FND-5316). A caller that
+    built the source itself passes `sdk` and `sdk_note` instead."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -729,6 +760,18 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    # The head's own lock (FND-5316): the SDK source and the other-SDK block
+    # are bound to the head this round reviews, never to the default branch.
+    lock = sdk_source.head_lock_at(gh, head)
+    if sdk_dir is not None:
+        sdk, sdk_note = SdkSource.open(
+            sdk_dir, lock.resolution(), reviewed_head=head, chosen_at=sdk_head
+        )
+        trace.line(
+            f"SDK source: application-sdk {sdk.label} at {sdk.root}"
+            if sdk
+            else sdk_note
+        )
     if sdk_note:
         res.notes.append(sdk_note)
     if post:
@@ -846,6 +889,7 @@ def run(
         index=idx,
         sdk=sdk,
     )
+    ws.sdk_pins = sdk_pins_block(ws, lock, lambda p: gh.raw_file_at(p, head))
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
     # The approach check runs alongside the line review, on a ledger of its own
     # carved out of the round's: whatever it spends, it can never take a
@@ -2174,14 +2218,27 @@ def _risk(b: Bundle) -> tuple[int, int]:
     return (rank, -b.changed_lines)
 
 
+# The tier tests rank in: below it is the code the app ships (app, contract,
+# build files, CI); from it on, tests and everything else.
+_TESTS_RANK = RISKY_PREFIXES.index(("tests/",))
+# Every skip reason past the cap starts with this (`UNREAD_REASONS`): a state
+# written by an earlier version says "bundle cap (lowest-risk code, …)".
+BUNDLE_CAP = "bundle cap"
+MAX_RANGES_SHOWN = 6  # line ranges named per partly reviewed file
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     """Bundles in review order — riskiest first — within `max_bundles`.
 
     Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed; only if that is not enough are
-    the lowest-risk bundles set aside, and each skipped file is named in the
-    summary. Ordering by risk means that whatever a short budget cuts is the
-    least important code, never the connector's own source."""
+    ceiling) so every file still gets reviewed. If that is still over the cap,
+    the code the app ships (app, then contract, build files and CI) and the
+    rest (tests, then anything else) are packed apart, in that order
+    (FND-5316): a test file no longer rides in the bundle of the source it
+    tests, where its tokens took the room that source's own code needed, so
+    whatever the cap cuts is tests and other files before any app code. Each
+    skipped file is named in the summary, with the lines left unread when only
+    part of it was cut."""
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
@@ -2190,16 +2247,63 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
             cfg.limits.context_limit_tokens // 2,
         )
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
+        if len(bundles) > cfg.max_bundles:
+            diffs = cast("list[FileDiff]", files)
+            shipped = [f for f in diffs if risk_rank(f.path) < _TESTS_RANK]
+            rest = [f for f in diffs if risk_rank(f.path) >= _TESTS_RANK]
+            bundles = [
+                b
+                for pool in (shipped, rest)
+                for b in group(pool, max_diff_tokens=bigger, max_files=12)
+            ]
+    # The pools never share a bundle, so this keeps every shipped bundle first.
     bundles.sort(key=_risk)
-    # A file over the token cap is reviewed in parts (`bundle._parts`), and its
-    # parts can fall on both sides of the cap: named once, as not read.
-    skipped: list[str] = []
-    for b in bundles[cfg.max_bundles :]:
-        skipped.extend(p for p in b.paths if p not in skipped)
-    res.skipped_files.extend(
-        (p, "bundle cap (lowest-risk code, after re-packing)") for p in skipped
+    kept, cut = bundles[: cfg.max_bundles], bundles[cfg.max_bundles :]
+    res.skipped_files.extend(_cap_skips(kept, cut, cfg.max_bundles))
+    return kept
+
+
+def _cap_skips(
+    kept: list[Bundle], cut: list[Bundle], cap: int
+) -> list[tuple[str, str]]:
+    """Each file past the cap, once, with why: a file reviewed in parts
+    (`bundle._parts`) can have parts on both sides of the cap, and then the
+    lines left unread are named."""
+    read = {f.path for b in kept for f in b.files}
+    unread: dict[str, list[tuple[int, int]]] = {}
+    for b in cut:
+        for f in b.files:
+            unread.setdefault(f.path, []).extend(
+                (h.new_start, h.new_start + max(h.new_len, 1) - 1) for h in f.hunks
+            )
+    out: list[tuple[str, str]] = []
+    for path, spans in unread.items():
+        if path in read:
+            out.append(
+                (
+                    path,
+                    f"{BUNDLE_CAP}: {_line_ranges(spans)} not reviewed, the rest was",
+                )
+            )
+        else:
+            out.append((path, f"{BUNDLE_CAP}: not reviewed, past the {cap}-bundle cap"))
+    return out
+
+
+def _line_ranges(spans: list[tuple[int, int]]) -> str:
+    """`lines 120-480, 900-1250` from hunk spans (head side), merged and capped."""
+    merged: list[list[int]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    shown = [f"{a}-{b}" if a != b else f"{a}" for a, b in merged[:MAX_RANGES_SHOWN]]
+    more = len(merged) - MAX_RANGES_SHOWN
+    word = "line" if len(merged) == 1 and merged[0][0] == merged[0][1] else "lines"
+    return f"{word} {', '.join(shown)}" + (
+        f" and {more} more range(s)" if more > 0 else ""
     )
-    return bundles[: cfg.max_bundles]
 
 
 ROUND_DIFF_CHARS = 12_000  # this round's changes shown to the verify call
@@ -2909,10 +3013,18 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
 
 
 UNREAD_HINT = (
-    "Part of the change could not be read (listed below: too large, or a deleted test with no "
-    "line to review), so a retry would not read it either: split it into smaller pull requests, "
-    "or, once a person has reviewed those files, comment `/review waive <reason>`."
+    "Part of the change could not be read (listed below: too large, past the bundle cap, or a "
+    "deleted test with no line to review), so a retry would not read it either: split it into "
+    "smaller pull requests, or, once a person has reviewed those files, comment "
+    "`/review waive <reason>`."
 )
+# Said once wherever a file past the bundle cap is listed (FND-5316).
+CAP_NOTE = (
+    "the bundle cap: a run line-reviews a set number of bundles of the diff, app code first, "
+    "then the contract, build files and CI, then tests and other files"
+)
+MAX_UNREAD_LISTED = 20  # unread files named in the incomplete reason
+MAX_SKIPPED_LISTED = 50  # skipped files named in the summary's list
 
 
 def incomplete_reasons(res: RunResult) -> list[str]:
@@ -2929,9 +3041,18 @@ def incomplete_reasons(res: RunResult) -> list[str]:
             "comment `/review` to retry them"
         )
     if st.unread:
-        listed = ", ".join(f"`{p}` ({why})" for p, why in list(st.unread.items())[:5])
-        more = f" (+{len(st.unread) - 5} more)" if len(st.unread) > 5 else ""
-        out.append(f"{len(st.unread)} file(s) not read: {listed}{more}")
+        items = list(st.unread.items())
+        listed = ", ".join(f"`{p}` ({why})" for p, why in items[:MAX_UNREAD_LISTED])
+        more = (
+            f' (+{len(items) - MAX_UNREAD_LISTED} more, under "file(s) not reviewed")'
+            if len(items) > MAX_UNREAD_LISTED
+            else ""
+        )
+        capped = any(why.startswith(BUNDLE_CAP) for _, why in items)
+        out.append(
+            f"{len(items)} file(s) not read: {listed}{more}"
+            + (f". Past {CAP_NOTE}" if capped else "")
+        )
     return out
 
 
@@ -3062,7 +3183,13 @@ def render_summary(res: RunResult) -> str:
         lines.append(
             f"\n<details><summary>{len(res.skipped_files)} file(s) not reviewed</summary>\n"
         )
-        lines.extend(f"- `{p}` — {why}" for p, why in res.skipped_files[:50])
+        lines.extend(
+            f"- `{p}` — {why}" for p, why in res.skipped_files[:MAX_SKIPPED_LISTED]
+        )
+        if len(res.skipped_files) > MAX_SKIPPED_LISTED:
+            lines.append(f"- … and {len(res.skipped_files) - MAX_SKIPPED_LISTED} more")
+        if any(why.startswith(BUNDLE_CAP) for _, why in res.skipped_files):
+            lines.append(f"\nPast {CAP_NOTE}.")
         lines.append("\n</details>")
     led = st.ledger
     hit = (
