@@ -34,9 +34,16 @@ trigger, the code path, the outcome; agent.trace_chain) against the code.
   caller removes it and says so in the summary. With no base code (code the
   PR removes, a new file or symbol, or a base copy that cannot be read) the
   answer is not read, and nothing is dropped on an unknown.
+- **A retry turn's finding** (`Finding.retry`, FND-5316): a code bundle's
+  retry of an empty final turn (agent._retry_final) produced findings that
+  were mostly high and none true in a replay. Each one is checked whatever
+  its severity and past the cap, and is dropped unless upheld: a contested,
+  refuted or malformed verdict, and a check that could not be made, all drop
+  it.
 
 Bounded like the approach check (holistic.py): new critical and high findings
-only, at most `max_findings` per round, each check at most `max_lookups`
+(and a retry turn's at any severity), at most `max_findings` per round (a
+retry turn's are not counted), each check at most `max_lookups`
 lookups in all (one response may ask for several; each counts) and then a
 forced verdict, `concurrency` at a time, on a ledger of its
 own carved out of the round's (review.SKEPTIC_SHARE).
@@ -86,6 +93,8 @@ CHANGES = ("refuted", "contested", "malformed")
 JUDGED = ("upheld", "contested", "refuted")
 ON_BASE = ("introduced", "worse", "same_on_base", "unknown")
 SAME_ON_BASE = "same_on_base"
+# The summary note of a retry turn's finding the skeptic did not uphold.
+RETRY_DROP = "it came from a retry of an empty final turn and was not upheld"
 # The summary note of a finding dropped as already on the base.
 BASE_DROP = (
     "the failure already happens at the base branch, and this pull request "
@@ -108,8 +117,8 @@ class SkepticConfig:
 
 SYSTEM = (
     """\
-You are a skeptical second reviewer. Another reviewer raised ONE finding against a pull request and says
-it must block merge. Your job is to check, against the actual code, whether the finding's causal chain
+You are a skeptical second reviewer. Another reviewer raised ONE finding against a pull request, which is
+checked before it is published or can block merge. Your job is to check, against the actual code, whether the finding's causal chain
 holds: the trigger, each step of the code path, and the outcome.
 """
     + CONNECTOR_PROFILE
@@ -263,12 +272,15 @@ class Outcome:
 
 
 def candidates(new: list[Finding]) -> list[Finding]:
-    """The findings a skeptic checks: new this round, open and blocking. Gate
-    findings are computed in code, not by a model, so they are not second-guessed."""
+    """The findings a skeptic checks: new this round, open, and blocking or
+    raised by a retry turn (`Finding.retry`). Gate findings are computed in
+    code, not by a model, so they are not second-guessed."""
     return [
         f
         for f in new
-        if f.severity in BLOCKING and f.status == "open" and f.origin == "llm"
+        if (f.severity in BLOCKING or f.retry)
+        and f.status == "open"
+        and f.origin == "llm"
     ]
 
 
@@ -542,8 +554,12 @@ def check(
 def apply(f: Finding, out: Outcome) -> bool:
     """A refuted, contested or malformed finding drops to medium and is marked
     contested (never with an empty note); any other outcome leaves it as it
-    is. A dropped one (`out.dropped`) is left as it is too: the caller removes
-    it. Returns whether the finding changed."""
+    is. A retry turn's finding that is not upheld is dropped (`out.dropped`),
+    and a dropped one is left as it is too: the caller removes it. Returns
+    whether the finding changed."""
+    if f.retry and out.outcome != "upheld" and not out.dropped:
+        why = out.reason or out.error or out.outcome
+        out.dropped = clean(f"{RETRY_DROP} ({out.outcome}: {why})")
     if out.dropped or out.outcome not in CHANGES:
         return False
     f.severity = CONTESTED_SEVERITY
@@ -564,10 +580,13 @@ def run_all(
     outcome. `principle_for(finding)` renders the principle it cites ("" for
     none), and `base_for(finding)` its code on the base branch ("" for none,
     and for every finding when it is not given). Candidates past
-    `max_findings` keep their severity, as "skipped". An outcome with
-    `dropped` set is a finding the caller removes."""
+    `max_findings` keep their severity, as "skipped"; a retry turn's findings
+    are always checked and not counted against it. An outcome with `dropped`
+    set is a finding the caller removes."""
     todo = candidates(new)
-    checked, over = todo[: max(cfg.max_findings, 0)], todo[max(cfg.max_findings, 0) :]
+    cap = max(cfg.max_findings, 0)
+    rest = [f for f in todo if not f.retry]
+    checked, over = [f for f in todo if f.retry] + rest[:cap], rest[cap:]
 
     def one(f: Finding) -> Outcome:
         try:

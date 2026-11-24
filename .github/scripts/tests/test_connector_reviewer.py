@@ -10130,6 +10130,121 @@ def test_an_answer_is_a_code_comment_or_task_done_on_any_turn(
     assert len(script.requests) == (3 if retry else 2)
 
 
+_SECOND = chained(
+    dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        severity="medium",
+        title="a later finding",
+    )
+)
+
+
+def test_only_the_retry_turns_findings_are_marked(repo: Path):
+    """The skeptic checks every finding of a retry turn, so the mark must be
+    exact: a finding from a later turn (here the second pass) is not one."""
+    ws, bundle = _ws(repo)
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(content="still reasoning"),  # the forced final turn: empty
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response(  # the second pass
+            [
+                tool_call("code_comment", {"comments": [_SECOND]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    lim = _one_turn_limits()
+    lim.second_pass, lim.second_pass_min_lines = 1, 0
+    res = agent_mod.review_bundle(
+        client, ws, bundle, PrincipleSet(), {}, [], lim, retry_empty=True
+    )
+    assert res.retried and res.second_pass_added == 1
+    marks = {f.title: f.retry for f in res.findings}
+    assert marks == {COMMENT["title"]: True, "a later finding": False}
+    st = PRState(findings=res.findings)
+    assert '"retry"' not in json.dumps(st.encode())  # not stored in the state
+
+
+def _retry_run(repo: Path, skeptic_reply: Any) -> tuple[RunResult, Any, Script]:
+    """A whole run whose one code bundle ends on an empty final turn, and whose
+    retry raises one medium finding."""
+    cfg = cfg_for(repo)
+    cfg.limits.max_tool_turns, cfg.limits.plan = 1, 0
+    cfg.limits.turns_per_extra_file, cfg.limits.lines_per_extra_turn = 0, 10**6
+    medium = dict(COMMENT, severity="medium")
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(content="still reasoning"),
+        response(
+            [
+                tool_call("code_comment", {"comments": [medium]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+        skeptic=[skeptic_reply],
+    )
+    res, gh = _skeptic_run(repo, script, cfg)
+    assert res.bundles[0].retried and not res.bundles[0].unanswered
+    return res, gh, script
+
+
+@pytest.mark.parametrize(
+    "reply, outcome",
+    [
+        (
+            response(
+                [
+                    tool_call(
+                        "skeptic_verdict",
+                        {"verdict": "contested", "reason": "step 1 does not hold"},
+                    )
+                ]
+            ),
+            "contested",
+        ),
+        (response([tool_call("skeptic_verdict", {"verdict": "maybe"})]), "malformed"),
+        ((400, {}, "bad request"), "error"),
+    ],
+    ids=["contested", "no-verdict", "call-failed"],
+)
+def test_a_retry_turns_finding_the_skeptic_does_not_uphold_is_dropped(
+    repo: Path, reply: Any, outcome: str
+):
+    """A code bundle's retry of an empty final turn produced findings that were
+    mostly high and none true. Each one now faces the skeptic whatever its
+    severity, and one it does not uphold is dropped, not just contested."""
+    res, gh, script = _retry_run(repo, reply)
+
+    assert len(script.skeptic_requests) == 1  # a medium, checked all the same
+    assert state_of(res).findings == []
+    [o] = res.skeptic
+    assert o.outcome == outcome and o.dropped.startswith(
+        "it came from a retry of an empty final turn and was not upheld"
+    )
+    body = gh.comments[0]["body"]
+    assert "The skeptic dropped" in body and "retry of an empty final turn" in body
+
+
+def test_a_retry_turns_finding_the_skeptic_upholds_is_kept(repo: Path):
+    res, gh, script = _retry_run(repo, UPHELD)
+
+    assert len(script.skeptic_requests) == 1
+    [f] = state_of(res).findings
+    assert (f.severity, f.contested) == ("medium", "")
+    assert not res.skeptic[0].dropped
+    assert "The skeptic dropped" not in gh.comments[0]["body"]
+
+
 _TEST_FILE = "tests/unit/other/test_wide.py"
 
 

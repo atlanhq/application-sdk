@@ -1274,7 +1274,7 @@ def run(
         sk_client: Client = client_factory(skeptic_ledger)
         skeptic_client = sk_client
         with trace.group(
-            f"6c · skeptic: {len(to_doubt)} new blocking finding(s), "
+            f"6c · skeptic: {len(to_doubt)} new blocking or retry-turn finding(s), "
             f"its own budget ${skeptic_cap:.4f}"
         ):
             res.skeptic = skeptic.run_all(
@@ -1297,7 +1297,7 @@ def run(
         res.calls = all_calls()
     elif to_doubt:
         trace.line(
-            f"skeptic: off in config; {len(to_doubt)} new blocking finding(s) not checked"
+            f"skeptic: off in config; {len(to_doubt)} new blocking or retry-turn finding(s) not checked"
         )
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)

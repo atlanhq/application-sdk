@@ -107,6 +107,10 @@ class Finding:
     # "effect"}], "outcome", "harm", "normal_path"}. Read by grading and the
     # skeptic; not stored in the state.
     chain: dict[str, Any] = field(default_factory=dict)
+    # Raised by a code bundle's retry of an empty final turn
+    # (agent._retry_final): the skeptic checks it whatever its severity, and
+    # drops it unless upheld. Not stored in the state.
+    retry: bool = False
 
     def fingerprint(self, salt: str | None = None) -> str:
         """The finding's id. `salt` tells apart two different findings of one
@@ -224,6 +228,7 @@ class PRState:
                 continue
             f["scenario"] = ""
             f["chain"] = {}
+            del f["retry"]
             if f["status"] == "open":
                 f["body"] = f["body"][:body_keep]
                 f["suggestion"] = f["suggestion"][:body_keep]

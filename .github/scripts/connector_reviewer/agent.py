@@ -152,6 +152,9 @@ class BundleResult:
     # An app-code bundle whose loop ended with no answer got one more final
     # turn (`_retry_final`).
     retried: bool = False
+    # Which raw comments the retry turn made, as [start, end) indexes; each
+    # finding placed from one is marked `Finding.retry` (FND-5316).
+    retry_span: tuple[int, int] = (0, 0)
     # The bundle ended with no answer at all (`no_answer`): it never called
     # code_comment (not even with no comments) and never called task_done.
     # Its 0 findings mean it was not read to a conclusion, not that it is
@@ -827,6 +830,12 @@ def review_bundle(
     res.unanswered = no_answer(res)
     raw = raw_comments[: limits.max_comments]
     pairs = [(place(ws, bundle, c), c) for c in raw]
+    # A retry turn's findings were mostly high and none true in a replay: each
+    # is marked, so the skeptic checks it whatever its severity (FND-5316).
+    lo, hi = res.retry_span
+    for i, (f, _) in enumerate(pairs):
+        if f and lo <= i < hi:
+            f.retry = True
     # Ids first: two findings on one quote shared an id, and the second was
     # graded from the first's comment and then dropped (FND-5316).
     placed = unique_ids([f for f, _ in pairs if f])
@@ -1117,7 +1126,9 @@ def _retry_final(
         trace.line(f"[{bundle.label}]   no tool call on the retry either")
         return
     messages.append(assistant_turn(comp))
+    before = len(raw_comments)
     done = _answer(ws, bundle, comp, messages, raw_comments, res, final=True)
+    res.retry_span = (before, len(raw_comments))
     res.stop = "done" if done else "final_round"
 
 
