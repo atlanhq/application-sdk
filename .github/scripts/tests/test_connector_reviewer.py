@@ -40,6 +40,7 @@ from connector_reviewer import finalize as finalize_mod
 from connector_reviewer import findings as findings_mod
 from connector_reviewer import github as github_mod
 from connector_reviewer import llm as llm_mod
+from connector_reviewer import prompts as prompts_mod
 from connector_reviewer import report as report_mod
 from connector_reviewer import review as review_mod
 from connector_reviewer import sdk_source as sdk_source_mod
@@ -1222,6 +1223,139 @@ def test_the_review_prompt_tells_the_model_how_to_use_and_name_principles(repo: 
     assert agent_mod.build_principles_message(bundle, PrincipleSet()) == (
         "<principles>\n(no principle applies to these files)\n</principles>"
     )
+
+
+# A finding resting on FP01 whose scenario meets FP01's High case ("a shortfall
+# can be published as complete"), reported at medium: the replayed miss.
+FP01_COMMENT = {
+    **COMMENT,
+    "severity": "medium",
+    "category": "other",
+    "principle": "FP01",
+    "title": "A missing key is published as an empty result",
+    "content": "A missing key returns None, and the caller publishes the page as complete.",
+    "severity_case": "high",
+    "severity_basis": "a shortfall can be published as complete: the empty page is published",
+}
+
+
+def _graded(repo: Path, **changes: Any) -> Finding:
+    """One placed FP01 finding, graded from its comment as changed by `changes`
+    (a value of None drops that field)."""
+    raw = {k: v for k, v in {**FP01_COMMENT, **changes}.items() if v is not None}
+    ws, bundle = _ws(repo)
+    placed = agent_mod.place(ws, bundle, raw)
+    assert placed is not None
+    kept, _ = agent_mod.cite([placed], principles_of(repo))
+    agent_mod.grade_by_principle(kept, {placed.id: raw}, principles_of(repo))
+    return placed
+
+
+def test_a_finding_that_meets_its_principles_high_case_is_graded_high(repo: Path):
+    """FND-5316: a finding matched a principle's "High when …" case and came
+    out medium, so it did not block. A finding resting on a principle takes its
+    grade from that principle's Severity line, set in code from the case the
+    model says its scenario meets."""
+    assert _graded(repo).severity == "high"
+    # A nit that meets the High case is graded by it too.
+    assert _graded(repo, severity="low").severity == "high"
+
+
+@pytest.mark.parametrize(
+    "changes, severity",
+    [
+        # The scenario meets only the lower case: it stays where it was.
+        ({"severity_case": "medium"}, "medium"),
+        ({"severity_case": None}, "medium"),
+        # A High case with no words of the line it meets is not a match.
+        ({"severity_basis": "  "}, "medium"),
+        ({"severity_basis": None}, "medium"),
+        # Nothing is lowered: a high or critical finding keeps its grade.
+        ({"severity": "high", "severity_case": "medium"}, "high"),
+        ({"severity": "critical", "severity_case": "medium"}, "critical"),
+        ({"severity": "critical"}, "critical"),
+        # The case is about the principle the model named: when `cite` took
+        # another one from the text, or none applies, nothing is raised.
+        (
+            {
+                "principle": "FP09",
+                "content": "A missing key returns None, published as complete (FP01).",
+            },
+            "medium",
+        ),
+        ({"principle": None, "category": "bug"}, "medium"),
+    ],
+    ids=[
+        "medium-case",
+        "no-case",
+        "blank-basis",
+        "no-basis",
+        "high-stays",
+        "critical-stays",
+        "critical-high-case",
+        "other-principle",
+        "no-principle",
+    ],
+)
+def test_a_principle_case_never_lowers_and_raises_only_on_its_own_match(
+    repo: Path, changes: dict[str, Any], severity: str
+):
+    assert _graded(repo, **changes).severity == severity
+
+
+def test_a_principle_without_a_high_case_raises_nothing(repo: Path):
+    principles = principles_of(repo)
+    ws, bundle = _ws(repo)
+    placed = agent_mod.place(ws, bundle, FP01_COMMENT)
+    assert placed is not None
+    fp01 = next(p for p in principles.fleet if p.id == "FP01")
+    flat = PrincipleSet(
+        fleet=[
+            p
+            if p is not fp01
+            else parse_principle(
+                FP01.replace(
+                    "Severity: High when a shortfall can be published as complete; otherwise medium.",
+                    "Severity: Medium in every case.",
+                ),
+                "fleet",
+            )
+            for p in principles.fleet
+        ]
+    )
+    _, notes = agent_mod.grade_by_principle([placed], {placed.id: FP01_COMMENT}, flat)
+    assert placed.severity == "medium" and notes == []
+
+
+def test_a_review_publishes_a_principles_high_case_as_blocking(repo: Path):
+    """End to end: the model reports the finding at medium with FP01's High
+    case, and the review publishes it high, so the status blocks."""
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [FP01_COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    [f] = state_of(res).findings
+    assert (f.rule_id, f.severity) == ("FP01", "high")
+    assert gh.statuses[-1]["state"] == "failure"
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "graded by that principle's Severity line, not by the general scale" in flat
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    assert item["properties"]["severity_case"]["enum"] == ["high", "medium"]
+    assert "severity_case" not in item["required"]
 
 
 def test_glob_semantics():

@@ -509,6 +509,15 @@ COMMENT_ITEM = {
             "type": "string",
             "description": "The id of the <principle> this finding rests on (FP01, RP02, …), one that applies to this file. Omit only for a concrete bug or security defect; any other finding without a principle is dropped.",
         },
+        "severity_case": {
+            "type": "string",
+            "enum": ["high", "medium"],
+            "description": "With `principle`: the case of that principle's Severity line this finding meets. high only when the scenario in `content` meets the line's High case; otherwise medium. A finding that meets the High case is graded high.",
+        },
+        "severity_basis": {
+            "type": "string",
+            "description": "With severity_case high: the words of the principle's Severity line the scenario meets, and why it meets them, in one sentence.",
+        },
         "title": {"type": "string", "description": "One line, under 90 characters."},
         "content": {
             "type": "string",

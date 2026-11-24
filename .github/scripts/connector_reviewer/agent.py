@@ -380,6 +380,52 @@ def cite(
     return kept, dropped
 
 
+# A principle's Severity line names a High case ("High when …", "High only when …").
+_HIGH_CASE = re.compile(r"\bhigh\b", re.I)
+
+
+def grade_by_principle(
+    found: list[Finding],
+    raw_of: dict[str, dict[str, Any]],
+    principles: PrincipleSet,
+) -> tuple[list[Finding], list[str]]:
+    """A finding that rests on a principle takes its severity from that
+    principle's Severity line, not from the general scale (FND-5316).
+
+    The model says which case of the line its finding meets (`severity_case`,
+    with the words it meets in `severity_basis`); the grade is set here, in
+    code, so a finding that meets a High case is never published as medium.
+    Only the model's own match raises a finding: it must name the principle
+    the finding still cites after `cite`, the principle's Severity line must
+    have a High case, and the basis must not be empty. Nothing is lowered
+    here, and critical stays critical. Runs before `calibrate`, whose caps
+    (unchanged code, a compatibility claim on code this PR adds) still win,
+    and a finding raised to high faces the skeptic like any new blocker.
+    Returns the findings and a note per change made."""
+    notes: list[str] = []
+    for f in found:
+        raw = raw_of.get(f.id) or EMPTY
+        if not f.rule_id or f.severity not in ("medium", "low"):
+            continue
+        if str(raw.get("principle") or "").strip().upper() != f.rule_id:
+            continue
+        case = str(raw.get("severity_case") or "").strip().lower()
+        basis = " ".join(str(raw.get("severity_basis") or "").split())
+        if case != "high" or not basis:
+            continue
+        line = next(
+            (p.severity for p in principles.for_paths([f.path]) if p.id == f.rule_id),
+            "",
+        )
+        if not _HIGH_CASE.search(line):
+            continue
+        notes.append(
+            f"{f.id}: {f.severity} → high ({f.rule_id}'s High case: {basis[:120]})"
+        )
+        f.severity = "high"
+    return found, notes
+
+
 def calibrate(
     found: list[Finding],
     limits: "AgentLimits",
@@ -521,7 +567,13 @@ def review_bundle(
         res.stop, res.error = "llm_error", str(e)
 
     raw = raw_comments[: limits.max_comments]
-    placed = [f for f in (place(ws, bundle, c) for c in raw) if f]
+    pairs = [(place(ws, bundle, c), c) for c in raw]
+    placed = [f for f, _ in pairs if f]
+    # Each finding's own comment, for what only grading reads (`severity_case`).
+    raw_of: dict[str, dict[str, Any]] = {}
+    for f, c in pairs:
+        if f:
+            raw_of.setdefault(f.id, c)
     trace.line(
         f"[{bundle.label}] placement: {len(raw)} raw comment(s) → {sum(1 for f in placed if f.line)} anchored inline, "
         f"{sum(1 for f in placed if not f.line)} summary-only, {len(raw) - len(placed)} dropped (no evidence / not locatable)"
@@ -552,6 +604,9 @@ def review_bundle(
                 else ""
             )
         )
+    placed, grading = grade_by_principle(placed, raw_of, principles)
+    for note in grading:
+        trace.line(f"[{bundle.label}] severity from principle: {note}")
     placed, calibration = calibrate(placed, limits, ws, added)
     for note in calibration:
         trace.line(f"[{bundle.label}] severity rule: {note}")
