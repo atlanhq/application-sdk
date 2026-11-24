@@ -13,7 +13,7 @@ import warnings
 from abc import ABC
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import (
@@ -29,7 +29,8 @@ from typing import (
 from uuid import UUID
 
 from temporalio import activity, workflow
-from temporalio.exceptions import FailureError
+from temporalio.common import RetryPolicy
+from temporalio.exceptions import FailureError, WorkflowAlreadyStartedError
 
 from application_sdk._runtime.offload import run_best_effort, run_in_thread
 from application_sdk.app._ep_registration import (
@@ -728,6 +729,19 @@ def _require_aliases_not_expired(cls: type, app_name: str) -> None:
         )
 
 
+@dataclass(frozen=True)
+class DetachedRun:
+    """What :meth:`App.start_detached` did."""
+
+    started: bool
+    """False when a workflow with ``workflow_id`` was already running, so nothing started."""
+
+    workflow_id: str
+
+    run_id: str | None = None
+    """The started child's run id; None when nothing started."""
+
+
 class App(ABC):
     """Base class for all Apps.
 
@@ -1346,6 +1360,85 @@ class App(ABC):
         workflow.continue_as_new(
             args=[input],
             memo={"correlation_id": self.correlation_id},
+        )
+
+    async def start_detached(
+        self,
+        entrypoint: str,
+        input: Input,
+        *,
+        workflow_id: str | None = None,
+        timeout_seconds: int | None = None,
+        retry_max_attempts: int = 1,
+    ) -> DetachedRun:
+        """Start one of this App's own entry points and do not wait for it.
+
+        The entry point runs as a child workflow that keeps running after this
+        run closes, for any reason. The run never awaits it, so neither this
+        run's duration nor its status depends on it, and a failing child never
+        fails the run. Use it for follow-up work that the run hands off but must
+        never be held up by.
+
+        Only the App's own entry points can be started. Starting another app's
+        workflow is the app-to-app call the SDK keeps switched off.
+
+        Args:
+            entrypoint: The entry point's name, as given to ``@entrypoint``.
+            input: The entry point's input.
+            workflow_id: The child's workflow id. Defaults to
+                ``{this run's workflow id}-{entrypoint}``, unique per run. A
+                fixed id allows at most one running child per id: while one is
+                running, Temporal refuses the start and nothing starts.
+            timeout_seconds: Upper bound on the child's whole execution. None
+                means no bound.
+            retry_max_attempts: How many times the whole child may run if it
+                fails. 1 means it is not retried.
+
+        Returns:
+            A :class:`DetachedRun`: whether the child started, and its ids.
+
+        Raises:
+            AppContextError: If called outside of run() execution.
+            UnknownEntryPointError: If this App has no entry point ``entrypoint``.
+        """
+        if self._context is None:
+            raise AppContextError(
+                "start_detached() is only available during run() execution."
+            )
+        ep = self._app_metadata.entry_points.get(entrypoint)
+        if ep is None:
+            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+                UnknownEntryPointError,
+            )
+
+            raise UnknownEntryPointError(
+                message=f"{self._app_name} has no entry point {entrypoint!r}",
+                resource_identifier=entrypoint,
+            )
+
+        child_id = workflow_id or f"{workflow.info().workflow_id}-{entrypoint}"
+        try:
+            handle = await workflow.start_child_workflow(
+                canonical_workflow_type(self._app_name, ep),
+                input,
+                id=child_id,
+                parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+                execution_timeout=(
+                    timedelta(seconds=timeout_seconds) if timeout_seconds else None
+                ),
+                retry_policy=RetryPolicy(maximum_attempts=retry_max_attempts),
+                memo={"correlation_id": self.correlation_id},
+            )
+        except WorkflowAlreadyStartedError:
+            _safe_log(
+                "info",
+                f"Detached entry point already running | app={self._app_name} entrypoint={entrypoint} workflow_id={child_id}",
+                app_name=self._app_name,
+                workflow_id=child_id,
+            )
+            return DetachedRun(started=False, workflow_id=child_id)
+        return DetachedRun(
+            started=True, workflow_id=child_id, run_id=handle.first_execution_run_id
         )
 
     # =========================================================================
