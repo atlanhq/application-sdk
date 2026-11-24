@@ -60,6 +60,7 @@ from .findings import (
     PRState,
     merge_new,
     quote_stored,
+    unique_ids,
 )
 from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
@@ -1160,6 +1161,9 @@ def run(
         # summary and the verdict; connector-reviewer opens no inline review threads.
         fresh.extend(br.findings)
         fresh.extend(br.unplaced)
+    # Each bundle's ids are unique already; two bundles can still meet on one
+    # file. Before the base check (keyed by id) and `merge_new` (FND-5316).
+    fresh = unique_ids(fresh)
     if round_no > 1:
         fresh = [
             f for f in fresh if _sev_at_least(f.severity, cfg.later_round_min_severity)

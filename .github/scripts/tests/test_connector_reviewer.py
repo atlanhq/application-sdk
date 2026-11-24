@@ -1685,6 +1685,89 @@ def test_fingerprint_is_stable_across_rewording_and_line_moves():
     assert merge_new(st, [b], round_no=2) == [] and st.findings[0].line == 42
 
 
+def _same_quote_pair() -> list[dict[str, Any]]:
+    """Two different findings on the same quoted line of the same file, in the
+    same category: the replayed case where both got one id and one vanished.
+    The second rests on FP01 and meets its High case; the first is a plain bug."""
+    plain = dict(COMMENT, severity="medium", title="decode() on a None result")
+    graded = dict(
+        FP01_COMMENT,
+        category="bug",
+        title="A missing key is published as an empty page",
+    )
+    return [plain, graded]
+
+
+def _pair_script(*first: Any) -> Script:
+    return Script(
+        *first,
+        response(
+            [
+                tool_call("code_comment", {"comments": _same_quote_pair()}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+
+
+def test_two_findings_on_one_quote_keep_their_own_ids_and_grades(repo: Path):
+    """FND-5316: the id is `sha1(category, path, quote)`, so two different
+    findings on one quoted line got the same id, and `merge_new` dropped the
+    second as a restatement. Each now has its own id, both are stored and in
+    the summary, and each is graded from its own comment."""
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_pair_script()),
+    )
+    st = state_of(res)
+    by_title = {f.title: f for f in st.findings}
+    plain = by_title["decode() on a None result"]
+    graded = by_title["A missing key is published as an empty page"]
+    assert plain.id != graded.id
+    # The finding that would have won the id keeps the plain fingerprint, so an
+    # open finding on a live pull request keeps matching its stored record.
+    assert plain.id == plain.fingerprint()
+    # Graded from its own comment: the FP01 High case raises only the second.
+    assert (plain.severity, graded.severity) == ("medium", "high")
+    body = gh.comments[0]["body"]
+    assert f"| {plain.id} |" in body and f"| {graded.id} |" in body
+
+    # Round 2 reports both again: neither is new, and both keep their ids.
+    ids = {plain.id, graded.id}
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = gh.diffs[("b0", "h1")]
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("app/storage/fetch.py", "h2")] = SRC_V2_NEXT
+    again = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(
+            _pair_script(response([tool_call("verdicts", {"items": []})]))
+        ),
+    )
+    assert again.new_findings == []
+    assert {f.id for f in state_of(again).findings} == ids
+
+
+def test_a_literal_repeat_of_a_finding_is_one_finding():
+    """Only a repeat (same quote, principle and title) collapses: that is the
+    same finding reported twice, not two findings."""
+    a = Finding("p.py", 1, "high", "bug", "Decode on None", "x", "return d()")
+    b = Finding("p.py", 1, "high", "bug", "  decode on none ", "y", "return d()")
+    c = Finding("p.py", 1, "medium", "bug", "Another defect", "z", "return d()")
+    kept = findings_mod.unique_ids([a, b, c])
+    assert kept == [a, c] and a.id != c.id and a.id == a.fingerprint()
+
+
 def test_state_round_trips_through_the_comment_marker():
     st = PRState(
         reviewed_head="abc",

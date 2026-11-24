@@ -303,6 +303,15 @@ review no longer sees `<pr_understanding>`; round 2's does) and
 `test_every_request_is_recorded_with_counts_only_and_reported` (the approach request
 comes last).
 
+### What a second replay changed (FND-5316)
+
+A replay of 24 past pull requests showed these defects. lens has the same code for
+the id and the mechanical box, and still has both defects; they are not ported.
+
+| | lens | connector-reviewer |
+|---|---|---|
+| Two different findings on one quote | The id is `sha1(category, path, quote)`, with no prose in it. Two findings in one category that quote the same line get the same id. `agent.review_bundle` grades the second from the first one's comment (`raw_of` is keyed by id), and `merge_new` drops it as a restatement, so it vanishes from the summary and the status. | `findings.unique_ids` runs on each bundle's placed findings before `raw_of` is built, and in `review.run` on the round's findings before `_check_new_against_base` and `merge_new`, since two bundles can meet on one file. In a group that shares an id, the most severe finding keeps the plain fingerprint. Ties go by principle, then title, so the order the model wrote them in does not matter, and an open finding on a live pull request keeps matching its stored record. Each other finding gets `Finding.fingerprint(salt)`, salted with its principle. When that id is taken, the salt is the principle and title, and as a last resort a counter is added. A later round that reports the same findings gets the same ids. A literal repeat (same quote, principle and title) is one finding reported twice, and is kept once. A finding whose principle and title both change in a later round gets a new id, and the old one stays open until verify closes it. |
+
 ### Regression and history facts (FND-5312)
 
 lens hands the line review the callers, tests and changed functions it finds in
@@ -518,7 +527,7 @@ above; "typing" means only the annotations described under Typing.
 | `baseline.py`, `diff.py`, `index.py` | Identical, byte for byte. A lens patch applies as it is. |
 | `lock.py` | Names. |
 | `report.py` | Names; bundle time, forced final turn and dropped uncited findings; the incomplete list from `incomplete_reasons`; the skeptic counts and checks (FND-5332). |
-| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `Finding.contested`. |
+| `findings.py` | Names; `PRState.waiver`, `exempt`, `unread`, `facts`; `Finding.contested`; `unique_ids` and the `salt` of `Finding.fingerprint` (FND-5316). |
 | `triage.py` | Typing (one annotation). |
 | `tools.py` | Two description strings (`compatibility`, `search_code`), the comment's optional `principle` field, and `task_done`'s optional `regression` and `history`; the comment's optional `severity_case` and `severity_basis` (FND-5316); `SdkSource`, `Workspace.sdk` and the `sdk:` prefix in `read_file`, `search_code` and `find_symbol`, with the path checks factored into `_safe_rel` and `_read_inside` (FND-5331); `Workspace.sdk_pins` and `SdkSource.package` (FND-5316). |
 | `trace.py` | Names, typing. |
@@ -531,9 +540,9 @@ above; "typing" means only the annotations described under Typing.
 | `holistic.py` | The prompt's opening and one concern; no `<public_api>` block; typing. |
 | `context.py` | No `_public` / `public_api`; `build` returns a string. |
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
-| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316); `grade_by_principle` (FND-5316). |
+| `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316); `grade_by_principle` (FND-5316); `unique_ids` before grading (FND-5316). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" (with the Severity-line grading of FND-5316) and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316). |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316); `unique_ids` across bundles before `merge_new` (FND-5316). |
 | `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316). |
 | `__init__.py` | Docstring. |
 | `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |

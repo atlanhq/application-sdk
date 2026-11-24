@@ -33,7 +33,7 @@ from .baseline import PRAdditions
 from .bundle import Bundle
 from .diff import anchor, locate_in_text
 from .facts import Facts
-from .findings import BLOCKING, Finding
+from .findings import BLOCKING, Finding, unique_ids
 from .llm import (
     BudgetExhausted,
     Client,
@@ -568,11 +568,14 @@ def review_bundle(
 
     raw = raw_comments[: limits.max_comments]
     pairs = [(place(ws, bundle, c), c) for c in raw]
-    placed = [f for f, _ in pairs if f]
+    # Ids first: two findings on one quote shared an id, and the second was
+    # graded from the first's comment and then dropped (FND-5316).
+    placed = unique_ids([f for f, _ in pairs if f])
     # Each finding's own comment, for what only grading reads (`severity_case`).
     raw_of: dict[str, dict[str, Any]] = {}
+    kept_ids = {id(f) for f in placed}
     for f, c in pairs:
-        if f:
+        if f and id(f) in kept_ids:
             raw_of.setdefault(f.id, c)
     trace.line(
         f"[{bundle.label}] placement: {len(raw)} raw comment(s) → {sum(1 for f in placed if f.line)} anchored inline, "
