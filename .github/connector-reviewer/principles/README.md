@@ -86,8 +86,9 @@ The rules for the files in this directory, which
 - The file is named `<id in lower case>-<slug>.md`, for example
   `fp01-undeclared-loss.md`.
 - Front matter sits between two `---` lines. `id` is required: `FP` (fleet) or `RP`
-  (repo) followed by two digits. `applies-to` is optional: an inline list of areas.
-  Leave it out when the principle applies everywhere. No other keys.
+  (repo) followed by two digits. `applies-to` is optional: an inline list of areas
+  and quoted path globs (see [Areas and globs](#areas-and-globs)). Leave it out when
+  the principle applies everywhere. No other keys.
 - Then an H1 title and a blank line.
 - Then the five fields in this order, each label at the start of a line:
   `Principle:`, `Why:`, `Ask:`, `Don't flag:`, `Severity:`. No blank lines between
@@ -110,9 +111,15 @@ things hold across all of them:
 - The more customers a change reaches, the higher the severity. The same defect in
   code every connection runs outranks it in one rarely used path.
 
-## Areas
+## Areas and globs
 
-`applies-to` takes area names only, never paths or globs.
+`applies-to` lists up to eight entries. Each is an area or a path glob, in any mix:
+
+```markdown
+applies-to: [contract, "app/workflow_health/**", "app/sq_enricher*/**"]
+```
+
+An unquoted entry is an area:
 
 | Area | Files |
 |---|---|
@@ -122,12 +129,31 @@ things hold across all of them:
 | `contract` | `contract/` |
 | `ci` | `.github/` |
 
+A quoted entry is a path glob, matched against each file's path from the repository
+root. A quoted area name, such as `"app"`, still means the area.
+
+- `**` matches across folders, and `**/` can also match no folder at all:
+  `"app/**/test_*.py"` matches `app/test_a.py` and `app/x/y/test_a.py`.
+- `*` and `?` match within one folder name or file name only: `"app/*.py"` matches
+  `app/main.py`, not `app/extract/main.py`.
+- Every other character except `,` is literal. There are no `[...]` classes and no
+  `{a,b}` lists. Commas separate entries, so a glob cannot contain one.
+- A glob is relative to the repository root. It has no leading `/`, no `.` or `..`
+  segment, no backslash and no empty segment (`//` or a trailing `/`), and is at most
+  200 characters.
+
+A principle applies to a pull request's file when one of its areas is that file's
+area, or one of its globs matches that file's path. An entry that breaks these rules
+causes the file to be skipped, like any other format error. An unquoted path also
+counts as a format error, because it is read as an unknown area. Globs suit a repo
+principle about one part of one app. The fleet principles above use areas.
+
 ## How the reviewer reads them
 
 The loader is `.github/scripts/connector_reviewer/principles.py`. For each review it
 loads this directory, then the principles of the repository under review, and gives
-the model the ones whose areas the pull request touches: fleet principles first, then
-the repository's own.
+the model the ones whose areas or globs the pull request touches: fleet principles
+first, then the repository's own.
 
 The loader is a little more forgiving than the rules above (it accepts blank lines
 between fields, for example), so that one slip in an app's own principle does not
