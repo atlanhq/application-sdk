@@ -1716,24 +1716,37 @@ def recheck_evidence(
     text = ws.text(f.path) or ""
     lines = text.splitlines()
     at = locate_in_text(text, f.evidence)
-    sym = ws.index.enclosing(f.path, at) if at else None
+    # Code the PR removes is absent at the head by design, as in verify: show
+    # where it was removed, and say so, so absence is not read as a fix.
+    removed_at = None if at else _removed_site(ws, f)
+    site = at or removed_at or 0
+    near = ws.index.enclosing(f.path, site) if site else None
     lo, hi = (
-        (sym.start, sym.end)
-        if sym and sym.end - sym.start < 120
-        else (max(at - 15, 1), at + 15)
+        (near.start, near.end)
+        if near and near.end - near.start < 120
+        else (max(site - 15, 1), site + 15)
     )
     code_now = (
         "\n".join(f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1))
-        if at
+        if site
         else _quote_gone(f)
     )
+    if removed_at is not None:
+        code_now = (
+            f"{REMOVED_NOTE}; the site it was removed from, as it is now:)\n{code_now}"
+            if site
+            else f"{REMOVED_NOTE}; the PR deletes the whole file)"
+        )
+    # The symbol around a removal site is a neighbour of the removed code, not
+    # its subject: it frames <code_now> only, and no merge-base or caller fact.
+    sym = near if removed_at is None else None
     fd = ws.diffs.get(f.path)
     base_path = fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
     dotted = sym.qualname.split(":", 1)[1] if sym else ""
     facts: list[str] = []
     absent = False
     at_base = ""
-    why = added.added(f.path, sym)
+    why = "" if removed_at is not None else added.added(f.path, sym)
     if why:
         facts.append(why)
         absent = True
@@ -1742,6 +1755,16 @@ def recheck_evidence(
         base = None if secret_path(base_path) else merge_base_text(base_path)
         if base is None:
             facts.append(f"merge-base copy of {base_path} could not be read")
+        elif removed_at is not None:
+            # Never "absent": the PR's own diff removes this code.
+            facts.append(
+                f"present on merge base: the quoted code is in {base_path}, and "
+                "this PR removes it: its absence at the PR head is not a fix"
+                if snippet_in_text(base, f.evidence)
+                else f"the quoted code is code this PR removes, but it is not in "
+                f"the merge-base copy of {base_path}: its absence at the PR head "
+                "is not a fix"
+            )
         elif (names := baseline.dotted_names(base_path, base)) is None:
             # Unknown is not absent: a copy that does not parse proves nothing.
             facts.append(f"merge-base copy of {base_path} could not be parsed")

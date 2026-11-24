@@ -10686,6 +10686,99 @@ def test_a_finding_on_removed_code_survives_an_unrelated_push_and_goes_to_verify
     assert gh.statuses[-1]["state"] == "failure"
 
 
+def _tag(text: str, tag: str) -> str:
+    return text.split(f"<{tag}>\n", 1)[1].split(f"\n</{tag}>", 1)[0]
+
+
+def test_recheck_of_a_finding_on_removed_code_is_not_told_it_is_gone(repo: Path):
+    """`/review recheck` said "the quoted code is not in this file any more" of
+    code the PR removes, which reads as fixed. It is told what verify is told:
+    the code is removed by this PR, and its absence is not a fix."""
+    gh = _deletion_repo(repo)
+    gh.files[("app/client.py", "b0")] = CLIENT_V1
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(_script_with(_dispose_finding())),
+    )
+    [f] = state_of(first).findings
+    res, script = _recheck(
+        gh, repo, [f.id], "", Script(_verdict(f.id, "open", "still"))
+    )
+    user = script.requests[0]["messages"][1]["content"]
+    code_now = _tag(user, "code_now")
+    assert code_now.startswith(
+        f"{review_mod.REMOVED_NOTE}; the site it was removed from, as it is now:)\n"
+    )
+    assert "for attempt in range(3):" in code_now
+    assert "not in this file any more" not in user
+    assert "no longer in" not in user
+    assert (
+        "- present on merge base: the quoted code is in app/client.py, and this "
+        "PR removes it: its absence at the PR head is not a fix"
+    ) in user
+    assert "await self.engine.dispose()" in _tag(user, "at_merge_base")
+    assert res.resolved_verified == [] and res.resolved_free == []
+
+
+API_BASE = "def old_api(x):\n    return x\n\n\ndef keep():\n    return 1\n"
+API_HEAD = "def new_api(x):\n    return x * 2\n\n\ndef keep():\n    return 1\n"
+API_DIFF = _udiff(
+    "app/api.py",
+    [
+        "-def old_api(x):",
+        "-    return x",
+        "+def new_api(x):",
+        "+    return x * 2",
+        " ",
+        " ",
+        " def keep():",
+    ],
+)
+
+
+def _removed_evidence(diff: str, head: dict[str, str], quote: str, base: str) -> Any:
+    [fd] = parse_unified_diff(diff)
+    ws = Workspace(
+        root=Path("/nonexistent"),
+        head_text=head,
+        diffs={fd.path: fd},
+        index=build_index(Path("/nonexistent"), overrides=head),
+    )
+    f = Finding(fd.path, 1, "high", "bug", "t", "b", quote, compatibility=True)
+    added = review_mod.baseline.PRAdditions(symbols={"app/api.py": ["new_api"]})
+    return review_mod.recheck_evidence(ws, f, added, lambda p: base)
+
+
+def test_recheck_of_removed_code_never_resolves_on_the_symbol_beside_it():
+    """The removal site sits in `new_api`, which the PR adds. That symbol is a
+    neighbour of the removed code, not its subject: a compatibility claim about
+    removing `old_api` must not resolve as "absent on merge base"."""
+    ev = _removed_evidence(
+        API_DIFF, {"app/api.py": API_HEAD}, "def old_api(x):\n    return x", API_BASE
+    )
+    assert not ev.absent_on_merge_base
+    assert ev.facts[0].startswith("present on merge base: the quoted code is in")
+    assert not any("new_api" in x for x in ev.facts)
+    assert ev.code_now.startswith(review_mod.REMOVED_NOTE)
+    assert "def old_api(x):" in ev.at_merge_base
+
+
+def test_recheck_of_code_in_a_deleted_file_says_the_file_is_deleted():
+    ev = _removed_evidence(
+        LEGACY_DIFF,
+        {},
+        "def legacy_token(user):",
+        "def legacy_token(user):\n    return sign(user, ttl=60)\n",
+    )
+    assert ev.code_now == f"{review_mod.REMOVED_NOTE}; the PR deletes the whole file)"
+    assert not ev.absent_on_merge_base
+    assert "not in this file any more" not in ev.code_now
+
+
 LEGACY_DIFF = _udiff(
     "app/auth/legacy.py",
     ["-def legacy_token(user):", "-    return sign(user, ttl=60)"],
