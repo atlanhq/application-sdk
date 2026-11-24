@@ -52,10 +52,18 @@ def job(doc: Doc, name: str) -> Doc:
 
 
 def steps(job_or_action: Doc) -> list[Doc]:
-    """The steps of a job, or of a parsed composite action (``runs.steps``)."""
-    if "runs" in job_or_action:
-        return list(job_or_action["runs"].get("steps") or [])
-    return list(job_or_action.get("steps") or [])
+    """The steps of a job, or of a parsed composite action (``runs.steps``).
+
+    Fails when there are none. A guard such as "no step writes git config"
+    passes vacuously over an empty list, so a job that lost its ``steps:``
+    (or a ``uses:`` job, which has none) must not read as compliant.
+    """
+    container: Doc = job_or_action.get("runs", job_or_action)
+    found: Any = container.get("steps")
+    assert isinstance(found, list) and found, (
+        f"expected a non-empty steps list; keys are {sorted(map(str, job_or_action))}"
+    )
+    return cast("list[Doc]", found)
 
 
 def step_named(job_or_action: Doc, name: str) -> Doc:

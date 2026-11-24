@@ -131,7 +131,8 @@ def _workflow_jobs() -> list[tuple[str, str, list[Step]]]:
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
         workflow_jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
         for job_id, body in workflow_jobs.items():
-            job_steps = steps(body)
+            # A reusable-workflow call (`uses:`) has no steps; the sweep skips it.
+            job_steps: list[Step] = body.get("steps") or []
             if job_steps:
                 jobs.append((path.name, job_id, job_steps))
     return jobs

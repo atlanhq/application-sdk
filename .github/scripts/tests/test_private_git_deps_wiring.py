@@ -180,7 +180,9 @@ def test_no_inline_mint_outside_the_action() -> None:
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
         jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
         for job_id, body in jobs.items():
-            if any("git_auth.py repos" in s.get("run", "") for s in steps(body)):
+            # A reusable-workflow call (`uses:`) has no steps; the sweep skips it.
+            job_steps: list[Step] = body.get("steps") or []
+            if any("git_auth.py repos" in s.get("run", "") for s in job_steps):
                 inline.add((path.name, job_id))
     assert inline == INLINE
 
@@ -381,7 +383,8 @@ def _all_steps() -> list[tuple[str, Step]]:
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
         jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
         for job_id, body in jobs.items():
-            for step in steps(body):
+            # A reusable-workflow call (`uses:`) has no steps; the sweep skips it.
+            for step in body.get("steps") or []:
                 found.append((f"{path.name}:{job_id}", step))
     for path in sorted(ACTIONS.glob("*/action.y*ml")):
         runs: dict[str, Any] = load_workflow(path).get("runs") or {}
