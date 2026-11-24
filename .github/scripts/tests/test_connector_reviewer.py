@@ -3166,7 +3166,91 @@ def test_riskiest_bundles_are_reviewed_first_and_packing_comes_before_skipping()
     reviewed = {p for b in bundles for p in b.paths}
     # Re-packed larger first; whatever is still over the cap is the lowest-risk code, and named.
     assert any(p.startswith("app/credentials/") for p in reviewed)
-    assert all("lowest-risk" in why for _, why in res.skipped_files)
+    assert all(why.startswith("bundle cap: ") for _, why in res.skipped_files)
+
+
+def _sized_file(path: str, lines: int) -> str:
+    """An added file of `lines` lines of equal width, so its diff tokens are
+    proportional to `lines`."""
+    body = "".join(f'+v{i:05d} = "{"x" * 24}"\n' for i in range(lines))
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -0,0 +1,{lines} @@\n{body}"
+    )
+
+
+def test_over_the_cap_tests_never_take_the_room_app_code_needs():
+    """FND-5316: a large pull request's test files, packed with the source
+    they test, made more bundles hold app code than the cap allows, so app code
+    was cut while tests were read. Still over the cap after re-packing, the
+    code the app ships and the tests are packed apart, app first: the cap cuts
+    tests, and every app file is reviewed."""
+    sizes = {  # lines; 300 lines is about half a re-packed bundle
+        "app/a.py": 300,
+        "tests/unit/test_a.py": 360,
+        "app/b.py": 270,
+        "tests/unit/test_b.py": 270,
+        "app/c.py": 270,
+        "tests/unit/test_c.py": 270,
+        "app/d.py": 270,
+    }
+    files = parse_unified_diff("".join(_sized_file(p, n) for p, n in sizes.items()))
+    half = next(f for f in files if f.path == "app/a.py").render()
+    cfg = Config(price=PRICE, max_bundles=2)
+    # A re-packed bundle holds about twice app/a.py.
+    cfg.limits.context_limit_tokens = 4 * bundle_mod.estimate_tokens(half) + 400
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    reviewed = {p for b in bundles for p in b.paths}
+    assert {p for p in sizes if p.startswith("app/")} <= reviewed
+    assert res.skipped_files and all(
+        p.startswith("tests/") for p, _ in res.skipped_files
+    )
+    # No bundle mixes the two pools once they are packed apart.
+    for b in bundles:
+        assert len({p.startswith("tests/") for p in b.paths}) == 1
+
+
+def test_a_file_cut_by_the_cap_is_named_with_the_lines_left_unread():
+    """The summary names exactly what was not reviewed: a file cut whole, and
+    for a file reviewed in parts, the lines of the parts past the cap."""
+    path = "tests/unit/test_huge.py"
+    files = parse_unified_diff(_hunks_diff(path, [60] * 150))
+    cfg = Config(price=PRICE)
+    cfg.max_bundles = 2
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert {p for b in bundles for p in b.paths} == {path}
+    [(skipped, why)] = res.skipped_files
+    assert skipped == path
+    assert re.fullmatch(
+        r"bundle cap: lines \d+-\d+(, \d+-\d+)* not reviewed, the rest was", why
+    ) or re.fullmatch(
+        r"bundle cap: lines \d+-\d+(, \d+-\d+){5} and \d+ more range\(s\) not reviewed, "
+        r"the rest was",
+        why,
+    ), why
+    # The first part was read: its lines are not among those named.
+    first = bundles[0].files[0].hunks[0]
+    assert f"lines {first.new_start}-" not in why
+    assert review_mod._line_ranges([(5, 9), (10, 12), (20, 20)]) == "lines 5-12, 20"
+    assert review_mod._line_ranges([(7, 7)]) == "line 7"
+
+    # A summary lists every file past the cap, says why once, and counts the rest.
+    skipped = [
+        (f"tests/unit/test_{i}.py", "bundle cap: not reviewed, past the 8-bundle cap")
+        for i in range(52)
+    ]
+    res = RunResult("reviewed", state=PRState(round=1, unread=dict(skipped)))
+    res.skipped_files = skipped
+    body = render_summary(res)
+    assert "- … and 2 more" in body
+    assert body.count("Past the bundle cap: a run line-reviews") == 2  # reason and list
+    reasons = review_mod.incomplete_reasons(res)
+    assert reasons[0].startswith("52 file(s) not read: `tests/unit/test_0.py`")
+    assert "`tests/unit/test_19.py`" in reasons[0]
+    assert "`tests/unit/test_20.py`" not in reasons[0]
+    assert '(+32 more, under "file(s) not reviewed")' in reasons[0]
 
 
 def test_a_bundle_that_spends_its_share_wraps_up_instead_of_starving_others(repo: Path):
@@ -9245,8 +9329,11 @@ def test_files_past_the_bundle_cap_are_unread():
     bundles = plan_bundles(files, cfg, res)
     assert [b.paths for b in bundles] == [["app/a/one.py"]]
     assert review_mod.unread_skips(res.skipped_files) == [
-        ("docs/two.py", "bundle cap (lowest-risk code, after re-packing)")
+        ("docs/two.py", "bundle cap: not reviewed, past the 1-bundle cap")
     ]
+    # A state written before FND-5316 says it the old way, and is still unread.
+    old = ("docs/two.py", "bundle cap (lowest-risk code, after re-packing)")
+    assert review_mod.unread_skips([old]) == [old]
     # What is skipped on purpose is not unread source.
     assert (
         review_mod.unread_skips(
@@ -11927,8 +12014,11 @@ def test_a_split_file_past_the_bundle_cap_is_named_once_and_stays_unread():
     res = RunResult("reviewed")
     bundles = plan_bundles(files, cfg, res)
     assert [b.paths for b in bundles] == [[path]]
-    reason = "bundle cap (lowest-risk code, after re-packing)"
-    assert res.skipped_files == [(path, reason)]
+    [(skipped, reason)] = res.skipped_files
+    assert skipped == path
+    assert reason.startswith("bundle cap: lines ") and reason.endswith(
+        "not reviewed, the rest was"
+    )
     assert review_mod.unread_skips(res.skipped_files) == [(path, reason)]
 
 
