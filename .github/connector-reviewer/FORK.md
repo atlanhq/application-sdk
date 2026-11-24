@@ -533,7 +533,9 @@ names.
   The symbol around the removal site frames `<code_now>` only: it gives no
   merge-base, caller, privacy or capability fact (the last two in lens only). So a
   compatibility claim about the removal cannot resolve with no model call because
-  that neighbour is new.
+  that neighbour is new. In `recheck_evidence`, a head match that sits on a line
+  the PR added, of a quote the PR also removes (`review._new_copy_of_removed`), is
+  a new copy rather than the quote surviving, so the removal stays the subject.
 - An unknown word on the command's line (`/review frobnicate`, `/lens forse`) gets a
   usage reply and starts nothing. Options come from the first line only, so a note
   on the lines below a bare `/review` or `/lens` still reviews.

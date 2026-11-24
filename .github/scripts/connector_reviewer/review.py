@@ -1716,6 +1716,8 @@ def recheck_evidence(
     text = ws.text(f.path) or ""
     lines = text.splitlines()
     at = locate_in_text(text, f.evidence)
+    if _new_copy_of_removed(ws, f, at):
+        at = 0
     # Code the PR removes is absent at the head by design, as in verify: show
     # where it was removed, and say so, so absence is not read as a fix.
     removed_at = None if at else _removed_site(ws, f)
@@ -2352,6 +2354,21 @@ def _removed_site(ws: Workspace, f: Finding) -> int | None:
         return None
     span = anchor(fd, f.evidence)
     return span[0] if span else 0
+
+
+def _new_copy_of_removed(ws: Workspace, f: Finding, at: int) -> bool:
+    """Whether the head match at `at` is a copy the PR added of code it removes.
+
+    A short quote such as `return x` can survive in a newly added function
+    after the original is deleted. That copy is not the quoted code still
+    being there, so the removal stays the finding's subject."""
+    fd = ws.diffs.get(f.path)
+    return (
+        bool(at)
+        and fd is not None
+        and at in fd.added_lines
+        and in_removed_lines(fd, f.evidence)
+    )
 
 
 BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>

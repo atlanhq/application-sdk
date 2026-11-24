@@ -7870,6 +7870,29 @@ def test_recheck_of_removed_code_never_resolves_on_the_symbol_beside_it():
     assert "def old_api(x):" in ev.at_merge_base
 
 
+def test_recheck_of_removed_code_ignores_a_copy_the_pr_adds():
+    """`return x` is deleted with `old_api` and re-added inside the new
+    `new_api`. That copy is new code, not the quote surviving: the finding
+    stays about the removal and never resolves as absent on the merge base."""
+    head = "def new_api(x):\n    return x\n\n\ndef keep():\n    return 1\n"
+    diff = _one_hunk(
+        API_PATH,
+        [
+            "-def old_api(x):",
+            "-    return x",
+            "+def new_api(x):",
+            "+    return x",
+            " ",
+            " ",
+            " def keep():",
+        ],
+    )
+    ev = _removed_evidence(diff, {API_PATH: head}, "    return x", API_BASE)
+    assert not ev.absent_on_merge_base
+    assert ev.code_now.startswith(review_mod.REMOVED_NOTE)
+    assert not any("new_api" in x for x in ev.facts)
+
+
 def test_recheck_of_code_in_a_deleted_file_says_the_file_is_deleted():
     ev = _removed_evidence(
         LEGACY_DIFF,
