@@ -449,6 +449,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # as K029.
     # K031: a pinned ATLAN_TASK_QUEUE — reads an app's contract/ and atlan.yaml;
     # the SDK has neither.
+    # K032/K033: @task(pool=) names vs the app's deploy.pools — the pools live in
+    # an app's contract/ and atlan.yaml, which the SDK does not have.
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -573,6 +575,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K029",
         "K030",
         "K031",
+        "K032",
+        "K033",
         "P004",
         "P005",
         "P008",
@@ -1014,7 +1018,8 @@ def test_catalog_k_series_present() -> None:
     contract classes under one bare class name) (FND-3140), and K029 (the
     deployment object store disabled in deploy.dapr), and K030 (the secret store
     disabled on an app that resolves credentials), and K031 (a pinned
-    ATLAN_TASK_QUEUE in the deploy env)."""
+    ATLAN_TASK_QUEUE in the deploy env), and K032/K033 (a @task(pool=) naming a
+    pool the app does not deploy, and a deployed pool no task routes to)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -1043,6 +1048,8 @@ def test_catalog_k_series_present() -> None:
         "K029",
         "K030",
         "K031",
+        "K032",
+        "K033",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

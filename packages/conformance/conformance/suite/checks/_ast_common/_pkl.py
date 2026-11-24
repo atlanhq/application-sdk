@@ -1,14 +1,22 @@
-"""Pkl contract source helpers shared by the contract-reading checks (K029–K031).
+"""Pkl contract source helpers shared by the contract-reading checks (K029–K033).
 
 The package has no Pkl parser: these checks read ``contract/**/*.pkl`` source
 line by line. :func:`pkl_code_lines` blanks comments and string literals so a
 pattern matches only code; :func:`contract_files` lists the hand-written
-contract sources.
+contract sources; :func:`pkl_mapping_keys` lists the keys of a named block.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+# Text before a ``{`` that names the block: ``env`` or ``name = new X<..>``.
+# Anything else (``["k"] = new Pool``, a bare ``new Mapping``) is anonymous.
+_BLOCK_NAME_RE = re.compile(r"^\s*(\w+)\s*$|(\w+)\s*=\s*new\s+[\w.]+(?:<[^{}]*>)?\s*$")
+# A mapping entry in masked code: the string key is blanked, the brackets stay.
+_MASKED_ENTRY_RE = re.compile(r"\[\s*\]\s*(?:=|\{)")
+_RAW_KEY_RE = re.compile(r'\[\s*"([^"\\]*)"\s*\]')
 
 
 def _string_end(text: str, i: int) -> int | None:
@@ -81,3 +89,35 @@ def contract_files(root: Path) -> list[Path]:
         for p in contract_dir.rglob("*.pkl")
         if not any(part.startswith(".") for part in p.relative_to(contract_dir).parts)
     )
+
+
+def pkl_mapping_keys(text: str, block: str, *, within: str) -> list[tuple[str, int]]:
+    """``(key, line)`` of each ``["key"] = …`` / ``["key"] { … }`` entry of a block.
+
+    Only entries directly inside a block named *block* (``pools { … }`` or
+    ``pools = new Mapping<…> { … }``) that is itself nested somewhere inside a
+    block named *within* count, in source order. Lines are 1-based. Keys in
+    comments and strings are ignored; a key containing a backslash (an escape
+    or an interpolation) is skipped rather than guessed at.
+    """
+    stack: list[str | None] = []
+    raw_lines = text.splitlines()
+    keys: list[tuple[str, int]] = []
+    for lineno, code in enumerate(pkl_code_lines(text), start=1):
+        seg = 0  # start of the text since the last brace on this line
+        for i, ch in enumerate(code):
+            if ch == "{":
+                m = _BLOCK_NAME_RE.search(code[seg:i])
+                stack.append(m and (m.group(1) or m.group(2)))
+                seg = i + 1
+            elif ch == "}":
+                if stack:
+                    stack.pop()
+                seg = i + 1
+            elif ch == "[" and stack and stack[-1] == block and within in stack[:-1]:
+                if _MASKED_ENTRY_RE.match(code, i) is None:
+                    continue
+                raw = _RAW_KEY_RE.match(raw_lines[lineno - 1], i)
+                if raw is not None:
+                    keys.append((raw.group(1), lineno))
+    return keys

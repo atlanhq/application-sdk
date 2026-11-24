@@ -288,7 +288,10 @@ class TaskMetadata:
     When set, the framework routes this activity to the task queue registered
     for that pool via ``ATLAN_POOL_<POOL>_QUEUE``. Tasks without a pool run
     on the workflow's own task queue (default behavior). Must match a key
-    declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``.
+    declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``
+    after the first one: the first key is the main worker, which polls the
+    base queue. Nothing checks this at runtime; conformance rule K032
+    (TaskPoolNotDeployed) checks it at build time.
     """
 
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
@@ -587,7 +590,9 @@ def task(
         pool: Logical worker-pool name for this task. When set, the framework
             routes this activity to the task queue registered for that pool via
             ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
-            contract ``pools { … }``. Must be a non-empty lowercase kebab-case
+            contract ``pools { … }`` other than the first (the main worker,
+            which polls the base queue); conformance rule K032 checks this at
+            build time, not this decorator. Must be a non-empty lowercase kebab-case
             string (e.g. ``"heavy"``, ``"cold-tier"``). The env-var key is
             derived by uppercasing the pool name and replacing hyphens with
             underscores (``"cold-tier"`` → ``ATLAN_POOL_COLD_TIER_QUEUE``), so

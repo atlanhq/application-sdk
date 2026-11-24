@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**25 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**27 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -40,6 +40,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [K029](#k029) | `DeploymentObjectStoreDisabled` | `warn` | `app` | `contract-toolkit` | yes | 0.56.0 |
 | [K030](#k030) | `CredentialSecretStoreDisabled` | `warn` | `app` | `contract-toolkit` | yes | 0.57.0 |
 | [K031](#k031) | `PinnedWorkerTaskQueue` | `warn` | `app` | `contract-toolkit` | — | 0.62.0 |
+| [K032](#k032) | `TaskPoolNotDeployed` | `block` | `app` | `contract-toolkit` | — | 0.62.0 |
+| [K033](#k033) | `UnusedWorkerPool` | `warn` | `app` | `contract-toolkit` | — | 0.62.0 |
 
 ---
 
@@ -1637,5 +1639,97 @@ trigger follows. First move both to the derived name, or suppress with a reason.
 of the contract (or the comment-only line above it), or `# conformance: ignore[K031]
 <reason>` on the `ATLAN_TASK_QUEUE:` line of `atlan.yaml`. A suppression is almost never
 correct: the pinned queue breaks on-demand retries.
+
+---
+
+## K032 — `TaskPoolNotDeployed` {#k032}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.62.0
+
+> @task(pool=) names a pool the app does not deploy — its activities go to a queue no worker polls and hang
+
+**Rationale:** @task(pool="x") routes the task's activities to atlan-<app>-<deployment>-x
+(resolve_pool_queue). Only a worker pool the chart deploys polls that queue, and the
+contract-toolkit deploys one for each deploy.pools key after the first; the first key is
+the main worker, which polls the base queue. The @task validator checks only that the
+name is kebab-case, so a typo, a pool removed from the contract, or the main worker's
+own key sends every call of the task to a queue nothing polls. ADR-0016 rejected
+per-call routing because it reopens exactly this failure and promised a build-time gate
+for decoration-time routing; this is that gate. BLOCK: no app in the fleet names an
+undeployed pool today, and the failure is a hang, not a degradation. Customer impact:
+every run that reaches the task hangs until its activity or workflow timeout (hours) and
+then fails.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk contract-toolkit/examples/pools/app.pkl — `cold` is a key after the
+  first, so the toolkit renders it as a dedicated worker pool with its own task queue,
+  the one a task routed with pool="cold" is sent to; `hot`, the first key, is the main
+  worker and polls the base queue.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
+- **Interacts with:** K033 is the other half of the same cross-check: a dedicated pool no task routes to.
+  Renaming a pool in the contract without renaming its pool= trips both. The contract is
+  the source of atlan.yaml, so regenerate after changing deploy.pools (K005).
+
+A `@task(pool="x")` (`application_sdk.app.task`) names a pool that is not a dedicated
+worker pool of the app. A dedicated pool is a `deploy.pools` key **after the first** in
+`contract/**/*.pkl` (or, with no contract pools, in the `pools:` mirror of
+`atlan.yaml`), a `deploy.workerPools[]` `name` in `atlan.yaml`, or a pool with an
+explicit `ATLAN_POOL_<POOL>_QUEUE`. The first `pools` key is the app's main worker: it
+polls `atlan-<app>-<deployment>`, not `atlan-<app>-<deployment>-<key>`, so naming it in
+`pool=` is also a finding.
+
+`pool=` is read from a string literal or a module-level string constant of the same
+module; any other expression is not checked.
+
+**Fix:** correct the name to a declared pool, or declare the pool after the first key
+and regenerate `atlan.yaml` with the repo's generate task:
+
+    deploy = new DeployConfig {       pools {         ["default"] = new Pool { }   //
+main worker         ["heavy"] = new Pool { }     // @task(pool="heavy")       }     }
+
+To run the task on the main worker, drop `pool=`.
+
+**Suppress** with `# conformance: ignore[K032] <reason>` on the `pool=` line. A
+suppression is almost never correct: the task's activities are never picked up.
+
+---
+
+## K033 — `UnusedWorkerPool` {#k033}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.62.0
+
+> A dedicated worker pool is declared but no @task(pool=) routes to it
+
+**Rationale:** Every deploy.pools key after the first renders its own worker deployment, KEDA scaler
+and on-demand mirror, and each one costs Temporal worker-deployment versions. A pool no
+@task(pool=) names never receives an activity, which usually means the task that was
+meant to use it lost or misspelled its pool= (the K032 side of the same mistake) or the
+pool outlived the task. WARN, not BLOCK: an app can route to a pool by means this check
+cannot see. Customer impact: none directly; an idle pool is cost and a sign the intended
+routing is not happening.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk application_sdk/app/registry.py — `resolve_pool_queue` derives the queue
+  a task routed to a pool is sent to; a dedicated pool that no task names never receives
+  work.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
+- **Interacts with:** K032 is the other half of the same cross-check: a pool= naming a pool the app does not
+  deploy. A renamed pool trips both; fix the pair together. Regenerate atlan.yaml after
+  changing deploy.pools (K005).
+
+A `deploy.pools` key after the first in `contract/**/*.pkl` (or, with no contract pools,
+in the `pools:` mirror of `atlan.yaml`) is not named by any `@task(pool=...)` in the
+app's Python. The first key is the main worker and is never flagged. The rule stays
+silent when any `pool=` value is not a string literal or module-level string constant,
+since that task may be the pool's user.
+
+**Fix:** route the task meant for it with `@task(pool="<key>")`, or delete the pool and
+regenerate `atlan.yaml`.
+
+**Suppress** with `// conformance: ignore[K033] <reason>` on the pool's key line in the
+contract (or the comment-only line above it), or `# conformance: ignore[K033] <reason>`
+on the key line of `atlan.yaml` — for a pool the app routes to by other means.
 
 ---

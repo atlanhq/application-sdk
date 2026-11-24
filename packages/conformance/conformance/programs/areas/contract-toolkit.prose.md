@@ -64,7 +64,11 @@ description: >
   contract (or from atlan.yaml when the app has no contract) and regenerates when
   the pin equals the derived queue, and migrates the queue first when it is a
   legacy name.
-  K009, K011, K012, and K015 are
+  K032 (an @task(pool=) names no dedicated worker pool, so its activities go to
+  a queue nothing polls) and K033 (a dedicated pool no @task(pool=) routes to)
+  are migration rules (autofixable = false): the right name, or whether the pool
+  should exist, is the app owner's call, so the lane hands a brief to a human.
+  K009, K011, K012, K015 and K032 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
@@ -78,17 +82,17 @@ findings in the working tree, classified by disposition and remediability.
 The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
 current working tree, as reported by `suite.runner --series K`.
 
-All K-series rules are WARN-tier **except K003, K009, K011, K012, and K015 (BLOCK)**.
+All K-series rules are WARN-tier **except K003, K009, K011, K012, K015, and K032 (BLOCK)**.
 So in **default** mode this facet is empty *unless* a K003 (pin/lock drift),
 K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
-(missing `generate` poe task), or K015 (legacy-alias contract/code drift)
-finding is present — those are FAILING results
+(missing `generate` poe task), K015 (legacy-alias contract/code drift), or K032
+(`@task(pool=)` naming an undeployed pool) finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K029/K030/K031), which is where the rest
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K029/K030/K031/K033), which is where the rest
 of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K021, K027, K029, K030 and K031 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K021, K027 and K029–K033 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -1170,15 +1174,49 @@ when there is one, and otherwise on the key in `atlan.yaml`. An app with only
    contract line (or `# conformance: ignore[K031] <reason>` on the `atlan.yaml`
    line).
 
+**K032 TaskPoolNotDeployed** — a `@task(pool="x")` names a pool that is not a
+dedicated worker pool: not a `deploy.pools` key after the first, not a
+`deploy.workerPools[].name` in `atlan.yaml`, and with no explicit
+`ATLAN_POOL_<POOL>_QUEUE`. The first `pools` key is the main worker, which polls
+the base queue, so naming it is a finding too. The task's activities go to
+`atlan-<app>-<deployment>-x`, which nothing polls, and hang until their timeout.
+`classification = "judgment"`.
+
+**K033 UnusedWorkerPool** — a `deploy.pools` key after the first that no
+`@task(pool=)` names. `classification = "judgment"`.
+
+Both are **migration** rules (`autofixable = false`): apply nothing, and return
+the `migration_brief` that `remediate-finding` describes. A K032 finding
+anchors on the `pool=` line of the Python source; a K033 finding on the pool's
+key line in `contract/**/*.pkl`, or in `atlan.yaml` when the contract declares
+no pools.
+
+*Procedure (for the human who picks up the brief):*
+
+1. When both fire with near-identical names (`haevy` / `heavy`), the `pool=` is
+   misspelt: fix it in the Python. Nothing to regenerate.
+2. When K032 names the first `pools` key, the task meant to run on the main
+   worker: drop `pool=`. If it needs its own resources, declare a new pool after
+   the first key instead.
+3. When K032 names a pool that should exist, add it to `deploy.pools` after the
+   first key in `contract/app.pkl` and regenerate with the repo's generate task
+   (**requires `pkl`**). **Never hand-edit a generated `atlan.yaml`.**
+4. When K033 flags a pool nothing should use, delete it from `deploy.pools` and
+   regenerate.
+5. Suppression is almost never correct for K032 (the task never runs). For
+   K033 it is right for a pool the app routes to by other means:
+   `// conformance: ignore[K033] <reason>` on the contract key line (or
+   `# conformance: ignore[K033] <reason>` on the `atlan.yaml` key line).
+
 ---
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
-(K001–K005, K007, K008, K010, K029, K030 and K031 contract; `//` comments) or `# conformance: ignore[Kxxx]
+(K001–K005, K007, K008, K010, K029, K030, K031 and K033 contract; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
 K017 Python, K018, K021, K027,
-K009 text artifact, K014, K029, K030 and K031 `atlan.yaml`; `#` comments) — on the violating line or
+K009 text artifact, K014, K029, K030, K031 and K033 `atlan.yaml`, K032 Python; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on
 a contract intentionally kept at the legacy module during a phased migration with
