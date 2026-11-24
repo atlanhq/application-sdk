@@ -452,8 +452,9 @@ _L022Function = ast.FunctionDef | ast.AsyncFunctionDef
 # failure is not handled, whatever the handler logged first.
 _EXIT_CALLS = frozenset({("sys", "exit"), ("os", "_exit")})
 _EXIT_BUILTINS = frozenset({"exit", "quit"})
-# ``status=<Enum>.FAILURE`` on a returned result object.
-_FAILURE_STATUS_NAMES = frozenset({"FAILURE", "FAILED", "ERROR"})
+# Failure names on a returned result object, including the SDK auth status that
+# maps rejected credentials to a caller-visible HTTP 401.
+_FAILURE_STATUS_NAMES = frozenset({"FAILURE", "FAILED", "ERROR", "INVALID_CREDENTIALS"})
 
 
 def _handler_statements(handler: ast.ExceptHandler) -> list[ast.AST]:

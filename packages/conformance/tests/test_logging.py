@@ -1886,6 +1886,27 @@ def test_l022_silent_when_the_failure_propagates_or_is_a_warning(handler: str) -
     assert _l022(handler) == []
 
 
+def test_l022_silent_when_authentication_rejection_is_returned() -> None:
+    handler = (
+        "    except AuthenticationError:\n"
+        "        logger.error('authentication rejected', exc_info=True)\n"
+        "        return AuthenticationResult(\n"
+        "            status=AuthenticationStatus.INVALID_CREDENTIALS,\n"
+        "            message='rejected',\n"
+        "        )\n"
+    )
+    assert _l022(handler) == []
+
+
+def test_l022_still_fires_for_authentication_success_status() -> None:
+    handler = (
+        "    except AuthenticationError:\n"
+        "        logger.error('authentication rejected', exc_info=True)\n"
+        "        return AuthenticationResult(status=AuthenticationStatus.SUCCESS)\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
 def test_l022_silent_outside_an_except_block() -> None:
     src = (
         "from application_sdk.observability import get_logger\n"
