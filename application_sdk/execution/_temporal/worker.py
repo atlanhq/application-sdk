@@ -290,7 +290,11 @@ class AppWorker:
         self._credential_sweeper: asyncio.Task[None] | None = None
 
     def _start_credential_sweeper(self) -> None:
-        """Start removing this worker's credential directories of closed runs."""
+        """Start releasing this worker's state of closed runs.
+
+        Credential directories and ``_app_state`` slots (tracked files,
+        cached clients), on every worker that ran one of the run's tasks.
+        """
         from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: worker startup only
             run_sweeper,
         )
@@ -300,13 +304,15 @@ class AppWorker:
         )
 
     async def _stop_credential_sweeper(self) -> None:
-        """Stop the sweeper and remove every credential directory still tracked.
+        """Stop the sweeper and release every run's state still held.
 
-        Runs after the Temporal worker has stopped, so no task on this worker
-        can still need one. Best-effort: shutdown must not fail on it.
+        Removes every credential directory still tracked and releases every
+        ``_app_state`` slot, closing the clients in it. Runs after the
+        Temporal worker has stopped, so no task on this worker can still need
+        one. Best-effort: shutdown must not fail on it.
         """
         from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: shutdown only
-            remove_all_credential_dirs,
+            release_all_runs,
         )
 
         sweeper, self._credential_sweeper = self._credential_sweeper, None
@@ -315,12 +321,10 @@ class AppWorker:
             with contextlib.suppress(asyncio.CancelledError):
                 await sweeper
         try:
-            await remove_all_credential_dirs()
+            await release_all_runs()
         # conformance: ignore[E004] shutdown path; a failed removal is logged and must not block shutdown
         except Exception:
-            logger.warning(
-                "Removing credential directories at shutdown failed", exc_info=True
-            )
+            logger.warning("Releasing run state at shutdown failed", exc_info=True)
 
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:

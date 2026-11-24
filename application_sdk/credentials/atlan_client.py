@@ -168,6 +168,10 @@ def create_async_atlan_client(
 class AtlanClientMixin:
     """Mixin providing cached async Atlan client access for App subclasses.
 
+    The client is cached in the run's app state on the worker that made it,
+    and closed (``aclose()``) when that worker releases the run's state after
+    the run has closed. Do not keep a reference to it beyond the run.
+
     Mix into an ``App`` subclass to get ``get_or_create_async_atlan_client``::
 
         class MyApp(AtlanClientMixin, App):

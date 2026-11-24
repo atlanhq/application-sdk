@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.58.1
-source-sha:    63e68ab4a27cd0c8b81a0df5ad0fffd32a78037e
-source-date:   2026-11-24T09:26:12Z
+source-sha:    d5043463095a10dfa169004618140d9746959440
+source-date:   2026-11-24T12:10:31Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -298,7 +298,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `_app_state`
 
 - **Import:** `from application_sdk.app.base import _app_state`
-- **Signature:** `_app_state: dict[str, dict[str, Any]]`
+- **Signature:** `_app_state: dict[tuple[str, str], dict[str, Any]]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
 
