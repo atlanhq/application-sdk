@@ -679,6 +679,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 execution_type="activity",
                 workflow_id=info.workflow_id or "",
                 workflow_run_id=info.workflow_run_id or "",
+                workflow_type=info.workflow_type or "",
                 activity_id=info.activity_id or "",
                 activity_type=info.activity_type or "",
                 task_queue=info.task_queue or "",

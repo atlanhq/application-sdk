@@ -1317,6 +1317,29 @@ class TestLogActivityInboundInterceptor:
             )
         assert get_execution_context().app_name == ""
 
+    async def test_task_code_reads_workflow_type_from_execution_context(
+        self, mock_next
+    ):
+        # App task code reads the running workflow's type through the public
+        # get_execution_context() seam, so it never needs `temporalio.activity`.
+        # Captured inside the activity body: that is where @task code runs.
+        seen: list[str] = []
+
+        async def _body(_input):
+            seen.append(get_execution_context().workflow_type)
+            return "act-result"
+
+        mock_next.execute_activity = AsyncMock(side_effect=_body)
+        interceptor = _LogActivityInboundInterceptor(mock_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.activity"
+        ) as mock_act:
+            mock_act.info.return_value = MockActivityInfo(
+                workflow_type="ExtractionWorkflow"
+            )
+            await interceptor.execute_activity(MockExecuteActivityInput())
+        assert seen == ["ExtractionWorkflow"]
+
     async def test_emits_activity_started_log(self, interceptor):
         with patch(
             "application_sdk.execution._temporal.interceptors.log.activity"
