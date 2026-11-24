@@ -105,7 +105,25 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # it only applies when ``***`` is the whole value, so it can never stop short
 # of a real secret. The negative lookahead after ``=`` likewise leaves a quoted
 # value :data:`_QUOTED_SECRET_RE` already masked (``password='***'``) intact.
-_SECRET_NAMES = r"(?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])(?:sig|token|auth))"
+#
+# Object-store credentials, as obstore's S3 / Azure / GCS config, boto, minio
+# and the Azure SDKs name them. Each is a full name, never a looser ``key`` or
+# ``token`` suffix, so the cursors above still survive. Suffix matching covers
+# the prefixed forms: ``access_key`` / ``accesskey`` cover ``secret_access_key``,
+# ``aws_secret_access_key``, ``SecretAccessKey`` and
+# ``azure_storage_access_key``; ``account_key`` covers ``azure_storage_account_key``
+# and GCS ``service_account_key``; ``session_token`` / ``sessiontoken`` cover
+# ``aws_session_token``, ``fabric_session_token`` and STS ``SessionToken``.
+# ``sas_token``, ``sas_key``, ``bearer_token`` and ``security_token`` are listed
+# because ``token`` carries the lookbehind above and so misses them.
+# ``access_key`` on its own is masked on purpose: in obstore's Azure config it
+# *is* the storage account key (``AzureAccessKey.access_key``). The AWS access
+# key *id* is an identifier, not a secret, and stays readable under the names it
+# actually travels as — ``access_key_id``, ``aws_access_key_id``,
+# ``AWSAccessKeyId`` — which end in ``id`` and so match nothing here; a
+# wrong-key error stays diagnosable. ``private_key_id``, ``client_email`` and
+# ``sse_kms_key_id`` are likewise identifiers and are not listed.
+_SECRET_NAMES = r"(?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|account_key|access_key|accesskey|secret_key|sas_token|sastoken|sas_key|session_token|sessiontoken|security_token|bearer_token|encryption_key|(?<![a-z0-9_])(?:sig|token|auth))"
 # A credential-bearing HTTP header. Matched as a suffix like the names above, so
 # ``proxy-authorization``, ``set-cookie``, ``x-api-key`` and ``x-auth-token``
 # are covered by ``authorization``, ``cookie``, ``api-key`` and ``auth-token``.
@@ -116,7 +134,7 @@ _SECRET_HEADER_NAMES = r"(?:authorization|cookie|api-key|auth-token)"
 # which made the quoted pass ~6x faster on a 20 KB traceback. A name added to
 # either list must start with one of these letters
 # (``test_every_secret_name_passes_the_first_letter_gate`` checks).
-_SECRET_NAME_START = r"(?=[aiprsct])"
+_SECRET_NAME_START = r"(?=[abceiprst])"
 _SECRET_PARAM_RE = re.compile(
     r"(?i)(" + _SECRET_NAME_START + _SECRET_NAMES + r"=)(?!(['\"])\*\*\*\2)"
     r"(?:\*\*\*(?=['\"<>]?(?:[\s&,;#]|$))|\{[^}]*\}|[^\s&,;#]+)",
@@ -252,7 +270,10 @@ def redact_secrets(text: str) -> str:
       → ``Authorization: Bearer ***``, masked to the end of the line.
     * A bare ``Bearer <token>`` → ``Bearer ***``.
     * Bare ``key=value`` pairs outside a URL whose key is a known credential
-      name (``password``, ``token``, ``apikey``, ``pwd``, ``sig``, …).
+      name (``password``, ``token``, ``apikey``, ``pwd``, ``sig``, …),
+      including object-store credentials (``secret_access_key``,
+      ``account_key``, ``sas_token``, ``session_token``, ``access_key``, …).
+      The AWS access-key *id* (``access_key_id``) is an identifier and is kept.
 
     Why a URL query is redact-by-default but bare text is redact-by-name: a
     URL's ``?`` marks exactly where its params start, so every value can be

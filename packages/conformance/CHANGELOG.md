@@ -2,6 +2,22 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.61.0] - 2026-11-24
+
+### Features
+
+- a principle's applies-to can name path globs [FND-5316] (#5069) ([85968b8](https://github.com/atlanhq/application-sdk/commit/85968b8))
+- make P004 DirectTemporalImport a blocking rule [FND-5383] (#5065) ([059e52a](https://github.com/atlanhq/application-sdk/commit/059e52a))
+- give apps a workflow-safe per-run scratch dir and flag tempfile in app code [FND-5364] (#5057) ([bbfd627](https://github.com/atlanhq/application-sdk/commit/bbfd627))
+- bootstrap removes the mothership review rule sets and the app's local rules folder [FND-5317] (#5016) ([185b375](https://github.com/atlanhq/application-sdk/commit/185b375))
+- bootstrap installs the connector reviewer and retires the mothership review kit [FND-5317] (#5022) ([aa41d88](https://github.com/atlanhq/application-sdk/commit/aa41d88))
+
+### Bug fixes
+
+- a shorter CLAUDE.md block, and suppression only for a genuine exception [FND-5317] (#5063) ([6f838b2](https://github.com/atlanhq/application-sdk/commit/6f838b2))
+- E016 accepts a group member re-raised through a local (#5033) ([a5ce98c](https://github.com/atlanhq/application-sdk/commit/a5ce98c))
+- L022 false positive on compliant code (1 repo) (#5027) ([d910459](https://github.com/atlanhq/application-sdk/commit/d910459))
+
 ## [0.60.0] - 2026-11-17
 
 ### Features
