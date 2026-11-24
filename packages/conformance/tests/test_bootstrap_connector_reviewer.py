@@ -363,25 +363,22 @@ def test_block_keeps_the_markers_existing_blocks_are_found_by() -> None:
     assert _BLOCK.endswith(_END + "\n")
 
 
-def test_block_keeps_the_conformance_command_and_its_exit_cases() -> None:
-    assert (
-        "## Mandatory before opening a pull request:"
-        " conformance and a principles review\n"
-    ) in _BLOCK
-    assert "### 1. Conformance on your change\n" in _BLOCK
+def test_block_keeps_the_conformance_command_and_its_cases() -> None:
+    assert "## Before opening a pull request (mandatory)\n" in _BLOCK
+    assert "### 1. Conformance\n" in _BLOCK
     assert (
         "git fetch origin main\n"
         "CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance"
         " detect \\\n"
         "  --repo . --output /tmp/conformance.sarif\n"
     ) in _BLOCK
+    flat = _flat(_BLOCK)
     for case in (
-        "- Exit 0: nothing blocking was introduced.",
-        "- Exit 1 with `[INTRODUCED]` lines:",
-        "- Exit 1 with `falling back to the whole-repository verdict`",
-        "- Exit 1 with a `[PARSE]` line:",
+        "`[INTRODUCED]` lines (exit 1) are blocking findings you added.",
+        "`falling back to the whole-repository verdict`: the base could not be compared.",
+        "`[PARSE]`: fix it if your change broke the file.",
     ):
-        assert case in _BLOCK
+        assert case in flat, case
 
 
 def _flat(text: str) -> str:
@@ -392,34 +389,27 @@ def _flat(text: str) -> str:
 def test_block_asks_for_a_principles_review_before_the_pull_request() -> None:
     """Step 2 sits between the conformance step and the reviewer section, and
     reads both principle sets the way the reviewer does."""
-    conformance = _BLOCK.index("### 1. Conformance on your change\n")
-    principles = _BLOCK.index("### 2. Review your change against the principles\n")
-    reviewer = _BLOCK.index("## After opening a pull request: the connector reviewer\n")
+    conformance = _BLOCK.index("### 1. Conformance\n")
+    principles = _BLOCK.index("### 2. Principles review\n")
+    reviewer = _BLOCK.index("## After opening a pull request: `/review`\n")
     assert conformance < principles < reviewer
     flat = _flat(_BLOCK[principles:reviewer])
     for phrase in (
-        "every `rp*.md` in `.github/connector-reviewer/principles/`",
-        "every `fp*.md` in application-sdk's `.github/connector-reviewer/principles/`"
-        " on `main`",
+        "this repository's `rp*.md` in `.github/connector-reviewer/principles/`",
+        "the fleet `fp*.md`",
         "https://github.com/atlanhq/application-sdk/tree/main/.github/"
         "connector-reviewer/principles",
-        # The fields every principle file carries (the principles README).
-        "whose `applies-to` covers a file you changed",
+        "`git diff origin/main...HEAD`",
         # The principles README: leave `applies-to` out and it applies everywhere.
-        "a principle with no `applies-to` covers every changed file",
-        "answer its `Ask:` questions against your diff (`git diff origin/main...HEAD`)",
-        "skip what its `Don't flag:` excludes",
-        "judge severity by its `Severity:` line",
-        # Lenient: the agent fixes what it judges valid; the reviewer has the
-        # final word once the pull request is open.
-        "Fix the findings you judge valid, and leave the rest; the reviewer"
-        " judges them again once the pull request is open.",
-        "Do not weaken, delete or reword a principle so that your change passes.",
-        "A change to a principle is its own pull request,",
-        "This local review does not replace `/review`.",
+        "whose `applies-to` covers a changed file (no `applies-to` means every file)",
+        "answer its `Ask:` questions, skip its `Don't flag:` cases and grade by its"
+        " `Severity:` line.",
+        # Lenient: the reviewer has the final word once the pull request is open.
+        "Fix what you judge valid; the reviewer judges the rest on the pull request.",
+        "Never weaken or reword a principle to pass: a principle change is its own"
+        " pull request.",
     ):
         assert phrase in flat, phrase
-    assert "Fix every finding before you open the pull request." not in flat
 
 
 def test_block_asks_for_introduced_warnings_to_be_fixed_too() -> None:
@@ -428,38 +418,50 @@ def test_block_asks_for_introduced_warnings_to_be_fixed_too() -> None:
     block says how to tell an introduced warning apart without inventing one."""
     flat = _flat(_BLOCK)
     for phrase in (
-        "Fix every finding your change introduces before you open the pull"
-        " request, blocking and warning alike",
-        "no output line or SARIF field marks a warning as introduced.",
-        "`[<rule>] [WARN] <file>:<line>:<column>`",
-        "run `detect` on `origin/main` too, and ignore that run's exit code:",
-        # The base run writes its own SARIF, so the branch's report survives,
-        # and its checkout is removed afterwards.
-        "git worktree add /tmp/conformance-base origin/main",
-        "--repo /tmp/conformance-base --output /tmp/conformance-base.sarif",
-        "git worktree remove /tmp/conformance-base",
-        "A rule and file with more warnings on your branch than on `origin/main`"
-        " is one your change introduced.",
+        "Fix every finding your change introduces, blocking and warning alike,",
+        "Warnings are not compared with the base.",
+        # The base run writes its own SARIF, and its checkout is removed.
+        "`git worktree add /tmp/conformance-base origin/main`",
+        "`--output /tmp/conformance-base.sarif`, exit code ignored, then"
+        " `git worktree remove` it",
+        "A rule and file with more `[WARN]` lines on your branch is yours: fix it.",
         # The backlog stays the remediation lane's.
-        "warnings your change did not introduce, do not fail the run. Leave them"
-        " alone unless the task is to fix them",
+        "Inherited findings and warnings you did not add are not yours:",
+    ):
+        assert phrase in flat, phrase
+
+
+def test_block_allows_only_a_narrow_justified_suppression() -> None:
+    """Fix in the app, or fix the rule in application-sdk; an inline ignore
+    with a reason is the only suppression, and only for a genuine exception."""
+    flat = _flat(_BLOCK)
+    for phrase in (
+        "**Fix, do not suppress.**",
+        "open a rule-fix pull request in application-sdk and link it.",
+        "Only a deliberate, genuine exception that neither fix can reach",
+        "`# conformance: ignore[<RULE>] <reason>` on that one line",
+        "no exclude path or ignore entry in the conformance, ruff, pyright or"
+        " pre-commit configuration",
+        "no `# noqa`, `# type: ignore` or `# pyright: ignore` on code you added",
+        "no skipped, xfailed, deleted or weakened test",
+        "no lowered threshold or coverage floor",
+        "no `--no-verify` or skipped hook.",
+        "Leave suppressions already on `main` alone unless the task is to fix them.",
     ):
         assert phrase in flat, phrase
 
 
 def test_block_describes_the_connector_reviewer() -> None:
-    assert "## After opening a pull request: the connector reviewer\n" in _BLOCK
+    assert "## After opening a pull request: `/review`\n" in _BLOCK
     flat = _flat(_BLOCK)
     for phrase in (
-        "It reviews only when asked.",
-        "- `/review` reviews the pull request.",
-        "- `/review force` reviews again",
-        "a `connector-reviewer` status on the head commit",
+        "It runs only when asked,",
+        "- `/review`: review the pull request.",
+        "- `/review force`: review again",
+        "a `connector-reviewer` status",
         "- `/review dismiss F-xxxxxx <reason>`",
-        "- `/review recheck F-xxxxxx <what changed, or why it is wrong>`",
+        "- `/review recheck F-xxxxxx <why>`",
         "- `/review waive <reason>`",
-        "https://github.com/atlanhq/application-sdk/tree/main/.github/"
-        "connector-reviewer/principles",
         "The repository's CI configuration remains authoritative for enforcement.",
     ):
         assert phrase in flat, phrase
@@ -471,29 +473,23 @@ def test_block_states_the_command_grammar() -> None:
     The plain-review options are `force` and `verify-budget`."""
     flat = _flat(_BLOCK)
     for phrase in (
-        "every word on its line must be part of one of the commands below",
-        "Any other word gets a usage reply and nothing runs.",
-        "Below a plain `/review` or `/review force`, a note on the next line is"
-        " for the people reading the pull request; the reviewer does not read it.",
-        # Until the parser takes the subcommand from the first line only, a
-        # note below a bare `/review` that starts with one of these is read as
-        # that command.
-        "Do not start that note with `dismiss`, `recheck` or `waive`.",
-        "Add `verify-budget` after it",
+        "any other word on that line gets a usage reply and nothing runs",
+        "Under a plain `/review`, the next line is a note for people;",
+        # A note below a bare `/review` that starts with one of these is read
+        # as that command by a parser older than #5060.
+        "do not start it with `dismiss`, `recheck` or `waive`.",
+        "Add `verify-budget` only when the summary suggests it.",
     ):
         assert phrase in flat, phrase
 
 
 def test_block_says_subcommand_text_below_is_part_of_the_reason() -> None:
-    """event.py reads a dismiss/recheck/waive reason from the whole comment, so
-    text on the lines below is part of it, never an ignored note (lens
-    F-98f9ca)."""
-    flat = _flat(_BLOCK)
+    """event.py reads a dismiss/recheck/waive reason from the lines below the
+    command too, so that text is never an ignored note (lens F-98f9ca)."""
     assert (
-        "After `/review dismiss`, `/review recheck` or `/review waive`, the"
-        " finding ids and the reason may continue on the lines below, and the"
-        " reviewer reads all of that text as the reason."
-    ) in flat
+        "After `dismiss`, `recheck` or `waive`, the following lines are part of"
+        " the reason."
+    ) in _flat(_BLOCK)
 
 
 def test_block_explains_contested_findings_and_the_status() -> None:
@@ -501,11 +497,9 @@ def test_block_explains_contested_findings_and_the_status() -> None:
     stays red until every finding of any severity is closed."""
     flat = _flat(_BLOCK)
     for phrase in (
-        # skeptic.py checks every new blocking finding: critical and high.
-        'A finding marked "⚖️ contested" was raised as critical or high',
-        "It is now medium, so it does not block merge and the author may dismiss it.",
-        "The status is green only when every finding, of any severity,",
-        "Each finding names the principle it cites.",
+        'A "⚖️ contested" finding was disputed by a second check and is now medium',
+        "It is green only when every finding, of any severity,",
+        "Each finding cites a principle. Critical and high findings block merge.",
     ):
         assert phrase in flat, phrase
 
@@ -516,9 +510,8 @@ def test_block_states_the_waiver_exception_to_a_green_status() -> None:
     the exception (lens F-ce599e)."""
     flat = _flat(_BLOCK)
     for phrase in (
-        "or when the review was waived.",
-        "A waive turns the status green for that head commit only and resolves"
-        " no finding",
+        "or the head is waived (findings stay open;",
+        "set the review aside for this head only",
     ):
         assert phrase in flat, phrase
 
@@ -526,11 +519,10 @@ def test_block_states_the_waiver_exception_to_a_green_status() -> None:
 def test_block_points_at_the_repositorys_own_principles() -> None:
     flat = _flat(_BLOCK)
     for phrase in (
-        "This repository's own principles are in"
-        " `.github/connector-reviewer/principles/`",
-        "`rp01-<slug>.md`",
-        "To add one, follow the README in that folder.",
-        "That folder belongs to this repository.",
+        "This repository's principles are `rpNN-<slug>.md` files in"
+        " `.github/connector-reviewer/principles/`, which belongs to this"
+        " repository",
+        "add one by its README; it applies once merged",
     ):
         assert phrase in flat, phrase
     # The README the block points at is the one bootstrap scaffolds there.
@@ -555,11 +547,11 @@ def test_block_says_what_an_agent_may_do() -> None:
     section = _BLOCK.split("### What an agent may do\n", 1)[1]
     flat = " ".join(section.split())
     for phrase in (
-        "may run conformance and the principles review",
+        "Run conformance and the principles review,",
         "comment `/review` after a push",
-        "comment `/review recheck` with the evidence",
-        "Dismissing a finding and waiving the review are decisions for a person.",
-        "Use `/review force` only when a person asks for it.",
+        "comment `/review recheck` with evidence",
+        "Dismissing and waiving are a person's decision:",
+        "Use `/review force` only when a person asks.",
     ):
         assert phrase in flat, phrase
 
