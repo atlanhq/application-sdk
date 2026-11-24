@@ -1997,7 +1997,45 @@ def test_a_literal_repeat_of_a_finding_is_one_finding():
     b = Finding("p.py", 1, "high", "bug", "  decode on none ", "y", "return d()")
     c = Finding("p.py", 1, "medium", "bug", "Another defect", "z", "return d()")
     kept = findings_mod.unique_ids([a, b, c])
-    assert kept == [a, c] and a.id != c.id and a.id == a.fingerprint()
+    # Same principle (none): the title decides which keeps the plain id.
+    assert kept == [a, c] and a.id != c.id and c.id == c.fingerprint()
+
+
+def test_same_principle_findings_on_one_quote_keep_their_ids_across_rounds():
+    """lens F-871acd: two findings on one quote with the same principle and
+    different titles took the plain id by severity, so a round that swapped
+    their grades swapped their ids."""
+
+    def pair(sev_a: str, sev_b: str) -> list[Finding]:
+        return [
+            Finding(
+                "p.py", 1, sev_a, "bug", "Loses rows", "x", "ret()", rule_id="FP01"
+            ),
+            Finding(
+                "p.py", 1, sev_b, "bug", "Skips pages", "y", "ret()", rule_id="FP01"
+            ),
+        ]
+
+    first = {f.title: f.id for f in findings_mod.unique_ids(pair("high", "medium"))}
+    again = {f.title: f.id for f in findings_mod.unique_ids(pair("medium", "critical"))}
+    assert first == again and len(set(first.values())) == 2
+
+
+def test_a_second_pass_over_salted_findings_keeps_their_ids_and_sees_repeats():
+    """lens F-11333f: the round pass grouped by the current id, so a finding
+    one bundle had salted was not recognised when another bundle reported it
+    alone, and got a third id. Groups are formed by the plain fingerprint."""
+
+    def mk(rule: str, title: str) -> Finding:
+        return Finding("p.py", 1, "high", "bug", title, "b", "ret()", rule_id=rule)
+
+    one = findings_mod.unique_ids(
+        [mk("FP01", "Loses rows"), mk("FP02", "Logs a token")]
+    )
+    other = findings_mod.unique_ids([mk("FP02", "Logs a token")])
+    ids = {f.id for f in one}
+    merged = findings_mod.unique_ids(one + other)
+    assert len(merged) == 2 and {f.id for f in merged} == ids
 
 
 def test_state_round_trips_through_the_comment_marker():

@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import zlib
+from collections import Counter
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
@@ -293,46 +294,51 @@ def unique_ids(found: list[Finding]) -> list[Finding]:
     The fingerprint leaves out the prose on purpose, so two DIFFERENT findings
     on the same quoted line of a file, in the same category, got one id, and
     `merge_new` dropped the second as a restatement of the first (FND-5316).
-    Within such a group the finding first by principle (no principle sorts
-    first), then severity, then title keeps the plain fingerprint, so an
-    open finding on a live pull request keeps matching its stored record.
-    Each other one is salted with its principle, or with its principle and
-    title when that is taken too, and as a last resort with a counter. The
-    principle leads because the model's severity and the order it writes
-    findings in change from round to round; with distinct principles the ids
-    depend on nothing else, so a later round that reports the same findings
-    gets the same ids. Only a literal repeat (same principle and title) is
-    the same finding reported twice, and is kept once."""
-    used = {f.id for f in found}
+    Groups are formed by the plain fingerprint, not the current id, so a
+    second pass over findings an earlier pass already salted (one bundle's,
+    then the round's) re-derives the same ids and still sees a repeat.
+    Within a group the finding first by principle (no principle sorts
+    first), then title, keeps the plain fingerprint, so an open finding on a
+    live pull request keeps matching its stored record. Each other one is
+    salted with its principle when no other finding of the group has that
+    principle, otherwise with its principle and title, and as a last resort
+    with a counter. Severity and the order the model writes findings in
+    change from round to round and decide nothing here, so a later round that
+    reports the same findings gets the same ids. Only a literal repeat (same
+    principle and title) is the same finding reported twice, and is kept
+    once."""
     groups: dict[str, list[Finding]] = {}
     for f in found:
-        groups.setdefault(f.id, []).append(f)
+        groups.setdefault(f.fingerprint(), []).append(f)
+    used = set(groups)
     repeats: set[int] = set()
-    for group in groups.values():
-        if len(group) < 2:
-            continue
+    for base, group in groups.items():
         ordered = sorted(
             group,
             key=lambda f: (
                 f.rule_id,
-                _RANK.get(f.severity, len(SEVERITIES)),
                 _title_key(f.title),
+                _RANK.get(f.severity, len(SEVERITIES)),
             ),
         )
-        seen = {(ordered[0].rule_id, _title_key(ordered[0].title))}
-        for f in ordered[1:]:
+        distinct: list[Finding] = []
+        seen: set[tuple[str, str]] = set()
+        for f in ordered:
             ident = (f.rule_id, _title_key(f.title))
             if ident in seen:
                 repeats.add(id(f))
-                continue
-            seen.add(ident)
-            salts = [f.rule_id, f"{f.rule_id}|{ident[1]}"]
-            cand = next((c for c in map(f.fingerprint, salts) if c not in used), "")
-            n = 2
-            while not cand:
-                c = f.fingerprint(f"{salts[-1]}#{n}")
-                cand = c if c not in used else ""
-                n += 1
+            else:
+                seen.add(ident)
+                distinct.append(f)
+        distinct[0].id = base
+        shared = Counter(f.rule_id for f in distinct)
+        for f in distinct[1:]:
+            salt = f.rule_id
+            if shared[f.rule_id] > 1:
+                salt = f"{f.rule_id}|{_title_key(f.title)}"
+            cand, n = f.fingerprint(salt), 2
+            while cand in used:
+                cand, n = f.fingerprint(f"{salt}#{n}"), n + 1
             f.id = cand
             used.add(cand)
     return [f for f in found if id(f) not in repeats]
