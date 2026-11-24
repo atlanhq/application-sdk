@@ -1257,7 +1257,10 @@ def cited_excerpts(
             if fd is not None and fd.status == "added"
             else merge_base_text(base_path)
         )
-        if fd is None:
+        # A path the PR renames away has no diff of its own (diffs are keyed by
+        # the new path), only a "" head-text entry: it is touched, not untouched.
+        touched = fd is not None or rel in ws.head_text
+        if not touched:
             head = base
         else:
             head = ws.head_text.get(rel) or None
@@ -1271,8 +1274,10 @@ def cited_excerpts(
             continue
         lo = max(ref.lo - CITED_CONTEXT, 1)
         hi = min(ref.hi + CITED_CONTEXT, size)
-        changed = fd is not None and (
-            head is None or bool(fd.changed_lines & set(range(lo, hi + 1)))
+        changed = touched and (
+            head is None
+            or fd is None
+            or bool(fd.changed_lines & set(range(lo, hi + 1)))
         )
         copies = 2 if changed and head and base else 1
         hi = min(hi, lo + budget // copies - 1)

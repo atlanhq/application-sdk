@@ -9532,6 +9532,27 @@ def test_cited_excerpts_treat_an_added_or_unfetched_file_as_the_prs_own(
     assert "    5 line_5 = 5" in unfetched.base
 
 
+def test_cited_excerpts_treat_a_path_renamed_away_as_changed(tmp_path: Path):
+    """F-7eb584: a rename's diff is keyed by its new path, so the old path has no
+    diff, only a "" head-text entry. Citing the old path must not show the
+    control the PR moved (and may have weakened) as unchanged base code."""
+    rename = (
+        "diff --git a/control.py b/controls/control.py\n"
+        "similarity index 100%\nrename from control.py\nrename to controls/control.py\n"
+    )
+    ws = _cite_ws(
+        tmp_path,
+        rename,
+        head={"controls/control.py": _numbered_src(5), "control.py": ""},
+    )
+    base = {"control.py": _numbered_src(5)}
+    [c], skipped = review_mod.cited_excerpts(ws, "control.py:3", base.get)
+    assert skipped == []
+    assert c.changed_by_this_pr and c.head == ""
+    assert "    3 line_3 = 3" in c.base
+    assert "(not in the PR head, or not fetched)" in review_mod._cited_block(c)
+
+
 def test_cited_excerpts_refuse_unsafe_secret_missing_and_out_of_range(
     tmp_path: Path,
 ):
