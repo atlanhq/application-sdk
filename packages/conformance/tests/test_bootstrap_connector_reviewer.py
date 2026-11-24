@@ -430,7 +430,8 @@ def test_block_explains_contested_findings_and_the_status() -> None:
     stays red until every finding of any severity is closed."""
     flat = _flat(_BLOCK)
     for phrase in (
-        'A finding marked "⚖️ contested" was raised as high',
+        # skeptic.py checks every new blocking finding: critical and high.
+        'A finding marked "⚖️ contested" was raised as critical or high',
         "It is now medium, so it does not block merge and the author may dismiss it.",
         "The status is green only when every finding, of any severity,",
         "Each finding names the principle it cites.",

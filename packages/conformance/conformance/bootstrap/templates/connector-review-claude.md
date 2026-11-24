@@ -68,10 +68,10 @@ What comes back:
   dismissed or resolved by a recheck.
 - Each finding names the principle it cites. A critical or high finding blocks
   merge.
-- A finding marked "⚖️ contested" was raised as high, but a second, independent
-  check found evidence in the code against it. It is now medium, so it does not
-  block merge and the author may dismiss it. Read both reasons, then fix it or
-  dismiss it.
+- A finding marked "⚖️ contested" was raised as critical or high, but a second,
+  independent check found evidence in the code against it. It is now medium, so
+  it does not block merge and the author may dismiss it. Read both reasons, then
+  fix it or dismiss it.
 - The approach check at the top of the summary is advice. Act on it or leave it.
 - `/review` on these pull requests reports them exempt instead of reviewing
   them: Renovate and Dependabot updates, bootstrap resync pull requests,
