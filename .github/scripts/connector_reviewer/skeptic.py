@@ -26,6 +26,14 @@ trigger, the code path, the outcome; agent.trace_chain) against the code.
 - A failed call (a provider error), a spent budget share, or a check past
   the cap changes nothing: no check was made, and a provider error must not
   unblock a real defect.
+- **Already on the base** (FND-5316): when the caller hands the check the
+  finding's code as it is on the base branch (`base_for`), the skeptic also
+  answers whether the failure is introduced or made worse by this pull
+  request, or already happens at the base (`on_base`). A judged verdict
+  (upheld, contested or refuted) with `same_on_base` drops the finding: the
+  caller removes it and says so in the summary. With no base code (code the
+  PR removes, a new file or symbol, or a base copy that cannot be read) the
+  answer is not read, and nothing is dropped on an unknown.
 
 Bounded like the approach check (holistic.py): new critical and high findings
 only, at most `max_findings` per round, each check at most `max_lookups`
@@ -73,6 +81,16 @@ OUTCOMES = (
     "skipped",
 )
 CHANGES = ("refuted", "contested", "malformed")
+# The verdicts a check can give; only these can drop a finding as already on
+# the base (`judge_base`), never "malformed" or a check that was not made.
+JUDGED = ("upheld", "contested", "refuted")
+ON_BASE = ("introduced", "worse", "same_on_base", "unknown")
+SAME_ON_BASE = "same_on_base"
+# The summary note of a finding dropped as already on the base.
+BASE_DROP = (
+    "the failure already happens at the base branch, and this pull request "
+    "does not make it worse"
+)
 # The contested note of a check that gave no verdict.
 NO_VERDICT = "the skeptic gave no verdict, so the chain is not confirmed"
 STEP_WHY_KEEP = 160  # characters of the skeptic's note on one step kept in a reason
@@ -114,6 +132,13 @@ finding, input an attacker or a misconfigured source can send counts as normal. 
 shape, an invalid input, or a chain that needs several unlikely conditions at once is not normal, even
 when every step holds: such a finding does not block. <normal_path> is the other reviewer's claim; check
 it, do not copy it.
+
+Decide whether this pull request causes the failure (on_base). <code_at_base>, when given, is the same
+code as it is on the base branch, before this pull request. On the input the trigger names, does the base
+code reach the same outcome? introduced: the base does not fail this way. worse: the base fails, but this
+pull request makes it more likely or more harmful. same_on_base: the base reaches the same outcome, or a
+worse one, on that input, and this pull request does not make it worse. unknown: you cannot tell, or no
+<code_at_base> is given. Say why in base_why.
 
 - upheld: every step holds in the code and the trigger is a normal input. List every step in `steps`
   with holds=true and what in the code shows it, and set trigger_normal=true. An upheld verdict that
@@ -187,8 +212,17 @@ VERDICT_TOOL: dict[str, Any] = {
                         "required": ["path", "quote"],
                     },
                 },
+                "on_base": {
+                    "type": "string",
+                    "enum": list(ON_BASE),
+                    "description": "Is the failure introduced or made worse by this pull request, or does it already happen at the base (<code_at_base>)? unknown when you cannot tell or no <code_at_base> is given.",
+                },
+                "base_why": {
+                    "type": "string",
+                    "description": "What in <code_at_base> shows it, in one sentence.",
+                },
             },
-            "required": ["verdict", "reason", "trigger_normal"],
+            "required": ["verdict", "reason", "trigger_normal", "on_base"],
         },
     },
 }
@@ -211,6 +245,8 @@ class Outcome:
     lookups: int = 0
     error: str = ""
     seconds: float = 0.0
+    # Why the finding is dropped (the caller removes it), "" when it is kept.
+    dropped: str = ""
 
     def to_report(self) -> dict[str, Any]:
         return {
@@ -222,6 +258,7 @@ class Outcome:
             "lookups": self.lookups,
             "error": self.error,
             "seconds": self.seconds,
+            "dropped": self.dropped,
         }
 
 
@@ -249,7 +286,7 @@ def chain_steps(f: Finding) -> list[dict[str, Any]]:
     return objects((f.chain or EMPTY).get("steps"))
 
 
-def build_input(ws: Workspace, f: Finding, principle: str) -> str:
+def build_input(ws: Workspace, f: Finding, principle: str, base: str = "") -> str:
     line = f.line or f.head_line
     where = f"{f.path}:{line}" if line else f.path
     if line and f.end_line and f.end_line > line:
@@ -302,7 +339,20 @@ def build_input(ws: Workspace, f: Finding, principle: str) -> str:
         parts.append(
             f'<code_at_head path="{f.path}" lines="{lo}-{hi}">\n{window}\n</code_at_head>'
         )
+    if base:
+        parts.append(f"<code_at_base>\n{base}\n</code_at_base>")
     return "\n".join(parts)
+
+
+def judge_base(out: Outcome, args: dict[str, Any], base: str) -> None:
+    """Mark `out` dropped when the skeptic, shown the base code (`base`),
+    judged the finding and answered that the failure already happens there.
+    Nothing is dropped without base code, on any other answer (a missing or
+    unknown one included), or on a check with no verdict."""
+    if not base or out.outcome not in JUDGED or args.get("on_base") != SAME_ON_BASE:
+        return
+    why = clean(str(args.get("base_why") or ""), STEP_WHY_KEEP)
+    out.dropped = clean(BASE_DROP + (f": {why}" if why else ""))
 
 
 def _parse_verdict(
@@ -409,16 +459,19 @@ def check(
     f: Finding,
     cfg: SkepticConfig,
     principle: str = "",
+    base: str = "",
 ) -> Outcome:
     """One skeptic call on one finding. Never raises for a model failure: the
     outcome says what happened, and only "refuted", "contested" or
     "malformed" (the model answered with no verdict) changes anything. A
-    failed call or a spent budget is no check and changes nothing."""
+    failed call or a spent budget is no check and changes nothing. `base` is
+    the finding's code on the base branch ("" for none): with it, a judged
+    verdict that says the failure is the same there drops the finding."""
     out = Outcome(finding_id=f.id, severity=f.severity)
     t0 = time.monotonic()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": build_input(ws, f, principle)},
+        {"role": "user", "content": build_input(ws, f, principle, base)},
     ]
     try:
         for turn in range(cfg.max_lookups + 1):
@@ -447,6 +500,7 @@ def check(
                 args = parse_args(fn.get("arguments") or "")
                 if name == "skeptic_verdict":
                     _parse_verdict(ws, out, args, len(chain_steps(f)))
+                    judge_base(out, args, base)
                     out.seconds = round(time.monotonic() - t0, 1)
                     return out
                 if name in _LOOKUPS and not last and out.lookups < cfg.max_lookups:
@@ -488,8 +542,9 @@ def check(
 def apply(f: Finding, out: Outcome) -> bool:
     """A refuted, contested or malformed finding drops to medium and is marked
     contested (never with an empty note); any other outcome leaves it as it
-    is. Returns whether the finding changed."""
-    if out.outcome not in CHANGES:
+    is. A dropped one (`out.dropped`) is left as it is too: the caller removes
+    it. Returns whether the finding changed."""
+    if out.dropped or out.outcome not in CHANGES:
         return False
     f.severity = CONTESTED_SEVERITY
     f.contested = out.reason or NO_VERDICT
@@ -503,16 +558,21 @@ def run_all(
     cfg: SkepticConfig,
     principle_for: Any,
     concurrency: int,
+    base_for: Any = None,
 ) -> list[Outcome]:
     """Check every candidate in `new`, `concurrency` at a time, and apply each
     outcome. `principle_for(finding)` renders the principle it cites ("" for
-    none). Candidates past `max_findings` keep their severity, as "skipped"."""
+    none), and `base_for(finding)` its code on the base branch ("" for none,
+    and for every finding when it is not given). Candidates past
+    `max_findings` keep their severity, as "skipped". An outcome with
+    `dropped` set is a finding the caller removes."""
     todo = candidates(new)
     checked, over = todo[: max(cfg.max_findings, 0)], todo[max(cfg.max_findings, 0) :]
 
     def one(f: Finding) -> Outcome:
         try:
-            return check(client, ws, f, cfg, principle_for(f))
+            base = base_for(f) if base_for else ""
+            return check(client, ws, f, cfg, principle_for(f), base)
         except Exception as e:  # noqa: BLE001 - a skeptic bug must never cost the review
             return Outcome(
                 finding_id=f.id,
@@ -540,7 +600,13 @@ def run_all(
         changed = apply(f, o)
         trace.line(
             f"skeptic {o.finding_id} {o.severity}: {o.outcome}"
-            + (f" → {f.severity}, contested" if changed else ", severity kept")
+            + (
+                " → dropped"
+                if o.dropped
+                else f" → {f.severity}, contested"
+                if changed
+                else ", severity kept"
+            )
             + f" ({o.lookups} lookup(s), {o.seconds:.1f}s)"
             + (f": {trace.short(o.reason, 160)}" if o.reason else "")
             + (f" [{trace.short(o.error, 120)}]" if o.error else "")

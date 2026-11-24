@@ -13650,6 +13650,157 @@ def test_the_skeptic_takes_a_consumers_behaviour_from_the_cited_principle():
     assert params["properties"]["trigger_normal"]["type"] == "boolean"
 
 
+# ---- the skeptic compares against the base branch (FND-5316) -----------------------------------------
+
+
+def _base_verdict(on_base: str | None, verdict: str = "upheld") -> Any:
+    """A skeptic verdict confirming every step, with `on_base` (left out when
+    None) as its answer to "does the base already fail this way?"."""
+    args: dict[str, Any] = {
+        "verdict": verdict,
+        "reason": "The code does it.",
+        "steps": [
+            {"step": n, "holds": True, "why": "the quoted line does it"}
+            for n in range(1, 7)
+        ],
+        "trigger_normal": True,
+        "trigger_why": "the default config produces this input",
+        "base_why": "the base fetch returns client.get(key) for the same key",
+    }
+    if on_base is not None:
+        args["on_base"] = on_base
+    return response([tool_call("skeptic_verdict", args)])
+
+
+def _code_at_base(request: dict[str, Any]) -> str:
+    """The <code_at_base> block of a skeptic request, "" when it has none."""
+    msgs = cast(list[dict[str, Any]], request["messages"])
+    text = str(msgs[1]["content"])
+    if "<code_at_base>" not in text:
+        return ""
+    return text.split("<code_at_base>", 1)[1].split("</code_at_base>", 1)[0]
+
+
+def test_a_failure_that_already_happens_at_the_base_is_dropped(
+    repo: Path, tmp_path: Path
+):
+    """The skeptic checked each step at the PR head only, so it upheld blocking
+    findings whose failure the base branch already had, identically or worse.
+    It now sees the finding's function as it is on the base, answers whether
+    the PR introduces or worsens the failure, and a finding the base already
+    has is dropped, with a note in the summary."""
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base")]
+    res, gh = _skeptic_run(repo, script)
+
+    [req] = script.skeptic_requests
+    base = _code_at_base(req)
+    assert "app/storage/fetch.py: fetch" in base
+    assert "def fetch(client, key):" in base and "return client.get(key)" in base
+    assert "data.decode()" not in base  # the head's code is not the base's
+    assert state_of(res).findings == [] and res.new_findings == []
+    [o] = res.skeptic
+    assert o.outcome == "upheld" and o.dropped.startswith(
+        "the failure already happens at the base branch"
+    )
+    body = gh.comments[0]["body"]
+    assert "The skeptic dropped" in body and "decode() on a None result" in body
+    assert "returns client.get(key) for the same key" in body
+    assert "Changes requested" not in body
+    assert "blocking" not in gh.statuses[-1]["description"]
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["skeptic"]["checks"][0]["dropped"] == o.dropped
+
+
+@pytest.mark.parametrize("on_base", ["introduced", "worse", "unknown", "maybe", None])
+def test_a_failure_the_pr_introduces_or_worsens_is_kept(repo: Path, on_base: Any):
+    """Only "same on the base" drops: a failure the PR introduces or worsens,
+    an unknown, an unrecognised answer and no answer keep the finding."""
+    script = _review_script()
+    script.skeptic = [_base_verdict(on_base)]
+    res, gh = _skeptic_run(repo, script)
+
+    assert _code_at_base(script.skeptic_requests[0])
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    assert not res.skeptic[0].dropped
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+@pytest.mark.parametrize(
+    "base", [None, "def fetch(:\n"], ids=["missing", "unparseable"]
+)
+def test_an_unreadable_base_never_drops_a_finding(repo: Path, base: str | None):
+    """A base copy that cannot be read is unknown: no base code is shown, and
+    a "same on the base" answer is not read."""
+    path = repo / "app" / "storage" / "fetch.py"
+    if base is None:
+        path.unlink()
+    else:
+        path.write_text(base)
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base")]
+    res, gh = _skeptic_run(repo, script)
+
+    assert _code_at_base(script.skeptic_requests[0]) == ""
+    [f] = state_of(res).findings
+    assert f.severity == "high" and not res.skeptic[0].dropped
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def _base_ws(repo: Path, path: str, old: str | None, new: str) -> Workspace:
+    files = parse_unified_diff(_diff_of(path, old, new))
+    head = {path: new}
+    return Workspace(
+        root=repo,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(repo, overrides=head),
+    )
+
+
+def _at(path: str, quote: str) -> Finding:
+    return Finding(path, 1, "high", "bug", "t", "b", quote)
+
+
+@pytest.mark.parametrize(
+    "path, old, new, quote",
+    [
+        # Code the PR removes: no counterpart, so never "already on base".
+        ("app/storage/fetch.py", SRC_V1, SRC_V2, "    return client.get(key)"),
+        # A new file.
+        (
+            "app/storage/fresh.py",
+            None,
+            "def g(x):\n    return x.decode()\n",
+            "    return x.decode()",
+        ),
+        # A new function in a file the base has.
+        (
+            "app/storage/fetch.py",
+            SRC_V1,
+            SRC_V2_NEXT,
+            "    return {k: fetch(client, k) for k in keys}",
+        ),
+    ],
+    ids=["removed-code", "new-file", "new-function"],
+)
+def test_code_with_no_base_counterpart_shows_the_skeptic_no_base(
+    repo: Path, path: str, old: str | None, new: str, quote: str
+):
+    ws = _base_ws(repo, path, old, new)
+    assert review_mod.skeptic_base(ws, _at(path, quote)) == ""
+
+
+def test_the_skeptic_base_is_the_enclosing_function_on_the_base(repo: Path):
+    ws = _base_ws(repo, "app/storage/fetch.py", SRC_V1, SRC_V2)
+    got = review_mod.skeptic_base(
+        ws, _at("app/storage/fetch.py", "    return data.decode()")
+    )
+    assert got.startswith("app/storage/fetch.py: fetch\n")
+    assert "return client.get(key)" in got and "decode" not in got
+
+
 # ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
 
 

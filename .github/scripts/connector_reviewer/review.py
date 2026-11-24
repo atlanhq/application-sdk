@@ -1284,11 +1284,15 @@ def run(
                 cfg.skeptic,
                 lambda f: _cited_principle(principles, f),
                 cfg.concurrency,
+                # A checkout that is not the base shows no base code: an
+                # unknown base never drops a finding.
+                base_for=None if off_base else (lambda f: skeptic_base(ws, f)),
             )
             tally = skeptic.counts(res.skeptic)
             trace.line(
                 "skeptic: " + ", ".join(f"{k} {v}" for k, v in tally.items() if v)
             )
+            _drop_by_skeptic(state, res)
         res.timings_ms["skeptic"] = int((time.monotonic() - t_sk) * 1000)
         res.calls = all_calls()
     elif to_doubt:
@@ -1762,6 +1766,24 @@ def _check_new_against_base(
         if not drop and not unchecked:
             trace.line("every new blocking finding stands")
     return [f for f in fresh if f.id not in drop]
+
+
+def _drop_by_skeptic(state: PRState, res: RunResult) -> None:
+    """Remove the new findings a skeptic check dropped (`Outcome.dropped`).
+    The skeptic runs after `merge_new`, so each is in the state already. The
+    summary names each one and why, since it no longer has a row."""
+    gone = {o.finding_id: o.dropped for o in res.skeptic if o.dropped}
+    if not gone:
+        return
+    for f in res.new_findings:
+        if f.id in gone:
+            res.notes.append(
+                f"The skeptic dropped {f.id} ({f.severity}, "
+                f"{skeptic.clean(f.title, 120)}): {gone[f.id]}."
+            )
+            trace.line(f"dropped {f.id} {f.severity} {f.path}: {gone[f.id]}")
+    state.findings[:] = [f for f in state.findings if f.id not in gone]
+    res.new_findings = [f for f in res.new_findings if f.id not in gone]
 
 
 def _book(ledger: Ledger, spent: Ledger) -> None:
@@ -2641,6 +2663,22 @@ def at_base_branch(
     dotted = head_sym.qualname.split(":", 1)[1]
     got = base_symbol_excerpt(root, rel, text, f, head_sym, head_line)
     return f"{rel}: {dotted}\n{got}" if got else f"absent on base: {dotted} in {rel}"
+
+
+def skeptic_base(ws: Workspace, f: Finding) -> str:
+    """`f`'s enclosing function or quoted lines as they are on the base branch,
+    for the skeptic to compare against (FND-5316); "" when there is nothing to
+    compare. Code the PR removes (`REMOVED_NOTE`) and a new file, symbol or
+    line have no base counterpart, and a base copy that cannot be read, may
+    hold secrets or has no stored quote is unknown: none of them can be "the
+    same on the base"."""
+    text = ws.text(f.path) or ""
+    at = _current_line(ws, f, text)
+    if not at or _new_copy_of_removed(ws, f, at):
+        return ""  # removed code, or a quote that is gone: no counterpart
+    got = at_base_branch(ws, f, ws.index.enclosing(f.path, at), at)
+    # Every answer that is not an excerpt starts "absent on base" or "(".
+    return "" if got.startswith(("absent on base", "(")) else got
 
 
 def _numbered(text: str, lo: int, hi: int) -> str:
