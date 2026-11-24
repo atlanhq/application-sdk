@@ -113,6 +113,126 @@ class TestClientOptionsOverrides:
         }
 
 
+_DURATION_ENV_DEFAULTS = {
+    "ATLAN_OBSTORE_TIMEOUT": "30m",
+    "ATLAN_OBSTORE_READ_TIMEOUT": "90s",
+    "ATLAN_OBSTORE_CONNECT_TIMEOUT": "30s",
+    "ATLAN_OBSTORE_POOL_IDLE_TIMEOUT": "90s",
+    "ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT": "30s",
+}
+
+
+def _obstore_accepts_duration(value: str) -> bool:
+    """Whether obstore itself parses *value* as a client timeout."""
+    from obstore.exceptions import GenericError
+    from obstore.store import S3Store
+
+    try:
+        S3Store(
+            "probe-bucket",
+            region="us-east-1",
+            skip_signature=True,
+            client_options={"timeout": value},
+        )
+    except GenericError:
+        return False
+    return True
+
+
+class TestDurationEnvValues:
+    """FND-5223: an empty or unparseable duration broke every store construction."""
+
+    @pytest.mark.parametrize("key", sorted(_DURATION_ENV_DEFAULTS))
+    def test_empty_value_is_the_default(self, monkeypatch, key: str) -> None:
+        monkeypatch.setenv(key, "")
+        opts = obstore_client_options()
+        field = key.removeprefix("ATLAN_OBSTORE_").lower()
+        assert opts[field] == _DURATION_ENV_DEFAULTS[key]
+
+    def test_unparseable_value_is_the_default_and_logged(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_OBSTORE_READ_TIMEOUT", "90")
+        with patch.object(_obstore_config.logger, "warning") as warning:
+            opts = obstore_client_options()
+        assert opts["read_timeout"] == "90s"
+        warning.assert_called_once()
+        assert "ATLAN_OBSTORE_READ_TIMEOUT='90'" in warning.call_args.args[1]
+
+    def test_empty_user_agent_is_the_default(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_OBSTORE_USER_AGENT", "")
+        assert obstore_client_options()["user_agent"].startswith(
+            "atlan-application-sdk/"
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            *_DURATION_ENV_DEFAULTS.values(),
+            "0",
+            "0s",
+            "1h 30m",
+            "1h30m",
+            "1.5h",
+            "5 min",
+            "500ms",
+            "1µs",
+            "1nsec",
+            "3 wks",
+            "2 hrs",
+            "1M",
+            "1y2M",
+            "1h\t2m",
+            "30",
+            "s",
+            "-1s",
+            ".5s",
+            "1.s",
+            "1e3s",
+            "+1s",
+            "1H",
+            "1Min",
+            "1h,2m",
+            "1msecs",
+            "1mon",
+            "1micros",
+            "1h2",
+            "forever",
+        ],
+    )
+    def test_validator_agrees_with_obstore(self, value: str) -> None:
+        """The SDK's duration check and obstore's parser give the same verdict.
+
+        Differential, so an obstore upgrade that changes its grammar fails here
+        instead of letting a value through that breaks every store construction.
+        """
+        from application_sdk._env import is_duration
+
+        assert is_duration(value) == _obstore_accepts_duration(value)
+
+    def test_empty_timeout_constructs_an_s3_store(self) -> None:
+        """The reproduction from the issue, in a fresh interpreter.
+
+        Before, ``make_s3_store`` raised ``Generic Config error: failed to parse
+        "" as Duration`` whenever ``ATLAN_OBSTORE_TIMEOUT`` was set but empty.
+        """
+        import subprocess
+        import sys
+
+        code = (
+            "from application_sdk._obstore_config import make_s3_store\n"
+            "make_s3_store('probe-bucket', {'aws_region': 'us-east-1', "
+            "'aws_skip_signature': 'true'})\n"
+        )
+        env = {**os.environ, "ATLAN_OBSTORE_TIMEOUT": ""}
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+
 # ---------------------------------------------------------------------------
 # proxy_url plumbing (obstore does not read proxy env vars itself)
 # ---------------------------------------------------------------------------
@@ -245,7 +365,7 @@ class TestRetryConfig:
         )
         read = set(
             re.findall(
-                r'os\.getenv\("(ATLAN_OBSTORE_RETRY_\w+)"\)',
+                r'env_int\(\s*"(ATLAN_OBSTORE_RETRY_\w+)"',
                 inspect.getsource(obstore_retry_config),
             )
         )
@@ -285,6 +405,24 @@ class TestRetryConfig:
         monkeypatch.setenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", "abc")
         cfg = obstore_retry_config()
         assert cfg is None
+
+    @pytest.mark.parametrize(
+        "key",
+        ["ATLAN_OBSTORE_RETRY_MAX_RETRIES", "ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS"],
+    )
+    def test_negative_value_falls_back_to_default(self, monkeypatch, key) -> None:
+        """A bare ``int()`` accepted ``-1`` and handed it to obstore."""
+        monkeypatch.delenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", raising=False)
+        monkeypatch.delenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv(key, "-1")
+        with patch.object(_obstore_config.logger, "warning") as warning:
+            assert obstore_retry_config() is None
+        assert "is below 0" in warning.call_args.args[1]
+
+    def test_zero_retries_is_kept(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", "0")
+        assert obstore_retry_config() == {"max_retries": 0}
 
 
 # ---------------------------------------------------------------------------

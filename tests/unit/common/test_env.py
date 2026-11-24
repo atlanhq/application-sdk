@@ -179,3 +179,82 @@ class TestImportTime:
             timeout=120,
         )
         assert result.returncode == 0, result.stderr
+
+
+class TestNoneDefault:
+    """``default=None`` is "unset means no override" (FND-5223)."""
+
+    def test_int_unset_or_empty_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert _env.env_int(KEY, None) is None
+        monkeypatch.setenv(KEY, "  ")
+        assert _env.env_int(KEY, None) is None
+
+    def test_int_rejection_says_it_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(KEY, "-1")
+        with pytest.warns(RuntimeWarning, match="is below 0; ignoring it"):
+            assert _env.env_int(KEY, None, minimum=0) is None
+
+    def test_float_non_finite_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(KEY, "inf")
+        with pytest.warns(RuntimeWarning, match="is not finite; ignoring it"):
+            assert _env.env_float(KEY, None) is None
+
+    def test_float_valid_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(KEY, "2.5")
+        assert _env.env_float(KEY, None) == 2.5
+
+
+class TestEnvStr:
+    def test_unset_is_the_default(self) -> None:
+        assert _env.env_str(KEY, "fallback") == "fallback"
+
+    @pytest.mark.parametrize("raw", ["", "   ", "\n"])
+    def test_empty_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """``os.getenv(KEY, "fallback")`` returns ``""`` here, and that empty
+        string replaced the default at every site this reader now serves."""
+        monkeypatch.setenv(KEY, raw)
+        assert os.getenv(KEY, "fallback") == raw
+        assert _env.env_str(KEY, "fallback") == "fallback"
+
+    def test_value_is_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(KEY, "  my-app \n")
+        assert _env.env_str(KEY, "fallback") == "my-app"
+
+    def test_common_module_re_exports_it(self) -> None:
+        assert common_env.env_str is _env.env_str
+
+
+class TestEnvDuration:
+    @pytest.mark.parametrize(
+        "raw", ["30s", "1h 30m", "1.5h", "0", "500ms", "2 minutes"]
+    )
+    def test_valid_duration_passes_through(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv(KEY, raw)
+        assert _env.env_duration(KEY, "90s") == raw
+
+    def test_empty_is_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(KEY, "")
+        assert _env.env_duration(KEY, "90s") == "90s"
+
+    @pytest.mark.parametrize("raw", ["30", "s", "-1s", "1h,2m", "1Min", "forever"])
+    def test_malformed_warns_and_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        monkeypatch.setenv(KEY, raw)
+        with pytest.warns(RuntimeWarning, match="is not a duration"):
+            assert _env.env_duration(KEY, "90s") == "90s"
+
+    def test_common_module_reports_through_the_logger(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(KEY, "30")
+        with patch.object(common_env.logger, "warning") as warning:
+            assert common_env.env_duration(KEY, "90s") == "90s"
+        warning.assert_called_once()
+        assert "is not a duration" in warning.call_args.args[1]

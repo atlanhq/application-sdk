@@ -38,6 +38,7 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk.common._env import env_str
 from application_sdk.contracts.events import (
     ApplicationEventNames,
     Event,
@@ -755,11 +756,9 @@ def _resolve_event_ingress_url() -> str | None:
     if _ingress_url_resolved and _resolved_ingress_url is not None:
         return _resolved_ingress_url
 
-    import os  # noqa: PLC0415 — cold path
-
     name = _event_store_name()
     for components_dir in (
-        os.environ.get("DAPR_COMPONENTS_PATH", "/app/components"),
+        env_str("DAPR_COMPONENTS_PATH", "/app/components"),
         "./components",
     ):
         url = _read_http_binding_url(components_dir, name)

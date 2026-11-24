@@ -390,34 +390,167 @@ class TestLoadOomRestartCheck:
             assert _load_oom_restart_check() == "none"
 
 
-class TestEveryEnvReadIsTolerant:
-    """Guard for FND-4891: ``constants`` runs at import, before logging exists.
+_SDK_ROOT = Path(constants.__file__).parent
 
-    A bare ``int(os.getenv(...))`` there turns one empty Helm value into a
-    process that cannot start, and a hand-written ``== "true"`` brings back a
-    second boolean vocabulary. Typed reads go through ``application_sdk._env``.
+
+def _guarded_sources() -> list[Path]:
+    """Every SDK module the env-read guard covers.
+
+    Everything under ``application_sdk/`` except ``_env.py`` itself (the one
+    place allowed to read the environment raw) and ``testing/`` (the test
+    harness, whose variables CI sets and a deployed app never reads).
+    """
+    return sorted(
+        path
+        for path in _SDK_ROOT.rglob("*.py")
+        if path != _SDK_ROOT / "_env.py" and _SDK_ROOT / "testing" not in path.parents
+    )
+
+
+def _is_env_read(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and ast.unparse(node.func) in {
+        "os.getenv",
+        "os.environ.get",
+    }
+
+
+_FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def _walk_scope(scope: ast.AST) -> list[ast.AST]:
+    """The nodes of *scope*, not descending into nested functions.
+
+    Each function is its own scope, so a ``raw`` assigned from an env read in
+    one function does not mark an unrelated ``raw`` in another.
+    """
+    nodes: list[ast.AST] = []
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if not isinstance(node, _FUNCTION_NODES):
+            stack.extend(ast.iter_child_nodes(node))
+    return nodes
+
+
+def _env_fed_names(scope: ast.AST) -> set[str]:
+    """Names assigned from an expression that contains an env read in *scope*.
+
+    So ``raw = os.getenv(K)`` followed by ``int(raw)`` counts as a numeric
+    conversion of an env read, as ``int(os.getenv(K))`` does.
+    """
+    names: set[str] = set()
+    for node in _walk_scope(scope):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            value = node.value
+            if value is None or not any(_is_env_read(n) for n in ast.walk(value)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return names
+
+
+def _numeric_conversions_of_env_reads(tree: ast.Module) -> list[ast.Call]:
+    scopes: list[ast.AST] = [tree]
+    scopes += [n for n in ast.walk(tree) if isinstance(n, _FUNCTION_NODES)]
+    found: list[ast.Call] = []
+    for scope in scopes:
+        fed = _env_fed_names(scope)
+        for node in _walk_scope(scope):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in {"int", "float"}
+                and node.args
+            ):
+                continue
+            arg = node.args[0]
+            if any(_is_env_read(n) for n in ast.walk(arg)) or any(
+                isinstance(n, ast.Name) and n.id in fed for n in ast.walk(arg)
+            ):
+                found.append(node)
+    return sorted(found, key=lambda n: (n.lineno, n.col_offset))
+
+
+def _string_reads_with_a_default(tree: ast.Module) -> list[ast.Call]:
+    """Two-argument env reads whose default is not provably ``""`` or ``None``.
+
+    ``os.getenv(K, "x")`` returns ``""`` for an empty value, so the default is
+    skipped exactly when a Helm value is left unset. ``env_str`` keeps it.
+    """
+    found = []
+    for node in ast.walk(tree):
+        if not (_is_env_read(node) and len(node.args) >= 2):
+            continue
+        default = node.args[1]
+        if isinstance(default, ast.Constant) and default.value in ("", None):
+            continue
+        found.append(node)
+    return found
+
+
+class TestEveryEnvReadIsTolerant:
+    """Guard for FND-4891 and FND-5223, over every module in the package.
+
+    A bare ``int(os.getenv(...))`` turns one empty Helm value into a process
+    that cannot start (or, read through a variable, a hand-rolled parser that
+    drifts from the shared rules: negatives and ``inf`` let through). A
+    two-argument ``os.getenv(K, default)`` skips the default on an empty value.
+    A hand-written ``== "true"`` brings back a second boolean vocabulary. All of
+    them go through ``application_sdk._env`` instead.
     """
 
     @staticmethod
-    def _is_env_read(node: ast.AST) -> bool:
-        if not isinstance(node, ast.Call):
-            return False
-        func = node.func
-        text = ast.unparse(func)
-        return text in {"os.getenv", "os.environ.get"}
+    def _offenders(finder) -> list[str]:
+        offenders = []
+        for path in _guarded_sources():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            rel = path.relative_to(_SDK_ROOT.parent)
+            offenders += [
+                f"{rel}:{node.lineno}: {ast.unparse(node)}" for node in finder(tree)
+            ]
+        return sorted(offenders)
 
-    def test_no_bare_numeric_conversion_of_an_env_read(self) -> None:
-        tree = ast.parse(Path(constants.__file__).read_text())
-        offenders = [
-            ast.unparse(node)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in {"int", "float"}
-            and node.args
-            and self._is_env_read(node.args[0])
+    def test_the_guard_covers_the_whole_package(self) -> None:
+        """A guard that parses one file reports nothing about the others."""
+        covered = {p.relative_to(_SDK_ROOT).as_posix() for p in _guarded_sources()}
+        assert {
+            "constants.py",
+            "_obstore_config.py",
+            "storage/preflight.py",
+            "execution/settings.py",
+        } <= covered
+        assert "_env.py" not in covered
+
+    def test_the_finders_catch_each_shape(self) -> None:
+        """The finders flag what they exist for, so an empty result means clean."""
+        tree = ast.parse(
+            "import os\n"
+            "a = int(os.getenv('A'))\n"
+            "def f():\n"
+            "    raw = os.environ.get('B', '').strip()\n"
+            "    return float(raw)\n"
+            "c = os.getenv('C', 'default')\n"
+            "d = os.environ.get('D', name)\n"
+            "e = os.getenv('E', '')\n"
+            "g = os.getenv('G')\n"
+            "def h(raw):\n"
+            "    return int(raw)\n"
+        )
+        assert [ast.unparse(n) for n in _numeric_conversions_of_env_reads(tree)] == [
+            "int(os.getenv('A'))",
+            "float(raw)",
         ]
-        assert offenders == []
+        assert [ast.unparse(n) for n in _string_reads_with_a_default(tree)] == [
+            "os.getenv('C', 'default')",
+            "os.environ.get('D', name)",
+        ]
+
+    def test_no_numeric_conversion_of_an_env_read(self) -> None:
+        assert self._offenders(_numeric_conversions_of_env_reads) == []
+
+    def test_no_string_read_whose_default_an_empty_value_skips(self) -> None:
+        assert self._offenders(_string_reads_with_a_default) == []
 
     def test_no_hand_written_boolean_comparison_of_an_env_read(self) -> None:
         tree = ast.parse(Path(constants.__file__).read_text())
@@ -425,7 +558,7 @@ class TestEveryEnvReadIsTolerant:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Compare):
                 continue
-            calls = [n for n in ast.walk(node.left) if self._is_env_read(n)]
+            calls = [n for n in ast.walk(node.left) if _is_env_read(n)]
             words = {
                 c.value
                 for c in node.comparators

@@ -65,10 +65,25 @@ from application_sdk._env import (
     env_choice,
     env_float,
     env_int,
+    env_str,
     warn_rejected,
 )
 
 load_dotenv(dotenv_path=".env")
+
+
+def _user_warning(message: str) -> None:
+    """Report a rejected value as a ``UserWarning`` (and log it).
+
+    For the shutdown and loop-stall overrides, whose rejection has always been
+    a ``UserWarning``: the value falls back to a derived bound, not a fault.
+    """
+    warn_rejected(message, UserWarning)
+
+
+def _silently(message: str) -> None:
+    """Drop a rejection that another reader of the same variable reports."""
+
 
 # Static Constants
 LOCAL_ENVIRONMENT = "local"
@@ -85,18 +100,18 @@ LOCAL_WORKFLOW_ID = "local-no-temporal"
 #: (FND-195 / CONNECT-183). Queue naming goes through
 #: :mod:`application_sdk.common.task_queue`, which reports an unset app name as
 #: ``None`` instead of inventing one.
-APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+APPLICATION_NAME = env_str("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of
 #: the same application. Same caveat as :data:`APPLICATION_NAME`: the
 #: ``LOCAL_ENVIRONMENT`` fallback is an identity default, and the worker treats an
 #: unset deployment name as "drop the ``atlan-`` prefix entirely", so queue
 #: derivation must read the raw env via :mod:`application_sdk.common.task_queue`.
-DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
+DEPLOYMENT_NAME = env_str("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 # REMOVED: APP_HOST, APP_PORT — use AppConfig.handler_host / handler_port
 #: Tenant ID for multi-tenant applications
-APP_TENANT_ID = os.getenv("ATLAN_TENANT_ID", "default")
+APP_TENANT_ID = env_str("ATLAN_TENANT_ID", "default")
 # Domain Name of the tenant
-DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
+DOMAIN_NAME = env_str("ATLAN_DOMAIN_NAME", "atlan.com")
 
 # App Vitals / Release metadata.
 #
@@ -169,7 +184,7 @@ PUBLISHED_AT = os.getenv("ATLAN_PUBLISHED_AT", "")
 #: Iceberg namespace its table lives in, so the name — and therefore the host —
 #: cannot change. Overridable because the SDK also runs off-cluster, where it
 #: must be pointable at a stub, or at nothing.
-PREFLIGHT_RESULTS_ENDPOINT = os.getenv(
+PREFLIGHT_RESULTS_ENDPOINT = env_str(
     "ATLAN_PREFLIGHT_RESULTS_ENDPOINT",
     "http://system-workflows.system-workflows-app.svc.cluster.local:8000"
     "/continuous-preflight/check-results",
@@ -217,7 +232,7 @@ def _run_prefix(app_name: str, workflow_id: str, run_id: str) -> str:
 
 
 # Temporary Path (used to store intermediate files)
-TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+TEMPORARY_PATH = env_str("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
 PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
 """Removed lever, kept one release as an import shim.
@@ -242,7 +257,7 @@ ARTIFACT_VALIDATION_MODE_ENV = "ATLAN_ARTIFACT_VALIDATION_MODE"
 # Directory where contract-toolkit generated files (configmaps, manifest, Python types) live.
 # Convention: app/generated/ inside the repo (importable as app.generated).
 # In Docker (WORKDIR=/app, app code at /app/app/) this resolves to /app/app/generated.
-CONTRACT_GENERATED_DIR = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
+CONTRACT_GENERATED_DIR = env_str("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
 
 # Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
 # If empty, cleanup activities will default to workflow-specific paths at runtime
@@ -279,7 +294,7 @@ OBSERVABILITY_DIR = "artifacts/apps/{application_name}/{deployment_name}/observa
 #: reachable — combined-mode FastAPI ``/metrics`` proxies it in-process,
 #: and the worker's ``TemporalCoreCollector`` scrapes it locally to feed
 #: the Pushgateway push.
-TEMPORAL_PROMETHEUS_BIND_ADDRESS = os.getenv(
+TEMPORAL_PROMETHEUS_BIND_ADDRESS = env_str(
     "ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS", "127.0.0.1:9464"
 )
 #: Per-request HTTP timeout for the in-process FastAPI ``/metrics`` proxy
@@ -447,11 +462,7 @@ def _preferred_drain_seconds() -> int:
     A value that does not parse falls back to the default here silently;
     ``load_execution_settings`` reads the same variable and reports it.
     """
-    raw = os.environ.get(_DRAIN_ENV, "").strip()
-    try:
-        return int(raw) if raw else _DEFAULT_DRAIN_SECONDS
-    except ValueError:
-        return _DEFAULT_DRAIN_SECONDS
+    return env_int(_DRAIN_ENV, _DEFAULT_DRAIN_SECONDS, report=_silently)
 
 
 def load_shutdown_budget() -> ShutdownBudget | None:
@@ -461,19 +472,8 @@ def load_shutdown_budget() -> ShutdownBudget | None:
     fixed default, so a deployment that declares nothing behaves as before.
     Read on each call so settings loaders and tests see the current env.
     """
-    raw = os.environ.get(SHUTDOWN_GRACE_SECONDS_ENV, "").strip()
-    if not raw:
-        return None
-    try:
-        grace = int(raw)
-    except ValueError:
-        warn_rejected(
-            f"{SHUTDOWN_GRACE_SECONDS_ENV}={raw!r} is not an integer; "
-            "shutdown bounds keep their fixed defaults",
-            UserWarning,
-        )
-        return None
-    if grace <= 0:
+    grace = env_int(SHUTDOWN_GRACE_SECONDS_ENV, None, report=_user_warning)
+    if grace is None or grace <= 0:
         return None
     try:
         return derive_shutdown_budget(
@@ -704,7 +704,7 @@ APP_DEPLOYMENT_NAME = os.getenv("ATLAN_APP_DEPLOYMENT_NAME") or os.getenv(
 
 
 #: Name of the deployment secrets in the secret store
-DEPLOYMENT_SECRET_PATH = os.getenv(
+DEPLOYMENT_SECRET_PATH = env_str(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
 
@@ -730,11 +730,11 @@ AUTH_URL = os.getenv("ATLAN_AUTH_URL")
 
 # Deployment Secret Store Key Names
 #: Key name for OAuth2 client ID in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_ID_KEY)
-WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(
+WORKFLOW_AUTH_CLIENT_ID_KEY = env_str(
     "ATLAN_AUTH_CLIENT_ID_KEY", "ATLAN_AUTH_CLIENT_ID"
 )
 #: Key name for OAuth2 client secret in deployment secrets (can be overridden via ATLAN_AUTH_CLIENT_SECRET_KEY)
-WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
+WORKFLOW_AUTH_CLIENT_SECRET_KEY = env_str(
     "ATLAN_AUTH_CLIENT_SECRET_KEY", "ATLAN_AUTH_CLIENT_SECRET"
 )
 
@@ -814,21 +814,12 @@ WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 #: would otherwise end the process. Unset, malformed, negative or non-finite
 #: values mean no override.
 def load_worker_loop_stall_timeout_override() -> float | None:
-    name = "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS"
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        value = float(raw)
-    except ValueError:
-        value = math.nan
-    if not math.isfinite(value) or value < 0:
-        warn_rejected(
-            f"{name}={raw!r} is not a non-negative number; using the derived bound",
-            UserWarning,
-        )
-        return None
-    return value
+    return env_float(
+        "ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS",
+        None,
+        minimum=0.0,
+        report=_user_warning,
+    )
 
 
 #: Consecutive definitive zero-poller readings after which the worker ``/live``
@@ -919,11 +910,11 @@ USE_SERVER_SIDE_CURSOR = _load_use_server_side_cursor()
 
 # DAPR Constants
 #: Name of the state store component in DAPR
-STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
+STATE_STORE_NAME = env_str("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
-SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
+SECRET_STORE_NAME = env_str("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
-DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
+DEPLOYMENT_OBJECT_STORE_NAME = env_str("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
 #: Name of the upstream object store component in DAPR.
 #: Three wirings reach this value:
 #:
@@ -942,11 +933,9 @@ DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "object
 #: decision about *what to build* — see ``_create_infrastructure``.  Code asking
 #: "is this deployment one store or two?" reads ``context.single_store``, which
 #: compares the handles that were actually built.
-UPSTREAM_OBJECT_STORE_NAME = os.getenv(
-    "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
-)
+UPSTREAM_OBJECT_STORE_NAME = env_str("UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore")
 #: Name of the pubsub component in DAPR
-EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+EVENT_STORE_NAME = env_str("EVENT_STORE_NAME", "eventstore")
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
 
@@ -1071,7 +1060,7 @@ ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int = ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXI
 DAPR_MAX_GRPC_MESSAGE_LENGTH = env_int("DAPR_MAX_GRPC_MESSAGE_LENGTH", 104857600)
 
 #: Name of the deployment secret store component in DAPR
-DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
+DEPLOYMENT_SECRET_STORE_NAME = env_str(
     "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"
 )
 
@@ -1080,11 +1069,11 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
 #: Used by logger_adaptor.py at module level (logging.basicConfig runs at
 #: import time, before AppConfig exists). AppConfig.log_level is the runtime
 #: equivalent for code that has access to the config instance.
-LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upper()
+LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or env_str("LOG_LEVEL", "INFO")).upper()
 #: Service name for OpenTelemetry.
 #: Used by traces_adaptor.py and metrics_adaptor.py at module level for
 #: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.
-SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
+SERVICE_NAME: str = env_str("OTEL_SERVICE_NAME", "atlan-application-sdk")
 
 
 from application_sdk.version import __version__  # noqa: E402
@@ -1099,7 +1088,7 @@ SERVICE_VERSION: str = _load_service_version()
 #: Additional resource attributes for OpenTelemetry
 OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 #: Endpoint for the OpenTelemetry collector
-OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
+OTEL_EXPORTER_OTLP_ENDPOINT: str = env_str(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
 #: Whether to enable OpenTelemetry log export
@@ -1155,7 +1144,7 @@ OTEL_QUEUE_SIZE = env_int("OTEL_QUEUE_SIZE", 2048)
 
 # AWS Constants
 #: AWS Session Name
-AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
+AWS_SESSION_NAME = env_str("AWS_SESSION_NAME", "temp-session")
 
 # Log batching configuration
 LOG_BATCH_SIZE = env_int("ATLAN_LOG_BATCH_SIZE", 100)
@@ -1177,24 +1166,24 @@ LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = env_float(
 # to the correct observability sub-path (logs / metrics / traces).  The actual output
 # format is gzip-compressed NDJSON (.json.gz) — not parquet.  Do not change the
 # default value; doing so would silently reroute log records to the "other" sub-path.
-LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
+LOG_FILE_NAME = env_str("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
 # Metrics batching / sink configuration
 METRICS_BATCH_SIZE = env_int("ATLAN_METRICS_BATCH_SIZE", 100)
 METRICS_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", 10)
 # Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
-METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
+METRICS_FILE_NAME = env_str("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 
 # --- Activity sizing telemetry ------------------------------------------------
 # One record per execution, batched larger and flushed slower than metrics: this
 # is offline evidence for fitting envelopes, not something watched live.
 SIZING_BATCH_SIZE = env_int("ATLAN_SIZING_BATCH_SIZE", 500)
 SIZING_FLUSH_INTERVAL_SECONDS = env_int("ATLAN_SIZING_FLUSH_INTERVAL_SECONDS", 60)
-SIZING_FILE_NAME = os.environ.get("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
+SIZING_FILE_NAME = env_str("ATLAN_SIZING_FILE_NAME", "sizing.parquet")
 #: Signal discriminator for the traces adapter. No traces file is written:
 #: the adapter emits spans over OTLP and keeps its object-store sink off.
-TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
+TRACES_FILE_NAME = env_str("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
 #: Upper bound, in seconds, on stopping the shared observability background
 #: loop at process exit: the final flush of every periodic sink (logs,
@@ -1206,7 +1195,7 @@ OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS = env_float(
 
 # Segment Configuration
 #: Segment API URL for sending events. Defaults to https://api.segment.io/v1/batch
-SEGMENT_API_URL = os.getenv("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
+SEGMENT_API_URL = env_str("ATLAN_SEGMENT_API_URL", "https://api.segment.io/v1/batch")
 #: Segment write key for authentication. If set, Segment metrics are automatically enabled.
 SEGMENT_WRITE_KEY = os.getenv("ATLAN_SEGMENT_WRITE_KEY", "")
 #: Default user ID for Segment events
@@ -1261,7 +1250,7 @@ _LOCK_METADATA_KEY = "__lock_metadata__"
 _REDIS_HOST = os.getenv("REDIS_HOST", "")
 _REDIS_PORT = os.getenv("REDIS_PORT", "")
 _REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-_REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
+_REDIS_SENTINEL_SERVICE_NAME = env_str("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
 _REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
 #: The Redis client's connect guard: ``true`` (the default) leaves it unconnected.
 _IS_LOCKING_DISABLED = env_bool("IS_LOCKING_DISABLED", True)
