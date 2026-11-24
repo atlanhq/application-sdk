@@ -32,7 +32,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, exempt, holistic, prompts, sdk_source, skeptic, trace
+from . import (
+    advisory,
+    baseline,
+    exempt,
+    gate,
+    holistic,
+    prompts,
+    sdk_source,
+    skeptic,
+    trace,
+)
 from . import context as code_context
 from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -94,6 +104,12 @@ class RunResult:
     unplaced: list[Finding] = field(default_factory=list)
     resolved_free: list[str] = field(default_factory=list)
     resolved_verified: list[str] = field(default_factory=list)
+    # Gate findings closed because their file now matches the bootstrap render,
+    # or is no longer changed (gate.py, FND-5325).
+    resolved_gate: list[str] = field(default_factory=list)
+    # The round's gate-file check (gate.py): changed gate files compared, and of
+    # those the ones that match the render. None when no check was made.
+    gate: gate.Evaluation | None = None
     # Open items (F-… and A…) sent to a verify call that spent its whole output
     # budget before answering: not re-judged this round, so not a verdict on them.
     verify_cut_off: list[str] = field(default_factory=list)
@@ -330,6 +346,12 @@ def author_files_in_range(
         for fd in incremental
         if fd.hunks and (fd.path in pr_paths or fd.path in finding_paths)
     }
+
+
+def _model_findings(state: PRState) -> list[Finding]:
+    """The open findings the model raised: the ones verify may close. A gate
+    finding is computed in code and closed in code (gate.reconcile)."""
+    return [f for f in state.open_findings() if f.origin != gate.ORIGIN]
 
 
 def _sev_at_least(sev: str, floor: str) -> bool:
@@ -594,6 +616,7 @@ def run(
     sdk_note: str = "",
     sdk_dir: str | None = None,
     sdk_head: str = "",
+    gate_fact: str | None = None,
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
@@ -602,7 +625,9 @@ def run(
     `uv.lock` of the very head this round reviews, and only when the checkout
     is at the ref that lock pins; `sdk_head` is the head the workflow chose the
     checkout's ref from, named when the two differ (FND-5316). A caller that
-    built the source itself passes `sdk` and `sdk_note` instead."""
+    built the source itself passes `sdk` and `sdk_note` instead. `gate_fact`
+    is the gate job's fact file (gate.py, FND-5325); None when the gate check
+    is not configured."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -826,6 +851,27 @@ def run(
         )
     if sdk_note:
         res.notes.append(sdk_note)
+    # The gate-file fact (FND-5325): a changed bootstrap-managed file that
+    # differs from what the pinned conformance version renders is one finding,
+    # computed in code. Judged against the whole PR's diff at this head.
+    gate_eval = gate.evaluate(
+        gate_fact,
+        full_files,
+        head=head,
+        lock_text=lock.text,
+        exclude=exclude_patterns(cfg),
+    )
+    res.gate = gate_eval
+    res.notes.extend(gate_eval.notes)
+    for n in gate_eval.notes:
+        trace.line(n)
+    if gate_eval.findings is not None:
+        differ = ", ".join(f.path for f in gate_eval.findings)
+        trace.line(
+            f"gate files: {len(gate_eval.checked)} changed, "
+            f"{len(gate_eval.matching)} match the render, "
+            f"{len(gate_eval.findings)} differ" + (f": {differ}" if differ else "")
+        )
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
@@ -848,6 +894,8 @@ def run(
     touched = {fd.path for fd in all_files}
     pr_diffs = {fd.path: fd for fd in full_files}
     for f in state.open_findings():
+        if f.origin == gate.ORIGIN:
+            continue  # computed in code each round (gate.reconcile), never matched
         if not quote_stored(f):
             continue  # no quote to match (the state outgrew a comment): verify judges it
         text = head_text.get(f.path)
@@ -975,7 +1023,7 @@ def run(
         or (
             cfg.verify
             and round_no > 1
-            and (state.open_findings() or open_concerns(state))
+            and (_model_findings(state) or open_concerns(state))
         )
     )
     if cfg.preflight and will_call:
@@ -1062,7 +1110,7 @@ def run(
         recheck = bool(round_files) or force
         verify_files = round_files if round_files else full_files
         if not recheck:
-            res.verify_skipped = [f.id for f in state.open_findings()] + [
+            res.verify_skipped = [f.id for f in _model_findings(state)] + [
                 cid for cid, _ in open_concerns(state)
             ]
             if res.verify_skipped:
@@ -1070,7 +1118,8 @@ def run(
                     "verify: skipped — no PR file changed this round, so "
                     f"{', '.join(res.verify_skipped)} were not re-checked"
                 )
-        to_verify = state.open_findings() if recheck else []
+        # A gate finding is never the model's to close: gate.reconcile does it.
+        to_verify = _model_findings(state) if recheck else []
         # The approach check runs once per PR, so without this a concern the author
         # has since addressed would stay on the PR forever. It rides the same call.
         concerns = open_concerns(state) if recheck else []
@@ -1301,6 +1350,15 @@ def run(
         )
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
+    # Gate findings after the model's (FND-5325): computed in code, so no
+    # later-round floor, base-branch check, skeptic or verify applies to them.
+    gate_new, res.resolved_gate = gate.reconcile(state, gate_eval.findings, round_no)
+    res.new_findings.extend(gate_new)
+    if res.resolved_gate:
+        trace.line(
+            f"resolved (gate file now matches the render or is unchanged): "
+            f"{', '.join(res.resolved_gate)}"
+        )
     for path, rounds in res.spiral:
         trace.line(f"spiral: {path} drew new findings in rounds {rounds}")
     with trace.group("7 · verdict"):
@@ -1377,7 +1435,9 @@ def run(
             "mode": mode,
             "label": mode_label,
             "new": len(res.new_findings),
-            "resolved": len(res.resolved_free) + len(res.resolved_verified),
+            "resolved": len(res.resolved_free)
+            + len(res.resolved_verified)
+            + len(res.resolved_gate),
             "blocking": len(state.open_findings(BLOCKING)),
             "incomplete": bool(res.failed or res.incomplete or state.unread),
             "usd": round(
@@ -2139,6 +2199,11 @@ def recheck(
         f = by_id.get(fid)
         if f is None or f.status != "open":
             refused.append(f"`{fid}` is not an open finding")
+        elif f.origin == gate.ORIGIN:
+            refused.append(
+                f"`{fid}` is computed in code from the bootstrap render, not by the "
+                "model: change the file back, or dismiss it with a reason"
+            )
         else:
             targets.append(f)
     ledger = (
@@ -2944,6 +3009,7 @@ _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
     "pr-history": "closed: needed history only this PR's own earlier commits could produce",
+    gate.FIXED_BY: "the file matches the bootstrap render again, or is no longer changed",
 }
 _CLOSE_HINT = (
     "Fix them and comment `/review`, or close one the team won't fix with "
@@ -3121,6 +3187,8 @@ def _principle(f: Finding) -> str:
     """The principle a finding rests on, as shown in the summary: its id (FPnn
     from the fleet set, RPnn from the repository's own), or a note that it is a
     concrete bug, which needs no principle (`agent.cite`)."""
+    if f.origin == gate.ORIGIN:
+        return "— (bootstrap render, computed in code)"
     return f"`{f.rule_id}`" if f.rule_id else "— (concrete bug)"
 
 
@@ -3165,7 +3233,16 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     out.append(cap(f.body.strip()))
     if f.scenario.strip():
         out.append(f"\n**When it fails:** {cap(f.scenario.strip())}")
-    if f.suggestion.strip() and chars != 0:
+    if f.origin == gate.ORIGIN and f.suggestion.strip() and chars != 0:
+        # The diff from the render to the pull request (gate.py). Fenced longer
+        # than any backtick run in it: its lines are the pull request's text.
+        runs = [len(m) for m in re.findall(r"`+", f.suggestion)]
+        fence = "`" * max(3, max(runs, default=0) + 1)
+        out.append(
+            "\n**Diff from the render** (`-` is what bootstrap renders, `+` what this "
+            f"pull request has):\n\n{fence}diff\n{cap(f.suggestion.rstrip())}\n{fence}"
+        )
+    elif f.suggestion.strip() and chars != 0:
         # Longer than any backtick run inside, so a suggestion that itself holds a
         # fenced example (a Markdown doc) cannot close the block early.
         runs = [len(m) for m in re.findall(r"`+", f.suggestion)]

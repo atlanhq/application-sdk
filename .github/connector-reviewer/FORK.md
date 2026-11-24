@@ -411,9 +411,9 @@ and placed in every bundle's prompt after `<context>`. They add no model stage.
   messages only: back and forth between its own commits is not detected. A removed
   assertion whose identical line lands in a brand-new test is taken as moved. Callers
   are counted by bare name, like `context.call_sites`.
-- Not done: the gate-file check of FND-5312 (compare a changed bootstrap-managed
-  gate file with what bootstrap would render). It needs the conformance package's
-  renderer, which this stdlib-only engine does not have.
+- The gate-file check FND-5312 left out (compare a changed bootstrap-managed
+  gate file with what bootstrap would render) is FND-5325, below: the renderer
+  runs in a job of its own and hands the engine a fact file.
 
 Tests: `FakeGitHub` has empty history reads by default
 (`pr_commit_messages`, `recent_commits`, `commit_patches`), so every other test runs
@@ -586,6 +586,40 @@ equivalent.
 - **Open.** A live review on a connector pull request that reads SDK source, and
   its cost and time against today's reviews (the ticket's last two items).
 
+### The gate-file fact (FND-5325)
+
+lens has no equivalent: application-sdk has no bootstrap-managed files.
+
+A connector repo carries files `atlan-application-sdk-conformance bootstrap`
+writes and overwrites on every resync. A hand edit to one is lost at the next
+resync (or holds it back) and changes a CI gate meant to be the same across the
+fleet. When a pull request changes one, the review compares it with what the
+conformance version the pull request pins renders, and a mismatch is one
+finding, computed in code (`gate.py`).
+
+| | |
+|---|---|
+| Which files | The pinned version's C002 list (`bootstrap_drift.discover`) without the two write-if-absent scaffolds the app owns (`tests.yaml`, `renovate.json`): the managed workflow shims, the reviewer's own `connector-reviewer.yaml` among them, the opt-in SARIF shim, the vendored action and scripts, and the retired files (a retired file still present is a mismatch, as in C002). The repository's `.github/connector-reviewer/principles/` and the app's own workflows are not gate files. Only a file the whole pull request changes counts (a rename's old path included): the app's older drift on files the pull request does not touch raises nothing. |
+| The comparison | C002 of the pinned version, called as it is (`gate_render.py`): `scan_path` decides each file, so the per-repo values it reads back, the action pins it ignores (`strip_action_pins`), an absent file and a retired one are judged as the app's own Conformance gate judges them. The diff shown is between `scan_path`'s own render (`render`, wrapped where `bootstrap_drift` imported it) and the head, both pin-stripped, at most 24 lines and 1,500 characters. A gate file reached through a symlink is not read. |
+| Which version | The `atlan-application-sdk-conformance` the pull request head's `uv.lock` pins (`gate.conformance_pin`): a released version from PyPI or the org's mirror (`sdk_source.known_index`, the index rebuilt from `_KNOWN_REGISTRIES`, never the lock's spelling). Any other pin, or none, is no check. The review uses the fact only when its head is the head it reviews and its version is the one that head pins (`gate.evaluate`). |
+| Where it runs | A job of its own, `gate`, before `review` (which `needs` it, `if: !cancelled()`). It holds no secret and no App token, and its token only reads contents. `gate-ref` writes `refs/pull/<n>/head` (the number an int); a sparse checkout of the head (`.github/workflows/`, `.github/actions/`, `.github/scripts/`, `renovate.json`, `uv.lock`, credentials not persisted) is read as data; `gate-fact` (`gate.make_fact`) creates a venv, installs `atlan-application-sdk-conformance==<pin>` with `--only-binary :all:` from that index, and runs `gate_render.py` with the venv's interpreter, `-I`, from outside the checkout, with an environment of `PATH`, `HOME`, the locale and the temp directory only. The fact goes to the review job as an artifact (`connector-reviewer-gate`, with the upload retry). This is the one place pull-request files are checked out and the one place third-party code runs: the review job, which holds the App token and the model key, still runs only this standard-library package. |
+| The finding | One per mismatched file: `origin = "gate"`, severity high, category `other`, no principle (no fleet principle covers bootstrap-managed files), line 0, the quote a fixed `gate:<path>` so the id is the path's whatever the edit. The body names the pinned version, the line counts, and the fix: edit it in application-sdk (`packages/conformance/conformance/bootstrap/templates/`) or run a resync; for a deleted file, restore it or retire it in application-sdk. `suggestion` holds the diff, shown under "Diff from the render" in a fence longer than any backtick run in it, and only for a path whose diff a prompt may carry (`select.model_visible`'s rule). The summary's principle column reads "bootstrap render, computed in code". |
+| Severity | High, on purpose. Any open finding already makes the status `failure`; what high adds is that the pull request's author cannot dismiss it alone (`dismiss`). A local edit to a fleet CI gate is for someone else to accept, and the two real fixes are cheap. The later-round floor, `calibrate` and the skeptic do not apply: it is not the model's. |
+| Each round | `gate.reconcile`, after `merge_new` and the skeptic: a new mismatch is a new finding; a gate finding whose file now matches or is no longer changed is closed (`fixed_by = "gate"`, "the file matches the bootstrap render again, or is no longer changed"); one that differs again is reopened as new; a dismissed one stays dismissed. A round without a usable fact (the gate job failed, the head moved, the pin changed, an unparseable fact) leaves gate findings as they are and adds a note "Gate-file check not made: …". Free resolution, verify (`_model_findings`) and `/review recheck` skip gate findings; the line review still sees it in `<confirmed_findings>`, so it does not raise it again. |
+| Resync | A resync pull request is still exempt (`exempt.py`), with no gate check. Under `/review force` it is reviewed, and a resync whose files match the render raises no gate finding. |
+| The fact file | Read as untrusted data (`gate.load_fact`): schema 1, a 40-hex head, a release version, at most 100 plain repo-relative paths (no `.`, `..`, empty or absolute segment), a mismatch only on a listed gate file and of a known kind, a diff cut at 2,000 characters, a reason stripped to plain characters. |
+
+Tests: `test_connector_reviewer.py` (the gate section at its end: the ref, the
+pin, the isolated install, a check that cannot be made, the fact's validation,
+one finding per changed mismatched file, deletion and rename, head and version
+binding, `reconcile`, a two-round review, a forced resync, recheck refused, and
+`gate_render.py` run in isolated mode against this repository's own bootstrap
+output) and `test_connector_reviewer_workflow.py` (the gate job holds no secret
+or App token, its checkouts, the fact's path to the review, the review job
+names no pull-request ref and installs nothing).
+`test_no_step_mentions_a_pull_request_head` now excludes the gate job, and the
+`job` fixture expects two jobs.
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -611,10 +645,11 @@ above; "typing" means only the annotations described under Typing.
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`, without lens's fnmatch fallback for a glob with no slash, and matched by walking the set of glob steps a path can be at instead of by a regex, so a repo-written principle glob such as `a*a*…a*z` costs at most len(path) * len(glob) steps and cannot backtrack exponentially (FND-5316). The semantics are lens's regex translation, checked against it on random globs and paths. |
 | `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316); `grade_by_principle` (FND-5316); `unique_ids` before grading, and `locate_step`, `trace_chain`, `render_chain`, `traced` and `BundleResult.untraced`, and `principle_case` and `bound_by_outcome` (FND-5316); `_short_line_at` in `trace_chain`, the loop's tool calls factored into `_answer`, `_retry_final` with `review_bundle(retry_empty=…)`, `BundleResult.retried` and `unanswered`, and `AgentLimits.final_retry_max_tokens` (third replay); `BundleResult.retry_span` and the `Finding.retry` mark (fourth replay). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" (with the Severity-line grading of FND-5316) and "Facts" sections; the causal-chain bullets of "Evidence", and the two-way principle grading and the outcome floor and cap in "Principles" and "Severity" (FND-5316); the observable-outcome bullet of "Evidence", the case judged at that outcome in "Principles", rejection in the floor, and `RETRY_FINAL` (third replay); the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316); `unique_ids` across bundles before `merge_new`, and the mechanical box and scope trace from `Triage.withheld`, and the contested note's wording (FND-5316); the line review in two phases (`split_code_bundles`), `no_review_note`, `base_ref_output` and `base_checkout_note` (third replay); `skeptic_base` and `_drop_by_skeptic` (fourth replay). |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316); the `base-ref` sub-command and `--principles-root` (third replay). |
+| `review.py` | Names; the removals; `run`'s `gate_fact`, `RunResult.gate` and `resolved_gate`, `_model_findings`, the gate rows in `_principle`, `_details` and `_FIXED_BY`, and recheck refusing a gate finding (FND-5325); `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316); `unique_ids` across bundles before `merge_new`, and the mechanical box and scope trace from `Triage.withheld`, and the contested note's wording (FND-5316); the line review in two phases (`split_code_bundles`), `no_review_note`, `base_ref_output` and `base_checkout_note` (third replay); `skeptic_base` and `_drop_by_skeptic` (fourth replay). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316); the `base-ref` sub-command and `--principles-root` (third replay); the `gate-ref` and `gate-fact` sub-commands and `--gate-fact` (FND-5325). |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py`, `gate.py` | New here. |
+| `gate_render.py` | New here, and not part of the engine: run only by the gate job's venv, it imports the conformance package (FND-5325). |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed in both copies (FND-5323)
