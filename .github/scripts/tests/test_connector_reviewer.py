@@ -11282,6 +11282,7 @@ def test_an_unknown_word_after_review_gets_a_usage_reply_and_no_review(body):
         ("/review force", True, False),
         ("/REVIEW FORCE\n", True, False),
         ("/review force verify-budget", True, True),
+        ("/review verify-budget force", True, True),
         ("/review verify-budget", False, True),
         # A note on the lines below the command is for people, not an option.
         ("/review\nplease look at the retry change", False, False),
@@ -11308,6 +11309,43 @@ def test_the_subcommands_are_unchanged_by_the_usage_reply():
     ):
         d = decide("issue_comment", _comment(bad), REPO)
         assert not d.run and d.reason == usage
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/review\ndismiss F-1a2b3c once the retry lands",
+        "/review\nrecheck F-1a2b3c after this push",
+        "/review\nwaive this if CI is green",
+        "/review force\ndismiss F-1a2b3c later",
+    ],
+)
+def test_a_note_below_review_that_starts_with_a_subcommand_is_only_a_note(body: str):
+    """The command's first line decides which command it is, as it decides the
+    options: a later line starting `dismiss`, `recheck` or `waive` reviews."""
+    d = decide("issue_comment", _comment(body), REPO)
+    assert d.run and not d.reply
+    assert not (d.dismiss or d.recheck or d.waive)
+    assert d.force is body.startswith("/review force")
+
+
+def test_a_subcommand_named_on_the_first_line_reads_ids_and_reason_below_it():
+    d = decide(
+        "issue_comment",
+        _comment("/review dismiss F-1a2b3c\nF-00ff00 we log this upstream"),
+        REPO,
+    )
+    assert d.run and d.dismiss == ["F-1a2b3c", "F-00ff00"]
+    assert d.dismiss_reason == "we log this upstream"
+    d = decide(
+        "issue_comment",
+        _comment("/review recheck verify-budget\nF-1a2b3c the module is new"),
+        REPO,
+    )
+    assert d.run and d.recheck == ["F-1a2b3c"] and d.verify_budget
+    assert d.recheck_reason == "the module is new"
+    d = decide("issue_comment", _comment("/review waive\nurgent hotfix"), REPO)
+    assert d.run and d.waive and d.waive_reason == "urgent hotfix"
 
 
 def test_the_cli_answers_an_unknown_word_and_reviews_nothing(

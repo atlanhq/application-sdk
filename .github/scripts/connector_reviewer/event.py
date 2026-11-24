@@ -34,7 +34,12 @@ connector-reviewer reviews only when asked — a push never spends money on its 
   waive, the PR author included; the reason is required.
 - Any other word after `/review` (a typo of `force`, a command that does not
   exist) gets a usage reply and starts nothing: a full review costs money, and
-  a mistyped command must not buy one.
+  a mistyped command must not buy one. `force` and `verify-budget` may come in
+  either order.
+- The command's own (first) line decides which command it is: a note on a later
+  line is not an option, and one that starts with `dismiss`, `recheck` or
+  `waive` is not that command. Once the first line names a subcommand, its
+  finding ids and reason may continue on the lines below.
 - `workflow_dispatch` with a PR number: run (maintainers, from the Actions tab).
 - Anything else, including every `pull_request*` event: do not run.
 
@@ -225,9 +230,15 @@ def decide(
         comment = event.get("comment") or EMPTY
         if event.get("action") != "created" or "pull_request" not in issue:
             return Decision(False, reason="not a new PR comment")
-        words = str(comment.get("body") or "").strip().split()
+        body = str(comment.get("body") or "").strip()
+        words = body.split()
         if not words or words[0].lower() != COMMAND:
             return Decision(False, reason="comment is not addressed to /review")
+        # The command's own line decides what it is: a note below a bare
+        # `/review` that starts "dismiss …" is a note, not a dismissal. Once the
+        # first line names a subcommand, its ids and reason may run on below it.
+        first_line = body.splitlines()[0].split()
+        sub = first_line[1].lower() if len(first_line) > 1 else ""
         number = int(issue["number"])
         comment_id = int(comment.get("id") or 0)
         actor = str((comment.get("user") or EMPTY).get("login") or "")
@@ -242,7 +253,7 @@ def decide(
                 actor=actor,
                 reply=reply,
             )
-        if len(words) > 1 and words[1].lower() == "dismiss":
+        if sub == "dismiss":
             ids = [w for w in words[2:] if _FINDING_ID.match(w)]
             reason = plain(" ".join(w for w in words[2:] if not _FINDING_ID.match(w)))
             return Decision(
@@ -256,7 +267,7 @@ def decide(
                 pr_author=pr_author,
                 reply=not (ids and reason),
             )
-        if len(words) > 1 and words[1].lower() == "recheck":
+        if sub == "recheck":
             rest: list[str] = [str(w) for w in words[2:]]
             verify_budget = bool(rest) and rest[0].lower() == VERIFY_BUDGET
             if verify_budget:
@@ -275,7 +286,7 @@ def decide(
                 pr_author=pr_author,
                 reply=not ids,
             )
-        if len(words) > 1 and words[1].lower() == "waive":
+        if sub == "waive":
             reason = plain(" ".join(words[2:]))
             return Decision(
                 bool(reason),
@@ -291,7 +302,6 @@ def decide(
         # Options come from the command's own line only: a note on the lines
         # below a bare `/review` ("/review\nplease look at the retry") is a
         # message to the reviewers, not an option, and still reviews.
-        first_line = str(comment.get("body") or "").strip().splitlines()[0].split()
         options = [w.lower() for w in first_line[1:]]
         if any(w not in REVIEW_OPTIONS for w in options):
             # Not a word this command knows: tell the commenter, review nothing.
@@ -304,7 +314,7 @@ def decide(
                 pr_author=pr_author,
                 reply=True,
             )
-        force = bool(options) and options[0] == "force"
+        force = "force" in options  # in either order with verify-budget
         return Decision(
             True,
             number,
