@@ -37,12 +37,40 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Call `gh` through `_gh.py`, write outputs through `_gha.py` (FND-4924)
+
+A new script does not write its own `gh` wrapper or its own `$GITHUB_OUTPUT`
+writer. Import the shared ones:
+
+| Need | Use | What it decides for you |
+|------|-----|-------------------------|
+| Run `gh` | `_gh.gh(args, input=, timeout=, retries=, idempotent=)` | A timeout on every call (120 s default), retry with backoff on a transient failure, `GhError(status, stderr)` on any other |
+| Parse its JSON | `_gh.gh_json(args)` | A non-JSON answer is a `GhError`, not a crash |
+| Read a paginated REST listing | `_gh.gh_paginated(path, key=)` | `--paginate --slurp` plus one flatten; a page of the wrong shape is an error, not a silent drop |
+| Decide "worth retrying" | `_gh.is_transient(status, stderr)` | 5xx, 429, a rate-limit 403 (not a permission 403), network errors |
+| Set a step output | `_gha.set_output(name, value)` / `set_outputs({...})` | Heredoc form with a random delimiter for any multi-line value; stdout when `$GITHUB_OUTPUT` is unset |
+| Write the step summary | `_gha.append_summary(markdown)` | Same unset behaviour |
+
+Pass `idempotent=False` for a call that creates something (a `POST` of a check
+run, a comment, a ref). It is then retried only on a rate limit, which GitHub
+refuses before doing the write; a 5xx or a timeout may already have created the
+object, so a retry would leave a duplicate.
+
+Tests stub `_gh.run`, the one subprocess seam, and get the real retry,
+classification and parsing. The conftest sleep stub makes backoff free.
+
+Existing scripts adopt these incrementally (FND-4924 and its follow-ups). Two
+kinds of script must stay self-contained and not import them: one a workflow
+sparse-checks-out as a single file, unless the sparse set is widened in the
+same change, and one vendored into consumer repos (`probe_code_scanning.py`,
+`build_conformance_args.py`).
+
 ### Never aggregate over `gh api --paginate --jq`
 
 With `--paginate`, gh runs the `--jq` filter once per page. A filter that
 aggregates (`length`, `add`, `first`, `any`) therefore prints one result per
 page: a review count over two pages is `"1\n0"`, not `1`. Fetch the listing
-with `--paginate --slurp`, flatten it with `_flatten_pages`, and do the
+with `_gh.gh_paginated` (`--paginate --slurp` plus a flatten) and do the
 counting in Python. `renovate_approval_conditions.fetch_reviews` and
 `count_signature_approvals` do this for review counts, and
 `vuln_auto_merge_gate` imports them rather than keeping its own copy (FND-4898).

@@ -30,11 +30,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
 import sys
 from typing import Any
 
 import yaml
+from _gha import set_outputs
 
 # Strict kebab-case: must start with a letter (matches the runtime handler's
 # _ENTRYPOINT_NAME_RE which also requires letter-start). Digits, hyphens, and
@@ -301,36 +301,13 @@ def parse(
     }
 
 
-def _write_outputs(outputs: dict[str, str]) -> None:
-    """Write outputs to ``$GITHUB_OUTPUT``. ``deploy_config`` is multiline → heredoc."""
-    gh_output = os.environ.get("GITHUB_OUTPUT")
-    # Randomised delimiter prevents a crafted deploy: block from injecting
-    # arbitrary $GITHUB_OUTPUT values by containing the literal delimiter.
-    delim = f"DEPLOY_EOF_{secrets.token_hex(8)}"
-    if not gh_output:
-        # Local dry-run: just dump key=value lines to stdout.
-        for k, v in outputs.items():
-            if "\n" in v:
-                print(f"{k}<<{delim}\n{v}\n{delim}")
-            else:
-                print(f"{k}={v}")
-        return
-
-    with open(gh_output, "a") as out:
-        for k, v in outputs.items():
-            if k == "deploy_config":
-                out.write(f"deploy_config<<{delim}\n{v}\n{delim}\n")
-            else:
-                out.write(f"{k}={v}\n")
-
-
 def main() -> None:
     try:
         outputs = parse()
     except AtlanYamlError as e:
         print(f"::error::{e.message}", file=sys.stderr)
         sys.exit(1)
-    _write_outputs(outputs)
+    set_outputs(outputs)
     print(f"App: {outputs['app_name']}")
     print(f"App ID: {outputs['app_id']}")
     print(f"Dockerfile: {outputs['dockerfile']}")
