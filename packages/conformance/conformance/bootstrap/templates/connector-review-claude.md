@@ -45,9 +45,16 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
   stop and say so in the pull request.
 - Exit 1 with a `[PARSE]` line: a file could not be parsed. That fails the
   run whoever broke it; fix it if your change did.
-- Do not silence a finding with `# conformance: ignore[...]`, an exclude
-  path, or a test or threshold change. If you believe the rule is wrong for
-  this code, stop and say so in the pull request instead of suppressing it.
+- Do not suppress a finding, in any form, to get a green run. That covers
+  `# conformance: ignore[...]`; a new exclude path or ignore entry in the
+  conformance, ruff, pyright or pre-commit configuration; `# noqa`,
+  `# type: ignore` or `# pyright: ignore` on code your change added; a test
+  that is skipped, marked xfail, deleted or weakened; a lowered threshold or
+  coverage floor; and `git commit --no-verify` or a skipped hook. If you
+  believe the rule is wrong for this code, stop and say so in the pull
+  request instead of suppressing it.
+- A suppression already on `main` is not yours to remove unless the task is
+  to fix it. Never add one to make your own change pass.
 - Blocking findings reported as inherited from the base, and warnings your
   change did not introduce, do not fail the run. Leave them alone unless the
   task is to fix them: the scheduled conformance run and its remediation lane
