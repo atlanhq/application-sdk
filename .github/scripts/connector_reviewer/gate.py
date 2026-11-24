@@ -199,6 +199,8 @@ def make_fact(
 ) -> dict[str, Any]:
     """The fact for the pull request head checked out at `checkout`. Never
     raises: whatever goes wrong is `status: unavailable` with a reason."""
+    # Absolute: every subprocess runs from the venv's parent directory.
+    checkout, venv = Path(os.path.abspath(checkout)), Path(os.path.abspath(venv))
     head = sdk_source.checkout_commit(checkout)
     if not head:
         return _unavailable("the pull request head was not checked out")
