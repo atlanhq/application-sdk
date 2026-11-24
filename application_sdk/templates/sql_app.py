@@ -36,7 +36,9 @@ Usage::
     class MySQLClient(BaseSQLClient):
         DB_CONFIG = DatabaseConfig(
             template="mysql+pymysql://{username}:{password}@{host}:{port}/{database}",
-            required=["username", "password", "host", "port"],
+            # Every required value is URL-encoded (host and port are
+            # validated) before it fills the template; pass raw values.
+            required=["username", "password", "host", "port", "database"],
         )
 
     class MySQLApp(SqlApp):

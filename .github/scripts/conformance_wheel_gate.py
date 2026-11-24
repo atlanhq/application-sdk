@@ -90,6 +90,15 @@ SLICE = (
     "test_prescriptions.py",
 )
 
+#: Tests inside SLICE files that compare package data against the SDK source
+#: tree, so they need the monorepo checkout. ``tests._helpers.sdk_root`` fails
+#: such a test under ``CI`` (FND-4948) rather than skipping it, and the gate
+#: runs with ``CI`` set from a copy outside the checkout. The PR job runs them
+#: from the checkout, where the comparison means something.
+DESELECT = (
+    "test_deprecations_manifest.py::test_committed_manifest_matches_fresh_scan",
+)
+
 
 def _run(argv: Sequence[str], cwd: Path) -> None:
     print(f"+ {' '.join(argv)}", flush=True)
@@ -300,7 +309,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = subprocess.run(
             [
                 str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                "-o", "asyncio_mode=auto", *(f"tests/{name}" for name in SLICE),
+                "-o", "asyncio_mode=auto",
+                *(arg for node in DESELECT for arg in ("--deselect", f"tests/{node}")),
+                *(f"tests/{name}" for name in SLICE),
             ],
             cwd=work,
         )  # fmt: skip

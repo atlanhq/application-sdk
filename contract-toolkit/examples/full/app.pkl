@@ -337,6 +337,31 @@ uiConfig = new UIConfig {
           excludePatterns = List("information_schema")
           placeholderText = "Select schemas"
         }
+        // Object conditional storing a flat string map: hidden until the toggle
+        // is on, then rendered as a dsnTreeMap (DSN name -> connection QN).
+        // stringMap = true types it dict[str, str] so the input imports.
+        ["enable-dsn-mapping"] = new Radio {
+          title = "Enable DSN mapping"
+          possibleValues {
+            ["true"] = "True"
+            ["false"] = "False"
+          }
+          default = "false"
+        }
+        ["dsn-mapping"] = new ConditionalInput {
+          title = ""
+          baseWidgetType = "div"
+          outputValueType = "object"
+          stringMap = true
+          default = "{}"
+          conditions {
+            new Condition {
+              property = "enable-dsn-mapping"
+              value = "true"
+              overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+            }
+          }
+        }
         // Preflight checks; keep the SageV2 widget last in the final step.
         // warmup = true declares that the app's handler overrides
         // Handler.warmup, so the setup UI runs the warmup flow first.

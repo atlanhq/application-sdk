@@ -172,8 +172,11 @@ Only the second is true, and only the second survives review.
   except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)
   from exc`.  `raise group.exceptions[i]` inside `except BaseExceptionGroup as
   group` (or `except*`) is already clear: the member keeps its own cause, and
-  `from group` would overwrite it.  Only a proven group counts — an app
-  class exposing an `exceptions` sequence still fires.
+  `from group` would overwrite it.  The same holds through a local bound only
+  inside the handler to `group` / `<group or local>.exceptions[i]` (a walk to
+  the leaf, then `raise fault`) or to `group.exceptions` (`raise leaves[i]`).
+  Only a proven group counts — an app class exposing an `exceptions` sequence
+  still fires.
 
 **Judgment rules** (`autofixable = true` — the lane applies the prescription;
 `classification = "judgment"` — every result is routed to residue for audit,

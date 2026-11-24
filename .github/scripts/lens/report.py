@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .llm import redact
 from .review import RunResult, verify_cut_off_report, verify_skipped_report
 
 
@@ -34,14 +35,16 @@ def call_line(event: dict[str, Any]) -> str:
     )
     return (
         f"lens: call {event['n']:>3} {event['stage']:<28} {event['status']} {event['latency_ms']:>6}ms "
-        f"attempt={event['attempt']} {size}{event.get('error', '')}"
+        f"attempt={event['attempt']} {size}{redact(str(event.get('error', '')))}"
     )
 
 
 def build(res: RunResult) -> dict[str, Any]:
     st = res.state
     led = (st.ledger if st else {}) or {}
-    calls = res.calls
+    # Every error is redacted again here, at the boundary to the Actions log and
+    # the uploaded report: an error recorded anywhere upstream is covered.
+    calls = [_redacted(c) for c in res.calls]
     ok = [c for c in calls if c.get("status") == 200]
     inp = sum(c.get("input", 0) for c in ok)
     return {
@@ -50,7 +53,7 @@ def build(res: RunResult) -> dict[str, Any]:
         "mode": res.mode,
         "mode_label": res.mode_label,
         "head": res.head,
-        "incomplete": res.incomplete,
+        "incomplete": [redact(r) for r in res.incomplete],
         "notes": res.notes,
         "timings_ms": res.timings_ms,
         "ledger": led,
@@ -78,11 +81,12 @@ def build(res: RunResult) -> dict[str, Any]:
                 "planned": b.planned,
                 "tools": b.tool_calls,
                 "stop": b.stop,
-                "error": b.error,  # whole: the run report is where an error is read in full
+                # whole: the run report is where an error is read in full
+                "error": redact(b.error) if b.error else b.error,
                 "findings": len(b.findings),
                 "unplaced": len(b.unplaced),
                 "fact_check_removed": len(b.removed_by_reflector),
-                **({"refusal": b.refusal} if b.refusal else {}),
+                **({"refusal": _redacted(b.refusal)} if b.refusal else {}),
             }
             for b in res.bundles
         ],
@@ -110,6 +114,13 @@ def build(res: RunResult) -> dict[str, Any]:
         "approach": (st.approach if st else {}) or {},
         "calls": calls,
     }
+
+
+def _redacted(event: dict[str, Any]) -> dict[str, Any]:
+    """`event` with its `error` text redacted (a copy; the original is kept)."""
+    if not event.get("error"):
+        return event
+    return {**event, "error": redact(str(event["error"]))}
 
 
 def _where(files: dict[str, list[str]]) -> str:

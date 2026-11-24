@@ -12,8 +12,10 @@ import contextvars
 import datetime
 import functools
 import hashlib
+import ipaddress
 import math
 import re
+import string
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -684,6 +686,117 @@ def _load_failure(exc: Exception) -> AppError:
     return SqlClientConnectUnclassifiedError(cause=exc)
 
 
+# A DNS name or IPv4 address: dot-separated labels of letters, digits, ``-``
+# and ``_`` (seen in internal names), with an optional trailing dot. Nothing
+# that can end the URL's host part (``/ ? # @ :``) or split it.
+_URL_HOSTNAME = re.compile(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.?")
+_URL_HOSTNAME_MAX_LEN = 253
+
+
+def _template_fields(template: str) -> frozenset[str]:
+    """The ``{name}`` fields a ``DatabaseConfig.template`` substitutes."""
+    return frozenset(
+        name for _, name, _, _ in string.Formatter().parse(template) if name
+    )
+
+
+def _is_ipv6_without_zone(text: str) -> bool:
+    """Whether ``text`` is an IPv6 address with no zone id.
+
+    A zone id (``fe80::1%eth0``) is free text, so it is refused.
+    """
+    if "%" in text:
+        return False
+    try:
+        ipaddress.IPv6Address(text)
+    except ValueError:
+        # Not an address: the caller rejects the host with a typed error.
+        # The value itself is form input, so it is not logged.
+        logger.debug("Bracketed SQL host is not a valid IPv6 address")
+        return False
+    return True
+
+
+def _url_host(value: object) -> str:
+    """Return ``value`` if it is a hostname, IPv4 address or bracketed IPv6.
+
+    The host cannot be percent-encoded like the other fields: SQLAlchemy's
+    URL parser never decodes it, so an encoded host would reach the driver
+    still encoded. It is validated instead, so a value carrying ``/`` or
+    ``?`` cannot end the host part and start a path or query of its own.
+
+    Raises:
+        SqlCredentialsParseError: If ``value`` is none of those. The message
+            never quotes the value.
+    """
+    host = str(value)
+    if host.startswith("[") and host.endswith("]"):
+        if _is_ipv6_without_zone(host[1:-1]):
+            return host
+    elif len(host) <= _URL_HOSTNAME_MAX_LEN and _URL_HOSTNAME.fullmatch(host):
+        return host
+    raise SqlCredentialsParseError(
+        field="host",
+        message=(
+            "host must be a hostname, an IPv4 address or an IPv6 address in "
+            "square brackets, with no scheme, port, path or query"
+        ),
+    )
+
+
+def _url_port(value: object) -> str:
+    """Return ``value`` as a port number between 1 and 65535.
+
+    Accepts an ``int`` or a string of digits, the shapes a connection form
+    sends.
+
+    Raises:
+        SqlCredentialsParseError: If ``value`` is not such a number. The
+            message never quotes the value.
+    """
+    port: int | None = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        port = value
+    elif isinstance(value, str) and value.isascii() and value.isdigit():
+        port = int(value)
+    if port is None or not 1 <= port <= 65535:
+        raise SqlCredentialsParseError(
+            field="port",
+            message="port must be a whole number between 1 and 65535",
+        )
+    return str(port)
+
+
+def _absent(value: object) -> bool:
+    """Whether a required connection value counts as not supplied.
+
+    ``None`` and other falsy values (``""``) do, as before; a numeric ``0``
+    does not, so ``port: 0`` reaches ``_url_port`` and is rejected as out of
+    range instead of being reported missing.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return False
+    return not value
+
+
+def _url_component(param: str, value: object, template_fields: frozenset[str]) -> str:
+    """Make one ``DatabaseConfig.required`` value safe to put in the URL.
+
+    Every value comes from the connection form, so none may add URL
+    structure: ``host`` and ``port`` are validated (see ``_url_host`` and
+    ``_url_port``); every other field is percent-encoded with ``safe=""``,
+    which SQLAlchemy decodes back to the original value whether the field
+    sits in the userinfo, the database path or a query value. ``host`` and
+    ``port`` are only validated when the template uses them; a template that
+    builds its target elsewhere (an Oracle DSN) gets the value untouched.
+    """
+    if param == "host" and param in template_fields:
+        return _url_host(value)
+    if param == "port" and param in template_fields:
+        return _url_port(value)
+    return quote(str(value), safe="")
+
+
 class BaseSQLClient(ClientInterface):
     """SQL client for database operations.
 
@@ -1024,6 +1137,11 @@ class BaseSQLClient(ClientInterface):
         parameters and credentials. It handles different authentication methods
         and includes necessary connection parameters.
 
+        Every ``DB_CONFIG.required`` value is made URL-safe before it is put
+        into ``DB_CONFIG.template``: ``host`` and ``port`` are validated, and
+        every other field is percent-encoded. Pass raw values, not
+        pre-encoded ones, or they will be encoded twice.
+
         For ``authType`` ``iam_user`` and ``iam_role`` this is called again
         after ``load()``, each time the RDS IAM token it put in the URL is
         about to expire and a new connection is opened. It always runs on a
@@ -1037,6 +1155,9 @@ class BaseSQLClient(ClientInterface):
         Raises:
             SqlClientConfigError: If DB_CONFIG is not set.
             MissingSqlParamError: If required connection parameters are missing.
+            SqlCredentialsParseError: If the template uses ``host`` and the
+                value is not a hostname, IPv4 address or bracketed IPv6
+                address, or uses ``port`` and the value is not a port number.
         """
         if not self.DB_CONFIG:
             raise SqlClientConfigError()
@@ -1045,16 +1166,22 @@ class BaseSQLClient(ClientInterface):
 
         auth_token = self.get_auth_token()
 
-        # Prepare parameters
-        param_values = {}
+        # Prepare parameters. Each value is made URL-safe before it is
+        # substituted (the password already is, by get_auth_token), so a
+        # connection-form value cannot add a driver parameter or override a
+        # pinned default such as sslmode.
+        template_fields = _template_fields(self.DB_CONFIG.template)
+        param_values: dict[str, str] = {}
         for param in self.DB_CONFIG.required:
             if param == "password":
                 param_values[param] = auth_token
             else:
-                value = self.credentials.get(param) or extra.get(param)
-                if value is None:
+                value = self.credentials.get(param)
+                if _absent(value):
+                    value = extra.get(param)
+                if _absent(value):
                     raise MissingSqlParamError(field=param)
-                param_values[param] = value
+                param_values[param] = _url_component(param, value, template_fields)
 
         # Fill in base template
         conn_str = self.DB_CONFIG.template.format(**param_values)

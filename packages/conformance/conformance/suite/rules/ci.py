@@ -85,6 +85,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "from what `bootstrap` would write, plus any *retired* shim still "
             "present — one `bootstrap` once installed fleet-wide and now deletes, "
             "which until it does keeps firing on every PR with nothing behind it. "
+            "A vendored script that was managed and is now retired (the review "
+            "gate's `.github/scripts/connector_review_gate.py`, replaced with its "
+            "workflow by `connector-reviewer.yaml`) is reported the same way. "
             "Re-run `bootstrap` to re-sync (the same bare re-run removes a retired "
             "file). The fleet count of a retired shim's findings is also what "
             "allows application-sdk to delete the reusable that shim called: the "
@@ -154,10 +157,9 @@ RULES: tuple[RuleDefinition, ...] = (
         id="C003",
         canonical_reference=(
             "atlan-openapi-app .gitignore — carries every entry this rule requires, "
-            "including `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, "
-            "plus the `.mothership/.cache/` line the bootstrap appends. A missing "
-            "entry is usually the newest one, added centrally after the repo was "
-            "scaffolded."
+            "including `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`. "
+            "A missing entry is usually the newest one, added centrally after the "
+            "repo was scaffolded."
         ),
         fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,

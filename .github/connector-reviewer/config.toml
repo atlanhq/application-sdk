@@ -1,0 +1,202 @@
+# connector-reviewer configuration. It ships with the reviewer in application-sdk and is the
+# same for every connector app: a repo under review cannot retune its own reviewer.
+# The hash of this file is recorded in each PR's state. A config change does not re-open code
+# an earlier round already reviewed: it applies from the next new commits. Only a model
+# change makes the next run a full review.
+
+[model]
+# Model Gateway serves provider-qualified ids (GET /openai/v1/models); the bare
+# "gpt-6-luna" alias was LiteLLM's. Preflight refuses an id the key cannot see.
+name = "atlan-bedrock-dev/global.openai.gpt-6-luna"
+reasoning_effort = "max"  # luna's highest; verified 2026-09-25 on LiteLLM: max + tools works on /v1/responses
+# "responses" (/v1/responses): the only API on which luna reasons AND calls tools; reasoning
+# is also carried between turns. "chat" (/v1/chat/completions): tools only work with
+# reasoning_effort "none" there. If the gateway does not serve /v1/responses, the reviewer falls
+# back to chat (reasoning "none") once per run and says so in the summary.
+api = "responses"
+
+# gpt-6-luna list prices, USD per million tokens (OpenAI pricing docs, 2026-09-25; LiteLLM's
+# model_prices_and_context_window.json carries the same). Used to RESERVE a call's worst case
+# against the per-PR cap before it is sent; the cost actually booked is priced from the
+# gateway's x-gateway-model-price header when it sends one, else from these rates.
+# Cache writes bill at 1.25x input; the reservation allows for it.
+[model.price]
+input_per_mtok = 0.10
+cached_input_per_mtok = 0.01
+cache_write_per_mtok = 0.125
+output_per_mtok = 0.50
+
+[budget]
+cap_usd_per_pr = 1.0      # every round of every run on one PR, combined
+first_round_share = 0.6   # round 1 may use at most this share; later rounds get what is left
+
+[rounds]
+max_rounds = 5                    # invocations per PR; `/review force` bypasses (the $ cap still holds)
+later_round_min_severity = "high" # after round 1, only critical/high may be newly raised
+
+[scope]
+max_bundles = 8
+concurrency = 4
+max_changed_files = 60
+# On top of select.DEFAULT_EXCLUDE (uv.lock and other lockfiles, CHANGELOG.md, generated
+# code, snapshots, images). Paths are those of the standard connector app layout.
+exclude = [
+  "app/generated/**",               # generated from the Pkl contract
+  "contract/PklProject.deps.json",  # the contract's resolved dependencies (a lockfile)
+  ".mothership/**",
+  "tests/**/fixtures/**",
+  "tests/**/golden/**",
+  "tests/**/__snapshots__/**",
+]
+
+[access]
+# Who may comment `/review` (and its sub-commands): anyone with the Write, Maintain or Admin
+# role on the repository, read live from GitHub, and these GitHub Apps. A comment counts as an
+# App's only when GitHub attributes it to the App (performed_via_github_app.slug) and its
+# author is that App's bot account, "<slug>[bot]". Every other bot is ignored.
+trusted_apps = [
+  "atlan-app-fleet",
+  "atlan-conformance-sync",
+  "connectivity-ai",
+  "mothership-ai",
+  "atlan-connectivity-release-train",
+]
+
+[exempt]
+# Pull requests that are not reviewed: `/review` answers "Exempt: <class>" with a success
+# status and makes no model call. `/review force` reviews one anyway. Decided in code
+# (connector_reviewer/exempt.py) from who opened the pull request, its branch, who wrote
+# each commit and which files changed.
+#
+# Dependency update: opened by one of dependency_bots, on a branch that starts with one of
+# dependency_branches, and EVERY commit is by one of dependency_bots.
+dependency_bots = ["atlan-app-fleet[bot]", "renovate[bot]", "dependabot[bot]"]
+dependency_branches = ["renovate/", "dependabot/"]
+# Conformance resync: opened by one of resync_bots, every commit by one of them, and every
+# changed file matches bootstrap_managed.
+resync_bots = ["atlan-conformance-sync[bot]"]
+# Version bump: the branch starts with one of these. It still needs `/gate-check`.
+version_bump_branches = ["bump-version"]
+# What `atlan-application-sdk-conformance bootstrap` writes, removes or merges into in a
+# connector repo. A managed workflow is named one by one, so the app's own workflows are
+# not covered. test_connector_reviewer.py reads the destination lists out of
+# packages/conformance/conformance/bootstrap/render.py and fails when one is missing here.
+bootstrap_managed = [
+  ".github/workflows/conformance.yaml",
+  ".github/workflows/conformance-upload-sarif.yaml",
+  ".github/workflows/checks.yml",
+  ".github/workflows/commits.yaml",
+  ".github/workflows/release-gate.yaml",
+  ".github/workflows/connector-review-gate.yaml",
+  ".github/workflows/release.yaml",
+  ".github/workflows/tag-and-publish.yaml",
+  ".github/workflows/vulnerability-scan.yml",
+  ".github/workflows/build-and-publish.yaml",
+  ".github/workflows/stale.yml",
+  ".github/workflows/generated-freshness.yaml",
+  ".github/workflows/test-commands.yaml",
+  ".github/workflows/tests.yaml",
+  # The connector-reviewer shim: a resync that only updates it is still a resync.
+  ".github/workflows/connector-reviewer.yaml",
+  # Shims bootstrap once wrote and now removes.
+  ".github/workflows/docstring-coverage.yaml",
+  ".github/workflows/auto-fix.yml",
+  ".github/workflows/update-dashboard.yml",
+  ".github/workflows/renovate-auto-approve.yml",
+  ".github/workflows/porter-bundle-cnab.yaml",
+  ".github/dependabot.yml",
+  ".github/dependabot.yaml",
+  ".github/actions/run-conformance-detect/**",
+  ".github/scripts/build_conformance_args.py",
+  ".github/scripts/probe_code_scanning.py",
+  ".github/scripts/connector_review_gate.py",
+  ".github/scripts/release_gate.py",
+  ".github/ci-system-deps.txt",
+  ".github/connector-reviewer/principles/README.md",
+  ".claude/**",
+  "scripts/fetch-review-rules.sh",
+  "scripts/write-connector-review-marker.sh",
+  ".mothership/**",
+  "CLAUDE.md",
+  "AGENTS.md",
+  "renovate.json",
+  "contract_schema.lock.json",
+  ".gitignore",
+]
+# Docs only (no list): every changed file ends in .md or is under docs/, and none is under
+# .github/connector-reviewer/ or .claude/, or named CLAUDE.md or AGENTS.md at any depth.
+
+[facts]
+# Computed in code and handed to the line review's prompt (connector_reviewer/facts.py); no
+# model stage. Regression: each changed function's callers outside the tests, the tests that
+# name it by tier, and every existing test expectation the PR weakened or removed (no request).
+# History: lines the PR restores that a recent base-branch commit removed, lines it removes
+# that one added, a revert, and a function changed churn_changes times in history_days days
+# (this PR included). Read through the GitHub REST API, at most
+# 3 + history_max_files + history_max_commits requests, four at a time. Reading history
+# returns after history_seconds at the latest: no request starts after it, and one still in
+# flight is abandoned. A failed read means fewer facts, never an incomplete review. Each
+# value must have its TOML type (true/false, a whole number): a quoted value is refused.
+regression = true
+history = true
+history_days = 30
+history_max_files = 8
+history_commits_per_file = 5
+history_max_commits = 20
+history_min_lines = 2
+churn_changes = 3
+history_seconds = 20
+
+[stages]
+reflect = true   # filter-only fact check of each bundle's comments
+verify = true    # one call per round checking still-open findings in touched files
+approach = true  # understand the problem + judge the approach: once per PR, first, advisory only
+
+[skeptic]
+# Before a NEW critical or high finding is published, one independent model call tries to refute it
+# against the code with the read-only tools (connector_reviewer/skeptic.py), and defaults to upheld.
+# A refutation must quote a line that is checked in code to be in the file it names; then the finding
+# drops to medium and is shown as contested, with the reason. It is never deleted. A failed call, a
+# spent budget share or a malformed answer keeps the severity. Runs after the line review, up to
+# `[scope] concurrency` checks at a time, on its own 10% share of the round's budget
+# (review.SKEPTIC_SHARE). Findings carried over from earlier rounds are never re-checked.
+# Each value must have its TOML type (true/false, a whole number), and an unknown key is refused.
+enabled = true
+max_lookups = 3      # read-only lookups per check; then the verdict is forced (at most 4 calls)
+max_tokens = 8000    # per call; reasoning tokens count against it
+max_findings = 6     # checks per round; a further new blocking finding keeps its severity
+
+[agent]
+# Turn budget per bundle scales with its size: base + 1 per extra file + 1 per 150 changed
+# lines, capped. It is a safety net, not a target: the model is never told it and stops
+# itself with task_done (observed 7-9 turns; none forced). What bounds cost is the bundle's
+# $ share, context_limit_tokens and the per-PR $ cap, whatever this says.
+max_tool_turns = 16
+turns_per_extra_file = 1
+lines_per_extra_turn = 150
+max_tool_turns_cap = 30
+max_empty_turns = 2
+context_limit_tokens = 60000
+review_max_tokens = 24000     # reasoning tokens count against this; sized for max effort
+reflect_max_tokens = 8000
+# Verify re-checks still-open findings each round; reasoning tokens count against it too.
+# When a re-check spends it all before answering, the verdict says so and names the opt-in:
+# `/review verify-budget` gives that one run verify_max_tokens_opt_in instead.
+# `/review recheck verify-budget F-… <reason>` does the same for a single re-check.
+verify_max_tokens = 8000
+verify_max_tokens_opt_in = 24000
+max_comments = 12
+max_nits = 5              # low-severity (nit) findings kept per bundle
+# Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
+plan = 1
+plan_min_lines = 60
+plan_max_tokens = 8000
+# Wall-clock limit per bundle, plan turn included: past it the next turn is the final one
+# (code_comment/task_done only), so one slow bundle cannot hold the whole review. The
+# final turn and the fact-check still run after it, about one call each. 0 turns it off.
+# Bundles still run `[scope] concurrency` at a time; the approach check runs beside them.
+bundle_time_limit_s = 120
+# Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
+# finds real defects the first pass misses at an acceptable cost.
+second_pass = 0
+second_pass_min_lines = 300

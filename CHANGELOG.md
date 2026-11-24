@@ -1,5 +1,69 @@
 # Changelog
 
+## v3.58.1 (November 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.58.0...v3.58.1
+
+### Bug Fixes
+
+- stop fake-source reverse-DNS on bind, and cut kube and loop-stall test wall-clock [FND-5168] (#4968) (by @cmgrote in [b9a2336](https://github.com/atlanhq/application-sdk/commit/b9a2336))
+- read preflight outcome rows from the real log sink so gate tests patch no logger [FND-4293] (#4967) (by @cmgrote in [596930c](https://github.com/atlanhq/application-sdk/commit/596930c))
+- bound the JSON output strategy, repair the permanently skipped tests, and fail unticketed skips [FND-4286] (#4970) (by @cmgrote in [d9002a1](https://github.com/atlanhq/application-sdk/commit/d9002a1))
+- fail closed when the worker health gate cannot be read, and make every broad-except suppression live [FND-4294] (#4976) (by @cmgrote in [d236e7c](https://github.com/atlanhq/application-sdk/commit/d236e7c))
+- warn when run_dev_combined gets the ignored credential_stores, deprecate unreferenced public names, and delete dead private code [FND-4922] (#4979) (by @cmgrote in [47796be](https://github.com/atlanhq/application-sdk/commit/47796be))
+- share one release-asset downloader between daprd and pkl, so the pkl fetch times out and a wrong pin fails on the first attempt [FND-4923] (#4982) (by @cmgrote in [b54443c](https://github.com/atlanhq/application-sdk/commit/b54443c))
+- stop the logger's periodic flush on reset, and keep every sink's flush bookkeeping on the base [FND-4918] (#4983) (by @cmgrote in [53e28dd](https://github.com/atlanhq/application-sdk/commit/53e28dd))
+- redact the cause in str() of every legacy-coded error and replace 27 copies of error_code/__str__/__init__ with one mixin [FND-4917] (#4984) (by @cmgrote in [3ca7fb3](https://github.com/atlanhq/application-sdk/commit/3ca7fb3))
+- log handled failures at WARNING, rate-limit observability self-failures, and flag ERROR in a recovering except with conformance L022 [FND-4296] (#4990) (by @cmgrote in [96d28f2](https://github.com/atlanhq/application-sdk/commit/96d28f2))
+- compose the run prefix in one place, from the App that owns the run [FND-4921] (#4988) (by @cmgrote in [8062b27](https://github.com/atlanhq/application-sdk/commit/8062b27))
+- a connect timeout blocks the hard gate whichever path saw it, client credential errors are CredentialErrors with one parse code, and every SDK exception is an AppError [FND-4298] (#4997) (by @cmgrote in [2e94804](https://github.com/atlanhq/application-sdk/commit/2e94804))
+- structured log fields the allowlist drops are counted and reported, extra= dicts are spread into fields, and a test holds SDK log calls to the allowlist [FND-4297] (#5000) (by @cmgrote in [8f93521](https://github.com/atlanhq/application-sdk/commit/8f93521))
+- a workflow result whose model has aliased fields keeps every field when outputs merge [FND-4089] (#5007) (by @cmgrote in [39d7280](https://github.com/atlanhq/application-sdk/commit/39d7280))
+- create_data_converter ignores additional_converters and App.payload_converters with a deprecation warning, instead of crashing [FND-4091] (#5010) (by @cmgrote in [5d47cd1](https://github.com/atlanhq/application-sdk/commit/5d47cd1))
+
+### Performance
+
+- the isolated asset scan returns only the bounded event and report, so a batch that fails on every record no longer re-creates its failures in the worker [FND-4088] (#5009) (by @cmgrote in [3dbd51f](https://github.com/atlanhq/application-sdk/commit/3dbd51f))
+
+### Refactoring
+
+- share the entrypoint, entrypoint_ref and agent_json fields through one request base [FND-4920] (#4981) (by @cmgrote in [7e59322](https://github.com/atlanhq/application-sdk/commit/7e59322))
+- route every AtlanLoggerAdapter level method through one _emit, and deprecate activity() and the two unregistered sinks [FND-4919] (#4986) (by @cmgrote in [7822c1f](https://github.com/atlanhq/application-sdk/commit/7822c1f))
+- deprecate the dead get_activity_options builder and test the live dispatch path instead [FND-4916] (#4993) (by @cmgrote in [47ba579](https://github.com/atlanhq/application-sdk/commit/47ba579))
+- make code the one error vocabulary — AAF-* codes come from one table and warn on use, and conformance E022 flags DEFAULT_ERROR_CODE [FND-4299] (#4996) (by @cmgrote in [e8a369f](https://github.com/atlanhq/application-sdk/commit/e8a369f))
+- hold Any in SDK signatures to a shrinking ANN401 baseline and type 90 sites in contracts, app, handler and storage [FND-4301] (#4998) (by @cmgrote in [361c8ab](https://github.com/atlanhq/application-sdk/commit/361c8ab))
+
+### Documentation
+
+- ApplicationError documents the parameters Temporal accepts, not a cause= kwarg it rejects [FND-4093] (#5006) (by @cmgrote in [2143d58](https://github.com/atlanhq/application-sdk/commit/2143d58))
+
+### Chores
+
+- update codex-/return-dispatch action to v4.1.0 (#4931) (by @renovate[bot] in [0948ef8](https://github.com/atlanhq/application-sdk/commit/0948ef8))
+- remove 1 resolved allowlist entry (#4940) (by @atlan-app-fleet[bot] in [4b13fde](https://github.com/atlanhq/application-sdk/commit/4b13fde))
+- run the load and integration-example trees, delete the never-run SDK e2e checks [FND-4291] (#4951) (by @cmgrote in [319ed12](https://github.com/atlanhq/application-sdk/commit/319ed12))
+- update nginx docker tag to v1.31.8 (#4954) (by @renovate[bot] in [ef4f516](https://github.com/atlanhq/application-sdk/commit/ef4f516))
+- update postgres docker tag to v16.16 (#4955) (by @renovate[bot] in [4df80c3](https://github.com/atlanhq/application-sdk/commit/4df80c3))
+- update temporalio/auto-setup docker tag to v1.29.7 (#4956) (by @renovate[bot] in [b1f6fe9](https://github.com/atlanhq/application-sdk/commit/b1f6fe9))
+- update dependency fastapi to >=0.163.0,<0.164.0 (#4952) (by @renovate[bot] in [329e152](https://github.com/atlanhq/application-sdk/commit/329e152))
+- update postgres docker tag to v18 (#4957) (by @renovate[bot] in [45c3280](https://github.com/atlanhq/application-sdk/commit/45c3280))
+- deprecate orphaned Hypothesis strategies, merge the SQL duplicate, bound every integer [FND-4292] (#4958) (by @cmgrote in [01c2817](https://github.com/atlanhq/application-sdk/commit/01c2817))
+- bump authlib to 1.9.9 (#4962) (by @endor-labs-pro[bot] in [aad9276](https://github.com/atlanhq/application-sdk/commit/aad9276))
+- stop the decorator duration and transfer-budget load tests flaking [FND-5173, FND-5174] (#4969) (by @cmgrote in [7b9cf75](https://github.com/atlanhq/application-sdk/commit/7b9cf75))
+- intercept unmocked Dapr sidecar calls on every OS and run the socket guard on Windows unit legs [FND-4287] (#4972) (by @cmgrote in [807d22c](https://github.com/atlanhq/application-sdk/commit/807d22c))
+- run the full unit suite with every dependency group on Python 3.14 [FND-4288] (#4975) (by @cmgrote in [eff623e](https://github.com/atlanhq/application-sdk/commit/eff623e))
+- make pyright's bug-catching rules errors under a shrink-only baseline, and replace every type: ignore [FND-4295] (#4978) (by @cmgrote in [d58a4f9](https://github.com/atlanhq/application-sdk/commit/d58a4f9))
+- update nginx docker tag to v1.31.9 (#4987) (by @renovate[bot] in [ed12865](https://github.com/atlanhq/application-sdk/commit/ed12865))
+- update nginx:1.31.9-alpine docker digest to 90b6bd2 (#4991) (by @renovate[bot] in [b1da254](https://github.com/atlanhq/application-sdk/commit/b1da254))
+- update postgres:18.7 docker digest to e754b83 (#4992) (by @renovate[bot] in [8497653](https://github.com/atlanhq/application-sdk/commit/8497653))
+- update postgres:18.7 docker digest to eb63372 (#5003) (by @renovate[bot] in [e49b45d](https://github.com/atlanhq/application-sdk/commit/e49b45d))
+- update postgres docker tag to v19 (#5004) (by @renovate[bot] in [de84094](https://github.com/atlanhq/application-sdk/commit/de84094))
+- update the pinned pkl toolchain to v0.33.1 (#5011) (by @renovate[bot] in [79c1107](https://github.com/atlanhq/application-sdk/commit/79c1107))
+- update dependency fastapi to >=0.165.0,<0.166.0 (#5012) (by @renovate[bot] in [3c2e6b0](https://github.com/atlanhq/application-sdk/commit/3c2e6b0))
+- update github-actions (#4980) (by @renovate[bot] in [ffd2755](https://github.com/atlanhq/application-sdk/commit/ffd2755))
+- update nginx:1.31.9-alpine docker digest to fb46585 (#5002) (by @renovate[bot] in [fdff402](https://github.com/atlanhq/application-sdk/commit/fdff402))
+
+
 ## v3.58.0 (November 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.57.0...v3.58.0
