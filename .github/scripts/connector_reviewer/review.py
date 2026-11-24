@@ -1111,8 +1111,12 @@ def run(
     left = round_ledger.remaining
     weights = {b.label: max(b.changed_lines, 20) for b in bundles}
     total_w = sum(weights.values()) or 1
+    # The code the app ships first, tests and everything else after (FND-5316):
+    # a code bundle that ends on an empty turn gets its retry (agent._retry_final)
+    # before any test bundle spends a cent, and test bundles share what is left.
+    code, rest = split_code_bundles(bundles)
 
-    def one(b: Bundle) -> BundleResult:
+    def one(b: Bundle, budget: float, is_code: bool) -> BundleResult:
         return review_bundle(
             client,
             ws,
@@ -1122,16 +1126,34 @@ def run(
             confirmed,
             cfg.limits,
             reflect=cfg.reflect,
-            budget_usd=left * weights[b.label] / total_w,
+            budget_usd=budget,
             added=added,
+            retry_empty=is_code,
         )
 
     with trace.group(f"6 · line review: {len(bundles)} bundle(s)"):
         trace.line(
-            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]"
+            f"up to {cfg.concurrency} bundles in parallel; lines are prefixed [bundle]; "
+            f"{len(code)} app-code bundle(s) first, then {len(rest)} other(s)"
         )
         with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
-            res.bundles = list(pool.map(one, bundles))
+
+            def first(b: Bundle) -> BundleResult:
+                return one(b, left * weights[b.label] / total_w, True)
+
+            res.bundles = list(pool.map(first, code))
+            after = round_ledger.remaining
+            rest_w = sum(weights[b.label] for b in rest) or 1
+
+            def then(b: Bundle) -> BundleResult:
+                return one(b, after * weights[b.label] / rest_w, False)
+
+            res.bundles += list(pool.map(then, rest))
+    for br in res.bundles:
+        if br.unanswered:
+            note = no_review_note(br, bundles)
+            trace.line(note)
+            res.notes.append(note)
     res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
     if approach_job is not None and approach_pool is not None:
         with trace.group("5 · approach check (once per PR, alongside the line review)"):
@@ -2234,6 +2256,40 @@ def _risk(b: Bundle) -> tuple[int, int]:
 # The tier tests rank in: below it is the code the app ships (app, contract,
 # build files, CI); from it on, tests and everything else.
 _TESTS_RANK = RISKY_PREFIXES.index(("tests/",))
+
+
+def split_code_bundles(bundles: list[Bundle]) -> tuple[list[Bundle], list[Bundle]]:
+    """(the bundles that hold code the app ships, the rest), each in its
+    given order. A bundle ranks as its riskiest file, so app code packed with
+    its tests is code. `review.run` reviews the first group to the end, a
+    retry of an empty final turn included, before the second starts."""
+    code = [b for b in bundles if _risk(b)[0] < _TESTS_RANK]
+    return code, [b for b in bundles if _risk(b)[0] >= _TESTS_RANK]
+
+
+NO_REVIEW_FILES_SHOWN = 5  # files named in a no-review note
+
+
+def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
+    """The summary note for a bundle that ended with no answer at all
+    (`BundleResult.unanswered`): its 0 findings mean it was not read to a
+    conclusion, not that it is clean."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    kind = "App-code bundle" if result.retried else "Bundle"
+    how = (
+        "its final turn and the retry both came back with no tool call"
+        if result.retried
+        else "its last turn came back with no tool call"
+    )
+    return (
+        f"{kind} `{result.label}` got no real review: {how}, so no finding from it "
+        f"does not mean it is clean ({shown})."
+    )
+
+
 # Every skip reason past the cap starts with this (`UNREAD_REASONS`): a state
 # written by an earlier version says "bundle cap (lowest-risk code, …)".
 BUNDLE_CAP = "bundle cap"

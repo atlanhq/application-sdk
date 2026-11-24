@@ -93,6 +93,10 @@ def build(res: RunResult) -> dict[str, Any]:
                 "untraced_dropped": [why for _, why in b.untraced],
                 "tools": b.tool_calls,
                 "stop": b.stop,
+                # An app-code bundle's empty final turn retried, and whether the
+                # bundle still ended with no answer at all (FND-5316).
+                "retried": b.retried,
+                "unanswered": b.unanswered,
                 # whole: the run report is where an error is read in full
                 "error": redact(b.error) if b.error else b.error,
                 "findings": len(b.findings),

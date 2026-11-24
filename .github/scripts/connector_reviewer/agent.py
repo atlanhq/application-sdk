@@ -44,6 +44,7 @@ from .findings import (
 from .llm import (
     BudgetExhausted,
     Client,
+    Completion,
     ContentRejected,
     FatalRequestError,
     LLMError,
@@ -102,6 +103,10 @@ class AgentLimits:
     # Wall-clock seconds a bundle may spend before its final turn is forced
     # (plan turn included). It cuts the long tail; 0 turns it off.
     bundle_time_limit_s: int = 120
+    # The output budget of the one retry an app-code bundle gets when its loop
+    # ends on a turn with no tool call and nothing reported: such a final turn
+    # had spent all of `review_max_tokens` on reasoning (`_retry_final`).
+    final_retry_max_tokens: int = 48_000
 
     def turn_budget(self, n_files: int, changed_lines: int) -> int:
         extra = self.turns_per_extra_file * max(n_files - 1, 0) + changed_lines // max(
@@ -140,6 +145,13 @@ class BundleResult:
     untraced: list[tuple[Finding, str]] = field(default_factory=list)
     # The model's answers to the regression and history questions, from task_done.
     answers: dict[str, str] = field(default_factory=dict)
+    # An app-code bundle whose loop ended empty got one more final turn
+    # (`_retry_final`).
+    retried: bool = False
+    # The bundle ended with no answer at all: no code_comment ever, and the
+    # last turn (the retry's, when there was one) made no tool call. Its 0
+    # findings mean it was not read to a conclusion, not that it is clean.
+    unanswered: bool = False
 
 
 # ---- prompt manifest -----------------------------------------------------------
@@ -675,7 +687,11 @@ def review_bundle(
     reflect: bool = True,
     budget_usd: float | None = None,
     added: PRAdditions | None = None,
+    retry_empty: bool = False,
 ) -> BundleResult:
+    """Review one bundle. `retry_empty` (review.run sets it for a bundle that
+    holds the code the app ships) gives a loop that ended on an empty turn,
+    with nothing reported, one more final turn (`_retry_final`)."""
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompts.REVIEW_SYSTEM},
@@ -711,6 +727,8 @@ def review_bundle(
             budget_usd,
             deadline,
         )
+        if retry_empty and res.stop == "empty_turns" and not raw_comments:
+            _retry_final(client, ws, bundle, messages, raw_comments, res, limits)
         if (
             limits.second_pass
             and res.stop == "done"
@@ -747,6 +765,7 @@ def review_bundle(
     except LLMError as e:
         res.stop, res.error = "llm_error", str(e)
 
+    res.unanswered = res.stop == "empty_turns" and not raw_comments
     raw = raw_comments[: limits.max_comments]
     pairs = [(place(ws, bundle, c), c) for c in raw]
     # Ids first: two findings on one quote shared an id, and the second was
@@ -922,55 +941,122 @@ def _loop(
             continue
         empty = 0
         messages.append(assistant_turn(comp))  # carries reasoning items across turns
-        done = False
-        for tc in comp.tool_calls:
-            fn = tc.get("function") or EMPTY
-            name = fn.get("name") or ""
-            args = parse_args(fn.get("arguments") or "")
-            res.tool_calls[name] = res.tool_calls.get(name, 0) + 1
-            if name == "code_comment":
-                items = args.get("comments") or []
-                raw_comments.extend(c for c in items if isinstance(c, dict))
-                reply = "Successfully commented."
-            elif name == "task_done":
-                done = True
-                reply = "OK"
-                for key in ("regression", "history"):
-                    answer = " ".join(str(args.get(key) or "").split())
-                    if answer:
-                        res.answers[key] = answer[:ANSWER_KEEP]
-            elif final:
-                reply = "Unavailable on the final turn: call code_comment or task_done."
-            else:
-                reply = run_tool(ws, name, args)
-            trace.line(
-                f"[{bundle.label}]   → {name}({trace.args_summary(name, args)})"
-                + (
-                    f" ← {len(reply)} chars"
-                    if name not in ("code_comment", "task_done")
-                    else ""
-                )
-            )
-            messages.append(
-                {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
-            )
-            if name not in ("code_comment", "task_done"):
-                res.sources.append(
-                    {
-                        "after_turn": res.turns,
-                        "kind": "tool",
-                        "tool": name,
-                        "args": trace.args_summary(name, args),
-                        "chars": len(reply),
-                        "files": prompt_locations(reply),
-                    }
-                )
+        done = _answer(ws, bundle, comp, messages, raw_comments, res, final)
         if done:
             res.stop = "done"
             return
         if final:
             res.stop = "final_round"
             return
+
+
+def _answer(
+    ws: Workspace,
+    bundle: Bundle,
+    comp: Completion,
+    messages: list[dict[str, Any]],
+    raw_comments: list[dict[str, Any]],
+    res: BundleResult,
+    final: bool,
+) -> bool:
+    """Run one turn's tool calls and append their replies; on the final turn
+    only code_comment and task_done do anything. Returns whether task_done
+    was called."""
+    done = False
+    for tc in comp.tool_calls:
+        fn = tc.get("function") or EMPTY
+        name = fn.get("name") or ""
+        args = parse_args(fn.get("arguments") or "")
+        res.tool_calls[name] = res.tool_calls.get(name, 0) + 1
+        if name == "code_comment":
+            items = args.get("comments") or []
+            raw_comments.extend(c for c in items if isinstance(c, dict))
+            reply = "Successfully commented."
+        elif name == "task_done":
+            done = True
+            reply = "OK"
+            for key in ("regression", "history"):
+                answer = " ".join(str(args.get(key) or "").split())
+                if answer:
+                    res.answers[key] = answer[:ANSWER_KEEP]
+        elif final:
+            reply = "Unavailable on the final turn: call code_comment or task_done."
+        else:
+            reply = run_tool(ws, name, args)
+        trace.line(
+            f"[{bundle.label}]   → {name}({trace.args_summary(name, args)})"
+            + (
+                f" ← {len(reply)} chars"
+                if name not in ("code_comment", "task_done")
+                else ""
+            )
+        )
+        messages.append(
+            {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
+        )
+        if name not in ("code_comment", "task_done"):
+            res.sources.append(
+                {
+                    "after_turn": res.turns,
+                    "kind": "tool",
+                    "tool": name,
+                    "args": trace.args_summary(name, args),
+                    "chars": len(reply),
+                    "files": prompt_locations(reply),
+                }
+            )
+    return done
+
+
+def _retry_final(
+    client: Client,
+    ws: Workspace,
+    bundle: Bundle,
+    messages: list[dict[str, Any]],
+    raw_comments: list[dict[str, Any]],
+    res: BundleResult,
+    limits: AgentLimits,
+) -> None:
+    """One more final turn for a code bundle whose loop ended on a turn with
+    no tool call and nothing reported (`stop == "empty_turns"`). The usual
+    cause is a forced final turn whose whole output budget went to
+    reasoning, so this turn gets `final_retry_max_tokens` and a message that
+    asks for the answer, not more analysis. Not bounded by the bundle's
+    budget share or its time limit: an app-code bundle with no answer is
+    worth more than its share, and it runs before any test bundle starts
+    (review.run). Leaves `stop` as it is when the retry is empty too, or
+    cannot be made (a refused reservation or a failed call): the bundle then
+    ends as it would have without the retry."""
+    res.retried = True
+    trace.line(
+        f"[{bundle.label}] code bundle ended on an empty turn with nothing reported: "
+        "one retry of the final turn"
+    )
+    messages.append({"role": "user", "content": prompts.RETRY_FINAL})
+    try:
+        comp = client.complete(
+            f"review:{bundle.label}",
+            messages,
+            max_tokens=max(limits.final_retry_max_tokens, limits.review_max_tokens),
+            tools=TOOL_SCHEMAS,
+            tool_choice="required",
+            cache_key="connector-reviewer-review",
+        )
+    except (BudgetExhausted, LLMError) as e:
+        trace.line(f"[{bundle.label}]   retry not made: {trace.short(str(e), 140)}")
+        return
+    res.turns += 1
+    u = comp.usage or {}
+    trace.line(
+        f"[{bundle.label}] retry turn: {len(comp.tool_calls)} tool call(s), "
+        f"reasoning={u.get('reasoning_tokens', 0)} out={u.get('completion_tokens', 0)} ${comp.cost:.5f}"
+    )
+    if not comp.tool_calls:
+        trace.line(f"[{bundle.label}]   no tool call on the retry either")
+        return
+    messages.append(assistant_turn(comp))
+    done = _answer(ws, bundle, comp, messages, raw_comments, res, final=True)
+    res.stop = "done" if done else "final_round"
 
 
 def _reflect(

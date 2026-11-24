@@ -10006,6 +10006,133 @@ def test_the_shipped_time_limit_keeps_four_bundles_in_parallel():
     assert 0 < cfg.limits.bundle_time_limit_s <= 180
 
 
+# ---- app code before tests, and a retry for an empty final turn (FND-5316) ----------------------
+
+
+def _one_turn_limits() -> Any:
+    """One tool turn, then the forced final turn; no plan turn."""
+    return agent_mod.AgentLimits(
+        max_tool_turns=1, turns_per_extra_file=0, lines_per_extra_turn=10**6, plan=0
+    )
+
+
+def test_a_code_bundle_whose_final_turn_comes_back_empty_gets_one_retry(repo: Path):
+    """App-code bundles ended on a forced final turn whose whole output budget
+    went to reasoning: no tool call, 0 findings, and the review read as clean.
+    Such a bundle now gets one more final turn with a larger output budget and
+    a message that asks for the answer, and what it reports is kept."""
+    ws, bundle = _ws(repo)
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(content="still reasoning"),  # the forced final turn: no tool call
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    lim = _one_turn_limits()
+    res = agent_mod.review_bundle(
+        client, ws, bundle, PrincipleSet(), {}, [], lim, retry_empty=True
+    )
+    assert res.forced == "turn budget"
+    assert res.retried and not res.unanswered and res.stop == "done"
+    assert [f.title for f in res.findings] == [COMMENT["title"]]
+    retry = script.requests[2]
+    assert retry["tool_choice"] == "required"
+    assert retry["max_tokens"] == lim.final_retry_max_tokens > lim.review_max_tokens
+    assert retry["messages"][-1]["content"] == prompts_mod.RETRY_FINAL
+
+
+def test_an_empty_retry_or_a_test_bundle_ends_unanswered(repo: Path):
+    """A retry that comes back empty too leaves the bundle unanswered; a bundle
+    that is not app code (retry_empty off) gets no retry at all."""
+    ws, bundle = _ws(repo)
+    for retry_empty, calls in ((True, 3), (False, 2)):
+        script = Script(
+            response([tool_call("find_symbol", {"name": "fetch"})]),
+            response(content="still reasoning"),
+            response(content="still reasoning"),
+        )
+        client = Client(
+            model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script
+        )
+        res = agent_mod.review_bundle(
+            client,
+            ws,
+            bundle,
+            PrincipleSet(),
+            {},
+            [],
+            _one_turn_limits(),
+            retry_empty=retry_empty,
+        )
+        assert (res.retried, res.unanswered) == (retry_empty, True)
+        assert res.stop == "empty_turns" and res.findings == []
+        assert len(script.requests) == calls
+
+
+_TEST_FILE = "tests/unit/other/test_wide.py"
+
+
+def _bundle_kind(body: dict[str, Any]) -> str:
+    """Which bundle a line-review request is for, from its <review_files>."""
+    block = (
+        "<review_files>\n<file "  # the block itself, not the system prompt's mention
+    )
+    for m in cast(list[dict[str, Any]], body.get("messages") or []):
+        content = m.get("content")
+        if isinstance(content, str) and block in content:
+            files = content.split(block, 1)[1]
+            return "test" if files.startswith(f'path="{_TEST_FILE}"') else "code"
+    return ""
+
+
+def test_app_code_bundles_finish_before_any_test_bundle_starts(repo: Path):
+    """Test bundles ran beside the app-code bundles, so tests spent the round
+    while the code bundle's final turn came back empty. App-code bundles now
+    run to the end, their retry included, before any test bundle starts, and
+    a code bundle that still got no answer is named in the summary."""
+    order: list[str] = []
+
+    class ByBundle(Script):
+        def __call__(self, body: dict[str, Any]) -> Any:
+            kind = _bundle_kind(body)
+            if not kind:
+                return super().__call__(body)
+            order.append(kind)
+            if kind == "test":
+                if body.get("tool_choice") == "none":
+                    return response(content="1. nothing to check")  # the plan turn
+                return response([tool_call("task_done", {"state": "DONE"})])
+            time.sleep(0.2)  # a slow code bundle: on main the tests ran meanwhile
+            return response(content="still reasoning")
+
+    gh = fake_github()
+    # Over one bundle's token limit, so it is a bundle of its own.
+    gh.diffs[("b0", "h1")] = DIFF + _sized_file(_TEST_FILE, 1000)
+    script = ByBundle()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    assert [b.label for b in res.bundles][0] != "change"
+    assert "code" in order and "test" in order
+    assert max(i for i, k in enumerate(order) if k == "code") < order.index("test")
+    code = res.bundles[0]
+    assert code.retried and code.unanswered
+    assert order.count("code") == 3  # two empty turns, then the retry
+    body = gh.comments[0]["body"]
+    assert "got no real review" in body and "`app/storage/fetch.py`" in body
+
+
 # ---- finalize: a crashed, cancelled or timed-out run never leaves a stale or green status ----------
 
 RUN_URL = "https://github.com/o/r/actions/runs/105"

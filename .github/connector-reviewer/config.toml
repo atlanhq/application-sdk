@@ -196,6 +196,11 @@ plan_max_tokens = 8000
 # final turn and the fact-check still run after it, about one call each. 0 turns it off.
 # Bundles still run `[scope] concurrency` at a time; the approach check runs beside them.
 bundle_time_limit_s = 120
+# A bundle of app code (app, contract, build files, CI) whose loop ends on a turn with no
+# tool call and nothing reported gets one more final turn with this output budget: such a
+# final turn had spent all of review_max_tokens on reasoning. App-code bundles run, retry
+# included, before any test bundle starts.
+final_retry_max_tokens = 48000
 # Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
 # finds real defects the first pass misses at an acceptable cost.
 second_pass = 0

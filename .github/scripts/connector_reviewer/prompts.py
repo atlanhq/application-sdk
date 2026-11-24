@@ -147,6 +147,14 @@ FINAL_ROUND = (
     "confirmed (or none), then task_done. No other tools are available."
 )
 
+# One more final turn for an app-code bundle whose final turn came back with no
+# tool call (agent._retry_final): its output budget went to reasoning.
+RETRY_FINAL = (
+    "Your last turn ended without a tool call: its output budget went to reasoning. Do not check "
+    "anything again. Call code_comment now with every defect you have already confirmed (or none), "
+    "then task_done."
+)
+
 PLAN = (
     "Before using any tool, write a short review plan (tools are not callable on this turn). "
     "List at most 6 concrete risks in this change worth checking, most severe first, each as: "
