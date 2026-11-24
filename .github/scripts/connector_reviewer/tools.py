@@ -156,12 +156,19 @@ class SdkSource:
 
     @classmethod
     def open(
-        cls, checkout: str, res: sdk_source.Resolution
+        cls,
+        checkout: str,
+        res: sdk_source.Resolution,
+        *,
+        reviewed_head: str = "",
+        chosen_at: str = "",
     ) -> tuple[SdkSource | None, str]:
         """The SDK source at `checkout`, labelled with `res`: the pin in the
-        pull request head's uv.lock, resolved the same way as for the step that
-        chose the checkout's ref (`sdk_source.head_lock`). Or None and the
-        reason it is not available."""
+        uv.lock of the head under review (`reviewed_head`). Used only when the
+        checkout is at the commit that pin names (`sdk_source.checkout_at`):
+        the workflow chose the checkout's ref from the head as it was a step
+        earlier (`chosen_at`), and a push in between can change the pin
+        (FND-5316). Or None and the reason it is not available."""
         if res.pin is None:
             return None, f"SDK source not available: {res.reason}"
         path = Path(checkout) if checkout.strip() else None
@@ -169,6 +176,17 @@ class SdkSource:
             return None, (
                 f"SDK source not available: no checkout of application-sdk at "
                 f"{res.pin.label} (the ref may not exist)"
+            )
+        if not sdk_source.checkout_at(path, res.pin.ref):
+            moved = (
+                f"; the pull request moved from {chosen_at[:9]} to {reviewed_head[:9]} "
+                "after the checkout's ref was chosen; `/review force` reviews with the right one"
+                if chosen_at and reviewed_head and chosen_at != reviewed_head
+                else ""
+            )
+            return None, (
+                f"SDK source not available: the checkout is not at {res.pin.label}, "
+                f"the version the head under review pins{moved}"
             )
         return cls(
             root=path.resolve(), label=res.pin.label, package=res.pin.package

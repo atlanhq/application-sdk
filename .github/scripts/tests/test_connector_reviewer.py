@@ -412,6 +412,9 @@ class FakeGitHub:
         self.history_reads: list[str] = []
         # (base, ref) -> merge base; the base's own sha unless a test scripts a merge.
         self.merge_bases: dict[tuple[str, str], str] = {}
+        # (path, ref) -> raw text (`raw_file_at`: the head's uv.lock and pyproject.toml).
+        self.raw: dict[tuple[str, str], str] = {}
+        self.raw_reads: list[tuple[str, str]] = []
 
     def pr(self, n):
         return {
@@ -448,6 +451,10 @@ class FakeGitHub:
 
     def file_at(self, path, ref):
         return self.files.get((path, ref))
+
+    def raw_file_at(self, path, ref):
+        self.raw_reads.append((path, ref))
+        return self.raw.get((path, ref))
 
     def repo_visibility(self, owner_repo):
         self.visibility_lookups.append(owner_repo)
@@ -1123,16 +1130,9 @@ def test_a_missing_or_empty_fleet_directory_is_a_configuration_error(
     assert load_principles(repo / FLEET_DIR, repo).repo == []
 
 
-# The head commit `_cli_review`'s pull request reports: a full sha, as GitHub sends.
-_CLI_HEAD = "c1" * 20
-
-
-def _cli_review(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], head_lock: str | None = None
-):
+def _cli_review(monkeypatch: pytest.MonkeyPatch, argv: list[str]):
     """Run the CLI with GitHub and the review itself stubbed out. Returns the
-    exit code and what the review was called with (None when it never started).
-    `head_lock` is the `uv.lock` at the pull request's head (None: it has none)."""
+    exit code and what the review was called with (None when it never started)."""
     import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test, patched below
 
     seen: dict[str, Any] = {}
@@ -1143,11 +1143,7 @@ def _cli_review(
 
         def pr(self, number):
             seen["github"] = True  # the first request the CLI makes
-            return {**SAME_REPO_PR, "head": {**SAME_REPO_PR["head"], "sha": _CLI_HEAD}}
-
-        def raw_file_at(self, path, ref):
-            seen.setdefault("raw_reads", []).append((path, ref))
-            return head_lock if (path, ref) == ("uv.lock", _CLI_HEAD) else None
+            return SAME_REPO_PR
 
         def delete_comment(self, comment_id):  # pragma: no cover - id is 0
             raise AssertionError("a dry run posts no progress note to delete")
@@ -3223,16 +3219,17 @@ def test_a_file_cut_by_the_cap_is_named_with_the_lines_left_unread():
     assert {p for b in bundles for p in b.paths} == {path}
     [(skipped, why)] = res.skipped_files
     assert skipped == path
-    assert re.fullmatch(
-        r"bundle cap: lines \d+-\d+(, \d+-\d+)* not reviewed, the rest was", why
-    ) or re.fullmatch(
-        r"bundle cap: lines \d+-\d+(, \d+-\d+){5} and \d+ more range\(s\) not reviewed, "
-        r"the rest was",
-        why,
-    ), why
-    # The first part was read: its lines are not among those named.
-    first = bundles[0].files[0].hunks[0]
-    assert f"lines {first.new_start}-" not in why
+    # `_hunks_diff` puts hunk k at head lines 1 + 70k to 60 + 70k (a 10-line
+    # gap, so no two merge). The unread ranges are exactly the hunks that are
+    # in no kept bundle, in order: the first six named, the rest counted.
+    every = [(1 + 70 * k, 60 + 70 * k) for k in range(150)]
+    read = {h.new_start for b in bundles for f in b.files for h in f.hunks}
+    unread = [f"{a}-{b}" for a, b in every if a not in read]
+    assert read and unread  # the cap cut part of the file, not all of it
+    expected = "lines " + ", ".join(unread[:6])
+    if len(unread) > 6:
+        expected += f" and {len(unread) - 6} more range(s)"
+    assert why == f"bundle cap: {expected} not reviewed, the rest was"
     assert review_mod._line_ranges([(5, 9), (10, 12), (20, 20)]) == "lines 5-12, 20"
     assert review_mod._line_ranges([(7, 7)]) == "line 7"
 
@@ -12954,6 +12951,50 @@ def _sdk_checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+def _git(root: Path, *args: str) -> str:
+    """git in `root`, isolated from the machine's own git configuration."""
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.invalid",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.invalid",
+    }
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        env.pop(k, None)
+    done = subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def _sdk_git_checkout(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`_sdk_checkout` as a real git checkout, as actions/checkout leaves it:
+    HEAD at the annotated tag `v3.40.0`, with an older commit tagged `v3.41.0`
+    that HEAD is not at (FND-5316)."""
+    root = _sdk_checkout(tmp_path_factory)
+    import shutil  # noqa: PLC0415
+
+    shutil.rmtree(root / ".git")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "older")
+    _git(root, "tag", "-a", "v3.41.0", "-m", "older")
+    (root / "application_sdk" / "__init__.py").write_text('"""SDK, newer."""\n')
+    _git(root, "commit", "-q", "-am", "pinned")
+    _git(root, "tag", "-a", "v3.40.0", "-m", "pinned")
+    return root
+
+
 def _sdk_ws(repo: Path, sdk_root: Path | None) -> Workspace:
     return Workspace(
         root=repo,
@@ -13092,7 +13133,7 @@ def test_the_sdk_index_stops_at_its_time_limit(
 def test_the_sdk_source_falls_back_with_a_reason(
     tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ):
-    checkout = _sdk_checkout(tmp_path_factory)
+    checkout = _sdk_git_checkout(tmp_path_factory)
 
     # No lock: no pin, whatever is on disk.
     no_lock = sdk_source_mod.HeadLock(None, "the pull request head has no uv.lock")
@@ -13117,67 +13158,144 @@ def test_the_sdk_source_falls_back_with_a_reason(
     assert sdk.label == "v3.40.0" and sdk.root == checkout.resolve()
 
 
-def test_the_cli_passes_the_sdk_source_or_why_it_is_missing(
+@pytest.mark.parametrize(
+    "version", ["3.41.0", "3.42.0"], ids=["tag-elsewhere", "no-such-tag"]
+)
+def test_the_sdk_source_is_used_only_when_the_checkout_is_at_the_pin(
+    tmp_path_factory: pytest.TempPathFactory, version: str
+):
+    """FND-5316 (lens F-f65a20): a directory that holds application_sdk/ is not
+    enough. The checkout must be at the commit the pin names (an annotated tag
+    is peeled), or one SDK would be labelled as another."""
+    checkout = _sdk_git_checkout(tmp_path_factory)
+    pinned = sdk_source_mod.resolve(
+        _lock('{ registry = "https://pypi.org/simple" }', version)
+    )
+    sdk, note = SdkSource.open(str(checkout), pinned)
+    assert sdk is None
+    assert note == (
+        f"SDK source not available: the checkout is not at v{version}, the version "
+        "the head under review pins"
+    )
+    # A commit pin is checked the same way.
+    head = _git(checkout, "rev-parse", "HEAD")
+    assert sdk_source_mod.checkout_at(checkout, head)
+    assert sdk_source_mod.checkout_at(checkout, "v3.40.0")
+    assert not sdk_source_mod.checkout_at(checkout, "f" * 40)
+    # A fake checkout (no repository of its own) is never "at" anything.
+    assert not sdk_source_mod.checkout_at(_sdk_checkout(tmp_path_factory), "v3.40.0")
+
+
+def test_the_cli_passes_the_sdk_checkout_and_the_head_it_was_chosen_at(
     repo: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    tmp_path_factory: pytest.TempPathFactory,
 ):
     monkeypatch.delenv("CONNECTOR_REVIEWER_SDK_SOURCE", raising=False)
+    monkeypatch.delenv("CONNECTOR_REVIEWER_SDK_HEAD", raising=False)
     # A local run without the flag or the variable: as before, no note.
     code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
     assert code == 0
-    assert seen["run"]["sdk"] is None and seen["run"]["sdk_note"] == ""
-    assert seen["run"]["head_lock"] is None and "raw_reads" not in seen
+    assert seen["run"]["sdk_dir"] is None and seen["run"]["sdk_head"] == ""
     assert "SDK source not available: not configured" in capsys.readouterr().err
 
-    # CI: the variable is set, and the pull request head has no lock to resolve.
+    # CI: the variables are set; the review opens the source itself.
     monkeypatch.setenv("CONNECTOR_REVIEWER_SDK_SOURCE", str(tmp_path / "sdk-src"))
+    monkeypatch.setenv("CONNECTOR_REVIEWER_SDK_HEAD", _SHA_HEAD)
     code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
-    why = (
-        f"SDK source not available: the pull request head ({_CLI_HEAD[:9]}) has no "
-        "uv.lock, or it could not be read"
-    )
-    assert seen["run"]["sdk"] is None
-    assert seen["run"]["sdk_note"] == why
-    assert why in capsys.readouterr().err
-
-    head = _lock('{ registry = "https://pypi.org/simple" }')
-    checkout = _sdk_checkout(tmp_path_factory)
+    assert seen["run"]["sdk_dir"] == str(tmp_path / "sdk-src")
+    assert seen["run"]["sdk_head"] == _SHA_HEAD
     code, seen = _cli_review(
-        monkeypatch, ["--root", str(repo), "--sdk-source", str(checkout)], head
+        monkeypatch, ["--root", str(repo), "--sdk-source", "x", "--sdk-head", "y"]
     )
-    assert seen["run"]["sdk"].label == "v3.40.0" and seen["run"]["sdk_note"] == ""
-    assert seen["run"]["head_lock"] == head
-    assert f"SDK source: application-sdk v3.40.0 at {checkout.resolve()}" in (
-        capsys.readouterr().err
-    )
+    assert (seen["run"]["sdk_dir"], seen["run"]["sdk_head"]) == ("x", "y")
 
 
-def test_the_review_labels_the_sdk_source_from_the_pull_request_heads_lock(
-    repo: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path_factory: pytest.TempPathFactory,
+# Two heads of one pull request: the head the workflow's resolve step read, and
+# the head the review step reviews after a push in between.
+_HEAD_A = "a1" * 20
+_HEAD_B = "b2" * 20
+
+
+def _sdk_review(
+    repo: Path, checkout: Path, head: str, lock: str | None, sdk_head: str = ""
+) -> tuple[RunResult, Any, Script]:
+    """A review of `head`, whose uv.lock is `lock`, with the SDK checkout the
+    workflow made at `sdk_head`."""
+    gh = fake_github(
+        head=head,
+        diffs={("b0", head): DIFF},
+        files={("app/storage/fetch.py", head): SRC_V2},
+    )
+    if lock is not None:
+        gh.raw[("uv.lock", head)] = lock
+    script = _review_script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        sdk_dir=str(checkout),
+        sdk_head=sdk_head,
+    )
+    return res, gh, script
+
+
+def test_the_review_labels_the_sdk_source_from_the_lock_of_the_head_it_reviews(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
 ):
     """FND-5316: the default branch's lock named the wrong SDK for a pull
-    request that pins another one. The review reads the head's lock, as the
-    workflow's `sdk-ref` step does, and never falls back to the default
-    branch's."""
+    request that pins another one. The review reads the lock at the head it
+    reviews, and never falls back to the default branch's."""
     (repo / "uv.lock").write_text(
         _lock('{ registry = "https://pypi.org/simple" }', "3.58.1")
     )
-    checkout = _sdk_checkout(tmp_path_factory)
-    monkeypatch.setenv("CONNECTOR_REVIEWER_SDK_SOURCE", str(checkout))
-    head = _lock('{ registry = "https://pypi.org/simple" }', "3.34.3")
-    _, seen = _cli_review(monkeypatch, ["--root", str(repo)], head)
-    assert seen["run"]["sdk"].label == "v3.34.3"
-    assert seen["raw_reads"] == [("uv.lock", _CLI_HEAD)]
+    checkout = _sdk_git_checkout(tmp_path_factory)
+    head_lock = _lock('{ registry = "https://pypi.org/simple" }', "3.40.0")
+    res, gh, script = _sdk_review(repo, checkout, _HEAD_A, head_lock, _HEAD_A)
+    assert res.notes == []
+    assert (
+        '<sdk_source version="v3.40.0">' in script.requests[0]["messages"][2]["content"]
+    )
+    assert ("uv.lock", _HEAD_A) in gh.raw_reads
 
-    # The head has no lock: no SDK source, even though the default branch has one.
-    _, seen = _cli_review(monkeypatch, ["--root", str(repo)], None)
-    assert seen["run"]["sdk"] is None
-    assert "has no uv.lock" in seen["run"]["sdk_note"]
+    # The head has no lock: no SDK source, though the default branch has one.
+    res, _, script = _sdk_review(repo, checkout, _HEAD_A, None, _HEAD_A)
+    assert res.notes == [
+        f"SDK source not available: the pull request head ({_HEAD_A[:9]}) has no "
+        "uv.lock, or it could not be read"
+    ]
+    assert "<sdk_source" not in script.requests[0]["messages"][2]["content"]
+
+
+def test_a_push_between_the_resolve_step_and_the_review_cannot_mislabel_the_sdk(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    """lens F-f65a20 / F-9e1332: the resolve step read head A, which pins
+    v3.40.0, and the checkout is at v3.40.0. The pull request then moved to
+    head B. When B pins another SDK, the checkout is not B's source, so the
+    review runs without it and names both heads; when B pins the same SDK, the
+    checkout is B's source too and is used."""
+    checkout = _sdk_git_checkout(tmp_path_factory)
+    moved = _lock('{ registry = "https://pypi.org/simple" }', "3.41.0")
+    res, _, script = _sdk_review(repo, checkout, _HEAD_B, moved, _HEAD_A)
+    assert res.notes == [
+        "SDK source not available: the checkout is not at v3.41.0, the version the "
+        f"head under review pins; the pull request moved from {_HEAD_A[:9]} to "
+        f"{_HEAD_B[:9]} after the checkout's ref was chosen; `/review force` reviews "
+        "with the right one"
+    ]
+    assert "<sdk_source" not in script.requests[0]["messages"][2]["content"]
+
+    same = _lock('{ registry = "https://pypi.org/simple" }', "3.40.0")
+    res, _, script = _sdk_review(repo, checkout, _HEAD_B, same, _HEAD_A)
+    assert res.notes == []
+    assert (
+        '<sdk_source version="v3.40.0">' in script.requests[0]["messages"][2]["content"]
+    )
 
 
 class _HeadLockGitHub:
@@ -13210,14 +13328,16 @@ def test_the_sdk_ref_cli_reads_the_pull_request_heads_lock(
     event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
     argv = ["sdk-ref", "--repo", "o/r", "--event-name", "issue_comment"]
     assert cli.main([*argv, "--event-path", str(event)]) == 0
-    assert out.read_text() == "ref=v3.34.3\nlabel=v3.34.3\n"
+    # The head it read is written too: the review names it if the pull request
+    # has moved by the time it runs.
+    assert out.read_text() == f"ref=v3.34.3\nlabel=v3.34.3\nhead={_SHA_HEAD}\n"
     assert fake.reads == [("uv.lock", _SHA_HEAD)]
 
     # The head has no lock, or it could not be read: an empty ref and the reason.
     fake.lock = None
     out.write_text("")
     assert cli.main([*argv, "--event-path", str(event)]) == 0
-    assert out.read_text() == "ref=\nlabel=\n"
+    assert out.read_text() == f"ref=\nlabel=\nhead={_SHA_HEAD}\n"
     assert "has no uv.lock, or it could not be read" in capsys.readouterr().out
 
     # An event that names no pull request: nothing is read.
@@ -13361,36 +13481,66 @@ def test_an_other_sdk_pin_shows_only_plain_text(requirement: str):
     assert "echo" not in block
 
 
+def _pins_review(repo: Path, raw: dict[tuple[str, str], str]) -> str:
+    """The line review's context message for a review of `_HEAD_A`, whose
+    files read through the API are `raw`."""
+    gh = fake_github(
+        head=_HEAD_A,
+        diffs={("b0", _HEAD_A): DIFF},
+        files={("app/storage/fetch.py", _HEAD_A): SRC_V2},
+    )
+    gh.raw.update(raw)
+    script = _review_script()
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    return script.requests[0]["messages"][2]["content"]
+
+
+# A uv.lock entry for an Atlan SDK that does not ship from application-sdk.
+_SERVER_LOCK_ENTRY = (
+    '\n[[package]]\nname = "atlan-server-sdk"\nversion = "0.4.0"\n'
+    f'source = {{ git = "https://github.com/atlanhq/server-sdk.git#{_SHA_HEAD}" }}\n'
+)
+
+
 def test_the_line_review_is_told_about_an_sdk_it_cannot_read(repo: Path):
     """The block reaches the line review's context message whether or not the
-    SDK source is there, and a review of an app that pins no other Atlan SDK
-    sends the prompt it always did."""
+    SDK source is there, read at the head under review, and a review of an app
+    that pins no other Atlan SDK sends the prompt it always did."""
     (repo / "server").mkdir()
-    (repo / "server" / "pyproject.toml").write_text(_SERVER_PYPROJECT)
-    script = _review_script()
-    run(
-        gh=fake_github(),
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        principles=principles_of(repo),
-        client_factory=_factory(script),
-    )
-    context_msg = script.requests[0]["messages"][2]["content"]
-    assert "<other_sdk_packages>" in context_msg
-    assert "- atlan-server-sdk: git github.com/atlanhq/server-sdk" in context_msg
+    (repo / "server" / "pyproject.toml").write_text("[project]\nname = 's'\n")
+    # The head's server/pyproject.toml pins it, whatever the checkout's says.
+    msg = _pins_review(repo, {("server/pyproject.toml", _HEAD_A): _SERVER_PYPROJECT})
+    assert "<other_sdk_packages>" in msg
+    assert "- atlan-server-sdk: git github.com/atlanhq/server-sdk" in msg
+    # The head's lock pins it.
+    lock = _lock('{ registry = "https://pypi.org/simple" }') + _SERVER_LOCK_ENTRY
+    msg = _pins_review(repo, {("uv.lock", _HEAD_A): lock})
+    assert "- atlan-server-sdk: 0.4.0 from git github.com/atlanhq/server-sdk" in msg
 
     (repo / "server" / "pyproject.toml").unlink()
-    script = _review_script()
-    run(
-        gh=fake_github(),
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        principles=principles_of(repo),
-        client_factory=_factory(script),
+    assert "<other_sdk_packages>" not in _pins_review(repo, {})
+
+
+def test_the_other_sdk_block_never_reads_the_default_branchs_files(repo: Path):
+    """lens F-d40fdc: the checkout is the default branch. When the head's lock
+    cannot be read, nothing comes from a lock, and a pyproject.toml is read at
+    the head: the checkout's pins are not the pull request's."""
+    (repo / "uv.lock").write_text(
+        _lock('{ registry = "https://pypi.org/simple" }') + _SERVER_LOCK_ENTRY
     )
-    assert "<other_sdk_packages>" not in script.requests[0]["messages"][2]["content"]
+    (repo / "server").mkdir()
+    (repo / "server" / "pyproject.toml").write_text(_SERVER_PYPROJECT)
+    msg = _pins_review(
+        repo, {("server/pyproject.toml", _HEAD_A): "[project]\nname = 's'\n"}
+    )
+    assert "<other_sdk_packages>" not in msg
 
 
 def test_a_review_without_the_sdk_source_runs_as_before_and_says_so(repo: Path):

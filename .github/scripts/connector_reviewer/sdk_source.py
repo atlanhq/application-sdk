@@ -43,7 +43,9 @@ The workflow calls `python -m connector_reviewer sdk-ref --repo … --event-name
 from __future__ import annotations
 
 import html
+import os
 import re
+import subprocess
 import tomllib
 import urllib.parse
 from dataclasses import dataclass
@@ -223,6 +225,7 @@ class HeadLock:
 
     text: str | None
     reason: str = ""  # why `text` is None; empty when there is a lock
+    head: str = ""  # the head commit it was read at (40 hex), "" when none
 
     def resolution(self) -> Resolution:
         if self.text is None:
@@ -231,9 +234,9 @@ class HeadLock:
 
 
 def head_lock(gh: GitHub, number: int) -> HeadLock:
-    """The `uv.lock` at pull request `number`'s head, read through the REST API
-    as data (`GitHub.raw_file_at`: an app's lock can pass the 1 MB the JSON
-    contents reply carries). Never raises."""
+    """The `uv.lock` at pull request `number`'s current head, read through the
+    REST API as data. What `sdk-ref` uses; the review reads at the head it
+    reviews instead (`head_lock_at`). Never raises."""
     if number <= 0:
         return HeadLock(None, "no pull request to read uv.lock from")
     try:
@@ -242,6 +245,12 @@ def head_lock(gh: GitHub, number: int) -> HeadLock:
         return HeadLock(
             None, f"the pull request could not be read ({type(e).__name__})"
         )
+    return head_lock_at(gh, head)
+
+
+def head_lock_at(gh: GitHub, head: str) -> HeadLock:
+    """The `uv.lock` at commit `head` (`GitHub.raw_file_at`: an app's lock can
+    pass the 1 MB the JSON contents reply carries). Never raises."""
     if not _COMMIT.fullmatch(head):
         return HeadLock(None, "the pull request has no head commit")
     try:
@@ -252,8 +261,9 @@ def head_lock(gh: GitHub, number: int) -> HeadLock:
         return HeadLock(
             None,
             f"the pull request head ({head[:9]}) has no uv.lock, or it could not be read",
+            head,
         )
-    return HeadLock(text)
+    return HeadLock(text, head=head)
 
 
 # ---- Atlan SDK packages that `sdk:` cannot cover (FND-5316) ---------------------
@@ -444,16 +454,19 @@ def _shown_path(path: str) -> str:
     return path if re.fullmatch(r"[0-9A-Za-z._/-]{1,200}", path) else "a pyproject.toml"
 
 
-def step_output(res: Resolution) -> str:
+def step_output(res: Resolution, head: str = "") -> str:
     """The `$GITHUB_OUTPUT` lines for the checkout step: `ref` empty unless it is
-    one of the two safe shapes, so the step's `if:` skips the checkout."""
+    one of the two safe shapes, so the step's `if:` skips the checkout. `head`,
+    the commit the lock was read at, is written only when it is 40 hex: the
+    review names it when the pull request has moved since."""
     pin = res.pin
     ok = pin is not None and _REF.fullmatch(pin.ref) is not None
     ref = pin.ref if pin is not None and ok else ""
     label = pin.label if pin is not None and ok else ""
     if not _LABEL.fullmatch(label):
         label = ""
-    return f"ref={ref}\nlabel={label}\n"
+    out = f"ref={ref}\nlabel={label}\n"
+    return out + (f"head={head}\n" if _COMMIT.fullmatch(head) else "")
 
 
 def checkout_present(path: Path) -> bool:
@@ -470,3 +483,54 @@ def checkout_present(path: Path) -> bool:
         )
     except OSError:
         return False
+
+
+GIT_SECONDS = 10.0  # each `git rev-parse` of `checkout_commit`
+
+
+def checkout_commit(path: Path, spec: str = "HEAD") -> str:
+    """The commit `spec` names in the git checkout at `path` (an annotated tag
+    is peeled), or "" when it names none or `path` is not a checkout of its
+    own. Reads the checkout's object store with `git rev-parse`; never runs
+    anything from the checkout. Never raises."""
+    if spec != "HEAD" and not _REF.fullmatch(spec):
+        return ""
+    try:
+        if not (path / ".git").exists():
+            return ""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+        }
+        # Never let git walk up out of `path` into an enclosing repository.
+        env["GIT_CEILING_DIRECTORIES"] = str(path.resolve().parent)
+        done = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(path),
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                f"{spec}^{{commit}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=GIT_SECONDS,
+            env=env,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+    sha = done.stdout.strip()
+    return sha if done.returncode == 0 and _COMMIT.fullmatch(sha) else ""
+
+
+def checkout_at(path: Path, ref: str) -> bool:
+    """True when the checkout at `path` is at the commit `ref` names: the SDK
+    source is labelled with the pin of the head under review only when it is
+    that pin's source (FND-5316). A push between the step that chose the
+    checkout's ref and the review can change the pin."""
+    head = checkout_commit(path)
+    return bool(head) and head == checkout_commit(path, ref)

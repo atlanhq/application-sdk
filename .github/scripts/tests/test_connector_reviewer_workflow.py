@@ -171,6 +171,13 @@ def test_the_sdk_pin_is_read_from_the_pull_request_head_not_the_default_branch(
         "EVENT_PATH": "${{ github.event_path }}",
     }
     assert "token" not in _checkout(job, "sdk-src")["with"]
+    # The review is told which head the checkout's ref came from (lens
+    # F-f65a20): it re-reads the lock at the head it reviews and names both
+    # heads when a push in between moved the pin.
+    [review] = [s for s in steps if s.get("name") == "Review"]
+    assert review["env"]["CONNECTOR_REVIEWER_SDK_HEAD"] == (
+        "${{ steps.sdk-ref.outputs.head }}"
+    )
 
 
 def test_no_step_mentions_a_pull_request_head(text: str) -> None:

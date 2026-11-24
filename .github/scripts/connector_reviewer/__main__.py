@@ -15,12 +15,14 @@ Sub-commands of the `/review` comment (`/review force`, `/review verify-budget`,
 
 `sdk-ref` reads the pull request head's `uv.lock` through the REST API (with
 `--repo` and a pull request: `--pr`, or the event) and writes the
-application-sdk ref it pins (`ref=` and `label=`) to `$GITHUB_OUTPUT`, empty when
-there is none (connector_reviewer/sdk_source.py); `--root` alone reads a local
-checkout's lock instead. The workflow checks the SDK source out at that ref and
-passes it to `review --sdk-source` (or `CONNECTOR_REVIEWER_SDK_SOURCE`), and the
-review labels it from the same head lock. The review's tools then read it under
-`sdk:`. When it was asked for and is not there, the review runs without it and
+application-sdk ref it pins (`ref=`, `label=` and the `head=` it read) to
+`$GITHUB_OUTPUT`, empty when there is none (connector_reviewer/sdk_source.py);
+`--root` alone reads a local checkout's lock instead. The workflow checks the
+SDK source out at that ref and passes it to `review --sdk-source` (or
+`CONNECTOR_REVIEWER_SDK_SOURCE`). The review reads the lock again at the exact
+head it reviews and uses the checkout only when the checkout's commit is the
+one that lock pins, so a push between the two steps cannot label one SDK as
+another. The review's tools then read it under `sdk:`. When it was asked for and is not there, the review runs without it and
 its summary says so; without the flag or the variable (a local run) nothing
 changes.
 
@@ -79,7 +81,6 @@ from .review import (
     waive,
 )
 from .sdk_source import Resolution, head_lock, resolve_root, step_output
-from .tools import SdkSource
 
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
@@ -122,6 +123,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="checkout of application-sdk at the version the app pins, read under "
         "`sdk:` (default: $CONNECTOR_REVIEWER_SDK_SOURCE; unset: no SDK source)",
+    )
+    r.add_argument(
+        "--sdk-head",
+        default=None,
+        help="the pull request head `sdk-ref` chose the SDK checkout's ref from, for "
+        "the note when the head moved (default: $CONNECTOR_REVIEWER_SDK_HEAD)",
     )
     f = sub.add_parser(
         "finalize",
@@ -317,25 +324,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # The pinned SDK source (FND-5331). Asked for (the flag or the variable,
     # even empty) but not usable: the review runs as without it, and says so.
-    sdk: SdkSource | None = None
-    sdk_note = ""
+    # `review.run` opens it against the lock at the very head it reviews, and
+    # only when the checkout is at the ref that lock pins (FND-5316).
     sdk_dir = (
         args.sdk_source
         if args.sdk_source is not None
         else os.environ.get("CONNECTOR_REVIEWER_SDK_SOURCE")
     )
-    # The pull request head's lock, the one the workflow's checkout was chosen
-    # from (FND-5316), never the default branch's.
-    lock_text: str | None = None
-    if sdk_dir is not None:
-        lock = head_lock(gh, args.pr)
-        lock_text = lock.text
-        sdk, sdk_note = SdkSource.open(sdk_dir, lock.resolution())
-    trace.line(
-        f"SDK source: application-sdk {sdk.label} at {sdk.root}"
-        if sdk
-        else (sdk_note or "SDK source not available: not configured")
+    sdk_head = (
+        args.sdk_head
+        if args.sdk_head is not None
+        else os.environ.get("CONNECTOR_REVIEWER_SDK_HEAD", "")
     )
+    if sdk_dir is None:
+        trace.line("SDK source not available: not configured")
 
     # A "running" note while the review is in progress, with a link to the live log. It is
     # removed once the verdict is posted (the verdict links the run too), and turned into a
@@ -360,9 +362,8 @@ def main(argv: list[str] | None = None) -> int:
             post=live,
             run_url=run_url,
             on_pending=record_head,
-            sdk=sdk,
-            sdk_note=sdk_note,
-            head_lock=lock_text,
+            sdk_dir=sdk_dir,
+            sdk_head=sdk_head,
         )
     except Exception:
         # The pending status this run set must not outlive it. The workflow's
@@ -455,6 +456,7 @@ def _finalize(args: argparse.Namespace) -> int:
 def _sdk_ref(args: argparse.Namespace) -> int:
     """`sdk-ref`: always exit 0. No ref is an empty output, and the review then
     runs without the SDK source; it is never a reason to fail the job."""
+    head = ""
     if args.repo:
         number = args.pr or 0
         if not number and args.event_name and args.event_path:
@@ -463,14 +465,15 @@ def _sdk_ref(args: argparse.Namespace) -> int:
             except (OSError, ValueError):
                 event = {}
             number = pr_number(args.event_name, event) if isinstance(event, dict) else 0
-        res = head_lock(GitHub(args.repo), number).resolution()
+        lock = head_lock(GitHub(args.repo), number)
+        res, head = lock.resolution(), lock.head
     elif args.root:
         res = resolve_root(Path(args.root))
     else:
         res = Resolution(
             None, "no pull request (--repo) or app checkout (--root) given"
         )
-    out = step_output(res)
+    out = step_output(res, head)
     print(
         f"connector-reviewer: application-sdk pin: {res.pin.label}"
         if res.pin

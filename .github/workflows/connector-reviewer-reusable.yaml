@@ -128,8 +128,8 @@ jobs:
       # tested). The head, not the default branch: an SDK bump in the pull
       # request changes which SDK its code calls. Reading the pull request needs
       # the App token (the job's own token has no pull-requests scope). Writes
-      # `ref` (empty when there is none) and `label` as step outputs. Always
-      # exits 0.
+      # `ref` (empty when there is none), `label` and the `head` it read as
+      # step outputs. Always exits 0.
       - name: Resolve the application-sdk version the pull request pins
         id: sdk-ref
         continue-on-error: true
@@ -185,6 +185,11 @@ jobs:
           # above was skipped or failed the directory is absent, and the
           # reviewer says "SDK source not available" (connector_reviewer/tools.py).
           CONNECTOR_REVIEWER_SDK_SOURCE: ${{ github.workspace }}/sdk-src
+          # The head the resolve step read the lock at. The review reads the
+          # lock again at the head it reviews and uses the checkout only when
+          # it is at the ref that lock pins; this names both heads when a push
+          # in between moved the pin (FND-5316).
+          CONNECTOR_REVIEWER_SDK_HEAD: ${{ steps.sdk-ref.outputs.head }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           # Run report (every model request, bundle, timing; no prompts, code or

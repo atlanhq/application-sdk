@@ -507,17 +507,29 @@ def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     return None, ""
 
 
-def sdk_pins_block(ws: Workspace, head_lock: str | None) -> str:
+def sdk_pins_block(
+    ws: Workspace,
+    lock: sdk_source.HeadLock,
+    at_head: Callable[[str], str | None],
+) -> str:
     """The `<other_sdk_packages>` block for the line review (FND-5316): the
-    Atlan SDK packages the head pins that `sdk:` cannot read, from its lock and
-    its `pyproject.toml` files; "" when it pins none."""
-    lock = head_lock if head_lock is not None else ws.text(sdk_source.LOCK)
-    pyprojects = {
-        p: text
-        for p in ws.files()
-        if sdk_source.is_pyproject(p) and (text := ws.text(p))
-    }
-    others = sdk_source.other_pins(lock, pyprojects)
+    Atlan SDK packages the head under review pins that `sdk:` cannot read;
+    "" when it pins none. Everything is read at that head, never from the
+    checkout, which is the default branch: the lock is `lock` (read at the
+    head; when it could not be read, nothing comes from a lock), and each
+    `pyproject.toml` path the workspace knows (at most
+    `sdk_source.MAX_PYPROJECTS`) is read with `at_head`, or taken from the
+    pull request's own text when it changed the file."""
+    paths = [p for p in ws.files() if sdk_source.is_pyproject(p)]
+    pyprojects: dict[str, str] = {}
+    for p in sorted(paths)[: sdk_source.MAX_PYPROJECTS]:
+        try:
+            text = ws.head_text[p] if p in ws.head_text else at_head(p)
+        except Exception:  # noqa: BLE001 - a failed read leaves the file out
+            text = None
+        if text:
+            pyprojects[p] = text
+    others = sdk_source.other_pins(lock.text, pyprojects)
     return sdk_source.pins_block(others, ws.sdk.label if ws.sdk else None)
 
 
@@ -536,15 +548,17 @@ def run(
     on_pending: Callable[[str], None] | None = None,
     sdk: SdkSource | None = None,
     sdk_note: str = "",
-    head_lock: str | None = None,
+    sdk_dir: str | None = None,
+    sdk_head: str = "",
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
-    `finalize` must check if this run never posts a verdict. `sdk` is the
-    pinned SDK source the tools can read; `sdk_note` says why it is missing
-    when one was asked for (FND-5331). `head_lock` is the pull request head's
-    `uv.lock` when the caller read it (`sdk_source.head_lock`); without it the
-    workspace's own is used (FND-5316)."""
+    `finalize` must check if this run never posts a verdict. `sdk_dir` is the
+    SDK checkout the workflow made (FND-5331), opened here against the
+    `uv.lock` of the very head this round reviews, and only when the checkout
+    is at the ref that lock pins; `sdk_head` is the head the workflow chose the
+    checkout's ref from, named when the two differ (FND-5316). A caller that
+    built the source itself passes `sdk` and `sdk_note` instead."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -746,6 +760,18 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    # The head's own lock (FND-5316): the SDK source and the other-SDK block
+    # are bound to the head this round reviews, never to the default branch.
+    lock = sdk_source.head_lock_at(gh, head)
+    if sdk_dir is not None:
+        sdk, sdk_note = SdkSource.open(
+            sdk_dir, lock.resolution(), reviewed_head=head, chosen_at=sdk_head
+        )
+        trace.line(
+            f"SDK source: application-sdk {sdk.label} at {sdk.root}"
+            if sdk
+            else sdk_note
+        )
     if sdk_note:
         res.notes.append(sdk_note)
     if post:
@@ -863,7 +889,7 @@ def run(
         index=idx,
         sdk=sdk,
     )
-    ws.sdk_pins = sdk_pins_block(ws, head_lock)
+    ws.sdk_pins = sdk_pins_block(ws, lock, lambda p: gh.raw_file_at(p, head))
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
     # The approach check runs alongside the line review, on a ledger of its own
     # carved out of the round's: whatever it spends, it can never take a

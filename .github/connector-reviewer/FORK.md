@@ -436,7 +436,11 @@ equivalent.
   tokens cannot read that repository, so `sdk:` cannot cover it.
   `sdk_source.other_pins` finds every `atlan-…sdk…` package other than the SDK,
   its api package and the conformance tool, in the head's lock and in each
-  `pyproject.toml` of the workspace (at most 20), and `pins_block` puts an
+  `pyproject.toml` path the workspace knows (at most 20), every one read at the
+  head under review (`review.sdk_pins_block`: the pull request's own text for a
+  file it changed, `GitHub.raw_file_at` at the head otherwise), never from the
+  checkout, which is the default branch. When the head's lock cannot be read,
+  nothing comes from a lock (lens F-d40fdc). `pins_block` puts an
   `<other_sdk_packages>` block in the line review's context, with or without
   the SDK source: `sdk:` covers only application-sdk (which version), the
   package and how it is pinned, and not to judge its calls from application-sdk
@@ -444,17 +448,28 @@ equivalent.
 - **Workflow.** `python -m connector_reviewer sdk-ref --repo … --event-name …
   --event-path …` runs after the App token is minted (reading the pull request
   needs `pull-requests` scope, which the job's own token lacks), takes the pull
-  request from the event, writes `ref` and `label` to `$GITHUB_OUTPUT` and
-  always exits 0. `--root <dir>` alone still reads a local checkout's lock. The
-  review step resolves the label from the same head lock (`SdkSource.open`
-  takes the resolution, not the app root) and hands the lock text to
-  `review.run(head_lock=…)`. A third checkout, of
+  request from the event, writes `ref`, `label` and the `head` it read to
+  `$GITHUB_OUTPUT` and always exits 0. `--root <dir>` alone still reads a local
+  checkout's lock. A third checkout, of
   `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
   (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,
   with `persist-credentials: false` and the job's read-only token. Both steps
   have `continue-on-error: true`: a ref that does not exist fails only the
   checkout. The Review step always gets `CONNECTOR_REVIEWER_SDK_SOURCE`
   (`--sdk-source`), the checkout's path, whether or not it exists.
+- **One head (lens F-f65a20, F-9e1332).** The pull request can move between the
+  resolve step and the review, so the review does not trust the step's ref.
+  `review.run(sdk_dir=…, sdk_head=…)` reads the lock again at the exact head
+  this round reviews (`sdk_source.head_lock_at`), resolves its pin, and
+  `SdkSource.open` uses the checkout only when it is at the commit that pin
+  names (`sdk_source.checkout_at`: `git rev-parse` of `HEAD` and of the ref,
+  an annotated tag peeled, in the checkout alone, with `GIT_CEILING_DIRECTORIES`
+  so it never reads an enclosing repository). A directory that merely holds
+  `application_sdk/` is no longer enough. When a push moved the pin, the review
+  runs without the SDK source and its note names the two heads
+  (`CONNECTOR_REVIEWER_SDK_HEAD`, the step's `head`) and says `/review force`
+  reviews with the right one. When the push left the pin alone, the checkout
+  is still that head's source and is used.
 - **Tools.** One prefix on the existing tools, not new tools: a `file_path` of
   `read_file`, a `path_glob` of `search_code`, or a `name` of `find_symbol` that
   starts `sdk:` goes to the SDK source (`tools.SdkSource`), e.g.
@@ -518,8 +533,8 @@ above; "typing" means only the annotations described under Typing.
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`. |
 | `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316); `grade_by_principle` (FND-5316). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" (with the Severity-line grading of FND-5316) and "Facts" sections; the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `head_lock` and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316). |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock (FND-5316). |
+| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316). |
 | `__init__.py` | Docstring. |
 | `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
