@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import Any
 from unittest import mock
 
@@ -220,8 +221,8 @@ class _FakeHistory:
 
 
 @pytest.fixture(autouse=True)
-def history(monkeypatch: pytest.MonkeyPatch) -> _FakeHistory:
-    """A live, empty history unless a test reconfigures it."""
+def history(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeHistory]:
+    """A live, empty history of a pinned run unless a test reconfigures it."""
     from application_sdk.execution._temporal import run_flags
 
     fake = _FakeHistory()
@@ -231,7 +232,9 @@ def history(monkeypatch: pytest.MonkeyPatch) -> _FakeHistory:
         lambda: fake.replaying,
     )
     monkeypatch.setattr(run_flags.workflow, "patched", fake.patched)
-    return fake
+    token = run_flags._RUN_FLAGS.set(run_flags.RunFlags(events=True, cleanup=True))
+    yield fake
+    run_flags._RUN_FLAGS.reset(token)
 
 
 class TestEvictionRetryHelper:
@@ -340,6 +343,32 @@ class TestEvictionCapFollowsHistory:
             )
         assert _is_worker_evicted(exc_info.value)
         assert exec_mock.await_count == 1
+
+    @pytest.mark.parametrize(("cap", "dispatches"), [(0, 1), (1, 2)])
+    async def test_a_history_written_before_pinning_replays_under_the_pod_cap(
+        self, history: _FakeHistory, cap: int, dispatches: int
+    ) -> None:
+        """Such a history recorded no stops, so a missing marker proves
+        nothing: the cap decides, as it did when the history was written. A
+        run that stopped at cap 0 must not re-dispatch on replay."""
+        from application_sdk.execution._temporal import run_flags
+
+        history.replaying = True
+        token = run_flags._RUN_FLAGS.set(
+            run_flags.RunFlags(events=True, cleanup=True, pinned=False)
+        )
+        evict = _make_activity_error_with_app_error_cause()
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, evict])
+        try:
+            with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+                await execute_activity_with_eviction_retry(
+                    "act-name", max_eviction_retries=cap
+                )
+        finally:
+            run_flags._RUN_FLAGS.reset(token)
+        assert _is_worker_evicted(exc_info.value)
+        assert exec_mock.await_count == dispatches
+        assert history.recorded == []
 
     async def test_replay_re_dispatches_where_history_did_even_under_a_zero_cap(
         self, history: _FakeHistory

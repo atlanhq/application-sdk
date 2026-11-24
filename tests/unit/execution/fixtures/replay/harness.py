@@ -33,6 +33,16 @@ RECORDINGS: dict[str, dict[str, bool]] = {
 }
 """Each committed history's name and the worker flags it was recorded under."""
 
+LEGACY_RECORDINGS: dict[str, dict[str, bool]] = {
+    "legacy_defaults": {"events": True, "cleanup": True},
+    "legacy_flags_off": {"events": False, "cleanup": False},
+}
+"""Histories recorded by the SDK before run flags were pinned (3.59.0, the
+fixture App on ``main`` at that release), so they carry no run-flag markers.
+They replay with the pod's values, as they always did, so each is replayed on
+a worker with the flags it was recorded under. Not re-recordable on this
+code; record on a pre-pinning checkout if the fixture App changes."""
+
 FLAG_COMBINATIONS: list[dict[str, bool]] = [
     {"events": events, "cleanup": cleanup}
     for events in (True, False)

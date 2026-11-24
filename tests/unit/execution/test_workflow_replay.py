@@ -1,9 +1,10 @@
 """Committed workflow histories replay on every worker flag combination.
 
-The histories under ``fixtures/replay/`` were recorded on the dev server by
-``tests/integration/test_workflow_replay.py``: one with the production
-defaults and every built-in interceptor (events and cleanup on), one with both
-flags off. Each replays here through the interceptor chain ``create_worker``
+The ``RECORDINGS`` histories under ``fixtures/replay/`` were recorded on the
+dev server by ``tests/integration/test_workflow_replay.py``: one with the
+production defaults and every built-in interceptor (events and cleanup on), one
+with both flags off. The ``LEGACY_RECORDINGS`` were written by the SDK before
+run flags were pinned. Each replays here through the interceptor chain ``create_worker``
 registers (``build_interceptors``), on a worker with every combination of
 ``APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR`` and
 ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``. A run's flags are pinned in its
@@ -23,6 +24,7 @@ import pytest
 
 from tests.unit.execution.fixtures.replay.harness import (
     FLAG_COMBINATIONS,
+    LEGACY_RECORDINGS,
     RECORDINGS,
     load_fixture,
     replay,
@@ -58,4 +60,16 @@ async def test_a_committed_history_replays_whatever_the_worker_flags(
     recording: str, flags: dict[str, bool]
 ) -> None:
     result = await replay(load_fixture(recording), **flags)
+    assert result.replay_failure is None, result.replay_failure
+
+
+@pytest.mark.parametrize("recording", sorted(LEGACY_RECORDINGS))
+async def test_a_history_written_before_pinning_replays_with_the_pod_s_flags(
+    recording: str,
+) -> None:
+    """No run-flag markers in history means nothing about the run's flags was
+    recorded, so the pod's values decide, as when the history was written. A
+    missing marker read as "on" would replay ``legacy_flags_off`` with
+    publish_event and cleanup activities it never scheduled."""
+    result = await replay(load_fixture(recording), **LEGACY_RECORDINGS[recording])
     assert result.replay_failure is None, result.replay_failure

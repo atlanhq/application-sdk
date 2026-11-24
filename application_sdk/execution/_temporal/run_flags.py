@@ -9,15 +9,18 @@ another under the same build ID (a values-only rollout, or no
 nondeterminism error.
 
 So each flag is decided once per run, in the run's first workflow task, and
-recorded in history when it takes its *non-default* value:
+recorded in history:
 
+* Every run started by a worker with this module records
+  :data:`RUN_FLAGS_MARKER` first. It says "this run's flags are in history".
 * Live (not replaying): the worker's value, read once at worker start, decides.
-  An off value records a ``workflow.patched`` marker.
-* Replaying: the marker's presence decides. The pod's value is not consulted.
-
-Recording the non-default keeps every run started under the defaults — every
-production run before this module existed — replaying unchanged: no marker
-reads as "on".
+  An off value records that flag's ``workflow.patched`` marker.
+* Replaying a history with :data:`RUN_FLAGS_MARKER`: each flag's marker
+  decides. The pod's value is not consulted.
+* Replaying a history without it (a run started before this module existed):
+  nothing about its flags was recorded, so the pod's value decides, exactly as
+  it did when that run was written. Reading a missing marker as "on" instead
+  would replay a run started with a flag off as if it were on.
 
 :class:`RunFlagsInterceptor` does the pinning and must sit ahead of every
 interceptor that reads the result (the worker puts it first).
@@ -44,6 +47,10 @@ from application_sdk.common._env import env_bool
 CLEANUP_ENV = "APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"
 """Env var gating ``App.on_complete()``'s end-of-run cleanup."""
 
+RUN_FLAGS_MARKER = "atlan-sdk/run-flags"
+"""Recorded first by every run whose flags are pinned. Its absence marks a
+history written before pinning, which replays with the pod's values."""
+
 EVENTS_OFF_MARKER = "atlan-sdk/run-flag/events-off"
 """Recorded when a run starts with the event interceptor switched off."""
 
@@ -57,6 +64,9 @@ class RunFlags:
 
     events: bool
     cleanup: bool
+    pinned: bool = True
+    """Whether this run records its flag decisions in history. False for a
+    history written before pinning, whose decisions follow the pod."""
 
 
 _RUN_FLAGS: ContextVar[RunFlags | None] = ContextVar("atlan_run_flags", default=None)
@@ -125,12 +135,19 @@ class _RunFlagsWorkflowInbound(WorkflowInboundInterceptor):
     _live: RunFlags
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> object:
-        # Both decisions happen before any other command, in a fixed order,
-        # so the markers sit ahead of the first publish_event.
-        pinned = RunFlags(
-            events=not pinned_off(EVENTS_OFF_MARKER, self._live.events),
-            cleanup=not pinned_off(CLEANUP_OFF_MARKER, self._live.cleanup),
-        )
+        # Every decision happens before any other command, in a fixed order,
+        # so the markers sit ahead of the first publish_event. ``patched`` is
+        # True live (and records the marker) and, on replay, True only when
+        # the history has it.
+        if workflow.patched(RUN_FLAGS_MARKER):
+            pinned = RunFlags(
+                events=not pinned_off(EVENTS_OFF_MARKER, self._live.events),
+                cleanup=not pinned_off(CLEANUP_OFF_MARKER, self._live.cleanup),
+            )
+        else:
+            pinned = RunFlags(
+                events=self._live.events, cleanup=self._live.cleanup, pinned=False
+            )
         token = _RUN_FLAGS.set(pinned)
         try:
             return await super().execute_workflow(input)
