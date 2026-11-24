@@ -843,12 +843,49 @@ def _runs_with_app_state() -> list[tuple[str, str]]:
         return list(_app_state)
 
 
+def _run_close_in_own_thread(closer: Callable[[], object]) -> "asyncio.Future[object]":
+    """Run a synchronous ``close()`` on a thread of its own; resolve when done.
+
+    Not on the shared blocking pool (``run_in_thread``): a close that hangs
+    past ``_STATE_VALUE_CLOSE_TIMEOUT_SECONDS`` keeps its thread after the
+    await gives up, and on the pool every such hang would take a worker away
+    from the tasks the pool serves. A daemon thread of its own costs nothing
+    to leave behind, and does not hold up interpreter exit.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[object] = loop.create_future()
+
+    def _settle(outcome: object, error: BaseException | None) -> None:
+        if future.done():
+            return  # the await already gave up on it
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(outcome)
+
+    def _run() -> None:
+        outcome: object = None
+        error: BaseException | None = None
+        try:
+            outcome = closer()
+        # conformance: ignore[E004] the outcome is handed back to the awaiting coroutine, which logs it
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the event loop through the future
+            error = exc
+        try:
+            loop.call_soon_threadsafe(_settle, outcome, error)
+        except RuntimeError:
+            pass  # the loop has closed; nothing is waiting any more
+
+    threading.Thread(target=_run, name="app-state-close", daemon=True).start()
+    return future
+
+
 async def _close_state_value(value: object) -> None:
     """Close one app-state value: ``aclose()`` if it has one, else ``close()``.
 
-    A value with neither is left alone. A synchronous ``close()`` runs off the
-    event loop, since a client's close may block on a socket. Each close is
-    bounded by ``_STATE_VALUE_CLOSE_TIMEOUT_SECONDS``.
+    A value with neither is left alone. A synchronous ``close()`` runs on a
+    thread of its own, since a client's close may block on a socket. Each
+    close is awaited for at most ``_STATE_VALUE_CLOSE_TIMEOUT_SECONDS``.
     """
     if isinstance(value, type):
         return  # a class object's close is an unbound method, not this value's
@@ -862,11 +899,18 @@ async def _close_state_value(value: object) -> None:
         if inspect.iscoroutinefunction(closer):
             result: object = await closer()
         else:
-            result = await run_in_thread(closer)
+            result = await _run_close_in_own_thread(closer)
         if inspect.isawaitable(result):
             await result
 
     await asyncio.wait_for(_close(), timeout=_STATE_VALUE_CLOSE_TIMEOUT_SECONDS)
+
+
+#: Releases started and not yet finished. A release removes its slot from
+#: ``_app_state`` before it does the work, so a shutdown that cancels the
+#: sweeper mid-release would otherwise lose that slot: ``release_all_runs``
+#: waits for these before it releases what is left.
+_releases_in_flight: set["asyncio.Task[None]"] = set()
 
 
 async def _release_run_state(run: tuple[str, str]) -> None:
@@ -878,15 +922,32 @@ async def _release_run_state(run: tuple[str, str]) -> None:
     connection pool. Called by the worker's run-state sweeper once Temporal
     reports the run closed, and for every remaining run at worker shutdown.
     Each failure is logged and skipped; the slot is gone either way.
-    """
-    from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
-        TRACKED_FILE_REFS_KEY,
-    )
 
+    The work runs as its own task, shielded: cancelling the caller (the
+    sweeper, at shutdown) leaves it running, and ``_drain_state_releases``
+    waits for it.
+    """
     with _app_state_lock:
         slot = _app_state.pop(run, None)
     if not slot:
         return
+    release = asyncio.create_task(_release_slot(slot), name="app-state-release")
+    _releases_in_flight.add(release)
+    release.add_done_callback(_releases_in_flight.discard)
+    await asyncio.shield(release)
+
+
+async def _drain_state_releases() -> None:
+    """Wait for every release already under way to finish."""
+    while _releases_in_flight:
+        await asyncio.gather(*list(_releases_in_flight), return_exceptions=True)
+
+
+async def _release_slot(slot: dict[str, Any]) -> None:
+    """Delete a removed slot's tracked local files and close its values."""
+    from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        TRACKED_FILE_REFS_KEY,
+    )
 
     tracked_refs = slot.get(TRACKED_FILE_REFS_KEY) or ()
     if tracked_refs and env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True):
@@ -4554,6 +4615,25 @@ def _create_task_activity_wrapper(
             )
         )
 
+    def _record_stored_refs(data: object) -> None:
+        """Record *data*'s stored refs in the run's sink, if it has one.
+
+        *data* is the input this workflow sent or the result it decoded,
+        both from history, so recording is deterministic on replay. Never
+        fails the task: a ref left out is only one cleanup misses.
+        """
+        if stored_refs is None:
+            return
+        try:
+            stored_refs.record(_find_file_refs(data))
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
+            _safe_log(
+                "warning",
+                f"Could not record the stored refs of task {task_name} for "
+                "cleanup_storage",
+                exc_info=True,
+            )
+
     async def wrapper(input_data: Input) -> Output:
         # Create the task context (metadata for the activity)
         task_context = TaskContext(
@@ -4585,6 +4665,10 @@ def _create_task_activity_wrapper(
             else None
         )
 
+        # Input refs first, before the activity can fail: a task that fails
+        # still received them, and cleanup_storage must still see them.
+        _record_stored_refs(input_data)
+
         # Extract summary from input for Temporal UI display
         summary = input_data.summary() if hasattr(input_data, "summary") else None
 
@@ -4613,21 +4697,7 @@ def _create_task_activity_wrapper(
             **({"task_queue": pool_queue} if pool_queue else {}),
         )
 
-        if stored_refs is not None:
-            # Both come from history (the input this workflow sent, the result
-            # it decoded), so recording them is deterministic on replay. Never
-            # fails the task: a ref left out is only one cleanup misses.
-            try:
-                stored_refs.record(_find_file_refs(input_data))
-                stored_refs.record(_find_file_refs(result))
-            except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                _safe_log(
-                    "warning",
-                    f"Could not record the stored refs of task {task_name} for "
-                    "cleanup_storage",
-                    exc_info=True,
-                )
-
+        _record_stored_refs(result)
         return result
 
     return wrapper

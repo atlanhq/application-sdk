@@ -1051,6 +1051,34 @@ class TestRunStoredRefs:
             "file_refs/out.json",
         ]
 
+    async def test_task_wrapper_records_input_refs_when_the_activity_fails(
+        self,
+    ) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_RefOut,
+            context_data={},
+            stored_refs=sink,
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity",
+                new_callable=mock.AsyncMock,
+                side_effect=RuntimeError("activity failed"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await wrapper(_RefIn(ref=FileReference(storage_path="file_refs/in.json")))
+
+        assert [r.storage_path for r in sink.for_cleanup()] == ["file_refs/in.json"]
+
     def test_wrap_instance_tasks_hands_every_task_the_runs_sink(self) -> None:
         from application_sdk.app.base import _RunStoredRefs
 

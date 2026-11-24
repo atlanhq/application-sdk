@@ -198,7 +198,8 @@ The tier controls **where** the file is stored and **when it is cleaned up**.
 ```
 Prefix:  file_refs/{uuid}
 Cleanup: deleted by App.cleanup_storage() at the end of every run, whichever
-         worker uploaded it
+         worker uploaded it (up to 2000 stored refs per run; past that, a
+         ref tracked only on another worker may be left in the store)
 Use for: intermediate files between tasks that are no longer needed after
          the run completes
 ```

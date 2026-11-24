@@ -281,3 +281,56 @@ class TestReleaseAppState:
 
         assert app_base._runs_with_app_state() == []
         client.aclose.assert_awaited_once()
+
+
+class TestReleaseIsBoundedAndCancellationSafe:
+    async def test_a_hung_sync_close_is_abandoned_off_the_shared_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+        import threading
+
+        release = threading.Event()
+
+        class _Hangs:
+            def __init__(self) -> None:
+                self.close = mock.Mock(side_effect=lambda: release.wait(5))
+
+        monkeypatch.setattr(app_base, "_STATE_VALUE_CLOSE_TIMEOUT_SECONDS", 0.05)
+        pool = mock.AsyncMock()
+        monkeypatch.setattr(app_base, "run_in_thread", pool)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await app_base._close_state_value(_Hangs())
+            assert any(t.name == "app-state-close" for t in threading.enumerate())
+            pool.assert_not_awaited()  # the shared blocking pool is never used
+        finally:
+            release.set()
+
+    async def test_shutdown_finishes_a_release_the_cancelled_sweeper_started(
+        self,
+    ) -> None:
+        import asyncio
+
+        started, finish = asyncio.Event(), asyncio.Event()
+        client = _AsyncClient()
+
+        async def _slow_close() -> None:
+            started.set()
+            await finish.wait()
+
+        client.aclose.side_effect = _slow_close
+        _seed_slot(("wf-a", "run-done"), atlan=client)
+
+        sweep = asyncio.create_task(app_base._release_run_state(("wf-a", "run-done")))
+        await started.wait()
+        sweep.cancel()  # what stopping the sweeper does at shutdown
+        with pytest.raises(asyncio.CancelledError):
+            await sweep
+        assert app_base._runs_with_app_state() == []  # slot already taken out
+
+        finish.set()
+        await credential_sweep.release_all_runs()
+
+        client.aclose.assert_awaited_once()
+        assert not app_base._releases_in_flight

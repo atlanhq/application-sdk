@@ -98,11 +98,15 @@ async def release_all_runs() -> None:
     no task on this worker can still be using either.
     """
     from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports the execution package
+        _drain_state_releases,
         _release_run_state,
         _runs_with_app_state,
     )
 
     await remove_all_credential_dirs()
+    # A release the stopped sweeper had under way has already taken its slot
+    # out of _app_state, so it is finished here, not enumerated below.
+    await _drain_state_releases()
     for run in _runs_with_app_state():
         await _release_run_state(run)
 

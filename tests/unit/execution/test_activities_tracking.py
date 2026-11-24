@@ -7,8 +7,17 @@ from unittest import mock
 
 from application_sdk.app.base import _app_state, _app_state_lock
 from application_sdk.constants import TRACKED_FILE_REFS_KEY
+from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
 from application_sdk.execution._temporal.activities import _track_file_refs
+
+
+class _TrackIn(Input, allow_unbounded_fields=True):
+    ref: FileReference | None = None
+
+
+class _TrackOut(Output, allow_unbounded_fields=True):
+    out: FileReference | None = None
 
 
 @dataclass
@@ -87,6 +96,30 @@ class TestTrackFileRefs:
         assert ref1 in tracked_a and ref2 not in tracked_a
         assert ref2 in tracked_b and ref1 not in tracked_b
 
+    def test_isolates_runs_of_the_same_workflow(self) -> None:
+        ref1 = FileReference(local_path="/tmp/r1.parquet", storage_path="r1")
+        ref2 = FileReference(local_path="/tmp/r2.parquet", storage_path="r2")
+        _track_file_refs(("wf-same", "run-a"), ref1)
+        _track_file_refs(("wf-same", "run-b"), ref2)
+
+        with _app_state_lock:
+            tracked_a = _app_state[("wf-same", "run-a")][TRACKED_FILE_REFS_KEY]
+            tracked_b = _app_state[("wf-same", "run-b")][TRACKED_FILE_REFS_KEY]
+
+        assert tracked_a == {ref1}
+        assert tracked_b == {ref2}
+
+    def test_task_state_is_per_run_within_one_workflow(self) -> None:
+        from application_sdk.app import base as app_base
+
+        for run, value in ((("wf-same", "run-a"), "a"), (("wf-same", "run-b"), "b")):
+            with mock.patch.object(app_base, "_current_run_key", return_value=run):
+                app_base.TaskStateAccessor().set("client", value)
+
+        for run, value in ((("wf-same", "run-a"), "a"), (("wf-same", "run-b"), "b")):
+            with mock.patch.object(app_base, "_current_run_key", return_value=run):
+                assert app_base.TaskStateAccessor().get("client") == value
+
     def test_multiple_refs_in_single_call(self) -> None:
         refs = [
             FileReference(
@@ -116,37 +149,59 @@ class TestActivityTrackingWiring:
         with _app_state_lock:
             _app_state.clear()
 
-    async def test_refs_from_input_and_output_are_tracked(self) -> None:
-        """_track_file_refs is called with refs from both input_data and result."""
+    async def test_activity_tracks_input_and_result_refs_under_its_run(
+        self,
+    ) -> None:
+        """The real activity body tracks both sides' refs under (workflow, run)."""
         import application_sdk.execution._temporal.activities as act_mod
+        from application_sdk.app.base import App
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+        from application_sdk.app.task import task
 
-        in_ref = FileReference(
-            local_path="/tmp/in.parquet", storage_path="artifacts/in"
-        )
-        out_ref = FileReference(
-            local_path="/tmp/out.parquet", storage_path="artifacts/out"
-        )
+        in_ref = FileReference(storage_path="artifacts/in")
+        out_ref = FileReference(storage_path="artifacts/out")
 
-        tracked_calls: list[tuple] = []
+        class _TrackWiringApp(App):
+            @task(timeout_seconds=60)
+            async def produce(self, input: _TrackIn) -> _TrackOut:
+                return _TrackOut(out=out_ref)
 
-        def capture_track(run: tuple[str, str], *refs: FileReference) -> None:
-            tracked_calls.append((run, refs))
+            async def run(self, input: _TrackIn) -> _TrackOut:
+                return await self.produce(input)
 
-        with mock.patch.object(act_mod, "_track_file_refs", side_effect=capture_track):
-            with mock.patch(
-                "application_sdk.storage.file_ref_sync._find_file_refs",
-                side_effect=[[in_ref], [out_ref]],
+        try:
+            meta = next(
+                t
+                for t in TaskRegistry.get_instance().get_tasks_for_app(
+                    _TrackWiringApp._app_name
+                )
+                if t.name == "produce"
+            )
+            activity_fn = act_mod.create_activity_from_task(meta)
+            ctx = act_mod.TaskContext(
+                app_name=_TrackWiringApp._app_name,
+                task_name="produce",
+                run_id="run-wiring",
+                heartbeat_timeout_seconds=None,
+                auto_heartbeat_seconds=None,
+            )
+            info = mock.MagicMock(workflow_id="wf-wiring", workflow_run_id="run-wiring")
+            with (
+                mock.patch.object(act_mod.activity, "info", return_value=info),
+                mock.patch(
+                    "application_sdk.infrastructure.context.get_infrastructure",
+                    return_value=None,
+                ),
             ):
-                # Directly exercise the tracking branch
-                all_refs = [in_ref] + [out_ref]
-                if all_refs:
-                    act_mod._track_file_refs(("wf-wiring", "run-1"), *all_refs)
+                await activity_fn(ctx, _TrackIn(ref=in_ref))
+        finally:
+            AppRegistry.reset()
+            TaskRegistry.reset()
 
-        assert len(tracked_calls) == 1
-        run, refs = tracked_calls[0]
-        assert run == ("wf-wiring", "run-1")
-        assert in_ref in refs
-        assert out_ref in refs
+        with _app_state_lock:
+            assert set(_app_state) == {("wf-wiring", "run-wiring")}
+            tracked = _app_state[("wf-wiring", "run-wiring")][TRACKED_FILE_REFS_KEY]
+        assert {in_ref, out_ref} <= tracked
 
     def test_track_file_refs_import_and_exists(self) -> None:
         """_track_file_refs is importable from activities module."""
