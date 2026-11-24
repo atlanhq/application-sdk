@@ -42,9 +42,12 @@ not repeat what conformance or CI already checks. It reviews only when asked.
 
 Ask by commenting on the pull request. The command must start the comment, and
 every word on its line must be part of one of the commands below. Any other
-word gets a usage reply and nothing runs. To add a note for the people reading
-the pull request, put it on the next line; the reviewer does not read it. Do
-not start that note with `dismiss`, `recheck` or `waive`.
+word gets a usage reply and nothing runs. Below a plain `/review` or
+`/review force`, a note on the next line is for the people reading the pull
+request; the reviewer does not read it. Do not start that note with `dismiss`,
+`recheck` or `waive`. After `/review dismiss`, `/review recheck` or
+`/review waive`, the finding ids and the reason may continue on the lines
+below, and the reviewer reads all of that text as the reason.
 
 - `/review` reviews the pull request. After a new push, comment it again: only
   the commits since the last review are reviewed.
@@ -65,7 +68,10 @@ What comes back:
 
 - One summary comment, and a `connector-reviewer` status on the head commit.
   The status is green only when every finding, of any severity, is fixed,
-  dismissed or resolved by a recheck.
+  dismissed or resolved by a recheck, or when the review was waived. A waive
+  turns the status green for that head commit only and resolves no finding:
+  they stay open, and the next commit has no green status until it is reviewed
+  or waived again.
 - Each finding names the principle it cites. A critical or high finding blocks
   merge.
 - A finding marked "⚖️ contested" was raised as critical or high, but a second,

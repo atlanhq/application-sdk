@@ -416,13 +416,27 @@ def test_block_states_the_command_grammar() -> None:
     for phrase in (
         "every word on its line must be part of one of the commands below",
         "Any other word gets a usage reply and nothing runs.",
-        "put it on the next line; the reviewer does not read it.",
-        # dismiss/recheck/waive are read from the whole comment, so a note on
-        # the next line must not start with one of them.
+        "Below a plain `/review` or `/review force`, a note on the next line is"
+        " for the people reading the pull request; the reviewer does not read it.",
+        # Until the parser takes the subcommand from the first line only, a
+        # note below a bare `/review` that starts with one of these is read as
+        # that command.
         "Do not start that note with `dismiss`, `recheck` or `waive`.",
         "Add `verify-budget` after it",
     ):
         assert phrase in flat, phrase
+
+
+def test_block_says_subcommand_text_below_is_part_of_the_reason() -> None:
+    """event.py reads a dismiss/recheck/waive reason from the whole comment, so
+    text on the lines below is part of it, never an ignored note (lens
+    F-98f9ca)."""
+    flat = _flat(_BLOCK)
+    assert (
+        "After `/review dismiss`, `/review recheck` or `/review waive`, the"
+        " finding ids and the reason may continue on the lines below, and the"
+        " reviewer reads all of that text as the reason."
+    ) in flat
 
 
 def test_block_explains_contested_findings_and_the_status() -> None:
@@ -435,6 +449,19 @@ def test_block_explains_contested_findings_and_the_status() -> None:
         "It is now medium, so it does not block merge and the author may dismiss it.",
         "The status is green only when every finding, of any severity,",
         "Each finding names the principle it cites.",
+    ):
+        assert phrase in flat, phrase
+
+
+def test_block_states_the_waiver_exception_to_a_green_status() -> None:
+    """review.py: `/review waive` turns the head's status `success` with the
+    findings still open, so "green only when every finding is closed" needs
+    the exception (lens F-ce599e)."""
+    flat = _flat(_BLOCK)
+    for phrase in (
+        "or when the review was waived.",
+        "A waive turns the status green for that head commit only and resolves"
+        " no finding",
     ):
         assert phrase in flat, phrase
 
@@ -699,6 +726,55 @@ def test_agents_md_symlinked_to_claude_md_gets_one_block(repo: pathlib.Path) -> 
 
     assert (repo / "AGENTS.md").is_symlink()
     assert (repo / "CLAUDE.md").read_text() == f"# Notes\n\n{_BLOCK}"
+
+
+def test_agents_md_symlinked_inside_the_repo_is_merged(repo: pathlib.Path) -> None:
+    """A link that stays in the repository is followed and merged."""
+    _write(repo, "CLAUDE.md", "# Notes\n")
+    _write(repo, "docs/agents.md", "# Agent notes\n")
+    (repo / "AGENTS.md").symlink_to("docs/agents.md")
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    assert (repo / "AGENTS.md").is_symlink()
+    assert (repo / "docs/agents.md").read_text() == f"# Agent notes\n\n{_BLOCK}"
+
+
+def test_agents_md_symlinked_outside_the_repo_stops_the_named_kit(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The write would follow the link and replace a file outside the checkout
+    (lens F-9430d5), so the kit refuses and writes nothing."""
+    outside = _write(repo.parent, "outside.md", "# Someone else's file\n")
+    _write(repo, "CLAUDE.md", "# Notes\n")
+    (repo / "AGENTS.md").symlink_to(outside)
+    before = _tree(repo)
+
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 2
+
+    err = capsys.readouterr().err
+    assert "AGENTS.md" in err
+    assert "outside the repository" in err
+    assert outside.read_text() == "# Someone else's file\n"
+    assert _tree(repo) == before
+
+
+def test_agents_md_symlinked_outside_the_repo_skips_the_kit_on_resync(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outside = _write(repo.parent, "outside.md", "# Someone else's file\n")
+    _write(repo, "CLAUDE.md", "# Notes\n")
+    (repo / "AGENTS.md").symlink_to(outside)
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
+    out = capsys.readouterr().out
+    assert "skipped: cannot safely merge" in out
+    assert "outside the repository" in out
+    assert outside.read_text() == "# Someone else's file\n"
+    # The two never disagree: CLAUDE.md is held back with AGENTS.md.
+    assert (repo / "CLAUDE.md").read_text() == "# Notes\n"
+    assert not (repo / _README_REL).exists()
 
 
 def test_bare_run_leaves_claude_md_and_agents_md_alone(repo: pathlib.Path) -> None:

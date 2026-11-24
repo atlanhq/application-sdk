@@ -596,11 +596,21 @@ def _plan_connector_review_kit(root: pathlib.Path) -> _ConnectorReviewKitPlan:
 
     ``AGENTS.md`` is mirrored only where the repository already has one.
     ``CLAUDE.md`` is created when absent, as it always was.
+
+    An ``AGENTS.md`` that is a symlink to a file outside the repository is
+    refused: the write would follow it and replace that file. A link that
+    stays inside the repository, such as ``AGENTS.md -> CLAUDE.md``, is merged
+    as usual. A dangling link does not exist, so it is left alone like a
+    missing ``AGENTS.md``.
     """
     settings = _retire_connector_review_hooks(root / ".claude" / "settings.json")
     targets = [root / "CLAUDE.md"]
     agents = root / "AGENTS.md"
     if agents.exists():
+        if not agents.resolve().is_relative_to(root.resolve()):
+            raise ConnectorReviewMergeError(
+                agents, "it is a symlink to a file outside the repository"
+            )
         targets.append(agents)
     return _ConnectorReviewKitPlan(
         settings=settings,
