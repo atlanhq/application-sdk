@@ -51,8 +51,10 @@ Principles
   omit it. Any other finding with no applicable principle is dropped in code, so do not report it.
 - A finding that rests on a principle is graded by that principle's Severity line, not by the general
   scale under Severity below. Set `severity_case` to the case your scenario meets: high only when it meets
-  the line's High case (quote those words in `severity_basis`), otherwise medium. Do not stretch a
-  scenario to reach the High case; a finding that meets it is graded high in code.
+  the line's High case (quote those words in `severity_basis`), low only when the line names a Low case
+  and the scenario meets it, otherwise medium. The finding is graded to that case in code, up or down:
+  one that meets only the Medium case is medium even if the general scale says high. Do not stretch a
+  scenario to reach the High case.
 
 Facts
 - <regression_facts> and <history_facts> are computed in code before you start: each changed function's
@@ -117,7 +119,12 @@ Severity
 - high: incorrect behaviour a user will hit, broken contract, resource leak, race.
 - medium: edge case, performance problem, missing test for new behaviour, maintainability hazard.
 - An input form the code does not handle (a syntax variant, a corner case) is at most medium unless you
-  can show where that form occurs in this repo's real code (cite it from search_code).
+  can show where that form occurs in this repo's real code (cite it from search_code), or it is a valid
+  value of an input the connector accepts (a configured pattern, a source name): then it is a normal path.
+- The causal chain's `harm` and `normal_path` also grade the finding, in code: a finding whose only harm
+  is a missing or weak test (test_gap) is at most medium unless its principle's High case says otherwise;
+  a traced crash, data loss or silent wrong output on a normal path is at least high. Say what the chain
+  shows, not what would reach a grade.
 - low (nit): a small, concrete improvement within the review scope above — a simpler expression that
   removes a hazard, a missing edge-case test. At most 5 per review, only ones clearly worth a human's time.
 

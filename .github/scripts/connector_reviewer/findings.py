@@ -34,6 +34,25 @@ CATEGORIES = (
     "documentation",
     "other",
 )
+# What kind of harm a finding's causal chain ends in (`causal_chain.harm`).
+# Severity reads two groups in code (agent.bound_by_outcome): a traced
+# OUTCOME_FLOOR harm on a normal path is at least high, and a TEST_GAP finding
+# is at most medium unless its principle's High case says otherwise.
+HARMS = (
+    "crash",
+    "data_loss",
+    "silent_wrong_output",
+    "security",
+    "hang",
+    "leak",
+    "performance",
+    "compatibility",
+    "noise",
+    "test_gap",
+    "other",
+)
+OUTCOME_FLOOR = ("crash", "data_loss", "silent_wrong_output")
+TEST_GAP = "test_gap"
 STATE_MARKER = "connector-reviewer-state"
 BODY_KEEP = 600  # characters of an open finding's body kept in the state
 EVIDENCE_KEEP_RESOLVED = 160  # the part the fingerprint is built from
@@ -80,7 +99,8 @@ class Finding:
     contested: str = ""
     # What the finding claims happens, checked against the code when it was
     # raised (agent.trace_chain): {"trigger", "steps": [{"at", "code",
-    # "effect"}], "outcome"}. Read by the skeptic; not stored in the state.
+    # "effect"}], "outcome", "harm", "normal_path"}. Read by grading and the
+    # skeptic; not stored in the state.
     chain: dict[str, Any] = field(default_factory=dict)
 
     def fingerprint(self, salt: str | None = None) -> str:

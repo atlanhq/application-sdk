@@ -34,7 +34,7 @@ from typing import Any
 
 from . import sdk_source
 from .diff import FileDiff
-from .findings import CATEGORIES, SEVERITIES
+from .findings import CATEGORIES, HARMS, SEVERITIES
 from .index import SKIP_DIRS, Index, index_source
 
 READ_MAX_LINES = 250
@@ -530,8 +530,8 @@ COMMENT_ITEM = {
         },
         "severity_case": {
             "type": "string",
-            "enum": ["high", "medium"],
-            "description": "With `principle`: the case of that principle's Severity line this finding meets. high only when the scenario in `content` meets the line's High case; otherwise medium. A finding that meets the High case is graded high.",
+            "enum": ["high", "medium", "low"],
+            "description": "With `principle`: the case of that principle's Severity line this finding meets. high only when the scenario in `content` meets the line's High case; low only when the line names a Low case and the scenario meets it; otherwise medium. The finding is graded to that case, up or down.",
         },
         "severity_basis": {
             "type": "string",
@@ -577,8 +577,17 @@ COMMENT_ITEM = {
                     "type": "string",
                     "description": "The wrong result the run, the customer or Atlan ends up with.",
                 },
+                "harm": {
+                    "type": "string",
+                    "enum": list(HARMS),
+                    "description": "What kind of harm the outcome is. test_gap when the only harm is a missing or weak test; silent_wrong_output when the run succeeds with a wrong or partial result.",
+                },
+                "normal_path": {
+                    "type": "boolean",
+                    "description": "true when the trigger occurs in ordinary production runs: the default config, a valid value of an input the connector accepts, a source shape real sources produce. false for a corner case, an invalid input, or a chain that needs several unlikely conditions at once.",
+                },
             },
-            "required": ["trigger", "steps", "outcome"],
+            "required": ["trigger", "steps", "outcome", "harm", "normal_path"],
         },
         "suggestion_code": {
             "type": "string",

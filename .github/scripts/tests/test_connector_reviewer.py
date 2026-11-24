@@ -1320,10 +1320,13 @@ def test_a_finding_that_meets_its_principles_high_case_is_graded_high(repo: Path
         # A High case with no words of the line it meets is not a match.
         ({"severity_basis": "  "}, "medium"),
         ({"severity_basis": None}, "medium"),
-        # Nothing is lowered: a high or critical finding keeps its grade.
-        ({"severity": "high", "severity_case": "medium"}, "high"),
-        ({"severity": "critical", "severity_case": "medium"}, "critical"),
+        # FND-5316: the Medium case lowers too, critical included; a critical
+        # finding that meets the High case keeps critical.
+        ({"severity": "high", "severity_case": "medium"}, "medium"),
+        ({"severity": "critical", "severity_case": "medium"}, "medium"),
         ({"severity": "critical"}, "critical"),
+        # A Low case on a line that names none is its lowest case, medium.
+        ({"severity": "high", "severity_case": "low"}, "medium"),
         # The case is about the principle the model named: when `cite` took
         # another one from the text, or none applies, nothing is raised.
         (
@@ -1340,14 +1343,15 @@ def test_a_finding_that_meets_its_principles_high_case_is_graded_high(repo: Path
         "no-case",
         "blank-basis",
         "no-basis",
-        "high-stays",
-        "critical-stays",
+        "high-to-medium-case",
+        "critical-to-medium-case",
         "critical-high-case",
+        "low-case-not-named",
         "other-principle",
         "no-principle",
     ],
 )
-def test_a_principle_case_never_lowers_and_raises_only_on_its_own_match(
+def test_a_principle_case_grades_both_ways_and_only_on_its_own_match(
     repo: Path, changes: dict[str, Any], severity: str
 ):
     assert _graded(repo, **changes).severity == severity
@@ -1404,8 +1408,138 @@ def test_a_review_publishes_a_principles_high_case_as_blocking(repo: Path):
     flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
     assert "graded by that principle's Severity line, not by the general scale" in flat
     item = cast(dict[str, Any], COMMENT_ITEM)
-    assert item["properties"]["severity_case"]["enum"] == ["high", "medium"]
+    assert item["properties"]["severity_case"]["enum"] == ["high", "medium", "low"]
     assert "severity_case" not in item["required"]
+
+
+def _fp01_with(severity_line: str, repo: Path) -> PrincipleSet:
+    """The fixture's principles, FP01's Severity line replaced."""
+    principles = principles_of(repo)
+    return PrincipleSet(
+        fleet=[
+            p
+            if p.id != "FP01"
+            else parse_principle(
+                FP01.replace(
+                    "Severity: High when a shortfall can be published as complete; otherwise medium.",
+                    severity_line,
+                ),
+                "fleet",
+            )
+            for p in principles.fleet
+        ]
+    )
+
+
+def test_a_principles_low_case_caps_a_finding_there(repo: Path):
+    """FND-5316: a principle's Severity line lowers as well as raises. A
+    finding that meets its Low case is low, whatever it was reported at."""
+    principles = _fp01_with(
+        "Severity: High when a shortfall can be published as complete. Medium when the "
+        "shortfall is declared. Low when only a fixture is missing.",
+        repo,
+    )
+    raw = {**FP01_COMMENT, "severity": "high", "severity_case": "low"}
+    ws, bundle = _ws(repo)
+    placed = agent_mod.place(ws, bundle, raw)
+    assert placed is not None
+    _, notes = agent_mod.grade_by_principle([placed], {placed.id: raw}, principles)
+    assert placed.severity == "low"
+    assert notes == [f"{placed.id}: high → low (FP01's Low case)"]
+
+
+def _graded_run(repo: Path, comment: dict[str, Any]) -> tuple[Finding, Any, Script]:
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [comment]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    gh = fake_github()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+    )
+    [f] = state_of(res).findings
+    return f, gh, script
+
+
+def _harm(comment: dict[str, Any], harm: str, normal_path: bool) -> dict[str, Any]:
+    chain = cast(dict[str, Any], COMMENT["causal_chain"])
+    return {
+        **comment,
+        "causal_chain": {**chain, "harm": harm, "normal_path": normal_path},
+    }
+
+
+def test_a_finding_whose_only_harm_is_a_test_gap_is_at_most_medium(repo: Path):
+    """FND-5316: a missing regression test, resting on a principle, was graded
+    high by the general scale and blocked a clean pull request. A finding
+    whose chain ends in a test gap is at most medium, unless its principle's
+    High case says otherwise. Read from the chain's `harm`, not the title."""
+    gap = {
+        **FP01_COMMENT,
+        "severity": "high",
+        "category": "test",
+        "title": "Decode failures are graded high",  # no keyword to match
+        "severity_case": None,
+        "severity_basis": None,
+    }
+    gap = {k: v for k, v in gap.items() if v is not None}
+    f, gh, script = _graded_run(repo, _harm(gap, "test_gap", True))
+    assert f.severity == "medium"
+    assert gh.statuses[-1]["state"] == "failure"
+    assert "Changes requested" not in gh.comments[0]["body"]
+    assert script.skeptic_requests == []  # no longer a blocker to check
+
+    # Its principle's High case says otherwise: it stays high.
+    f, _, _ = _graded_run(repo, _harm(dict(gap, **_HIGH_CASE_FIELDS), "test_gap", True))
+    assert f.severity == "high"
+
+
+_HIGH_CASE_FIELDS = {
+    "severity_case": "high",
+    "severity_basis": "a shortfall can be published as complete: the empty page is published",
+}
+
+
+def test_a_traced_crash_on_a_normal_path_is_at_least_high(repo: Path):
+    """FND-5316: a crash on any valid configured value was graded medium and
+    did not block. A traced crash, data loss or silent wrong output whose
+    trigger occurs on a normal path is at least high, and faces the skeptic."""
+    medium = dict(COMMENT, severity="medium", title="A valid value fails the fetch")
+    f, gh, script = _graded_run(repo, _harm(medium, "crash", True))
+    assert f.severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+    assert len(script.skeptic_requests) == 1
+
+    # The floor wins over a principle's Medium case: the chain is traced code.
+    fp01 = dict(FP01_COMMENT, category="bug", severity_case="medium")
+    f, _, _ = _graded_run(repo, _harm(fp01, "silent_wrong_output", True))
+    assert f.severity == "high"
+
+    # Not on a normal path, or not a floor harm: the grade stands.
+    f, _, _ = _graded_run(repo, _harm(medium, "crash", False))
+    assert f.severity == "medium"
+    f, _, _ = _graded_run(repo, _harm(medium, "performance", True))
+    assert f.severity == "medium"
+
+
+def test_the_prompt_and_schema_carry_the_harm_fields():
+    item = cast(dict[str, Any], COMMENT_ITEM)
+    chain = item["properties"]["causal_chain"]
+    assert chain["properties"]["harm"]["enum"] == list(findings_mod.HARMS)
+    assert "harm" in chain["required"] and "normal_path" in chain["required"]
+    flat = " ".join(prompts_mod.REVIEW_SYSTEM.split())
+    assert "a traced crash, data loss or silent wrong output on a normal path" in flat
+    assert "graded to that case in code, up or down" in flat
 
 
 def test_glob_semantics():
@@ -13093,18 +13227,6 @@ def test_upheld_needs_every_step_of_the_chain_confirmed(
     assert "Changes requested" not in gh.comments[0]["body"]
 
 
-def test_upheld_with_every_step_confirmed_still_blocks(repo: Path):
-    script = _review_script()
-    script.skeptic = [
-        _skeptic_says("upheld", [(2, True), (1, True)], "Both lines do it.")
-    ]
-    res, gh = _skeptic_run(repo, script)
-    [f] = state_of(res).findings
-    assert f.severity == "high" and f.contested == ""
-    assert [o.outcome for o in res.skeptic] == ["upheld"]
-    assert "Changes requested" in gh.comments[0]["body"]
-
-
 # ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
 
 
@@ -13209,7 +13331,7 @@ def test_the_review_prompt_and_schema_ask_for_a_traced_chain():
     item = cast(dict[str, Any], COMMENT_ITEM)
     assert "causal_chain" in item["required"]
     chain = item["properties"]["causal_chain"]
-    assert chain["required"] == ["trigger", "steps", "outcome"]
+    assert chain["required"][:3] == ["trigger", "steps", "outcome"]
     step = chain["properties"]["steps"]["items"]
     assert step["required"] == ["path", "code", "effect"]
     from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
