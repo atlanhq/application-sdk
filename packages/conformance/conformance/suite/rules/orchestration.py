@@ -46,6 +46,14 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         scope=RuleScope.APP,
         name="DirectTemporalImport",
+        # warn -> block (FND-5383), the catalog note schema-contract.md §6
+        # asks for. Census on 2026-11-24, running this rule over all 119
+        # consumer repos: 54 carry an unsuppressed finding. Pull requests
+        # are graded only on the findings they add, so that backlog does
+        # not gate unrelated work. 5 strict-mode repos (18 findings) grade
+        # the whole tree on push and would go red on release; FND-5387
+        # clears them and blocks this tier from shipping. The other 17
+        # strict-mode repos, the canary cohort, are already clean.
         tier=EnforcementTier.BLOCK,
         category="orchestration-seam",
         autofixable=False,
