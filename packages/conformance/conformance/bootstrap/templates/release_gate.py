@@ -40,9 +40,8 @@ there, and a skipped required check reads as a pass. So a status from anyone
 else is ignored, never read as a verdict.
 
 An empty or unreadable state file means the lookup failed, and the gate
-FAILS on it. That is the opposite of the connector-review gate, and
-deliberate: a release that skips its gate is worse than a re-run of a
-two-minute check.
+FAILS on it. That is deliberate: a release that skips its gate is worse than
+a re-run of a two-minute check.
 
 A release PR is also refused, whatever its ``gate-check`` state, while the
 app is pinned to an UNRELEASED Application SDK. That is any of:

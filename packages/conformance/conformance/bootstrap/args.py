@@ -77,11 +77,15 @@ TRISTATE_FLAGS = (
 #
 # ``--resync`` therefore implies ``--connector-review-kit``: the kit is
 # centrally managed and its merges preserve per-repo content (a marked block
-# in CLAUDE.md, an additive hook entry in .claude/settings.json), so it is a
-# structural catch-up target like the scaffolds. The flag survives on its own
-# for the repo that wants the kit *without* resyncing tests.yaml/renovate.json,
-# and ``main()`` still distinguishes the two: an unmergeable review block is
-# fatal when the kit was asked for by name, and skipped when it was implied.
+# in CLAUDE.md and AGENTS.md, and one hook entry removed from
+# .claude/settings.json), so it is a structural catch-up target like the
+# scaffolds. The flag survives on its own for the repo that wants the kit
+# *without* resyncing tests.yaml/renovate.json, and ``main()`` still
+# distinguishes the two: an unmergeable review block is fatal when the kit was
+# asked for by name, and skipped when it was implied.
+#
+# The flag kept its name when the kit's contents changed (FND-5317): it is in
+# runbooks and in the skip message the resync lane matches on.
 PRESENCE_FLAGS = {
     "--resync": "resync",
     "--connector-review-kit": "connector_review_kit",
@@ -288,8 +292,8 @@ disk in every caller repo. All of these always overwrite (re-running eradicates 
 tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
 pass --enforce true|false (or --renovate-automerge true|false) to also update
 renovate.json's enforcement mode, and --resync to pull the resyncable scaffolds'
-structure forward without disturbing their per-repo values — which also installs or
-updates the local connector review kit (see --connector-review-kit).
+structure forward without disturbing their per-repo values — which also brings the
+connector review kit up to date (see --connector-review-kit).
 
 The tests gate is not one of these levers. `tests / Tests Gate` becoming a required,
 unbypassable status check on the default branch is a GitHub branch-protection setting
@@ -403,22 +407,41 @@ options:
                               B006 tracking its drift).
                               The connector review kit rides along under different
                               rules — it is centrally owned rather than read back off
-                              disk, so it re-renders whole, and its two merge targets
-                              (a marked block in CLAUDE.md, one hook entry in
-                              .claude/settings.json) preserve everything around them.
+                              disk, and its merge targets (a marked block in CLAUDE.md
+                              and AGENTS.md, one hook entry in .claude/settings.json)
+                              preserve everything around them.
                               A target that can't be merged safely skips the kit with a
                               message and leaves the rest of the resync to finish,
                               rather than failing the run.
-  --connector-review-kit      install or update the centrally-managed local connector
-                              review kit (skill, non-blocking reminder, and rule-fetch
-                              script). Implied by --resync; pass it alone to adopt the
-                              kit without resyncing tests.yaml/renovate.json. Otherwise
-                              opt-in, so a bare bootstrap run never changes local
-                              Claude configuration. Existing unmarked review blocks
-                              stop for manual migration rather than being overwritten:
-                              passed by name that is an error (exit 2, nothing
-                              written); implied by --resync it is a skip, so one
-                              hand-edited CLAUDE.md cannot block a fleet resync.
+  --connector-review-kit      bring the connector reviewer's local side up to date.
+                              The reviewer itself is connector-reviewer.yaml, which
+                              every run installs; it reviews a pull request when
+                              someone comments `/review`. The kit:
+                                - writes the managed review block into CLAUDE.md, and
+                                  into AGENTS.md where that file already exists
+                                  (never created);
+                                - creates .github/connector-reviewer/principles/
+                                  README.md if absent (the folder is the repo's own;
+                                  the README is never overwritten);
+                                - removes the previous reviewer's kit: its rule-fetch
+                                  script, session reminder and local review skill,
+                                  the reminder's hook entry in .claude/settings.json
+                                  (every other setting is kept), and
+                                  .mothership/reviewer.yaml;
+                                - removes the rules under
+                                  .mothership/review-rulesets/connector-app/ only
+                                  when every one is the generic placeholder. A
+                                  folder with any other rule is left whole and
+                                  reported as `kept:`; move those rules to the
+                                  principles folder by hand.
+                              Implied by --resync; pass it alone to do this without
+                              resyncing tests.yaml/renovate.json. Otherwise opt-in, so
+                              a bare bootstrap run never changes local Claude
+                              configuration. Existing unmarked review blocks stop for
+                              manual migration rather than being overwritten: passed
+                              by name that is an error (exit 2, nothing written);
+                              implied by --resync it is a skip, so one hand-edited
+                              CLAUDE.md cannot block a fleet resync.
   --json                       after the normal output, print one final JSON line:
                               {"skipped": bool, "touched": [...], "unchanged": [...]}.
                               `touched` lists every path this invocation actually wrote

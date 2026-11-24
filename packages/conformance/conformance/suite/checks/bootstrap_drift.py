@@ -7,7 +7,8 @@ set of CI workflow shims.  This check flags any managed file that is:
 - structurally drifted from what ``bootstrap`` would write, or
 - retired (``RETIRED_WORKFLOWS``) and still on disk — a shim bootstrap once
   installed fleet-wide and now removes, which until it does keeps firing on
-  every PR with nothing behind it.
+  every PR with nothing behind it. A vendored script that left
+  ``MANAGED_ACTION_FILES`` (``RETIRED_ACTION_FILES``) is reported the same way.
 
 For parameterised templates the per-repo custom values are *extracted from the
 on-disk file* before comparing, so intentional per-repo choices (app-name,
@@ -98,6 +99,7 @@ from conformance.bootstrap.extract import (
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_WORKFLOWS,
+    RETIRED_ACTION_FILES,
     RETIRED_WORKFLOWS,
     SARIF_UPLOAD_WORKFLOW,
     render,
@@ -180,6 +182,9 @@ def discover(root: Path) -> list[Path]:
     paths.append(wf_dir / SARIF_UPLOAD_WORKFLOW)
     # Non-workflow vendored files (composite action + arg-building script).
     paths.extend(root / dest_rel for dest_rel in _MANAGED_ACTION_FILES_BY_DEST)
+    # Vendored files that were managed and are now retired: reported while a
+    # copy is still on disk, like a retired shim.
+    paths.extend(root / dest_rel for dest_rel in RETIRED_ACTION_FILES)
     # Write-if-absent scaffolds (WARN-only drift tracking).
     paths.append(wf_dir / _TESTS_WORKFLOW)
     paths.append(root / _RENOVATE_JSON)
@@ -202,6 +207,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = None
     if rel in _MANAGED_ACTION_FILES_BY_DEST:
         return _scan_managed_action_file(path, root, _MANAGED_ACTION_FILES_BY_DEST[rel])
+    if rel is not None and rel in RETIRED_ACTION_FILES:
+        return _scan_retired_action_file(path, rel)
     return _scan_managed_shim(path, root)
 
 
@@ -229,6 +236,29 @@ def _scan_retired_shim(path: Path, root: Path) -> list[Finding]:
             column=1,
             message=(
                 f"CI workflow '{path.name}' was retired and is no longer managed, "
+                f"but is still present. Run `{_CLI_CMD}` to remove it."
+            ),
+        )
+    ]
+
+
+def _scan_retired_action_file(path: Path, rel: str) -> list[Finding]:
+    """Flag a retired vendored file that is still on disk.
+
+    The non-workflow counterpart of ``_scan_retired_shim``: the file was a
+    ``MANAGED_ACTION_FILES`` entry, bootstrap now deletes it, and absence is
+    the end state. A copy left behind is a script nothing calls any more.
+    """
+    if not path.exists():
+        return []
+    return [
+        Finding(
+            rule_id=RULE_ID,
+            file=rel,
+            line=1,
+            column=1,
+            message=(
+                f"Managed file '{rel}' was retired and is no longer managed, "
                 f"but is still present. Run `{_CLI_CMD}` to remove it."
             ),
         )
