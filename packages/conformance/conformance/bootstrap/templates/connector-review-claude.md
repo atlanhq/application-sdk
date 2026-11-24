@@ -24,12 +24,19 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 - Warnings never fail the run, and only blocking findings are compared with
   the base: no output line or SARIF field marks a warning as introduced. Each
   warning is printed as `[<rule>] [WARN] <file>:<line>:<column>`. To find the
-  ones your change introduced, run the same `detect` without
-  `CONFORMANCE_SINCE` on a checkout of `origin/main` (for example
-  `git worktree add /tmp/conformance-base origin/main`, then
-  `--repo /tmp/conformance-base`) and compare the `[WARN]` lines. A rule and
-  file with more warnings on your branch than on `origin/main` is one your
-  change introduced. Fix those too.
+  ones your change introduced, run `detect` on `origin/main` too, and ignore
+  that run's exit code:
+
+  ```bash
+  git worktree add /tmp/conformance-base origin/main
+  uv run atlan-application-sdk-conformance detect \
+    --repo /tmp/conformance-base --output /tmp/conformance-base.sarif
+  git worktree remove /tmp/conformance-base
+  ```
+
+  Compare its `[WARN]` lines with your branch's. A rule and file with more
+  warnings on your branch than on `origin/main` is one your change
+  introduced. Fix those too.
 - Exit 1 with `falling back to the whole-repository verdict` and no
   `[INTRODUCED]` line: the base could not be compared, so the run graded the
   whole repository. Do not start fixing findings you did not add. Fix the
@@ -61,11 +68,12 @@ the same way it will:
   `.github/connector-reviewer/principles/` on `main`
   (https://github.com/atlanhq/application-sdk/tree/main/.github/connector-reviewer/principles).
 
-For each principle whose `applies-to` covers a file you changed, answer its
-`Ask:` questions against your diff (`git diff origin/main...HEAD`), skip what
-its `Don't flag:` excludes, and judge severity by its `Severity:` line. Fix
-the findings you judge valid, and leave the rest; the reviewer judges them
-again once the pull request is open.
+For each principle whose `applies-to` covers a file you changed (a principle
+with no `applies-to` covers every changed file), answer its `Ask:` questions
+against your diff (`git diff origin/main...HEAD`), skip what its
+`Don't flag:` excludes, and judge severity by its `Severity:` line. Fix the
+findings you judge valid, and leave the rest; the reviewer judges them again
+once the pull request is open.
 
 Do not weaken, delete or reword a principle so that your change passes. A
 change to a principle is its own pull request, and the reviewer reviews it.

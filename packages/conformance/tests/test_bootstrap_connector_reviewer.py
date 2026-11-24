@@ -407,6 +407,8 @@ def test_block_asks_for_a_principles_review_before_the_pull_request() -> None:
         "connector-reviewer/principles",
         # The fields every principle file carries (the principles README).
         "whose `applies-to` covers a file you changed",
+        # The principles README: leave `applies-to` out and it applies everywhere.
+        "a principle with no `applies-to` covers every changed file",
         "answer its `Ask:` questions against your diff (`git diff origin/main...HEAD`)",
         "skip what its `Don't flag:` excludes",
         "judge severity by its `Severity:` line",
@@ -432,8 +434,12 @@ def test_block_asks_for_introduced_warnings_to_be_fixed_too() -> None:
         " request, blocking and warning alike",
         "no output line or SARIF field marks a warning as introduced.",
         "`[<rule>] [WARN] <file>:<line>:<column>`",
-        "run the same `detect` without `CONFORMANCE_SINCE` on a checkout of"
-        " `origin/main`",
+        "run `detect` on `origin/main` too, and ignore that run's exit code:",
+        # The base run writes its own SARIF, so the branch's report survives,
+        # and its checkout is removed afterwards.
+        "git worktree add /tmp/conformance-base origin/main",
+        "--repo /tmp/conformance-base --output /tmp/conformance-base.sarif",
+        "git worktree remove /tmp/conformance-base",
         "A rule and file with more warnings on your branch than on `origin/main`"
         " is one your change introduced.",
         # The backlog stays the remediation lane's.
