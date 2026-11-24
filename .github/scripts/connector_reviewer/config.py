@@ -16,9 +16,21 @@ import math
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from .agent import AgentLimits
+from .exempt import ExemptConfig
+from .facts import FactsConfig
 from .llm import Price
+from .skeptic import SkepticConfig
+
+TRUSTED_APPS = (
+    "atlan-app-fleet",
+    "atlan-conformance-sync",
+    "connectivity-ai",
+    "mothership-ai",
+    "atlan-connectivity-release-train",
+)
 
 
 @dataclass
@@ -39,8 +51,18 @@ class Config:
     approach: bool = True
     preflight: bool = True
     exclude: list[str] = field(default_factory=list)
+    # GitHub Apps whose `/review` comments are honoured (event.trusted_app).
+    trusted_apps: list[str] = field(default_factory=lambda: list(TRUSTED_APPS))
+    # Which pull requests are not reviewed at all (exempt.classify).
+    exempt: ExemptConfig = field(default_factory=ExemptConfig)
+    # Regression and history facts for the line review (facts.py).
+    facts: FactsConfig = field(default_factory=FactsConfig)
+    # The skeptic pass on new blocking findings (skeptic.py).
+    skeptic: SkepticConfig = field(default_factory=SkepticConfig)
     limits: AgentLimits = field(default_factory=AgentLimits)
     raw_hash: str = ""
+    # Values config.toml gives with the wrong type; `validate` refuses them.
+    load_errors: list[str] = field(default_factory=list)
 
 
 def load_config(config_dir: Path) -> Config:
@@ -81,6 +103,39 @@ def load_config(config_dir: Path) -> Config:
     cfg.verify = bool(st.get("verify", cfg.verify))
     cfg.approach = bool(st.get("approach", cfg.approach))
     cfg.preflight = bool(st.get("preflight", cfg.preflight))
+    access = data.get("access", {})
+    cfg.trusted_apps = [str(x) for x in access.get("trusted_apps", cfg.trusted_apps)]
+    ex = data.get("exempt", {})
+    cfg.exempt = ExemptConfig(
+        **{
+            k: [str(x) for x in v]
+            for k, v in ex.items()
+            if k in ExemptConfig.__dataclass_fields__
+        }
+    )
+    fx = data.get("facts", {})
+    facts = FactsConfig()
+    for k, v in fx.items():
+        if k not in FactsConfig.__dataclass_fields__:
+            continue
+        # Each value must have its field's TOML type, never a coercion of it:
+        # `bool("false")` is True, so a quoted boolean would turn a half on.
+        # A wrong type keeps the default here and `validate` refuses the run.
+        if isinstance(getattr(facts, k), bool):
+            if isinstance(v, bool):
+                setattr(facts, k, v)
+            else:
+                cfg.load_errors.append(
+                    f"facts.{k} must be true or false (a TOML boolean), not {type(v).__name__} {v!r}."
+                )
+        elif isinstance(v, int) and not isinstance(v, bool):
+            setattr(facts, k, v)
+        else:
+            cfg.load_errors.append(
+                f"facts.{k} must be a whole number (a TOML integer), not {type(v).__name__} {v!r}."
+            )
+    cfg.facts = facts
+    cfg.skeptic = _skeptic(data.get("skeptic", {}), cfg.load_errors)
     a = data.get("agent", {})
     cfg.limits = AgentLimits(
         **{k: int(v) for k, v in a.items() if k in AgentLimits.__dataclass_fields__}
@@ -89,9 +144,47 @@ def load_config(config_dir: Path) -> Config:
     return cfg
 
 
+def _skeptic(table: object, errors: list[str]) -> SkepticConfig:
+    """The `[skeptic]` table, strictly: every key must be known and have its
+    field's TOML type. A typo such as `enable = false` would otherwise leave the
+    pass on unnoticed, and `bool("false")` is True. A bad value keeps the default
+    and is listed in `errors`, which `validate` refuses."""
+    sk = SkepticConfig()
+    if not isinstance(table, dict):
+        errors.append("[skeptic] must be a table.")
+        return sk
+    for k, v in cast(dict[str, object], table).items():
+        if k not in SkepticConfig.__dataclass_fields__:
+            errors.append(f"skeptic.{k} is not a known key.")
+        elif isinstance(getattr(sk, k), bool):
+            if isinstance(v, bool):
+                setattr(sk, k, v)
+            else:
+                errors.append(
+                    f"skeptic.{k} must be true or false (a TOML boolean), not {type(v).__name__} {v!r}."
+                )
+        elif isinstance(v, int) and not isinstance(v, bool):
+            if v < _SKEPTIC_MIN[k]:
+                errors.append(
+                    f"skeptic.{k} must be at least {_SKEPTIC_MIN[k]}, not {v}."
+                )
+            else:
+                setattr(sk, k, v)
+        else:
+            errors.append(
+                f"skeptic.{k} must be a whole number (a TOML integer), not {type(v).__name__} {v!r}."
+            )
+    return sk
+
+
+# The smallest value each whole-number key of `[skeptic]` may take.
+_SKEPTIC_MIN = {"max_lookups": 0, "max_tokens": 1000, "max_findings": 1}
+
+
 def validate(cfg: Config) -> list[str]:
-    """Refuse to run on a config that cannot enforce its own cap."""
-    errs: list[str] = []
+    """Refuse to run on a config that cannot enforce its own cap, or that gives
+    a value with the wrong type."""
+    errs: list[str] = list(cfg.load_errors)
     prices = (
         cfg.price.input_per_mtok,
         cfg.price.output_per_mtok,

@@ -46,10 +46,27 @@ Principles
   repository's own. Its `for` attribute names the files it applies to.
 - Judge the change by them: put each principle's Ask questions to the code it applies to, leave what its
   "Don't flag" line names to CI, and grade with its Severity line.
-- When a finding rests on a principle, name that principle's id in the comment's content.
+- Every finding either rests on a principle or is a concrete bug. When it rests on a principle, set the
+  comment's `principle` to that id (one listed for its file). A finding of category bug or security may
+  omit it. Any other finding with no applicable principle is dropped in code, so do not report it.
+
+Facts
+- <regression_facts> and <history_facts> are computed in code before you start: each changed function's
+  callers outside the tests and the tests that name it by tier, every existing test expectation this PR
+  weakened or removed, and, only when one fired, history from the base branch's recent commits (lines
+  restored that a commit removed, lines removed that a commit added, a revert, a function changed
+  repeatedly). Do not look for history yourself.
+- Answer two questions in task_done: `regression` — can this change break behaviour that works today, and
+  would a test in the right tier catch it? `history` (only when <history_facts> is present) — is this going
+  back and forth, and does the PR say why?
+- A fact is a reason to look, not a finding. Keep these findings light: medium at most, high only for a
+  concrete broken caller, a deleted or skipped test that covers changed code, or a recent fix undone with no
+  reason given.
 
 Scope
-- Focus on issues in newly added code (lines marked +). Deleted code is reference context only.
+- Focus on issues in the change: added lines (marked +) and removed lines (marked -). A removal is a
+  change too: a removed guard, cleanup, validation, auth check, retry bound or filter is reviewed like an
+  added line. A PR or file that only removes lines is reviewed the same way.
 - Do not comment on correct code or on files outside <review_files>.
 - Unchanged code is out of scope, with ONE exception — an incomplete fix: when this PR fixes a pattern
   (a bug class), and the SAME pattern is left unfixed elsewhere in a changed function or changed file
@@ -81,7 +98,7 @@ Evidence
   shape or behaviour breaks no existing caller, stored data or release, even when this round's diff shows
   them as modified. Set compatibility=true only for harm to something that existed before the PR.
 - existing_code must be copied VERBATIM from the diff or <changed_functions> (1-6 lines, without the
-  line-number column or the + marker).
+  line-number column or the + or - marker). For a finding about removed code, quote the removed lines.
 
 Severity
 - critical: security vulnerability, credential/data exposure, data loss or corruption, crash on a common path.

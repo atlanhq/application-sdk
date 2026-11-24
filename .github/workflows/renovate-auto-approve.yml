@@ -90,5 +90,10 @@ jobs:
       # packages/conformance/tests/test_relationship_direction.py::test_committed_table_matches_pinned_pyatlan
       # rebuilds the table from the locked pyatlan inside SDK Gate (a required
       # check), so a hand-edited table fails before this gate ever approves.
-      extra_dep_file_pattern: 'packages/conformance/conformance/bootstrap/templates/.+\.ya?ml|packages/conformance/conformance/data/relationship_directions\.json'
+      # The local/ compose files (FND-5353) hold the local dev stack's images
+      # (local/temporal-auth/docker-compose.yml). No shipped artifact or CI job
+      # reads them, and renovate.json's "local dev images" lane auto-merges
+      # their non-major bumps. The pattern mirrors Renovate's default
+      # docker-compose file pattern, one directory under local/.
+      extra_dep_file_pattern: 'packages/conformance/conformance/bootstrap/templates/.+\.ya?ml|packages/conformance/conformance/data/relationship_directions\.json|local/[^/]+/(docker-)?compose[^/]*\.ya?ml'
     secrets: inherit

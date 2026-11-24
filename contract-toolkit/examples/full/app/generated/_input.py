@@ -94,7 +94,11 @@ class AppInputContract(ExtractionInput):
         try:
             parsed = orjson.loads(stripped)
         except orjson.JSONDecodeError:
-            parsed = None
+            logger.debug(
+                "String-map input was not valid JSON; using an empty map.",
+                exc_info=True,
+            )
+            return {}
         if isinstance(parsed, dict):
             return parsed
         logger.debug("String-map input was not a JSON object; using an empty map.")

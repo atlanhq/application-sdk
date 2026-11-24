@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,6 +41,12 @@ from application_sdk.observability.correlation import (
 # ---------------------------------------------------------------------------
 
 
+# History time for the workflow side: the run started at _START and the
+# interceptor's exit happens at _NOW, 1.5 s of workflow time later.
+_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_NOW = _START + timedelta(seconds=1.5)
+
+
 @dataclass
 class MockParentInfo:
     workflow_id: str = "parent-wf-id"
@@ -47,6 +55,7 @@ class MockParentInfo:
 
 @dataclass
 class MockWorkflowInfo:
+    start_time: datetime = _START
     workflow_id: str = "wf-id"
     run_id: str = "run-id"
     workflow_type: str = "TestWorkflow"
@@ -244,6 +253,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -255,6 +265,73 @@ class TestLogWorkflowInboundInterceptor:
         # …but ``next.execute_workflow`` must still run so the wrapped workflow
         # can replay its commands.
         mock_next.execute_workflow.assert_awaited_once()
+
+    async def _run_with_replay_flip(
+        self, interceptor, mock_next, replaying_during, replaying_at_exit, exc=None
+    ):
+        state = {"replaying": replaying_during}
+
+        async def body(_input):
+            state["replaying"] = replaying_at_exit
+            if exc is not None:
+                raise exc
+            return "wf-result"
+
+        mock_next.execute_workflow = AsyncMock(side_effect=body)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.side_effect = lambda: state["replaying"]
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                if exc is None:
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+                else:
+                    with pytest.raises(type(exc)):
+                        await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        return mock_logger
+
+    @staticmethod
+    def _lifecycle_lines(mock_logger, prefix):
+        return [
+            c
+            for m in (mock_logger.info, mock_logger.warning, mock_logger.error)
+            for c in m.call_args_list
+            if c.args and str(c.args[0]).startswith(prefix)
+        ]
+
+    async def test_rehydrated_instance_logs_ended_but_not_started(
+        self, interceptor, mock_next
+    ):
+        # A worker that rebuilds the run from history must not repeat
+        # workflow.started (the first lifetime logged it) but must log
+        # workflow.ended when it finishes the run live.
+        mock_logger = await self._run_with_replay_flip(
+            interceptor, mock_next, replaying_during=True, replaying_at_exit=False
+        )
+        assert not self._lifecycle_lines(mock_logger, "workflow.started")
+        ended = self._lifecycle_lines(mock_logger, "workflow.ended")
+        assert len(ended) == 1
+        assert ended[0].kwargs["otel.status_code"] == "OK"
+        assert ended[0].kwargs["temporal.workflow.duration_ms"] == 1500.0
+
+    async def test_eviction_teardown_logs_no_ended(self, interceptor, mock_next):
+        # Eviction cancels the coroutine with is_replaying() forced true; the
+        # run is still in flight, so there is no workflow.ended to log.
+
+        mock_logger = await self._run_with_replay_flip(
+            interceptor,
+            mock_next,
+            replaying_during=False,
+            replaying_at_exit=True,
+            exc=asyncio.CancelledError(),
+        )
+        assert len(self._lifecycle_lines(mock_logger, "workflow.started")) == 1
+        assert not self._lifecycle_lines(mock_logger, "workflow.ended")
 
     async def test_preflight_block_logs_terse_not_error(self, interceptor, mock_next):
         # A deliberate preflight-gate block (type="PreflightFailed") is an
@@ -270,6 +347,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -307,6 +385,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -335,6 +414,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -437,6 +517,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -468,6 +549,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers=headers)
@@ -488,6 +570,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {"correlation_id": "memo-corr-id"}
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -525,6 +608,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers=headers)
@@ -544,6 +628,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -566,6 +651,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
@@ -591,6 +677,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with (
                 patch(
@@ -627,6 +714,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with (
                 patch(
@@ -667,6 +755,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with (
                 patch(
@@ -694,6 +783,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput(headers={}))
 
@@ -708,6 +798,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {"correlation_id": "memo-id-123"}
             await interceptor.execute_workflow(MockExecuteWorkflowInput(headers={}))
 
@@ -726,6 +817,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(
@@ -742,6 +834,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {"correlation_id": "memo-wins"}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(
@@ -760,6 +853,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(
@@ -779,6 +873,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers={}, args=["just-a-string"])
@@ -799,6 +894,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(
@@ -823,6 +919,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers={}, args=[TypedInput()])
@@ -846,6 +943,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers={}, args=[FakeExtraBagModel()])
@@ -868,6 +966,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers={}, args=[TypedInputWithoutCorrId()])
@@ -887,6 +986,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo(run_id="the-run-id")
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers={}, args=[])
@@ -903,6 +1003,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo(run_id="")
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers={}, args=[])
@@ -935,6 +1036,7 @@ class TestLogWorkflowInboundInterceptor:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(headers=headers)
@@ -1007,6 +1109,7 @@ class TestAppNameResolution:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(wf_input)
 
@@ -1101,6 +1204,7 @@ class TestAppNameResolution:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(
                 MockExecuteWorkflowInput(
@@ -1488,6 +1592,7 @@ class TestWorkflowInboundCachesParentIdentity:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo(parent=None)
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -1658,6 +1763,7 @@ class TestReplayPredicateInjection:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.unsafe.is_replaying_history_events = lambda: False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -1675,6 +1781,7 @@ class TestReplayPredicateInjection:
             mock_wf.unsafe.is_replaying.return_value = True
             mock_wf.unsafe.is_replaying_history_events = lambda: True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -1719,6 +1826,7 @@ class TestReplayPredicateInjection:
             )
             mock_wf.unsafe.is_replaying_history_events = lambda: True
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
@@ -1853,6 +1961,7 @@ class TestLifecycleMessageBodies:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
             mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.now.return_value = _NOW
             mock_wf.memo.return_value = {}
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"

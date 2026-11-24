@@ -14,10 +14,15 @@ import urllib.parse
 import urllib.request
 from typing import Any, cast
 
-from .typed import EMPTY
+from .typed import EMPTY, objects
 
 API = "https://api.github.com"
+STATUS_CONTEXT = "connector-reviewer"
 DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
+# GitHub lists at most 250 commits of a pull request: three pages of 100.
+COMMIT_MESSAGE_PAGES = 3
+# Pages of a commit's combined status read before giving up on a context.
+STATUS_PAGES = 10
 
 
 def bot_login() -> str:
@@ -33,6 +38,19 @@ def bot_login() -> str:
 
 class GitHubError(RuntimeError):
     pass
+
+
+COMMAND = "/review"
+
+
+def safe_body(body: str) -> str:
+    """`body` as the reviewer may post it: never opening with the `/review`
+    command. The reviewer posts as an App on the trusted list, so a comment of
+    its own that started with the command would ask for a review of itself.
+    No template starts that way; this holds the line if one ever does."""
+    if body.lstrip().lower().startswith(COMMAND):
+        return "connector-reviewer: " + body.lstrip()
+    return body
 
 
 class GitHub:
@@ -126,6 +144,77 @@ class GitHub:
             return base64.b64decode(blob["content"]).decode("utf-8", "replace")
         return None
 
+    def pr_commit_authors(self, number: int) -> list[str]:
+        """The GitHub login of each commit's author, in order; "" for a commit
+        GitHub could not attribute to an account. GitHub lists at most 250
+        commits of a pull request, so compare the length with the pull
+        request's own `commits` count before trusting "every commit"."""
+        out: list[str] = []
+        page = 1
+        while True:
+            batch: list[dict[str, Any]] = (
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/pulls/{number}/commits?per_page=100&page={page}",
+                )
+                or []
+            )
+            out += [str((c.get("author") or EMPTY).get("login") or "") for c in batch]
+            if len(batch) < 100:
+                return out
+            page += 1
+
+    def pr_commit_messages(self, number: int) -> list[str]:
+        """The message of each of the pull request's commits, read for a "This
+        reverts commit …" line: at most `COMMIT_MESSAGE_PAGES` pages of 100.
+        GitHub lists at most 250 commits of a pull request, so compare the
+        length with the pull request's own `commits` count to tell a cut list."""
+        out: list[str] = []
+        for page in range(1, COMMIT_MESSAGE_PAGES + 1):
+            batch = objects(
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/pulls/{number}/commits?per_page=100&page={page}",
+                )
+            )
+            out += [str((c.get("commit") or EMPTY).get("message") or "") for c in batch]
+            if len(batch) < 100:
+                break
+        return out
+
+    def recent_commits(
+        self, path: str, ref: str, since: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """The newest commits reachable from `ref` that touched `path` since
+        `since` (ISO 8601), at most `limit` (one request)."""
+        q = urllib.parse.urlencode(
+            {"sha": ref, "path": path, "since": since, "per_page": max(1, limit)}
+        )
+        return objects(self._call("GET", f"/repos/{self.repo}/commits?{q}"))
+
+    def commit_patches(self, sha: str) -> dict[str, str]:
+        """Each file a commit changed, with its patch text (path -> patch). A
+        file GitHub gives no patch for (binary, too large) is left out."""
+        data = self._call("GET", f"/repos/{self.repo}/commits/{sha}")
+        return {
+            str(f.get("filename")): str(f.get("patch"))
+            for f in objects((data or EMPTY).get("files"))
+            if f.get("filename") and isinstance(f.get("patch"), str)
+        }
+
+    def can_push(self, login: str) -> bool:
+        """Whether `login` holds Write, Maintain or Admin on this repository,
+        read live from the collaborator-permission API.
+
+        `user.permissions.push` is true exactly for those roles and for a
+        custom role built on Write; Read and Triage are false. A reply without
+        the field reads as no access. A failed call raises GitHubError and the
+        caller refuses: authorisation never fails open."""
+        q = urllib.parse.quote(login, safe="")
+        data = self._call("GET", f"/repos/{self.repo}/collaborators/{q}/permission")
+        perms = ((data or EMPTY).get("user") or EMPTY).get("permissions") or EMPTY
+        return perms.get("push") is True
+
     def repo_visibility(self, owner_repo: str) -> str | None:
         """Another repository's `visibility` (public | private | internal) as the
         GitHub API reports it to connector-reviewer's token, or None when the lookup fails (a
@@ -140,6 +229,31 @@ class GitHub:
             return None
         got = cast("dict[str, object]", data).get("visibility")
         return str(got) if got else None
+
+    def status_of(self, sha: str, context: str) -> dict[str, Any] | None:
+        """The latest commit status `context` has on `sha` (`state`,
+        `target_url`, `description`, …), or None when it has none. Read from
+        the combined status, which holds the newest status per context and is
+        paginated: pages of 100 until the context is found, a page comes back
+        short, `total_count` is reached, or `STATUS_PAGES` pages were read."""
+        seen = 0
+        for page in range(1, STATUS_PAGES + 1):
+            data = (
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/commits/{sha}/status?per_page=100&page={page}",
+                )
+                or EMPTY
+            )
+            batch = objects(data.get("statuses"))
+            for s in batch:
+                if s.get("context") == context:
+                    return s
+            seen += len(batch)
+            total = data.get("total_count")
+            if len(batch) < 100 or (isinstance(total, int) and seen >= total):
+                return None
+        return None
 
     def issue_comments(self, number: int) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -178,7 +292,7 @@ class GitHub:
         This is the green/red signal (and what branch protection can require)."""
         body = {
             "state": state,
-            "context": "connector-reviewer",
+            "context": STATUS_CONTEXT,
             "description": description[:140],
         }
         if target_url:
@@ -200,13 +314,17 @@ class GitHub:
     def comment(self, number: int, body: str) -> int:
         """Posts a PR comment; returns its id (0 if GitHub did not say)."""
         out = self._call(
-            "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
+            "POST",
+            f"/repos/{self.repo}/issues/{number}/comments",
+            {"body": safe_body(body)},
         )
         return int((out or EMPTY).get("id") or 0)
 
     def edit_comment(self, comment_id: int, body: str) -> None:
         self._call(
-            "PATCH", f"/repos/{self.repo}/issues/comments/{comment_id}", {"body": body}
+            "PATCH",
+            f"/repos/{self.repo}/issues/comments/{comment_id}",
+            {"body": safe_body(body)},
         )
 
     def delete_comment(self, comment_id: int) -> None:
@@ -223,10 +341,12 @@ class GitHub:
                 out = self._call(
                     "PATCH",
                     f"/repos/{self.repo}/issues/comments/{c['id']}",
-                    {"body": body},
+                    {"body": safe_body(body)},
                 )
                 return str((out or EMPTY).get("html_url") or c.get("html_url") or "")
         out = self._call(
-            "POST", f"/repos/{self.repo}/issues/{number}/comments", {"body": body}
+            "POST",
+            f"/repos/{self.repo}/issues/{number}/comments",
+            {"body": safe_body(body)},
         )
         return str((out or EMPTY).get("html_url") or "")

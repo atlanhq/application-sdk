@@ -56,7 +56,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.58.0"
+version = "3.58.1"
 source = { editable = "../../" }
 dependencies = [
     { name = "atlan-application-sdk-api" },
@@ -138,7 +138,7 @@ requires-dist = [
     { name = "protobuf", specifier = ">=6.33.5,<8" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=23.0.1,<27.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=23.0.1,<27.0.0" },
-    { name = "pyatlan", specifier = ">=11.7.1,<12" },
+    { name = "pyatlan", specifier = ">=11.8.0,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pyjwt", specifier = ">=2.12.0,<3" },
     { name = "pytest", marker = "extra == 'tests'", specifier = ">=8.3.3,<10.0.0" },
@@ -195,7 +195,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-api"
-version = "3.58.0"
+version = "3.58.1"
 source = { editable = "../api" }
 dependencies = [
     { name = "certifi" },
@@ -219,7 +219,7 @@ requires-dist = [
     { name = "obstore", marker = "extra == 'obstore'", specifier = ">=0.12.0,<0.13.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<4.0.0" },
-    { name = "pyatlan", marker = "extra == 'pyatlan'", specifier = ">=11.7.1,<12" },
+    { name = "pyatlan", marker = "extra == 'pyatlan'", specifier = ">=11.8.0,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "python-dotenv", marker = "extra == 'aws'", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.2.2,<2.0.0" },
@@ -231,7 +231,7 @@ provides-extras = ["sql", "pandas", "aws", "obstore", "pyatlan"]
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.59.0"
+version = "0.60.0"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
@@ -1991,7 +1991,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "11.7.1"
+version = "11.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -2007,9 +2007,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/20/38/243254c100d71032e63d2188ed1eddf4bf79880ca9da04cc5e09de1cd148/pyatlan-11.7.1.tar.gz", hash = "sha256:9981d056a746e66389154dbc9751c42c92437a16abe3e0c7cc23c55ae72341d6", size = 4321574, upload-time = "2026-11-16T06:57:49.615Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/b2/08552cd51f2079effde8a7c9a4899369be2c13e3fb5d12b4d95860570bdd/pyatlan-11.8.0.tar.gz", hash = "sha256:ad0fccddf6204bbff2d435b889725c460a5fd8ba43ec35646ed0220f722ffb72", size = 4323239, upload-time = "2026-11-23T14:42:32.139Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/20/b30c217c1403886e696c2befa82e2486e3f51b5a483171cbcd144601166e/pyatlan-11.7.1-py3-none-any.whl", hash = "sha256:60670e2c8c8a72c3424d5b02f5cf83bbcc83f338293388bfda64fedbe840a7a5", size = 6306290, upload-time = "2026-11-16T06:57:47.523Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/1b/e94ed51bd2bff83bde166a71c5e449553aa310104599272af2e8b03f7f80/pyatlan-11.8.0-py3-none-any.whl", hash = "sha256:68fa3159f0fbc8bc82241ea037398b4e43fb654f416d58b1d0b1039e110f086a", size = 6307668, upload-time = "2026-11-23T14:42:30.288Z" },
 ]
 
 [[package]]

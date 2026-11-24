@@ -361,6 +361,8 @@ To specify a handler explicitly, use the `--handler` CLI flag or `ATLAN_HANDLER_
 application-sdk --mode handler --handler myapp.handlers:MyHandler
 ```
 
+Handler mode runs on a single event loop, as combined mode does: it creates the infrastructure (including the shared Dapr client), serves requests with `uvicorn.Server.serve()`, then closes the Dapr client and flushes observability on that same loop. The Dapr client's pooled connections belong to the loop that opened them, so these steps cannot be split across separate `asyncio.run` calls.
+
 To define a custom handler using the convention-based approach:
 
 ```python

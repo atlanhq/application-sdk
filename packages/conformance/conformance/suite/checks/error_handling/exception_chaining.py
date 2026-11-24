@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from ._helpers import (
@@ -413,6 +413,169 @@ def _helper_call_preserves_cause(
     return False
 
 
+def _group_member_of(expression: ast.expr, sources: frozenset[str]) -> bool:
+    """Whether *expression* is ``<source>.exceptions[<index>]`` (no slice)."""
+    return (
+        isinstance(expression, ast.Subscript)
+        and not isinstance(expression.slice, ast.Slice)
+        and _group_members_of(expression.value, sources)
+    )
+
+
+def _group_members_of(expression: ast.expr, sources: frozenset[str]) -> bool:
+    """Whether *expression* is ``<source>.exceptions``."""
+    return (
+        isinstance(expression, ast.Attribute)
+        and expression.attr == "exceptions"
+        and isinstance(expression.value, ast.Name)
+        and expression.value.id in sources
+    )
+
+
+def _is_parameter(scope: ast.AST, name: str) -> bool:
+    if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    args = scope.args
+    parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    parameters += [p for p in (args.vararg, args.kwarg) if p is not None]
+    return any(parameter.arg == name for parameter in parameters)
+
+
+def _declared_global_or_nonlocal(scope: ast.AST, name: str) -> bool:
+    """A ``global``/``nonlocal`` anywhere lets other code rebind *name*."""
+    return any(
+        isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names
+        for node in ast.walk(scope)
+    )
+
+
+def _node_binds(node: ast.AST, name: str, allowed: set[int]) -> bool:
+    """Whether *node* binds *name*, other than as one of the *allowed* targets."""
+    if isinstance(node, ast.Name):
+        return (
+            node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and id(node) not in allowed
+        )
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name == name
+    if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+        return node.name == name
+    if isinstance(node, ast.MatchMapping):
+        return node.rest == name
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return any(_bound_name(node, alias) == name for alias in node.names)
+    return False
+
+
+def _binds_in_scope(scope: ast.AST, name: str, allowed: set[int]) -> bool:
+    """Whether anything in *scope* binds *name* other than the *allowed* targets.
+
+    Every form of binding counts: parameters, loop/with/walrus/unpacking targets,
+    augmented assignment, ``del``, ``except as``, imports, nested defs, match
+    captures, and ``global``/``nonlocal`` declarations.
+    """
+    return (
+        _is_parameter(scope, name)
+        or _declared_global_or_nonlocal(scope, name)
+        or any(_node_binds(node, name, allowed) for node in _iter_shallow(scope))
+    )
+
+
+def _handler_nodes(handler: ast.ExceptHandler) -> Iterator[ast.AST]:
+    """The handler's statements and their descendants, not crossing nested defs."""
+    for statement in handler.body:
+        yield statement
+        if not isinstance(
+            statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            yield from _iter_shallow(statement)
+
+
+def _raised_alias(raised: ast.expr) -> tuple[str, bool] | None:
+    """``(name, is_sequence)`` for ``raise name`` or ``raise name[i]``."""
+    if isinstance(raised, ast.Name):
+        return raised.id, False
+    if (
+        isinstance(raised, ast.Subscript)
+        and not isinstance(raised.slice, ast.Slice)
+        and isinstance(raised.value, ast.Name)
+    ):
+        return raised.value.id, True
+    return None
+
+
+def _simple_assignment(node: ast.AST) -> tuple[ast.expr, ast.expr] | None:
+    """``(target, value)`` of a single-target ``=`` or annotated assignment."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        return node.targets[0], node.value
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        return node.target, node.value
+    return None
+
+
+def _group_alias_targets(
+    handler: ast.ExceptHandler, group: str, alias: str, sequence: bool
+) -> set[int] | None:
+    """Ids of the handler's assignment targets binding *alias* from the group.
+
+    ``None`` when any assignment to *alias* in the handler binds something else.
+    A member alias may be seeded with the group itself and then walked down
+    through its own ``.exceptions[i]``; a sequence alias is ``group.exceptions``.
+    """
+    sources = frozenset({group} if sequence else {group, alias})
+    targets: set[int] = set()
+    for node in _handler_nodes(handler):
+        assignment = _simple_assignment(node)
+        if assignment is None:
+            continue
+        target, value = assignment
+        if not isinstance(target, ast.Name) or target.id != alias:
+            continue
+        if sequence:
+            valid = _group_members_of(value, frozenset({group}))
+        else:
+            valid = (
+                isinstance(value, ast.Name) and value.id == group
+            ) or _group_member_of(value, sources)
+        if not valid:
+            return None
+        targets.add(id(target))
+    return targets
+
+
+def _reraises_group_member_alias(
+    raised: ast.expr, handler: ast.ExceptHandler, scope: ast.AST
+) -> bool:
+    """Whether *raised* is a member of the caught group reached through a local.
+
+    Two forms, both bound only by plain assignments inside *handler*:
+
+    * ``raise fault`` where every binding of ``fault`` is the group itself or
+      ``<group or fault>.exceptions[i]`` — the walk-to-a-leaf loop
+      ``while isinstance(fault, BaseExceptionGroup): fault = fault.exceptions[0]``.
+    * ``raise leaves[i]`` where the only binding of ``leaves`` is
+      ``<group>.exceptions``.
+
+    The proof is flow-insensitive: any other binding of the name in the scope
+    (a new exception in one branch, a wrapper call, a parameter, a loop target)
+    leaves it unproven and the finding stands. The caller proves separately
+    that the handler binds an exception group.
+    """
+    group = handler.name
+    found = _raised_alias(raised)
+    if group is None or found is None or found[0] == group:
+        return False
+    alias, sequence = found
+    targets = _group_alias_targets(handler, group, alias, sequence)
+    if not targets:
+        return False
+    group_rebound = _declared_global_or_nonlocal(scope, group) or any(
+        _node_binds(node, group, set()) for node in _handler_nodes(handler)
+    )
+    return not group_rebound and not _binds_in_scope(scope, alias, targets)
+
+
 class ExceptionChainingMixin:
     """Rule methods for E015, E016 and E019 (exception-chaining category)."""
 
@@ -471,6 +634,10 @@ class ExceptionChainingMixin:
 
     _GROUP_TYPES: frozenset[str] = frozenset({"ExceptionGroup", "BaseExceptionGroup"})
 
+    def _enclosing_scope(self) -> ast.AST | None:
+        """The innermost function being checked, or the module at top level."""
+        return self._function_stack[-1] if self._function_stack else self._module
+
     def _catches_exception_group(self, handler: ast.ExceptHandler) -> bool:
         """Whether *handler* provably binds an exception group.
 
@@ -485,9 +652,7 @@ class ExceptionChainingMixin:
             n is not None and _get_name(n) in self._GROUP_TYPES for n in names
         ):
             return True
-        scope: ast.AST | None = (
-            self._function_stack[-1] if self._function_stack else self._module
-        )
+        scope = self._enclosing_scope()
         return scope is not None and any(
             isinstance(candidate, ast.TryStar)
             and any(h is handler for h in candidate.handlers)
@@ -516,6 +681,15 @@ class ExceptionChainingMixin:
             # ``raise group.exceptions[i]`` re-raises a member of the caught
             # exception group: it keeps its own ``__cause__`` and traceback,
             # and ``from group`` would overwrite that cause with the wrapper.
+            return
+        scope = self._enclosing_scope()
+        if (
+            scope is not None
+            and _reraises_group_member_alias(node.exc, handler, scope)
+            and self._catches_exception_group(handler)
+        ):
+            # The same member, reached through a local: a walk down nested
+            # groups to a leaf, or an alias of ``group.exceptions``.
             return
         if self._module is not None and _constructs_sdk_cause(
             node.exc, exc_binding, self._sdk_errors, self._function_stack, self._module

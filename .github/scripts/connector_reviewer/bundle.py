@@ -11,7 +11,10 @@ and never varies between runs:
   so are the root build files — and clusters are packed into as few bundles as
   the limits allow.
 - No bundle passes `max_files` or `max_diff_tokens`, so no single sub-review
-  can blow its context.
+  can blow its context. A file whose diff alone is over `max_diff_tokens` is
+  split at hunk boundaries into parts that fit, each a bundle file of its own
+  (same path, some of its hunks). A hunk is never split: one hunk that is over
+  the limit on its own is the only thing that goes into a bundle over it, alone.
 
 Each bundle is reviewed by its own bounded agent with isolated context, so a
 large PR degrades into more small reviews, not one huge unstable one.
@@ -22,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from .diff import FileDiff
+from .diff import FileDiff, Hunk
 from .llm import estimate_tokens
 
 
@@ -91,7 +94,7 @@ def group(
         return [Bundle("change", list(files))]
 
     by_key: dict[str, Bundle] = {}
-    for f in files:
+    for f in (part for fd in files for part in _parts(fd, max_diff_tokens)):
         key = _module_key(f.path)
         by_key.setdefault(key, Bundle(key)).files.append(f)
 
@@ -112,6 +115,36 @@ def group(
         else:
             out.append(Bundle(c.label, list(c.files)))
     return out
+
+
+def _parts(f: FileDiff, max_tokens: int) -> list[FileDiff]:
+    """`f` as diffs of consecutive whole hunks, each within `max_tokens`.
+
+    A file within the limit is returned as it is. Over it, hunks are packed in
+    order until the next one would pass the limit. A single hunk over the limit
+    is a part of its own: a hunk is the smallest unit a comment is placed in,
+    and a cut one would lose the context its lines are read against."""
+    if len(f.hunks) < 2 or estimate_tokens(f.render()) <= max_tokens:
+        return [f]
+    groups: list[list[Hunk]] = [[]]
+    used = 0
+    for h in f.hunks:
+        t = estimate_tokens(FileDiff(path=f.path, hunks=[h]).render())
+        if groups[-1] and used + t > max_tokens:
+            groups.append([])
+            used = 0
+        groups[-1].append(h)
+        used += t
+    return [
+        FileDiff(
+            path=f.path,
+            old_path=f.old_path,
+            status=f.status,
+            is_binary=f.is_binary,
+            hunks=hunks,
+        )
+        for hunks in groups
+    ]
 
 
 def _split(b: Bundle, max_files: int, max_tokens: int) -> list[Bundle]:

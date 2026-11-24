@@ -2475,7 +2475,7 @@ the frontend renderer shape.
 
 ## Connectors.pkl — Connector Registry
 
-162 connector constants. Each has `value` (string identifier) and `category`.
+163 connector constants. Each has `value` (string identifier) and `category`.
 
 The registry is a hand copy of pyatlan's `AtlanConnectorType`. In CI,
 `scripts/test-sdk-import.py` compares it with the pyatlan the SDK locks: every
@@ -4260,7 +4260,7 @@ Do not use it for nested selections; use `treeSelection` on an apitree for those
 - The field leaves the shared `_coerce_json_object_strings` validator and gets its own `mode="before"` validator, `_coerce_string_maps`:
   - a dict passes through unchanged (and is then type-checked);
   - a JSON-object string is decoded into a dict;
-  - `None`, a blank string, a string that is not valid JSON, or valid JSON that is not an object (`"false"`, `"[]"`, `"1"`) becomes `{}`, with a debug log that never includes the value.
+  - `None`, a blank string, a string that is not valid JSON, or valid JSON that is not an object (`"false"`, `"[]"`, `"1"`) becomes `{}`. The last two log at DEBUG, and the log never includes the value; a string that is not valid JSON logs the decode error with `exc_info=True`, so the generated code passes conformance E009.
 
   Saved configs where a stray scalar ended up in the map field keep validating, as an empty map.
 - A map with a non-string value (`{"dsn": {"host": "h"}}`, `{"dsn": 1}`) fails validation.

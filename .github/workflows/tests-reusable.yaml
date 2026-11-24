@@ -1839,6 +1839,10 @@ jobs:
       ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
        (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0')))
     runs-on: ubuntu-latest
+    # A wake failure (e.g. a missing dataforge workload binding) must not fail the
+    # workflow run: /gate-check's verdict reads the run's conclusion, not just
+    # Tests Gate. The job still shows red with its ::error:: annotation.
+    continue-on-error: true
     timeout-minutes: 30
     permissions:
       contents: write # create the per-run holder ref
@@ -3235,6 +3239,8 @@ jobs:
       inputs.dataforge-mode == 'resource' &&
       needs.wake-dataforge-source.result != 'skipped')
     runs-on: ubuntu-latest
+    # Non-blocking for the same reason as wake-dataforge-source.
+    continue-on-error: true
     timeout-minutes: 30
     permissions:
       contents: write # delete holder refs (this run's + reaped abandoned ones)

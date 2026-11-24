@@ -287,7 +287,9 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
     )
     if not f.body or not evidence.strip():
         return None
-    candidates = [ws.diffs[path]] if path in ws.diffs else []
+    # Only this bundle's files: `ws.diffs` holds every changed file, and a
+    # path from another bundle is that bundle's to review.
+    candidates = [ws.diffs[path]] if path in bundle.paths and path in ws.diffs else []
     # Re-file to another bundle file on a unique hit (the model named the wrong file).
     candidates += [fd for fd in bundle.files if fd.path != path]
     for fd in candidates:
@@ -295,7 +297,10 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         if span:
             f.path = fd.path
             f.line, f.end_line = span
-            if not any(n in fd.added_lines for n in range(f.line, f.end_line + 1)):
+            # A removed line is the change too: a span at a deletion's border
+            # (where `anchor` puts a quote of removed code) is not unchanged code.
+            changed = fd.added_lines | fd.deletion_sites
+            if not any(n in changed for n in range(f.line, f.end_line + 1)):
                 f.scope = "unchanged"  # a diff-context line, not a changed one
             f.id = f.fingerprint()
             return f

@@ -29,6 +29,7 @@ from .tools import Workspace
 
 FN_MAX_LINES = 150  # per changed function
 BUNDLE_MAX_FN_LINES = 450  # all changed functions in one bundle
+WINDOW_CONTEXT = 40  # lines shown each side of a change in a function over FN_MAX_LINES
 PATTERN_MAX = 3
 PATTERN_BODY_LINES = 40
 CALL_SITES_MAX = 6
@@ -71,9 +72,12 @@ def _lines(ws: Workspace, path: str) -> list[str]:
 
 
 def changed_symbols(ws: Workspace, fd: FileDiff) -> list[Symbol]:
-    """Innermost symbols enclosing an added line, in file order, once each."""
+    """Innermost symbols enclosing a changed line, in file order, once each.
+
+    A deletion counts at the line it is attributed to (`FileDiff.changed_lines`),
+    so a function that only lost lines is a changed function too."""
     seen: dict[str, Symbol] = {}
-    for line in sorted(fd.added_lines):
+    for line in sorted(fd.changed_lines):
         s = ws.index.enclosing(fd.path, line)
         if s and s.qualname not in seen:
             seen[s.qualname] = s
@@ -102,21 +106,38 @@ def changed_functions(ws: Workspace, files: list[FileDiff]) -> str:
             lo, hi = s.start, min(s.end, len(lines))
             if s.kind == "class" and hi - lo > FN_MAX_LINES:
                 continue  # a change directly in a big class body: the diff hunk is the context
+            windows = [(lo, hi)]
             if hi - lo + 1 > FN_MAX_LINES:
-                ch = [n for n in added if lo <= n <= hi] or [lo]
-                lo, hi = max(lo, min(ch) - 40), min(hi, max(ch) + 40)
-            take = min(hi - lo + 1, budget)
-            if take <= 0:
-                break
-            body = "\n".join(
-                f"{n:>5} {'+' if n in added else ' '} {lines[n - 1]}"
-                for n in range(lo, lo + take)
-            )
-            budget -= take
-            blocks.append(
-                f'<function path="{fd.path}" lines="{lo}-{lo + take - 1}" name="{s.qualname.split(":")[-1]}">\n{body}\n</function>'
-            )
+                ch = [n for n in fd.changed_lines if lo <= n <= hi] or [lo]
+                windows = _windows(ch, lo, hi)
+            for wlo, whi in windows:
+                take = min(whi - wlo + 1, budget)
+                if take <= 0:
+                    break
+                body = "\n".join(
+                    f"{n:>5} {'+' if n in added else ' '} {lines[n - 1]}"
+                    for n in range(wlo, wlo + take)
+                )
+                budget -= take
+                blocks.append(
+                    f'<function path="{fd.path}" lines="{wlo}-{wlo + take - 1}" name="{s.qualname.split(":")[-1]}">\n{body}\n</function>'
+                )
     return "\n".join(blocks)
+
+
+def _windows(changed: list[int], lo: int, hi: int) -> list[tuple[int, int]]:
+    """Lines `lo`..`hi` to show of a long function: `WINDOW_CONTEXT` lines
+    around each changed line, overlapping or touching windows merged. One window
+    from the first change to the last would spend the budget on the unchanged
+    code between them and cut off a later change."""
+    out: list[tuple[int, int]] = []
+    for n in sorted(changed):
+        a, b = max(lo, n - WINDOW_CONTEXT), min(hi, n + WINDOW_CONTEXT)
+        if out and a <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
 
 
 # ---- 3. repo symbols the change or the PR text names -----------------------------
@@ -141,7 +162,8 @@ def referenced_patterns(ws: Workspace, files: list[FileDiff], pr_text: str) -> s
     named_stems: set[str] = set()
     for m in re.findall(r"([A-Za-z0-9_./-]*[A-Za-z0-9_])\.py\b", pr_text or ""):
         if "/" in m:
-            named_paths.add(m.lstrip("./") + ".py")
+            # Only a leading `./`, `../` or `/` goes: `.github/x.py` keeps its dot.
+            named_paths.add(re.sub(r"^(?:\.{1,2}/|/)+", "", m) + ".py")
         elif m.lower() not in own_stems:
             named_stems.add(m.lower())
 

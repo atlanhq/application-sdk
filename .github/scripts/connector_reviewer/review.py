@@ -25,13 +25,16 @@ import json
 import re
 import time
 import urllib.parse
+from collections import Counter
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, holistic, prompts, trace
+from . import advisory, baseline, exempt, holistic, prompts, skeptic, trace
+from . import context as code_context
+from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
 from .baseline import PRAdditions
 from .bundle import Bundle, group
@@ -40,29 +43,41 @@ from .diff import (
     FileDiff,
     Hunk,
     Line,
+    anchor,
+    in_removed_lines,
     locate_in_text,
     parse_unified_diff,
     snippet_in_text,
 )
+from .event import plain
 from .findings import (
     BLOCKING,
     BODY_KEEP,
+    EVIDENCE_KEEP_RESOLVED,
     SEVERITIES,
     STATE_MARKER,
     Finding,
     PRState,
     merge_new,
+    quote_stored,
 )
-from .github import GitHub, bot_login
+from .github import GitHub, GitHubError, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .principles import PrincipleSet
-from .select import DEFAULT_EXCLUDE, select_files
-from .tools import Workspace, parse_args
+from .select import DEFAULT_EXCLUDE, excluded, model_visible, select_files
+from .tools import SdkSource, Workspace, parse_args, secret_diff, secret_path
 from .triage import Triage, triage
 from .typed import EMPTY, objects
 
 SUMMARY_MARKER = "<!-- connector-reviewer-summary -->"
+# The share of a round's budget held for the approach check, which runs on a
+# ledger of its own alongside the line review.
+APPROACH_SHARE = 0.15
+# The share held for the skeptic pass on new blocking findings (skeptic.py), on a
+# ledger of its own the same way. Only spend is booked: an unused share stays in
+# the PR's cap for later rounds.
+SKEPTIC_SHARE = 0.10
 COMMENT_LIMIT = 64_000  # GitHub's cap is 65,536 characters; keep a margin
 MAX_HISTORY = 20  # rounds kept in the state and shown in the summary
 
@@ -89,6 +104,8 @@ class RunResult:
     # New blocking findings this round's base-branch check judged fixed or moot:
     # dropped before publishing (see _check_new_against_base).
     new_dropped: list[str] = field(default_factory=list)
+    # One skeptic check per new blocking finding (skeptic.py): what each concluded.
+    skeptic: list[skeptic.Outcome] = field(default_factory=list)
     skipped_files: list[tuple[str, str]] = field(default_factory=list)
     bundles: list[BundleResult] = field(default_factory=list)
     ledger: Ledger | None = None
@@ -182,6 +199,12 @@ def only_pr_changes(
             dropped.append(fd.path)
             continue
         own_added = own.added_lines
+        # A removed line is the author's when the PR's own diff removes the same
+        # text from this file: old-side numbers differ between the two diffs, so
+        # text is the stable key. A deletion only the merge brought in is not.
+        own_removed = Counter(
+            ln.text for h in own.hunks for ln in h.lines if ln.kind == "-"
+        )
         hunks: list[Hunk] = []
         for h in fd.hunks:
             lines: list[Line] = []
@@ -195,6 +218,9 @@ def only_pr_changes(
                 else:
                     lines.append(ln)
                     mine = mine or ln.kind == "+"
+                    if ln.kind == "-" and own_removed[ln.text] > 0:
+                        own_removed[ln.text] -= 1
+                        mine = True  # an author's deletion, even with nothing added
             if mine:
                 hunks.append(
                     Hunk(
@@ -214,6 +240,52 @@ def only_pr_changes(
         elif fd.hunks:
             dropped.append(fd.path)
     return kept, dropped, demoted
+
+
+def base_merged_in(gh: GitHub, base: str, reviewed_head: str, head: str) -> str:
+    """Why `reviewed_head..head` is taken to carry base-branch changes, or ""
+    when it carries none.
+
+    The range carries base-branch changes only when a merge brought them in,
+    which moves the merge base with the base branch. Without one, every change
+    in the range is the author's, including a line restored to what the base
+    branch has and a commit that only deletes.
+
+    A merge base that cannot be read (a rate limit, a missing SHA) is not proof
+    of a merge: taking it as one could drop an author's restoration from review
+    with nothing marking the run incomplete. The whole range is reviewed
+    instead; at worst a merged-in base change is reviewed too, which costs a
+    little and hides nothing."""
+    before = gh.merge_base(base, reviewed_head)
+    after = gh.merge_base(base, head)
+    if not before or not after:
+        trace.line(
+            "the merge base could not be read: reviewing the whole range "
+            "since the last review, as if no base merge happened"
+        )
+        return ""
+    if before != after:
+        return f"the merge base moved from {before[:7]} to {after[:7]}"
+    return ""
+
+
+def author_files_in_range(
+    incremental: list[FileDiff], pr: list[FileDiff], finding_paths: set[str]
+) -> dict[str, FileDiff]:
+    """After a base merge: the whole `reviewed_head..head` diff of every file
+    the author may have changed, by path, for verify.
+
+    `only_pr_changes` keeps only lines the PR adds against the base branch, so
+    it also sets aside an author's restoration of base lines and an author's
+    deletion. Verify must still see those. A file in the range counts when the
+    PR changes it or an open finding sits in it; a file the base merge alone
+    changed may count too, which costs one verify call, never a missed fix."""
+    pr_paths = {fd.path for fd in pr}
+    return {
+        fd.path: fd
+        for fd in incremental
+        if fd.hunks and (fd.path in pr_paths or fd.path in finding_paths)
+    }
 
 
 def _sev_at_least(sev: str, floor: str) -> bool:
@@ -238,12 +310,16 @@ def head_side_text(
     `max_files` changed files. An old path the PR puts a file back at is never
     marked removed, wherever that file sits in the diff: inside the cap it has
     its head text, and past it it reads as any uncapped file does.
+
+    A change that may hold secrets is never fetched: a file renamed from `.env`
+    carries the `.env` content under an ordinary name, and anything in this map
+    can reach a prompt through a lookup (read, search, the index).
     """
     head_text: dict[str, str] = {}
     for fd in files[:max_files]:
         if fd.status == "deleted":
             head_text[fd.path] = ""
-        elif not fd.is_binary:
+        elif not fd.is_binary and not secret_diff(fd):
             head_text[fd.path] = gh.file_at(fd.path, head) or ""
     for fd in renamed_away(files):
         head_text[str(fd.old_path)] = ""
@@ -264,6 +340,159 @@ def renamed_away(files: list[FileDiff]) -> list[FileDiff]:
         and fd.old_path != fd.path
         and fd.old_path not in at_head
     ]
+
+
+def secret_origin(files: list[FileDiff], pr: list[FileDiff]) -> list[FileDiff]:
+    """`files` (a round's range), where a file the whole PR renamed from a path
+    that may hold secrets keeps that rename source.
+
+    In a later round's range such a file reads as an ordinary change of its new
+    path, while its content is still the secret file's. Carrying the source over
+    lets `secret_diff` refuse it in every prompt, as it does in the PR's diff."""
+    origin = {fd.path: fd.old_path for fd in pr if fd.old_path and secret_diff(fd)}
+    return [
+        FileDiff(
+            path=fd.path,
+            old_path=origin[fd.path],
+            status=fd.status,
+            is_binary=fd.is_binary,
+            hunks=fd.hunks,
+        )
+        if fd.path in origin and not secret_diff(fd)
+        else fd
+        for fd in files
+    ]
+
+
+# The reasons `select.select_files` and `plan_bundles` give for a file the review
+# meant to read and did not. Anything else skipped (binary, a deleted test file,
+# a deleted file too large to read, excluded by pattern, may hold secrets) is
+# left out on purpose.
+# A test file deleted outright that weakens an expectation, in a round with no
+# line review to hand the facts to: nothing in the change can be commented on.
+WEAKENED_UNREVIEWED = "deleted test: weakens expectations, no line to review"
+UNREAD_REASONS = ("over ", "bundle cap", WEAKENED_UNREVIEWED)
+
+
+def unread_skips(skipped: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The skipped files that are unread source: too large, past the bundle cap,
+    or a deleted test that weakens expectations with no line review to see it."""
+    return [(p, why) for p, why in skipped if why.startswith(UNREAD_REASONS)]
+
+
+def _no_verdict(
+    gh: GitHub, head: str, state: PRState, post: bool, run_url: str, why: str
+) -> None:
+    """An `error` status on a head this request did not review (round cap, spent
+    budget), so no head is ever left without a verdict or with a stale one.
+    A head that was already reviewed keeps the verdict it has."""
+    if post and head and head != state.reviewed_head:
+        gh.set_status(head, "error", why, run_url)
+
+
+def _whole_files(files: list[FileDiff]) -> list[FileDiff]:
+    """One diff per path, in first-seen order. A file over the bundle token cap
+    is reviewed in parts (`bundle._parts`); the facts are about the file, so
+    its parts are joined back into one diff before they are computed."""
+    joined: dict[str, FileDiff] = {}
+    for fd in files:
+        have = joined.get(fd.path)
+        if have is None:
+            joined[fd.path] = fd
+        else:
+            joined[fd.path] = FileDiff(
+                path=fd.path,
+                old_path=fd.old_path,
+                status=fd.status,
+                is_binary=fd.is_binary,
+                hunks=[*have.hunks, *fd.hunks],
+            )
+    return list(joined.values())
+
+
+def compute_facts(
+    gh: GitHub,
+    number: int,
+    pr: dict[str, Any],
+    base: str,
+    ws: Workspace,
+    files: list[FileDiff],
+    cfg: Config,
+    tests_changed: list[FileDiff] | None = None,
+) -> code_facts.Facts:
+    """The regression and history facts for the files under review, in review
+    order. No model call; the history half makes at most
+    3 + `history_max_files` + `history_max_commits` GitHub requests (the
+    commit messages take up to three pages).
+
+    `tests_changed` are the test files this round changed, taken before file
+    selection: a deleted test file is skipped by selection ("deletion only"),
+    and it is exactly a weakened expectation FP15 asks about."""
+    fx = code_facts.Facts()
+    if cfg.facts.regression:
+        fx.symbols = code_facts.regression_symbols(ws, files)
+        fx.expectations = code_facts.weakened_expectations(
+            files if tests_changed is None else tests_changed
+        )
+        fx.regression_read = True
+    if cfg.facts.history and files:
+        names = {
+            fd.path: {s.name for s in code_context.changed_symbols(ws, fd)}
+            for fd in files
+            if fd.path.endswith(".py")
+        }
+        total = pr.get("commits")
+        # The commit messages are read inside history's wall-time cap, and a
+        # failed read (HTTP, network or a bad body) is a note, never a crash.
+        fx.history = code_facts.history(
+            gh,
+            base=base,
+            files=files,
+            changed_names=names,
+            pr_title=str(pr.get("title") or ""),
+            pr_messages=[],
+            cfg=cfg.facts,
+            read_messages=lambda: gh.pr_commit_messages(number),
+            pr_commits=total if isinstance(total, int) else 0,
+        )
+        fx.history_read = True
+    return fx
+
+
+def changed_tests(files: list[FileDiff], cfg: Config) -> list[FileDiff]:
+    """The Python test files in `files`, deleted ones included, minus what is
+    never read: a change that may hold secrets, and anything the exclude
+    patterns name (fixtures, golden files, snapshots)."""
+    exclude = tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude)
+    return [
+        fd
+        for fd in files
+        if fd.path.endswith(".py")
+        and code_context._is_test(fd.path)
+        and not fd.is_binary
+        and not secret_diff(fd)
+        and not excluded(fd.path, exclude)
+    ]
+
+
+def exclude_patterns(cfg: Config) -> tuple[str, ...]:
+    """The exclude patterns selection applies to the line review: the defaults
+    and the repository's own. Every other prompt that shows a diff applies them
+    too (`select.model_visible`)."""
+    return tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude)
+
+
+def _approach(
+    client: Client,
+    ws: Workspace,
+    files: list[FileDiff],
+    pr_meta: dict[str, Any],
+    exclude: tuple[str, ...] = DEFAULT_EXCLUDE,
+) -> tuple[holistic.ApproachCheck, int]:
+    """The approach check, run in its own thread; returns it and its wall time (ms)."""
+    t0 = time.monotonic()
+    ac = holistic.check(client, ws, files, pr_meta, exclude=exclude)
+    return ac, int((time.monotonic() - t0) * 1000)
 
 
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
@@ -290,7 +519,15 @@ def run(
     verify_budget: bool = False,
     post: bool = True,
     run_url: str = "",
+    on_pending: Callable[[str], None] | None = None,
+    sdk: SdkSource | None = None,
+    sdk_note: str = "",
 ) -> RunResult:
+    """One review round. `on_pending(head)` is called right after the
+    `pending` status is set on `head`, so the caller can record which head
+    `finalize` must check if this run never posts a verdict. `sdk` is the
+    pinned SDK source the tools can read; `sdk_note` says why it is missing
+    when one was asked for (FND-5331)."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -312,6 +549,26 @@ def run(
         trace.line(
             f"model={cfg.model} api={cfg.api} effort={cfg.reasoning_effort} config={cfg.raw_hash} force={force}"
         )
+
+    # ---- exempt pull requests (0 model calls) ----------------------------
+    # Decided in code from who opened it, its branch, its commits and its files.
+    # Only a pull request the reviewer has never reviewed can be exempt: once a
+    # forced review has looked at it, a plain `/review` must not paper over what
+    # that review found.
+    diffs: dict[tuple[str, str], str] = {}
+
+    def diff(a: str, b: str) -> str:
+        if (a, b) not in diffs:
+            diffs[(a, b)] = gh.diff(a, b)
+        return diffs[(a, b)]
+
+    if not force and state.round == 0:
+        found = exemption(gh, number, pr, diff(base, head), cfg)
+        if found is not None:
+            trace.line(f"decision: EXEMPT — {found.kind}: {found.why}")
+            return _exempt(
+                gh, number, head, state, found, bool(prior_summary), post, run_url
+            )
 
     # ---- admission (0 model calls) --------------------------------------
     # Only a different MODEL is a different reviewer. A connector-reviewer config change (principles,
@@ -341,6 +598,14 @@ def run(
         )
     if state.round >= cfg.max_rounds and not force:
         trace.line(f"decision: SKIP — round cap {cfg.max_rounds} reached")
+        _no_verdict(
+            gh,
+            head,
+            state,
+            post,
+            run_url,
+            f"not reviewed — round cap ({cfg.max_rounds}) reached; `/review force` reviews it",
+        )
         return RunResult(
             "skipped",
             f"round cap ({cfg.max_rounds}) reached; comment `/review force` to review anyway",
@@ -357,6 +622,15 @@ def run(
     )
     if ledger.remaining <= 0.01:
         trace.line(f"decision: SKIP — PR budget ${cfg.cap_usd_per_pr:.2f} spent")
+        _no_verdict(
+            gh,
+            head,
+            state,
+            post,
+            run_url,
+            f"review incomplete — PR budget of ${cfg.cap_usd_per_pr:.2f} spent; "
+            "`/review waive <reason>` is the way past it",
+        )
         return RunResult(
             "skipped",
             f"PR budget of ${cfg.cap_usd_per_pr:.2f} spent",
@@ -384,20 +658,37 @@ def run(
         model_changed=bool(state.model) and state.model != cfg.model,
         ancestry=ancestry,
     )
+    # Files left unread last round (too large, or past the bundle cap) ride along
+    # with every review, whole, so each round decides afresh whether they can be read.
+    carried = set(state.pending_files) | set(state.unread)
+    # After a base merge, the author's own range diff of each file verify must see.
+    verify_range: dict[str, FileDiff] = {}
     if retry_only:
-        full_files = parse_unified_diff(gh.diff(base, head))
-        all_files = [fd for fd in full_files if fd.path in set(state.pending_files)]
+        full_files = parse_unified_diff(diff(base, head))
+        all_files = [fd for fd in full_files if fd.path in carried]
         range_base = base
     else:
         range_base = state.reviewed_head if incremental else base
-        all_files = parse_unified_diff(gh.diff(range_base, head))
+        all_files = parse_unified_diff(diff(range_base, head))
         full_files = (
-            all_files if not incremental else parse_unified_diff(gh.diff(base, head))
+            all_files if not incremental else parse_unified_diff(diff(base, head))
         )
-        if incremental:
+        merged_in = (
+            base_merged_in(gh, base, state.reviewed_head, head) if incremental else ""
+        )
+        if merged_in:
             # A merge of the base branch into the PR also "descends" from the last
             # reviewed head, so reviewed_head..head carries the base branch's changes
-            # too. Keep only what is part of THIS PR's own change.
+            # too. Line review keeps only what is part of THIS PR's own change;
+            # verify still sees each file the author may have changed, whole.
+            trace.line(f"base branch merged in since the last review: {merged_in}")
+            verify_range = {
+                p: fd
+                for p, fd in author_files_in_range(
+                    all_files, full_files, {f.path for f in state.open_findings()}
+                ).items()
+                if p not in carried
+            }
             all_files, merged_paths, merged_lines = only_pr_changes(
                 all_files, full_files
             )
@@ -406,13 +697,21 @@ def run(
                     f"excluded changes that came from merging the base branch: "
                     f"{len(merged_paths)} file(s), {merged_lines} line(s)"
                 )
-        # Files a previous run failed to review ride along with the new commits.
+        elif incremental:
+            # No merge: every change since the last review is the author's, a
+            # restoration of base lines and a pure deletion included.
+            trace.line("no base-branch merge since the last review")
+        # Files a previous run failed to review ride along with the new commits, and
+        # so do files it could not read; an unread file comes whole, never as the
+        # slice of it the new commits touched.
+        all_files = [fd for fd in all_files if fd.path not in state.unread]
         have = {fd.path for fd in all_files}
         all_files += [
-            fd
-            for fd in full_files
-            if fd.path in set(state.pending_files) and fd.path not in have
+            fd for fd in full_files if fd.path in carried and fd.path not in have
         ]
+    # Whether a change may hold secrets is judged against the whole PR's diff:
+    # a later round's range shows a file renamed from `.env` as an ordinary one.
+    all_files = secret_origin(all_files, full_files)
 
     round_no = state.round + 1
     res = RunResult(
@@ -424,13 +723,21 @@ def run(
         run_url=run_url,
         blob_base=f"https://github.com/{gh.repo}/blob/{head}",
     )
+    # A real review replaces a waive, and an exemption: the verdict is the
+    # reviewer's again.
+    state.waiver = {}
+    state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    if sdk_note:
+        res.notes.append(sdk_note)
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
             head, "pending", f"reviewing · round {round_no} · {mode_label}", run_url
         )
+        if on_pending is not None:
+            on_pending(head)
     trace.line(
         f"decision: REVIEW round {round_no} — {mode_label}; range={range_base[:9]}..{head[:9]}, "
         f"{len(all_files)} file(s) in range ({len(full_files)} in the whole PR), budget left ${ledger.remaining:.4f}"
@@ -444,11 +751,20 @@ def run(
 
     # ---- free resolution: the quoted code is gone ------------------------
     touched = {fd.path for fd in all_files}
+    pr_diffs = {fd.path: fd for fd in full_files}
     for f in state.open_findings():
+        if not quote_stored(f):
+            continue  # no quote to match (the state outgrew a comment): verify judges it
         text = head_text.get(f.path)
         if text is None and f.path not in touched:
             continue  # file untouched since: finding still stands
         if not text or not snippet_in_text(text, f.evidence):
+            pr_fd = pr_diffs.get(f.path)
+            if pr_fd is not None and in_removed_lines(pr_fd, f.evidence):
+                # A finding about code the PR removes quotes what is absent at
+                # the head by design: absence is not a fix while the PR still
+                # removes it. Verify judges it.
+                continue
             f.status, f.fixed_round, f.fixed_by = "fixed", round_no, "code-gone"
             res.resolved_free.append(f.id)
 
@@ -459,6 +775,13 @@ def run(
 
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
+    # The weakened-expectation facts are read from the round's test files before
+    # selection, which skips a test file deleted outright.
+    tests_changed = changed_tests(all_files, cfg)
+    weakened = (
+        code_facts.weakened_expectations(tests_changed) if cfg.facts.regression else []
+    )
+    weakened_paths = {e.path for e in weakened}
     res.skipped_files = sel.skipped
 
     # Mechanical change is proven and set aside before any model call (triage.py):
@@ -472,6 +795,20 @@ def run(
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
+    if not bundles and weakened_paths:
+        # No line review to carry the facts: a test deleted outright has no line
+        # to comment on. It must not pass unseen, so it counts as unread.
+        res.skipped_files[:] = [
+            (p, WEAKENED_UNREVIEWED if p in weakened_paths else why)
+            for p, why in res.skipped_files
+        ]
+    # Source that was meant to be read and was not can never give a green verdict.
+    state.unread = dict(unread_skips(res.skipped_files))
+    if state.unread:
+        trace.line(
+            f"unread: {len(state.unread)} file(s) the review could not read — the verdict "
+            "is incomplete until they are read or waived"
+        )
     with trace.group("2 · scope: files, triage, bundles"):
         for fd in sel.reviewed:
             trace.line(
@@ -507,9 +844,21 @@ def run(
         head_text=head_text,
         diffs={fd.path: fd for fd in full_files},
         index=idx,
+        sdk=sdk,
     )
     round_cap = ledger.remaining * (cfg.first_round_share if round_no == 1 else 1.0)
-    round_ledger = Ledger(cap_usd=round_cap)
+    # The approach check runs alongside the line review, on a ledger of its own
+    # carved out of the round's: whatever it spends, it can never take a
+    # bundle's share and leave that bundle unfinished.
+    run_approach = bool(cfg.approach and (not state.approach or force) and sel.reviewed)
+    approach_cap = round_cap * APPROACH_SHARE if run_approach else 0.0
+    # The skeptic pass, likewise, on a ledger of its own: a refutation check can
+    # never spend a bundle's share, and a bundle can never leave it none.
+    run_skeptic = bool(cfg.skeptic.enabled and bundles)
+    skeptic_cap = round_cap * SKEPTIC_SHARE if run_skeptic else 0.0
+    round_ledger = Ledger(cap_usd=round_cap - approach_cap - skeptic_cap)
+    approach_ledger = Ledger(cap_usd=approach_cap)
+    skeptic_ledger = Ledger(cap_usd=skeptic_cap)
     client: Client = client_factory(round_ledger)
     pr_meta = {"title": pr.get("title"), "body": pr.get("body")}
 
@@ -560,6 +909,39 @@ def run(
     pr_meta["paths_added"] = added.render_paths()
     pr_meta["symbols_added"] = added.render_symbols()
 
+    # ---- regression and history facts (0 model calls) ----------------------
+    # Computed in code and handed to every bundle's prompt (facts.py). The
+    # history half reads the base branch's recent commits through the REST API,
+    # within hard caps; a failure there means fewer facts, never an incomplete review.
+    if bundles or weakened:
+        t_facts = time.monotonic()
+        with trace.group("3c · facts: regression and history (computed in code)"):
+            fx = compute_facts(
+                gh,
+                number,
+                pr,
+                base,
+                ws,
+                _whole_files([fd for b in bundles for fd in b.files]),
+                cfg,
+                tests_changed=tests_changed,
+            )
+            res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
+            trace.line(f"regression: {fx.regression_line()}")
+            trace.line(
+                f"history: {fx.history_line()}; {fx.history.requests} request(s), "
+                f"{res.timings_ms['facts']} ms"
+            )
+            for n in fx.history.notes:
+                trace.line(f"history: {n}")
+        pr_meta["facts"] = fx
+        state.facts = {
+            "regression": fx.regression_line(),
+            "history": fx.history_line(),
+            "head": head,
+            "history_requests": fx.history.requests,
+        }
+
     # ---- verify still-open findings (1 call) -------------------------------
     # Every open finding, not only those whose own file changed: a fix often lands
     # in another file (a data file's finding fixed in the code that reads it). The
@@ -568,8 +950,13 @@ def run(
         # A round that changed no PR file (a merge from the base branch alone) has
         # nothing new to judge, so it skips verify — unless `/review force` asked for a
         # re-check, which then judges the open items against the whole PR's change.
-        recheck = bool(touched) or force
-        verify_files = all_files if touched else full_files
+        # A file the author changed counts even when line review set its change
+        # aside with a base merge's (a restoration of base lines, a deletion).
+        round_files = list(
+            {**{fd.path: fd for fd in all_files}, **verify_range}.values()
+        )
+        recheck = bool(round_files) or force
+        verify_files = round_files if round_files else full_files
         if not recheck:
             res.verify_skipped = [f.id for f in state.open_findings()] + [
                 cid for cid, _ in open_concerns(state)
@@ -597,7 +984,7 @@ def run(
                     client,
                     ws,
                     to_verify,
-                    round_diff(verify_files, to_verify),
+                    round_diff(verify_files, to_verify, exclude_patterns(cfg)),
                     concerns,
                     removed=removed_paths(full_files),
                     added=added,
@@ -630,35 +1017,38 @@ def run(
 
     res.timings_ms["index"] = int((time.monotonic() - t_phase) * 1000)
     t_phase = time.monotonic()
-    # ---- approach check: once per PR, FIRST --------------------------------
-    # It runs before the line review so every bundle reviews against the PR's
-    # intent. It is stored in state and reused on every later invocation — a
-    # re-review never pays to re-understand the PR (only `/review force` redoes it).
+    # ---- approach check: once per PR, ALONGSIDE the line review --------------
+    # It runs in its own thread next to the bundles (at most concurrency + 1 calls
+    # in flight), so it no longer adds its time to the review's. The price: on the
+    # round it runs, the bundles do not see its reading of the PR's intent. It is
+    # stored in state and reused on every later invocation, where the bundles do
+    # see it — a re-review never pays to re-understand the PR (only `/review
+    # force` redoes it). Advisory only: it never changes the status.
     pr_meta["mechanical"] = res.triage.summary_lines() + [
         f"rename: {a} -> {b}" for a, b in res.triage.renames
     ]
-    if cfg.approach and (not state.approach or force) and sel.reviewed:
-        with trace.group("5 · approach check (once per PR)"):
-            ac = holistic.check(
-                client, ws, full_files if incremental else sel.reviewed, pr_meta
-            )
-            if ac.ran:
-                state.approach = holistic.to_state(ac, head)
-                trace.line(f"problem: {trace.short(ac.problem, 240)}")
-                trace.line(f"approach: {trace.short(ac.approach, 240)}")
-                trace.line(
-                    f"verdict: {ac.verdict} ({len(ac.concerns)} concern(s), {ac.lookups} lookup(s))"
-                )
-                for c in ac.concerns:
-                    trace.line(f"concern: {trace.short(c.get('title'), 120)}")
-            else:
-                trace.line(f"did not complete: {ac.error or 'no verdict returned'}")
+    pr_meta["understanding"] = holistic.understanding_from_state(state.approach or {})
+    approach_client: Client | None = None
+    approach_pool = ThreadPoolExecutor(max_workers=1) if run_approach else None
+    approach_job: Future[tuple[holistic.ApproachCheck, int]] | None = None
+    if approach_pool is not None:
+        side: Client = client_factory(approach_ledger)
+        approach_client = side
+        trace.line(
+            "approach check: running alongside the line review "
+            f"(its own budget ${approach_cap:.4f})"
+        )
+        approach_job = approach_pool.submit(
+            _approach,
+            side,
+            ws,
+            full_files if incremental else sel.reviewed,
+            dict(pr_meta),
+            exclude_patterns(cfg),
+        )
     elif state.approach:
         trace.line("approach check: reused from an earlier round (not re-run)")
-    pr_meta["understanding"] = holistic.understanding_from_state(state.approach or {})
 
-    res.timings_ms["approach"] = int((time.monotonic() - t_phase) * 1000)
-    t_phase = time.monotonic()
     # ---- review ----------------------------------------------------------
     confirmed = [f for f in state.findings if f.status == "open"]
 
@@ -688,11 +1078,37 @@ def run(
         )
         with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
             res.bundles = list(pool.map(one, bundles))
+    res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
+    if approach_job is not None and approach_pool is not None:
+        with trace.group("5 · approach check (once per PR, alongside the line review)"):
+            ac, ms = approach_job.result()
+            approach_pool.shutdown()
+            res.timings_ms["approach"] = ms
+            if ac.ran:
+                state.approach = holistic.to_state(ac, head)
+                trace.line(f"problem: {trace.short(ac.problem, 240)}")
+                trace.line(f"approach: {trace.short(ac.approach, 240)}")
+                trace.line(
+                    f"verdict: {ac.verdict} ({len(ac.concerns)} concern(s), {ac.lookups} lookup(s))"
+                )
+                for c in ac.concerns:
+                    trace.line(f"concern: {trace.short(c.get('title'), 120)}")
+            else:
+                trace.line(f"did not complete: {ac.error or 'no verdict returned'}")
     if getattr(client, "fell_back", ""):
         res.notes.append(client.fell_back)
+    elif approach_client is not None and getattr(approach_client, "fell_back", ""):
+        res.notes.append(approach_client.fell_back)
 
-    res.timings_ms["review"] = int((time.monotonic() - t_phase) * 1000)
-    res.calls = list(getattr(client, "calls", []))
+    skeptic_client: Client | None = None
+
+    def all_calls() -> list[dict[str, Any]]:
+        own = list(getattr(client, "calls", []))
+        side = list(getattr(approach_client, "calls", [])) if approach_client else []
+        sk = list(getattr(skeptic_client, "calls", [])) if skeptic_client else []
+        return own + side + sk
+
+    res.calls = all_calls()
     fresh: list[Finding] = []
     for br in res.bundles:
         # A finding that is not on a diff line (unchanged code) is still a finding: it is
@@ -720,9 +1136,41 @@ def run(
             removed=removed_paths(full_files),
             added=added,
             max_tokens=res.verify_max_tokens or cfg.limits.verify_max_tokens,
+            exclude=exclude_patterns(cfg),
         )
-        res.calls = list(getattr(client, "calls", []))  # the check's call too
+        res.calls = all_calls()  # the check's call too
     res.new_findings = merge_new(state, fresh, round_no=round_no)
+    # ---- skeptic: one refutation attempt per NEW blocking finding ----------
+    # After merge_new, so a finding carried over from an earlier round (a known
+    # id) is never re-litigated; before the verdict, so a refuted finding no
+    # longer blocks. The objects are the state's own: a change lands there.
+    to_doubt = skeptic.candidates(res.new_findings)
+    if run_skeptic and to_doubt:
+        t_sk = time.monotonic()
+        sk_client: Client = client_factory(skeptic_ledger)
+        skeptic_client = sk_client
+        with trace.group(
+            f"6c · skeptic: {len(to_doubt)} new blocking finding(s), "
+            f"its own budget ${skeptic_cap:.4f}"
+        ):
+            res.skeptic = skeptic.run_all(
+                sk_client,
+                ws,
+                res.new_findings,
+                cfg.skeptic,
+                lambda f: _cited_principle(principles, f),
+                cfg.concurrency,
+            )
+            tally = skeptic.counts(res.skeptic)
+            trace.line(
+                "skeptic: " + ", ".join(f"{k} {v}" for k, v in tally.items() if v)
+            )
+        res.timings_ms["skeptic"] = int((time.monotonic() - t_sk) * 1000)
+        res.calls = all_calls()
+    elif to_doubt:
+        trace.line(
+            f"skeptic: off in config; {len(to_doubt)} new blocking finding(s) not checked"
+        )
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
     for path, rounds in res.spiral:
@@ -736,7 +1184,8 @@ def run(
             )
         for f in res.new_findings:
             trace.line(
-                f"NEW {f.id} {f.severity:<8} {f.path}:{f.line} {trace.short(f.title, 100)}"
+                f"NEW {f.id} {f.severity:<8} {f.rule_id or '-':<5} {f.path}:{f.line} "
+                f"{trace.short(f.title, 100)}"
             )
         if round_no > 1:
             trace.line(
@@ -750,6 +1199,8 @@ def run(
 
     # ---- state -----------------------------------------------------------
     _book(ledger, round_ledger)
+    _book(ledger, approach_ledger)
+    _book(ledger, skeptic_ledger)
     failed_paths: list[str] = []
     bundle_paths = {b.label: b.paths for b in bundles}
     for b in res.bundles:
@@ -791,9 +1242,14 @@ def run(
             "new": len(res.new_findings),
             "resolved": len(res.resolved_free) + len(res.resolved_verified),
             "blocking": len(state.open_findings(BLOCKING)),
-            "incomplete": bool(res.failed or res.incomplete),
-            "usd": round(round_ledger.spent_usd, 4),
-            "calls": round_ledger.calls,
+            "incomplete": bool(res.failed or res.incomplete or state.unread),
+            "usd": round(
+                round_ledger.spent_usd
+                + approach_ledger.spent_usd
+                + skeptic_ledger.spent_usd,
+                4,
+            ),
+            "calls": round_ledger.calls + approach_ledger.calls + skeptic_ledger.calls,
             "run": run_url,
         }
     )
@@ -860,6 +1316,7 @@ def dismiss(
         mode_label=label,
         state=state,
         run_url=run_url,
+        head=state.reviewed_head,
         blob_base=(
             f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
             if state.reviewed_head
@@ -910,6 +1367,193 @@ def dismiss(
     return res
 
 
+def exemption(
+    gh: GitHub, number: int, pr: dict[str, Any], diff_text: str, cfg: Config
+) -> exempt.Exemption | None:
+    """The class this pull request is exempt under, or None.
+
+    Gathers what `exempt.classify` needs: the author, the branch, the author
+    of every commit, and every path the diff touches (a rename's old path
+    included). A commit list that cannot be read, or that is shorter than the
+    pull request says it is, is "not known", which is never exempt."""
+    author = str((pr.get("user") or EMPTY).get("login") or "")
+    head_ref = str((pr.get("head") or EMPTY).get("ref") or "")
+    try:
+        authors = gh.pr_commit_authors(number)
+    except GitHubError as e:
+        trace.line(f"exempt: the commit list could not be read ({trace.short(e, 120)})")
+        authors = []
+    total = pr.get("commits")
+    if isinstance(total, int) and total != len(authors):
+        trace.line(
+            f"exempt: {len(authors)} of {total} commits listed: authors not known"
+        )
+        authors = []
+    paths = advisory.changed_paths(parse_unified_diff(diff_text))
+    return exempt.classify(
+        author=author,
+        head_ref=head_ref,
+        commit_authors=authors,
+        paths=paths,
+        cfg=cfg.exempt,
+    )
+
+
+def _exempt(
+    gh: GitHub,
+    number: int,
+    head: str,
+    state: PRState,
+    found: exempt.Exemption,
+    had_summary: bool,
+    post: bool,
+    run_url: str,
+) -> RunResult:
+    """Record the exemption and publish it: the summary, the verdict at the
+    bottom when a summary was already there, and a `success` status."""
+    state.exempt = {
+        "class": found.kind,
+        "why": found.why,
+        "reminder": found.reminder,
+        "head": head,
+    }
+    res = RunResult(
+        "exempt",
+        reason=f"{found.kind}: {found.why}",
+        mode="exempt",
+        mode_label=f"exempt · {found.kind}",
+        state=state,
+        run_url=run_url,
+        head=head,
+    )
+    if post:
+        url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+        if had_summary:
+            gh.comment(number, verdict_brief(res, url))
+        gh.set_status(head, *verdict_status(res), url)
+    return res
+
+
+def active_exemption(st: PRState, head: str) -> dict[str, Any] | None:
+    """The exemption that covers `head`, or None. Like a waive, it covers one
+    commit: a later commit is classified again when someone asks."""
+    ex = st.exempt or {}
+    return ex if head and ex.get("class") and ex.get("head") == head else None
+
+
+def _exempt_line(st: PRState) -> str:
+    ex = st.exempt or {}
+    if not ex.get("class"):
+        return ""
+    reminder = f" {ex['reminder']}" if ex.get("reminder") else ""
+    return (
+        f"✅ **Exempt: {ex['class']}** — {ex.get('why', '')}. It was not reviewed."
+        f"{reminder} Comment `/review force` to review it anyway."
+    )
+
+
+def waive(
+    gh: GitHub,
+    number: int,
+    reason: str,
+    *,
+    actor: str,
+    post: bool = True,
+    run_url: str = "",
+) -> RunResult:
+    """`/review waive <reason>`: set the verdict aside for the current head.
+
+    No model call and no review. Who, why and the head sha go into the state
+    and the round history; the `connector-reviewer` status on that head turns
+    `success` with "waived by @login: reason"; the summary says the pull
+    request was waived and that its open findings were not resolved.
+
+    A waive belongs to one head. A new commit has no status of its own, and a
+    later review of the same head (`/review force`) clears the waive and puts
+    the reviewer's verdict back (`run`). Anyone who may ask for a review may
+    waive, the pull request's author included: event.py decides who that is."""
+    state, prior = find_state(gh, number)
+    state = state or PRState()
+    head = str(((gh.pr(number) or EMPTY).get("head") or EMPTY).get("sha") or "")
+    if not head:
+        return RunResult(
+            "skipped",
+            reason="the pull request's head could not be read: nothing was waived",
+        )
+    state.waiver = {"by": actor, "reason": reason, "head": head}
+    label = f"waive · by @{actor}"
+    res = RunResult(
+        "waived",
+        mode="waive",
+        mode_label=label,
+        state=state,
+        run_url=run_url,
+        head=head,
+        blob_base=(
+            f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
+            if state.reviewed_head
+            else ""
+        ),
+    )
+    state.history.append(
+        {
+            "round": state.round,
+            "head": head[:12],
+            "base": "",
+            "mode": "waive",
+            "label": label,
+            "new": 0,
+            "resolved": 0,
+            "blocking": len(state.open_findings(BLOCKING)),
+            "incomplete": False,
+            "usd": 0.0,
+            "calls": 0,
+            "run": run_url,
+        }
+    )
+    del state.history[:-MAX_HISTORY]
+    trace.line(f"waive by @{actor} at {head[:9]}: {trace.short(reason, 120)}")
+    if not post:
+        return res
+    url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    if prior:  # a new summary is already the bottom comment
+        gh.comment(number, verdict_brief(res, url))
+    gh.set_status(head, *verdict_status(res), url)
+    return res
+
+
+def active_waiver(st: PRState, head: str) -> dict[str, Any] | None:
+    """The waive that covers `head`, or None. A waive covers one commit."""
+    w = st.waiver or {}
+    return w if head and w.get("head") == head else None
+
+
+def _waiver_lines(st: PRState, active: bool) -> list[str]:
+    """What the summary says while a waive is on record. While it covers the
+    head the status is for (`active`, the same test `verdict_status` makes), the
+    status is green, and the headline says so: the verdict it set aside follows
+    as detail, never as a second headline."""
+    w = st.waiver or {}
+    if not w.get("head"):
+        return []
+    left = len(st.open_findings())
+    unresolved = (
+        f"{left} open finding(s) were **not resolved**; they are listed below."
+        if left
+        else "There were no open findings."
+    )
+    icon = "✅" if active else "🟣"
+    return [
+        f"{icon} **Waived by @{w.get('by', '?')}:** {w.get('reason', '')} "
+        f"(at `{str(w['head'])[:7]}`)",
+        "",
+        f"The reviewer's verdict was set aside for that commit. {unresolved} "
+        "A later commit is not covered: it has no status until it is reviewed "
+        "or waived. Without the waive, the verdict is:",
+        "",
+    ]
+
+
 def _check_new_against_base(
     client: Client,
     ws: Workspace,
@@ -921,6 +1565,7 @@ def _check_new_against_base(
     removed: str,
     added: PRAdditions,
     max_tokens: int,
+    exclude: tuple[str, ...] = DEFAULT_EXCLUDE,
 ) -> list[Finding]:
     """`fresh` without the new blocking findings that are moot or fixed against
     the base branch.
@@ -946,7 +1591,7 @@ def _check_new_against_base(
                 client,
                 ws,
                 batch,
-                round_diff(changes, batch),
+                round_diff(changes, batch, exclude),
                 removed=removed,
                 added=added,
                 max_tokens=max_tokens,
@@ -1080,7 +1725,7 @@ def recheck_evidence(
     code_now = (
         "\n".join(f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1))
         if at
-        else "(the quoted code is not in this file any more)"
+        else _quote_gone(f)
     )
     fd = ws.diffs.get(f.path)
     base_path = fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
@@ -1093,7 +1738,8 @@ def recheck_evidence(
         facts.append(why)
         absent = True
     else:
-        base = merge_base_text(base_path)
+        # A file renamed from `.env`: its merge-base copy is the secret file itself.
+        base = None if secret_path(base_path) else merge_base_text(base_path)
         if base is None:
             facts.append(f"merge-base copy of {base_path} could not be read")
         elif (names := baseline.dotted_names(base_path, base)) is None:
@@ -1109,8 +1755,12 @@ def recheck_evidence(
             # The quote is gone from the head, so its enclosing symbol is unknown:
             # its absence from the merge base says nothing about that symbol.
             facts.append(
-                f"the quoted code is no longer in {f.path} at the PR head: "
-                "merge-base presence of its symbol unknown"
+                (
+                    f"the quoted code is no longer in {f.path} at the PR head"
+                    if quote_stored(f)
+                    else QUOTE_NOT_STORED
+                )
+                + ": merge-base presence of its symbol unknown"
             )
         elif snippet_in_text(base, f.evidence):
             facts.append(f"present on merge base: the quoted code is in {base_path}")
@@ -1322,6 +1972,7 @@ def recheck(
         state=state,
         ledger=ledger,
         run_url=run_url,
+        head=state.reviewed_head,
         blob_base=(
             f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
             if state.reviewed_head
@@ -1515,10 +2166,14 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
         )
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
     bundles.sort(key=_risk)
+    # A file over the token cap is reviewed in parts (`bundle._parts`), and its
+    # parts can fall on both sides of the cap: named once, as not read.
+    skipped: list[str] = []
     for b in bundles[cfg.max_bundles :]:
-        res.skipped_files.extend(
-            (p, "bundle cap (lowest-risk code, after re-packing)") for p in b.paths
-        )
+        skipped.extend(p for p in b.paths if p not in skipped)
+    res.skipped_files.extend(
+        (p, "bundle cap (lowest-risk code, after re-packing)") for p in skipped
+    )
     return bundles[: cfg.max_bundles]
 
 
@@ -1581,6 +2236,7 @@ def head_reader(
         if fd.path.endswith(".py")
         and fd.status in ("modified", "renamed")
         and fd.path not in head_text
+        and not secret_diff(fd)
     ]
     allowed = set(extra[:BASELINE_EXTRA_FILES])
     if len(extra) > len(allowed):
@@ -1612,9 +2268,17 @@ def added_blocks(added: PRAdditions | None) -> list[str]:
     return out
 
 
-def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
+def round_diff(
+    files: list[FileDiff],
+    open_: list[Finding],
+    exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE,
+) -> str:
     """What changed this round, for the verify call: files holding an open finding
-    first, then the rest, within a fixed budget (a cached, bounded prompt)."""
+    first, then the rest, within a fixed budget (a cached, bounded prompt).
+
+    `files` is the round's range or the whole PR, never filtered by selection,
+    so a change that may hold secrets and an excluded file are dropped here."""
+    files = model_visible(files, exclude)
     owners = {f.path for f in open_}
     out: list[str] = []
     used = 0
@@ -1630,11 +2294,41 @@ def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
     return "\n".join(out)
 
 
+QUOTE_NOT_STORED = (
+    "this finding's quoted code was not stored (the review state outgrew one "
+    "comment), so where it sits now is unknown"
+)
+
+
+def _quote_gone(f: Finding) -> str:
+    """What `<code_now>` says when the quote is not found: gone from the file,
+    or never stored, which says nothing about the code."""
+    if quote_stored(f):
+        return "(the quoted code is not in this file any more)"
+    return f"({QUOTE_NOT_STORED}: judge it from its title and body)"
+
+
 def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     """Where the finding's quoted code is NOW. Stored line numbers are from an
     earlier head and drift as commits land; the quote is what identifies the site,
     so when it is gone the model is told so instead of shown unrelated code."""
     return locate_in_text(text, f.evidence)  # 0 = the quote is gone; never guess a line
+
+
+REMOVED_NOTE = (
+    "(the quoted code is code this PR removes, and the finding is about that "
+    "removal: its absence is not a fix"
+)
+
+
+def _removed_site(ws: Workspace, f: Finding) -> int | None:
+    """For a finding that quotes code the PR still removes: the PR-head line its
+    deletion sits at (0 when the file is deleted whole). None otherwise."""
+    fd = ws.diffs.get(f.path)
+    if fd is None or not in_removed_lines(fd, f.evidence):
+        return None
+    span = anchor(fd, f.evidence)
+    return span[0] if span else 0
 
 
 BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
@@ -1657,6 +2351,9 @@ def at_base_branch(
     rel = (
         fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
     ) or ""
+    if rel and secret_path(rel):
+        # A file renamed from `.env`: the base copy is the secret file itself.
+        return f"(the base copy of {rel} is not shown: it may hold secrets)"
     root = ws.root.resolve()
     path = (root / rel).resolve()
     if not rel or root not in path.parents or not path.is_file():
@@ -1670,6 +2367,8 @@ def at_base_branch(
         # Module level: no symbol to look up, so the quote locates the site.
         at = locate_in_text(text, f.evidence)
         if not at:
+            if not quote_stored(f):
+                return f"({QUOTE_NOT_STORED})"
             return f"absent on base: the quoted code is not in {rel}"
         return f"{rel}: module level\n{_numbered(text, at - 15, at + 15)}"
     dotted = head_sym.qualname.split(":", 1)[1]
@@ -1822,6 +2521,10 @@ def _verify_batch(
         text = ws.text(f.path) or ""
         lines = text.splitlines()
         at = _current_line(ws, f, text)
+        # Code the PR removes is absent at the head by design: show where it
+        # was removed, and say so, so absence is not read as a fix.
+        removed_at = None if at else _removed_site(ws, f)
+        at = at or removed_at or 0
         sym = ws.index.enclosing(f.path, at) if at else None
         lo, hi = (
             (sym.start, sym.end)
@@ -1833,8 +2536,14 @@ def _verify_batch(
                 f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1)
             )
             if at
-            else "(the quoted code is not in this file any more)"
+            else _quote_gone(f)
         )
+        if removed_at is not None:
+            code = (
+                f"{REMOVED_NOTE}; the site it was removed from, as it is now:)\n{code}"
+                if at
+                else f"{REMOVED_NOTE}; the PR deletes the whole file)"
+            )
         items.append(
             f'<finding id="{f.id}" path="{f.path}"{mark}>\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
@@ -1992,7 +2701,7 @@ def _history_section(st: PRState) -> list[str]:
             run_kind += " · ⚠️ incomplete"
         log = f"[run]({h['run']})" if h.get("run") else "—"
         out.append(
-            f"| {'after ' if h.get('mode') == 'dismiss' else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
+            f"| {'after ' if h.get('mode') in ('dismiss', 'waive') else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
             f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} | {log} |"
         )
     out.append("\n</details>")
@@ -2007,6 +2716,10 @@ def _run_title(res: RunResult, round_no: int) -> str:
         return f"dismissal after round {round_no} · {label.removeprefix('dismiss · ')}"
     if res.mode == "recheck":
         return f"re-check after round {round_no} · {label.removeprefix('recheck · ')}"
+    if res.mode == "waive":
+        return f"waive after round {round_no} · {label.removeprefix('waive · ')}"
+    if res.mode == "exempt":
+        return label.replace("exempt · ", "not reviewed · exempt: ")
     return f"round {round_no} · {label}"
 
 
@@ -2082,6 +2795,26 @@ _FENCE = {
 }
 
 
+def _cited_principle(principles: PrincipleSet, f: Finding) -> str:
+    """The principle `f` cites, rendered as the line review saw it; "" for none."""
+    for p in principles.for_paths([f.path]):
+        if p.id == f.rule_id:
+            return p.render([f.path])
+    return ""
+
+
+def _contested(f: Finding) -> str:
+    """The contested mark shown after a finding's title; "" when not contested."""
+    return f" ⚖️ contested — {f.contested}" if f.contested else ""
+
+
+def _principle(f: Finding) -> str:
+    """The principle a finding rests on, as shown in the summary: its id (FPnn
+    from the fleet set, RPnn from the repository's own), or a note that it is a
+    concrete bug, which needs no principle (`agent.cite`)."""
+    return f"`{f.rule_id}`" if f.rule_id else "— (concrete bug)"
+
+
 def _where(f: Finding, blob_base: str) -> str:
     """The finding's location, linked to the file at the reviewed commit."""
     line = f.line or f.head_line
@@ -2110,11 +2843,16 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
         )
 
     out = [
-        f"<details><summary>{_SEV_ICON[f.severity]} {f.id} · {f.severity} · {f.category} — "
-        f"{f.title}</summary>\n",
+        f"<details><summary>{_SEV_ICON[f.severity]} {f.id} · {f.severity} · {f.category} · "
+        f"{_principle(f)} — {f.title}{_contested(f)}</summary>\n",
         f"**Where:** {_where(f, blob_base)}\n",
-        cap(f.body.strip()),
     ]
+    if f.contested:
+        out.append(
+            "**⚖️ Contested:** raised as blocking; an independent check refuted it against the "
+            f"code, so it is medium and does not block. Its reason: {f.contested}\n"
+        )
+    out.append(cap(f.body.strip()))
     if f.scenario.strip():
         out.append(f"\n**When it fails:** {cap(f.scenario.strip())}")
     if f.suggestion.strip() and chars != 0:
@@ -2130,10 +2868,46 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     return "\n".join(out)
 
 
+UNREAD_HINT = (
+    "Part of the change could not be read (listed below: too large, or a deleted test with no "
+    "line to review), so a retry would not read it either: split it into smaller pull requests, "
+    "or, once a person has reviewed those files, comment `/review waive <reason>`."
+)
+
+
+def incomplete_reasons(res: RunResult) -> list[str]:
+    """Why the review of this head is incomplete, from the run and from the state.
+
+    The state's part (files left unreviewed by a failure, files too large to
+    read) survives a dismissal or a re-check, which build a fresh result: an
+    incomplete review stays incomplete until a review covers those files."""
+    st = res.state or PRState()
+    out = list(res.incomplete)
+    if st.pending_files and not res.incomplete:
+        out.append(
+            f"{len(st.pending_files)} file(s) could not be reviewed in the last run: "
+            "comment `/review` to retry them"
+        )
+    if st.unread:
+        listed = ", ".join(f"`{p}` ({why})" for p, why in list(st.unread.items())[:5])
+        more = f" (+{len(st.unread) - 5} more)" if len(st.unread) > 5 else ""
+        out.append(f"{len(st.unread)} file(s) not read: {listed}{more}")
+    return out
+
+
 def _retry_hint(res: RunResult) -> str:
     """What an author can do about an incomplete review. A refusal by the model
     provider is deterministic: `/review` on the same content is refused again and
-    spends a round, so it is never offered as the fix for one."""
+    spends a round, so it is never offered as the fix for one. Nor is a file too
+    large to read: a retry reads the same file."""
+    st = res.state or PRState()
+    if st.unread and not res.incomplete and not st.pending_files:
+        return UNREAD_HINT
+    hint = _failure_hint(res)
+    return f"{hint} {UNREAD_HINT}" if st.unread else hint
+
+
+def _failure_hint(res: RunResult) -> str:
     refused = res.refused
     if not refused:
         return "Comment `/review` to retry the part that failed."
@@ -2155,12 +2929,13 @@ def render_summary(res: RunResult) -> str:
     counts = " · ".join(
         f"{_SEV_ICON[s]} {len(by_level[s])} {_SEV_LABEL[s]}" for s in SEVERITIES
     )
-    if res.incomplete:
+    incomplete = incomplete_reasons(res)
+    if incomplete:
         verdict = (
             "⚠️ **Review incomplete** — part of this change was not reviewed; this is not an all-clear. "
             + _retry_hint(res)
             + "\n\n"
-            + "\n".join(f"- {r}" for r in res.incomplete)
+            + "\n".join(f"- {r}" for r in incomplete)
         )
     elif blocking:
         verdict = f"❌ **Changes requested** — {len(blocking)} blocking (critical/high) finding(s) open"
@@ -2171,9 +2946,15 @@ def render_summary(res: RunResult) -> str:
         )
     else:
         verdict = "✅ **Ready to merge** — every finding is resolved"
+    # Not reviewed at all: the exemption is the verdict.
+    verdict = _exempt_line(st) or verdict
+    waived = bool(active_waiver(st, res.head or st.reviewed_head))
+    if waived:
+        verdict = set_aside(verdict)
     lines = [
         SUMMARY_MARKER,
         f"### connector-reviewer summary · updated after round {st.round} ({res.mode_label or res.mode})",
+        *_waiver_lines(st, waived),
         verdict,
         *_spiral_lines(res),
         "",
@@ -2191,6 +2972,7 @@ def render_summary(res: RunResult) -> str:
         lines.append("")
     elif ap.get("verdict") == "sound":
         lines.append("**Approach check** — sound.\n")
+    lines.extend(_facts_lines(st, res))
     for note in st.advisories:
         lines.append(f"**Advisory** (does not block) — {note}\n")
     for sev in SEVERITIES:
@@ -2201,9 +2983,11 @@ def render_summary(res: RunResult) -> str:
         lines.append(
             f"#### {_SEV_ICON[sev]} {_SEV_LABEL[sev].capitalize()} ({len(items)}){blocks}"
         )
-        lines.append("| id | where | finding |\n|---|---|---|")
+        lines.append("| id | where | principle | finding |\n|---|---|---|---|")
         for f in items:
-            lines.append(f"| {f.id} | {_where(f, res.blob_base)} | {f.title} |")
+            lines.append(
+                f"| {f.id} | {_where(f, res.blob_base)} | {_principle(f)} | {f.title}{_contested(f)} |"
+            )
         lines.append("")
     opened = st.open_findings()
     details_at = len(lines)  # the details block is sized last (see the size backstop)
@@ -2269,7 +3053,162 @@ def render_summary(res: RunResult) -> str:
             if len(body) <= COMMENT_LIMIT:
                 return body
     lean = _no_state_marker("\n".join(_without_resolved(lines)) + "\n")
-    return lean + st.encode(body_keep=0)
+    body = lean + st.encode(body_keep=0)
+    if len(body) <= COMMENT_LIMIT:
+        return body
+    # The marker, the title and the verdict (the waiver line too, when there is one).
+    top = "\n".join(lines[: lines.index(verdict) + 1]) + "\n"
+    return _fit_state(lean, _no_state_marker(top), st)
+
+
+STATE_TOO_LARGE = (
+    "\n> ⚠️ This pull request's review state is too large for one comment: the "
+    "tables are not shown, and stored quoted code is shortened. Every open "
+    "finding and its id are still tracked.\n"
+)
+
+
+def _quotes_not_stored(n: int) -> str:
+    return (
+        "\n> ⚠️ This pull request's review state is too large for one comment: the "
+        f"tables are not shown, resolved findings are not stored, and {n} open "
+        "finding(s) are stored without their quoted code. Every open finding and its "
+        "id are still tracked; one without its quote stays open until a re-check "
+        "judges it.\n"
+    )
+
+
+def _open_not_stored(n: int) -> str:
+    return (
+        "\n> ⚠️ This pull request's review state is too large for one comment even "
+        f"without quoted code: {n} open finding(s), lowest severity first, could not "
+        "be stored. If their code is still there, a later round can raise them again.\n"
+    )
+
+
+STATE_NOT_STORED = (
+    "\n> ⚠️ This pull request's review state is too large for one comment and "
+    "could not be stored: the next round reviews this pull request afresh.\n"
+)
+
+
+def _fewest(most: int, fits: Callable[[int], bool]) -> int | None:
+    """The fewest of `most` things to leave out for `fits`, or None when even all
+    of them is not enough. A bisection: the size only shrinks as more are left out.
+    The value returned is always one `fits` was checked true for."""
+    if most <= 0 or not fits(most):
+        return None
+    lo, hi = 1, most
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
+def _fit_state(lean: str, top: str, st: PRState) -> str:
+    """The summary when even the lean view and the stored bodies at 0 are over
+    the limit: GitHub would refuse the edit, and the next run would read the
+    previous state. Cut in this order until it fits: open findings' quoted code
+    to its leading lines (whole lines, so free resolution still matches), the
+    view to its first lines, the quoted code to its first line, then the oldest
+    resolved findings.
+
+    Past that, only open findings are left, and their first lines can still be
+    too long (a quote is one minified line). Then the largest quotes are left out,
+    the fewest that fit: each such finding keeps its id, title and place, stays
+    open, and is never resolved for a quote that is not there (`quote_stored`).
+    With every quote out, a finding is a title (≤120 characters), a path and a few
+    numbers, so only hundreds of open findings could still be over; then the
+    fewest open findings are left out, lowest severity and newest first. Should
+    the state be too large with none of them (only its bounded round history,
+    ledger and notes are left), the summary goes without a state block: GitHub
+    accepts it, and the next round starts afresh instead of reading a stale one.
+    Every value returned here is within the limit."""
+    for text, keep in (
+        (lean, EVIDENCE_KEEP_RESOLVED),
+        (top + STATE_TOO_LARGE, EVIDENCE_KEEP_RESOLVED),
+        (top + STATE_TOO_LARGE, 0),
+    ):
+        body = text + st.encode(body_keep=0, evidence_keep=keep)
+        if len(body) <= COMMENT_LIMIT:
+            return body
+
+    def fits(body: str) -> bool:
+        return len(body) <= COMMENT_LIMIT
+
+    def dropping(n: int) -> str:
+        return (
+            top
+            + STATE_TOO_LARGE
+            + st.encode(body_keep=0, evidence_keep=0, drop_resolved=n)
+        )
+
+    resolved = sum(1 for f in st.findings if f.status != "open")
+    n = _fewest(resolved, lambda k: fits(dropping(k)))
+    if n is not None:
+        return dropping(n)
+
+    def unquoting(n: int) -> str:
+        return (
+            top
+            + _quotes_not_stored(n)
+            + st.encode(
+                body_keep=0, evidence_keep=0, drop_resolved=resolved, drop_quotes=n
+            )
+        )
+
+    quoted = sum(1 for f in st.findings if f.status == "open" and quote_stored(f))
+    n = _fewest(quoted, lambda k: fits(unquoting(k)))
+    if n is not None:
+        return unquoting(n)
+
+    def leaving(n: int) -> str:
+        return (
+            top
+            + _open_not_stored(n)
+            + st.encode(
+                body_keep=0,
+                evidence_keep=0,
+                drop_resolved=resolved,
+                drop_quotes=quoted,
+                drop_open=n,
+            )
+        )
+
+    n = _fewest(len(st.open_findings()), lambda k: fits(leaving(k)))
+    if n is not None:
+        return leaving(n)
+    return top[: COMMENT_LIMIT - len(STATE_NOT_STORED)] + STATE_NOT_STORED
+
+
+_HEADLINE = re.compile(r"^\S+ \*\*(.+?)\*\*")
+
+
+def set_aside(verdict: str) -> str:
+    """A verdict a waive set aside: its icon and bold headline made plain, and
+    the whole of it quoted, so it reads as detail under the waive's headline."""
+    plain_text = _HEADLINE.sub(r"\1", verdict, count=1)
+    return "\n".join(f"> {line}" if line else ">" for line in plain_text.splitlines())
+
+
+def _facts_lines(st: PRState, res: RunResult) -> list[str]:
+    """The regression and history lines: the facts computed in code, then what
+    the line review answered about them this round (one answer per bundle that
+    gave one, at most two)."""
+    fx = st.facts or {}
+    if not fx.get("regression") and not fx.get("history"):
+        return []
+    out: list[str] = []
+    for key, label in (("regression", "Regression"), ("history", "History")):
+        line = f"**{label}** — {fx.get(key) or 'not computed'}."
+        answers = [b.answers[key] for b in res.bundles if b.answers.get(key)][:2]
+        for a in answers:
+            line += f" *Line review:* {plain(a)}"
+        out.append(line + "\n")
+    return out
 
 
 def _no_state_marker(text: str) -> str:
@@ -2492,14 +3431,29 @@ def verdict_status(res: RunResult) -> tuple[str, str]:
 
     Green means ready to merge: every finding, nits included, is fixed or was
     dismissed with a reason. Any open finding keeps it red; the description says
-    whether it is blocking or only medium/low. The approach check is advisory and
-    never turns it red. An incomplete review is `error`, never green: part of
-    the change was not looked at."""
+    whether it is blocking ("changes requested") or only medium/low ("not
+    ready"). The approach check is advisory and never turns it red. An
+    incomplete review is `error`, never green: part of the change was not looked
+    at — a failed bundle, a file left pending, or source too large to read, and
+    the state's part of that holds through a dismissal too. A head that was
+    waived (`waive`) or is exempt is green whatever the reviewer found, and says
+    why."""
     st = res.state or PRState()
     led = st.ledger or {}
     cost = f"${float(led.get('spent_usd', 0)):.2f}"
-    if res.incomplete:
-        return "error", f"review incomplete — {res.incomplete[0][:90]}"
+    waived = active_waiver(st, res.head or st.reviewed_head)
+    if waived:
+        # A waive is the way past a verdict, an incomplete one included.
+        return (
+            "success",
+            f"waived by @{waived.get('by', '?')}: {waived.get('reason', '')}",
+        )
+    exempted = active_exemption(st, res.head or st.reviewed_head)
+    if exempted:
+        return "success", f"exempt: {exempted['class']}"
+    incomplete = incomplete_reasons(res)
+    if incomplete:
+        return "error", f"review incomplete — {incomplete[0][:90]}"
     blocking = st.open_findings(BLOCKING)
     if blocking:
         ids = ", ".join(f.id for f in blocking[:4]) + ("…" if len(blocking) > 4 else "")

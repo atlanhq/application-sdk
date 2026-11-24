@@ -247,6 +247,14 @@ def test_pause_kept_out_of_the_verdict_jobs(jobs: dict) -> None:
         assert "pause-dataforge-source" not in (job.get("needs") or []), name
 
 
+def test_a_lifecycle_job_failure_does_not_fail_the_run(jobs: dict) -> None:
+    # /gate-check reads the whole run's conclusion, so a failed wake/pause (e.g.
+    # no workload binding for the repo) would red the verdict even when the
+    # tests gate passed. Job-level continue-on-error keeps the run green.
+    for job in ("wake-dataforge-source", "pause-dataforge-source"):
+        assert jobs[job]["continue-on-error"] is True, job
+
+
 def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
     # Chris blocker #1: api.dataforge.atlan.dev is VPN-gated, so each job must
     # check out + globalprotect-connect before the lifecycle script runs.

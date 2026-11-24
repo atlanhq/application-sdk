@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -19,7 +21,7 @@ from ._helpers import (
     is_adapter_file,
     is_script_file,
 )
-from ._level import LevelMixin
+from ._level import LevelMixin, _collect_l022_module_context
 from ._performance import PerformanceMixin
 from ._print import PrintMixin
 from ._security import SecurityMixin
@@ -79,6 +81,11 @@ class Checker(
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         self._bounded_loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
         self._except_stack: list[ast.ExceptHandler] = []
+        self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        self._l022_failure_helpers: Mapping[str, bool] = MappingProxyType({})
+        self._l022_exit_status_functions: frozenset[
+            ast.FunctionDef | ast.AsyncFunctionDef
+        ] = frozenset()
         # Innermost enclosing function's URL path-segment names (L010)
         self._path_segment_names: frozenset[str] = frozenset()
         # Track __main__ guard depth so L005 can exempt those blocks
@@ -101,6 +108,9 @@ class Checker(
 
     def visit_Module(self, node: ast.Module) -> None:
         self._bounded_loop_caps = collect_bounded_loop_caps(node)
+        self._l022_failure_helpers, self._l022_exit_status_functions = (
+            _collect_l022_module_context(node)
+        )
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -118,7 +128,9 @@ class Checker(
         self._loop_stack = []
         self._except_stack = []
         self._path_segment_names = collect_path_segment_names(node)
+        self._function_stack.append(node)
         self.generic_visit(node)
+        self._function_stack.pop()
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
         self._path_segment_names = saved_segments

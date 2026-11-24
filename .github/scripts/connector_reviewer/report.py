@@ -16,8 +16,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from . import skeptic
 from .llm import redact
-from .review import RunResult, verify_cut_off_report, verify_skipped_report
+from .review import (
+    RunResult,
+    incomplete_reasons,
+    verify_cut_off_report,
+    verify_skipped_report,
+)
 
 
 def call_line(event: dict[str, Any]) -> str:
@@ -53,7 +59,7 @@ def build(res: RunResult) -> dict[str, Any]:
         "mode": res.mode,
         "mode_label": res.mode_label,
         "head": res.head,
-        "incomplete": res.incomplete,
+        "incomplete": [redact(r) for r in incomplete_reasons(res)],
         "notes": res.notes,
         "timings_ms": res.timings_ms,
         "ledger": led,
@@ -79,6 +85,9 @@ def build(res: RunResult) -> dict[str, Any]:
                 "turns": b.turns,
                 "turn_budget": b.turn_budget,
                 "planned": b.planned,
+                "seconds": b.seconds,
+                "forced": b.forced,
+                "uncited_dropped": len(b.uncited),
                 "tools": b.tool_calls,
                 "stop": b.stop,
                 # whole: the run report is where an error is read in full
@@ -109,9 +118,18 @@ def build(res: RunResult) -> dict[str, Any]:
             for f in res.new_findings
         ],
         "resolved": {"free": res.resolved_free, "verified": res.resolved_verified},
+        # The skeptic pass (skeptic.py): counts by outcome, and one entry per check
+        # (locations only, never the quoted code).
+        "skeptic": {
+            "counts": skeptic.counts(res.skeptic),
+            "checks": [
+                {**o.to_report(), "error": redact(o.error)} for o in res.skeptic
+            ],
+        },
         "verify_cut_off": verify_cut_off_report(res),
         "verify_skipped": verify_skipped_report(res),
         "approach": (st.approach if st else {}) or {},
+        "facts": (st.facts if st else {}) or {},
         "calls": calls,
     }
 
@@ -190,17 +208,33 @@ def markdown(report: dict[str, Any], pr: int) -> str:
     if report["bundles"]:
         lines += [
             "### Bundles",
-            "| bundle | turns | plan | tools | stop | findings | fact-check removed |",
-            "|---|---|---|---|---|---|---|",
+            "| bundle | turns | plan | tools | stop | time | findings | fact-check removed | no principle, dropped |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for b in report["bundles"]:
             tools = ", ".join(f"{k}×{v}" for k, v in b["tools"].items()) or "-"
+            forced = f" (final turn forced: {b['forced']})" if b.get("forced") else ""
             lines.append(
                 f"| {b['label']} | {b['turns']}/{b['turn_budget']} | {'yes' if b['planned'] else '-'} | {tools} "
-                f"| {b['stop']}{(' — ' + b['error'][:80]) if b['error'] else ''} | {b['findings']} | {b['fact_check_removed']} |"
+                f"| {b['stop']}{forced}{(' — ' + b['error'][:80]) if b['error'] else ''} "
+                f"| {b.get('seconds', 0):.1f}s | {b['findings']} | {b['fact_check_removed']} "
+                f"| {b.get('uncited_dropped', 0)} |"
             )
         lines.append("")
     lines.extend(_refusal_lines(report["bundles"]))
+    sk: dict[str, Any] = report.get("skeptic") or {}
+    if sk.get("checks"):
+        lines.append(
+            "**Skeptic (new blocking findings):** "
+            + ", ".join(f"{k} {v}" for k, v in sk["counts"].items() if v)
+            + " — "
+            + ", ".join(
+                f"{c['id']} {c['outcome']}"
+                + (" → medium" if c["outcome"] == "refuted" else "")
+                for c in sk["checks"]
+            )
+        )
+        lines.append("")
     tri = report["triage"]
     if tri["mechanical"] or tri["duplicates"]:
         lines.append(
