@@ -367,9 +367,10 @@ def test_block_keeps_the_markers_existing_blocks_are_found_by() -> None:
 
 def test_block_keeps_the_conformance_command_and_its_exit_cases() -> None:
     assert (
-        "## Mandatory before opening a pull request: conformance on your change\n"
-        in _BLOCK
-    )
+        "## Mandatory before opening a pull request:"
+        " conformance and a principles review\n"
+    ) in _BLOCK
+    assert "### 1. Conformance on your change\n" in _BLOCK
     assert (
         "git fetch origin main\n"
         "CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance"
@@ -388,6 +389,33 @@ def test_block_keeps_the_conformance_command_and_its_exit_cases() -> None:
 def _flat(text: str) -> str:
     """*text* with every run of whitespace as one space, so a re-wrap passes."""
     return " ".join(text.split())
+
+
+def test_block_asks_for_a_principles_review_before_the_pull_request() -> None:
+    """Step 2 sits between the conformance step and the reviewer section, and
+    reads both principle sets the way the reviewer does."""
+    conformance = _BLOCK.index("### 1. Conformance on your change\n")
+    principles = _BLOCK.index("### 2. Review your change against the principles\n")
+    reviewer = _BLOCK.index("## After opening a pull request: the connector reviewer\n")
+    assert conformance < principles < reviewer
+    flat = _flat(_BLOCK[principles:reviewer])
+    for phrase in (
+        "every `rp*.md` in `.github/connector-reviewer/principles/`",
+        "every `fp*.md` in application-sdk's `.github/connector-reviewer/principles/`"
+        " on `main`",
+        "https://github.com/atlanhq/application-sdk/tree/main/.github/"
+        "connector-reviewer/principles",
+        # The fields every principle file carries (the principles README).
+        "whose `applies-to` covers a file you changed",
+        "answer its `Ask:` questions against your diff (`git diff origin/main...HEAD`)",
+        "skip what its `Don't flag:` excludes",
+        "judge severity by its `Severity:` line",
+        "Fix every finding before you open the pull request.",
+        "Do not weaken, delete or reword a principle so that your change passes.",
+        "Do not plan to dismiss or waive the finding after opening.",
+        "This local review does not replace `/review`.",
+    ):
+        assert phrase in flat, phrase
 
 
 def test_block_describes_the_connector_reviewer() -> None:
@@ -498,6 +526,7 @@ def test_block_says_what_an_agent_may_do() -> None:
     section = _BLOCK.split("### What an agent may do\n", 1)[1]
     flat = " ".join(section.split())
     for phrase in (
+        "may run conformance and the principles review",
         "comment `/review` after a push",
         "comment `/review recheck` with the evidence",
         "Dismissing a finding and waiving the review are decisions for a person.",

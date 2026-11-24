@@ -1,5 +1,7 @@
 <!-- BEGIN APPLICATION SDK CONNECTOR REVIEW -->
-## Mandatory before opening a pull request: conformance on your change
+## Mandatory before opening a pull request: conformance and a principles review
+
+### 1. Conformance on your change
 
 PR CI runs the conformance suite and grades a pull request on what it changes:
 it fails on a blocking finding the change adds and not on one `main` already
@@ -33,6 +35,33 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 - An older conformance package ignores `CONFORMANCE_SINCE` and grades the
   whole repository. That verdict is stricter, never laxer; if it fails only
   on findings you did not add, say so in the pull request.
+
+### 2. Review your change against the principles
+
+The connector reviewer judges every pull request against two sets of
+principles. Check your change against both before you open the pull request,
+the same way it will:
+
+- this repository's principles: every `rp*.md` in
+  `.github/connector-reviewer/principles/`;
+- the fleet principles: every `fp*.md` in application-sdk's
+  `.github/connector-reviewer/principles/` on `main`
+  (https://github.com/atlanhq/application-sdk/tree/main/.github/connector-reviewer/principles).
+
+For each principle whose `applies-to` covers a file you changed, answer its
+`Ask:` questions against your diff (`git diff origin/main...HEAD`), skip what
+its `Don't flag:` excludes, and judge severity by its `Severity:` line. Fix
+every finding before you open the pull request. If you believe a principle is
+wrong for this change, leave the code as it is and say so in the pull request,
+naming the principle.
+
+Do not suppress a finding. Do not weaken, delete or reword a principle so that
+your change passes. Do not shape a change to fall into an exempt category. Do
+not plan to dismiss or waive the finding after opening. A change to a principle
+is its own pull request, and the reviewer reviews it.
+
+This local review does not replace `/review`. Comment `/review` once the pull
+request is open.
 
 ## After opening a pull request: the connector reviewer
 
@@ -101,9 +130,10 @@ The principles:
 
 ### What an agent may do
 
-An agent working on a pull request may run conformance, push fixes, comment
-`/review` after a push, fix the findings, and comment `/review recheck` with
-the evidence when it believes a finding is wrong.
+An agent working on a pull request may run conformance and the principles
+review, push fixes, comment `/review` after a push, fix the findings, and
+comment `/review recheck` with the evidence when it believes a finding is
+wrong.
 
 Dismissing a finding and waiving the review are decisions for a person. Post
 `/review dismiss` or `/review waive` only when a person has made that decision
