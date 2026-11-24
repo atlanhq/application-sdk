@@ -452,9 +452,12 @@ _L022Function = ast.FunctionDef | ast.AsyncFunctionDef
 # failure is not handled, whatever the handler logged first.
 _EXIT_CALLS = frozenset({("sys", "exit"), ("os", "_exit")})
 _EXIT_BUILTINS = frozenset({"exit", "quit"})
-# Failure names on a returned result object, including the SDK auth status that
-# maps rejected credentials to a caller-visible HTTP 401.
-_FAILURE_STATUS_NAMES = frozenset({"FAILURE", "FAILED", "ERROR", "INVALID_CREDENTIALS"})
+# ``status=<Enum>.FAILURE`` on a returned result object.
+_FAILURE_STATUS_NAMES = frozenset({"FAILURE", "FAILED", "ERROR"})
+# The SDK's ``AuthStatus`` defines failure itself: every member but ``SUCCESS``
+# has ``is_success`` False and reaches the caller as a 4xx, whatever its code.
+_AUTH_STATUS_ENUM = "AuthStatus"
+_AUTH_STATUS_SUCCESS = "SUCCESS"
 
 
 def _handler_statements(handler: ast.ExceptHandler) -> list[ast.AST]:
@@ -584,12 +587,27 @@ def _function_returns(function: _L022Function) -> list[ast.Return]:
     return returns
 
 
+def _is_failure_status(value: ast.Attribute) -> bool:
+    """``X.FAILURE|FAILED|ERROR``, or any ``AuthStatus`` member but ``SUCCESS``."""
+    if value.attr in _FAILURE_STATUS_NAMES:
+        return True
+    enum = value.value
+    enum_name = (
+        enum.id
+        if isinstance(enum, ast.Name)
+        else enum.attr
+        if isinstance(enum, ast.Attribute)
+        else None
+    )
+    return enum_name == _AUTH_STATUS_ENUM and value.attr != _AUTH_STATUS_SUCCESS
+
+
 def _is_failure_keyword(name: str | None, value: ast.expr | None) -> bool:
     """``success=False``, ``status=X.FAILURE`` or ``status_code=<5xx>``."""
     if name == "success":
         return isinstance(value, ast.Constant) and value.value is False
     if name == "status":
-        return isinstance(value, ast.Attribute) and value.attr in _FAILURE_STATUS_NAMES
+        return isinstance(value, ast.Attribute) and _is_failure_status(value)
     if name == "status_code":
         return (
             isinstance(value, ast.Constant)

@@ -536,8 +536,9 @@ report that site the same way.
 - **L022 HandledFailureLoggedAtError** — a `logger.error()` sits in an
   `except` handler that has no `raise`, no process-exit call, and no return of
   a failure result (a call or dict carrying `success=False`,
-  `status=<Enum>.FAILURE|FAILED|ERROR|INVALID_CREDENTIALS` (the SDK's
-  `AuthStatus.INVALID_CREDENTIALS` maps to HTTP 401) or a 5xx `status_code`). A
+  `status=<Enum>.FAILURE|FAILED|ERROR`, any `status=AuthStatus.<member>` other
+  than `SUCCESS` (the SDK contract's `is_success` is False for each), or a 5xx
+  `status_code`). A
   call to a module-level helper, bound nowhere else in the module, counts only when its
   sole normal return is such a failure result; an `async` helper counts only
   when awaited. A nonzero integer status counts only when every call of the

@@ -1886,23 +1886,37 @@ def test_l022_silent_when_the_failure_propagates_or_is_a_warning(handler: str) -
     assert _l022(handler) == []
 
 
-def test_l022_silent_when_authentication_rejection_is_returned() -> None:
+@pytest.mark.parametrize(
+    "status",
+    ["AuthStatus.FAILED", "AuthStatus.EXPIRED", "AuthStatus.INVALID_CREDENTIALS"],
+)
+def test_l022_silent_when_a_non_success_auth_status_is_returned(status: str) -> None:
+    # Every AuthStatus member but SUCCESS is a failure the caller sees
+    # (AuthStatus.is_success), whatever HTTP code the contract maps it to.
     handler = (
         "    except AuthenticationError:\n"
         "        logger.error('authentication rejected', exc_info=True)\n"
-        "        return AuthenticationResult(\n"
-        "            status=AuthenticationStatus.INVALID_CREDENTIALS,\n"
-        "            message='rejected',\n"
-        "        )\n"
+        f"        return AuthOutput(status={status}, message='rejected')\n"
     )
     assert _l022(handler) == []
 
 
-def test_l022_still_fires_for_authentication_success_status() -> None:
+def test_l022_still_fires_for_auth_success_status() -> None:
     handler = (
         "    except AuthenticationError:\n"
         "        logger.error('authentication rejected', exc_info=True)\n"
-        "        return AuthenticationResult(status=AuthenticationStatus.SUCCESS)\n"
+        "        return AuthOutput(status=AuthStatus.SUCCESS)\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_still_fires_for_a_non_sdk_enum_named_like_an_auth_status() -> None:
+    # Only the SDK's AuthStatus carries the is_success contract; an app enum
+    # with an EXPIRED member says nothing about the caller seeing a failure.
+    handler = (
+        "    except CacheError:\n"
+        "        logger.error('cache entry stale', exc_info=True)\n"
+        "        return CacheResult(status=CacheStatus.EXPIRED)\n"
     )
     assert _l022(handler) == ["L022"]
 
