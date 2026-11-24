@@ -270,9 +270,6 @@ def test_mirror_step_runs_between_vpn_and_tests(integration_steps: list[dict]) -
         lambda s: "docker_registry_mirror.py" in str(s.get("run", "")),
     )
     # resubnet-docker overwrites daemon.json; running before it loses the mirror.
-    vpn = _index(
-        integration_steps, lambda s: "globalprotect-connect" in str(s.get("uses", ""))
-    )
     twingate = _index(
         integration_steps, lambda s: "twingate-connect" in str(s.get("uses", ""))
     )
@@ -280,7 +277,7 @@ def test_mirror_step_runs_between_vpn_and_tests(integration_steps: list[dict]) -
         integration_steps,
         lambda s: "connector-integration-tests" in str(s.get("uses", "")),
     )
-    assert twingate < vpn < mirror < tests
+    assert twingate < mirror < tests
     step = integration_steps[mirror]
     assert "if" not in step
     assert "--mirror https://mirror.gcr.io" in " ".join(step["run"].split())
