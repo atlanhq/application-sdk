@@ -45,16 +45,22 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
   stop and say so in the pull request.
 - Exit 1 with a `[PARSE]` line: a file could not be parsed. That fails the
   run whoever broke it; fix it if your change did.
-- Do not suppress a finding, in any form, to get a green run. That covers
-  `# conformance: ignore[...]`; a new exclude path or ignore entry in the
-  conformance, ruff, pyright or pre-commit configuration; `# noqa`,
-  `# type: ignore` or `# pyright: ignore` on code your change added; a test
-  that is skipped, marked xfail, deleted or weakened; a lowered threshold or
-  coverage floor; and `git commit --no-verify` or a skipped hook. If you
-  believe the rule is wrong for this code, stop and say so in the pull
-  request instead of suppressing it.
+- Fix a finding; do not suppress it. Fix it in this repository's code. If the
+  finding is wrong because the rule itself is wrong for this code, the fix is
+  a rule-fix pull request in application-sdk, not a suppression: open it and
+  link it from this pull request.
+- Suppress only when neither fix is possible: the code is a deliberate,
+  genuine exception that no rule change could express, such as a legacy name
+  kept for compatibility. Then use the narrowest form,
+  `# conformance: ignore[<RULE>] <reason>` on that one line, with a reason
+  that says why, and name it in the pull request.
+- Never suppress any other way: no new exclude path or ignore entry in the
+  conformance, ruff, pyright or pre-commit configuration; no `# noqa`,
+  `# type: ignore` or `# pyright: ignore` to hide what your change added; no
+  test skipped, marked xfail, deleted or weakened; no lowered threshold or
+  coverage floor; no `git commit --no-verify` or skipped hook.
 - A suppression already on `main` is not yours to remove unless the task is
-  to fix it. Never add one to make your own change pass.
+  to fix it.
 - Blocking findings reported as inherited from the base, and warnings your
   change did not introduce, do not fail the run. Leave them alone unless the
   task is to fix them: the scheduled conformance run and its remediation lane
