@@ -7,16 +7,18 @@ One resync has to move a repository from the old reviewer to the new one:
   repository's own principles folder;
 - out: the review gate workflow and its script, the rule-fetch script, the
   session reminder and its hook entry, the local review skill,
-  ``.mothership/reviewer.yaml``, and local review rules that are only the
-  generic placeholder.
+  ``.mothership/reviewer.yaml``, and the whole local review-rules folder
+  ``.mothership/review-rulesets/connector-app/``, real rules included.
 
-A folder of real local rules is knowledge about that connector. It is never
-deleted: those rules are moved to principles by hand.
+Every repository reviews against its own principles now, so nothing in the old
+rules folder is kept. Nothing else under ``.mothership/`` is touched, and no
+symlink is followed out of the repository.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import re
 from importlib.resources import files
@@ -26,10 +28,6 @@ import yaml
 
 from conformance.bootstrap.args import BOOTSTRAP_USAGE
 from conformance.bootstrap.command import _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK
-from conformance.bootstrap.local_rules import (
-    is_placeholder_rule,
-    placeholder_rule_files,
-)
 from conformance.bootstrap.render import (
     CONNECTOR_REVIEWER_PRINCIPLES_README,
     LOCAL_REVIEW_RULES_DIR,
@@ -906,7 +904,7 @@ def test_resync_leaves_the_repositorys_principles_byte_for_byte(
     repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Bootstrap writes into the principles folder (the README is absent) and
-    retires the old placeholder rules in the same pass, and still every other
+    removes the old local rules folder in the same pass, and still every other
     file in the folder is left exactly as it was and is reported nowhere."""
     principles = ".github/connector-reviewer/principles"
     own = {
@@ -927,7 +925,7 @@ def test_resync_leaves_the_repositorys_principles_byte_for_byte(
         assert rel not in manifest["unchanged"], rel
     assert (repo / _README_REL).read_text() == render(_README_TEMPLATE)
     assert _README_REL in manifest["touched"]
-    # The placeholder rules did go, so the retire path ran in this pass.
+    # The old rules folder did go, so the removal ran in this pass.
     assert not (repo / LOCAL_REVIEW_RULES_DIR).exists()
     # Nothing else appeared in the folder.
     assert sorted(
@@ -1263,191 +1261,265 @@ def test_resync_leaves_gitignore_to_the_repository(repo: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Local review rules: the placeholder goes, a real rule keeps the folder
+# Local review rules: the whole folder goes, real rules included
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("name", "rule_id"),
-    [
-        ("Widget", "WIDGET-REPO-001"),
-        ("OpenWidget", "OPENWIDGET-REPO-001"),
-        ("Widget Cloud Lineage", "WIDGET-CLOUD-LINEAGE-REPO-001"),
-        ("Widget ERP", "WIDGET_ERP-REPO-012"),
-    ],
-)
-def test_placeholder_is_recognised_whatever_the_product(
-    name: str, rule_id: str
+def _files_under(folder: pathlib.Path, root: pathlib.Path) -> list[str]:
+    """Every non-directory under *folder*, links included, repo-relative.
+
+    Walked without following links, so a link to a directory is one entry.
+    """
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        here = pathlib.Path(dirpath)
+        links = [name for name in dirnames if (here / name).is_symlink()]
+        for name in [*filenames, *links]:
+            found.append((here / name).relative_to(root).as_posix())
+    return sorted(found)
+
+
+def _assert_folder_removed(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str], argv: list[str]
 ) -> None:
-    assert is_placeholder_rule(_placeholder(name, rule_id))
+    """Run bootstrap with *argv* and check the folder went, file by file."""
+    files = _files_under(repo / LOCAL_REVIEW_RULES_DIR, repo)
+    assert files
 
+    assert _cmd_bootstrap([*argv, "--json"]) == 0
 
-def test_placeholder_is_recognised_whatever_the_whitespace() -> None:
-    text = _placeholder()
-    assert is_placeholder_rule(text.rstrip("\n"))
-    assert is_placeholder_rule(text.replace("\n", "\r\n"))
-    assert is_placeholder_rule(text + "\n\n")
-    # Re-wrapped by a formatter: the same words on different lines.
-    assert is_placeholder_rule(text.replace(" contract\n  shown", " contract shown"))
+    out = capsys.readouterr().out
+    touched = json.loads(out.strip().splitlines()[-1])["touched"]
+    for rel in files:
+        assert rel in touched, rel
+        assert f"removed: {repo / rel}  (retired file)" in out, rel
+    assert not (repo / ".mothership").exists()
+    assert "kept:" not in out
+    assert not any(line.startswith("skipped:") for line in out.splitlines())
 
 
 @pytest.mark.parametrize(
-    "text",
+    "rules",
     [
-        _REAL_RULE,
-        "",
-        "# Review Widget-specific behavior\n",
-        # A sentence added to the generic text.
-        _placeholder() + "- Widget ids are case-sensitive.\n",
-        # A word changed in the generic text.
-        _placeholder().replace("lineage", "profiling"),
-        # A field changed in the front matter.
-        _placeholder().replace("severity: HIGH", "severity: LOW"),
-        _placeholder().replace("globs: []", "globs: ['app/**']"),
-        # Renamed by hand: the id no longer has the placeholder's shape.
-        _placeholder(rule_id="WIDGET-IDENTITY-001"),
-        # A different title.
-        _placeholder().replace("# Review Widget-specific behavior", "# Widget ids"),
-        # Two rules in one file.
-        _placeholder() + _placeholder(),
+        pytest.param({"widget-repo-001.md": _placeholder()}, id="placeholder"),
+        pytest.param({"widget-paging-001.md": _REAL_RULE}, id="real-rule"),
+        pytest.param(
+            {"widget-repo-001.md": _placeholder(), "widget-paging-001.md": _REAL_RULE},
+            id="real-rule-beside-placeholder",
+        ),
+        pytest.param(
+            {"widget-repo-001.md": _placeholder() + "- Widget ids are cased.\n"},
+            id="reworded-placeholder",
+        ),
     ],
 )
-def test_anything_else_is_a_real_rule(text: str) -> None:
-    assert not is_placeholder_rule(text)
+def test_resync_removes_the_whole_rules_folder(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str], rules: dict[str, str]
+) -> None:
+    """Every repository has principles now: no rule in the folder is kept."""
+    _seed_local_rules(repo, rules)
+    _assert_folder_removed(repo, capsys, ["--resync"])
 
 
-def test_placeholder_only_folder_is_removed(
+def test_any_other_file_in_the_rules_folder_goes_too(
     repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _seed_local_rules(repo, {"widget-repo-001.md": _placeholder()})
+    _seed_local_rules(
+        repo,
+        {"widget-paging-001.md": _REAL_RULE},
+        manifest="schema: 2\nowner: widget-team\nrules:\n  - rules/gone.md\n",
+    )
+    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/NOTES.md", "why we have these\n")
+    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/rules/drafts/next.md", "draft\n")
+    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/fixtures/sample.json", "{}\n")
+    _assert_folder_removed(repo, capsys, ["--resync"])
+
+
+def test_manifest_alone_is_removed(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/MANIFEST.yaml", "schema: 2\nrules: []\n")
+    _assert_folder_removed(repo, capsys, ["--resync"])
+
+
+def test_connector_review_kit_alone_removes_the_folder(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
+    _assert_folder_removed(repo, capsys, ["--connector-review-kit"])
+
+
+def test_other_mothership_content_is_kept(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
+    others = {
+        ".mothership/review.yaml": "ours: true\n",
+        ".mothership/.cache/review-rulesets/platform/x.md": "cached\n",
+        ".mothership/review-rulesets/other/rules/x.md": "ours\n",
+        ".mothership/review-rulesets/README.md": "kept\n",
+    }
+    for rel, text in others.items():
+        _write(repo, rel, text)
 
     assert _cmd_bootstrap(["--resync", "--json"]) == 0
 
     touched = _manifest(capsys)["touched"]
-    assert f"{LOCAL_REVIEW_RULES_DIR}/rules/widget-repo-001.md" in touched
-    assert f"{LOCAL_REVIEW_RULES_DIR}/MANIFEST.yaml" in touched
-    assert not (repo / ".mothership").exists()
-
-
-def test_placeholder_rules_without_a_manifest_are_removed(repo: pathlib.Path) -> None:
-    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/rules/widget-repo-001.md", _placeholder())
-    assert _cmd_bootstrap(["--resync"]) == 0
-    assert not (repo / ".mothership").exists()
-
-
-def test_other_rulesets_beside_the_placeholder_are_left(repo: pathlib.Path) -> None:
-    _seed_local_rules(repo, {"widget-repo-001.md": _placeholder()})
-    _write(repo, ".mothership/review-rulesets/other/rules/x.md", "ours\n")
-
-    assert _cmd_bootstrap(["--resync"]) == 0
-
     assert not (repo / LOCAL_REVIEW_RULES_DIR).exists()
-    assert (repo / ".mothership/review-rulesets/other/rules/x.md").read_text() == (
-        "ours\n"
+    for rel, text in others.items():
+        assert (repo / rel).read_text() == text, rel
+        assert rel not in touched, rel
+    assert all(
+        rel.startswith(f"{LOCAL_REVIEW_RULES_DIR}/")
+        for rel in touched
+        if rel.startswith(".mothership/")
     )
 
 
-def _assert_folder_kept(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str], reason: str
+def test_link_to_a_file_outside_the_repo_is_removed_not_followed(
+    repo: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    outside = _write(tmp_path, "outside/shared-rule.md", "not the repo's\n")
+    folder = _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
+    link = folder / "rules" / "shared-rule.md"
+    link.symlink_to(outside)
+
+    _assert_folder_removed(repo, capsys, ["--resync"])
+
+    assert not link.is_symlink()
+    assert outside.read_text() == "not the repo's\n"
+
+
+def test_link_to_a_directory_outside_the_repo_is_not_walked(
+    repo: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    outside = tmp_path / "outside-rules"
+    _write(outside, "a.md", "a\n")
+    _write(outside, "nested/b.md", "b\n")
+    before = _tree(outside)
+    folder = _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
+    link = folder / "rules" / "shared"
+    link.symlink_to(outside, target_is_directory=True)
+
+    _assert_folder_removed(repo, capsys, ["--resync"])
+
+    assert not link.is_symlink()
+    assert _tree(outside) == before
+
+
+def test_dangling_link_in_the_folder_is_removed(
+    repo: pathlib.Path, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
+    (folder / "rules" / "gone.md").symlink_to(tmp_path / "missing.md")
+    _assert_folder_removed(repo, capsys, ["--resync"])
+
+
+def test_folder_that_is_a_link_inside_the_repo_goes_as_the_link_alone(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = repo / "docs" / "review-rules"
+    _write(target, "rules/x.md", "the repo's docs\n")
     folder = repo / LOCAL_REVIEW_RULES_DIR
-    before = _tree(folder)
-    assert before
+    folder.parent.mkdir(parents=True)
+    folder.symlink_to(target, target_is_directory=True)
 
     assert _cmd_bootstrap(["--resync", "--json"]) == 0
 
+    assert LOCAL_REVIEW_RULES_DIR in _manifest(capsys)["touched"]
+    assert not folder.is_symlink()
+    assert not (repo / ".mothership").exists()
+    assert (target / "rules" / "x.md").read_text() == "the repo's docs\n"
+
+
+def _link_outside(
+    repo: pathlib.Path, tmp_path: pathlib.Path, link_rel: str
+) -> pathlib.Path:
+    """Make *link_rel* a link to a directory outside *repo* holding the rules."""
+    outside = tmp_path / "outside"
+    below = LOCAL_REVIEW_RULES_DIR[len(link_rel) :].lstrip("/")
+    rules = outside / below if below else outside
+    _write(rules, "MANIFEST.yaml", "schema: 2\nrules:\n  - rules/x.md\n")
+    _write(rules, "rules/x.md", _REAL_RULE)
+    link = repo / link_rel
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    return outside
+
+
+_OUTSIDE_LINKS = pytest.mark.parametrize(
+    "link_rel",
+    [LOCAL_REVIEW_RULES_DIR, ".mothership/review-rulesets", ".mothership"],
+)
+
+
+@_OUTSIDE_LINKS
+def test_resync_skips_the_kit_when_the_folder_links_outside_the_repo(
+    repo: pathlib.Path,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    link_rel: str,
+) -> None:
+    """Like an AGENTS.md linked outside the repository: the kit is skipped
+    whole, so the old kit stays together, and the rest of the resync lands."""
+    outside = _link_outside(repo, tmp_path, link_rel)
+    before = _tree(outside)
+    _write(repo, _REMINDER, "legacy\n")
+
+    assert _cmd_bootstrap(["--resync"]) == 0
+
     out = capsys.readouterr().out
-    assert _tree(folder) == before
-    kept = [line for line in out.splitlines() if line.startswith("kept: ")]
-    assert len(kept) == 1
-    assert str(folder) in kept[0]
-    assert reason in kept[0]
-    assert "by hand" in kept[0]
-    # Not a refusal: the resync lane holds a repository on a `skipped:` line.
-    assert not any(line.startswith("skipped:") for line in out.splitlines())
-    manifest = json.loads(out.strip().splitlines()[-1])
-    assert not [p for p in manifest["touched"] if p.startswith(".mothership/review")]
+    skipped = [line for line in out.splitlines() if line.startswith("skipped:")]
+    assert len(skipped) == 1
+    assert "outside the repository" in skipped[0]
+    assert "connector review kit was left untouched" in skipped[0]
+    assert (repo / link_rel).is_symlink()
+    assert _tree(outside) == before
+    assert (repo / _REMINDER).read_text() == "legacy\n"
+    assert not (repo / "CLAUDE.md").exists()
+    assert (repo / ".github/workflows" / _WORKFLOW).exists()
 
 
-def test_folder_with_a_real_rule_is_left_whole(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+@_OUTSIDE_LINKS
+def test_connector_review_kit_refuses_a_folder_linked_outside_the_repo(
+    repo: pathlib.Path,
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    link_rel: str,
 ) -> None:
-    _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
-    _assert_folder_kept(repo, capsys, "widget-paging-001.md")
+    outside = _link_outside(repo, tmp_path, link_rel)
+    before = _tree(outside)
 
+    assert _cmd_bootstrap(["--connector-review-kit"]) == 2
 
-def test_real_rule_beside_a_placeholder_keeps_both(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The placeholder is not picked out: the folder is moved as one."""
-    _seed_local_rules(
-        repo,
-        {"widget-repo-001.md": _placeholder(), "widget-paging-001.md": _REAL_RULE},
-    )
-    _assert_folder_kept(repo, capsys, "widget-paging-001.md")
-
-
-def test_reworded_placeholder_keeps_the_folder(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _seed_local_rules(
-        repo,
-        {"widget-repo-001.md": _placeholder() + "- Widget ids are case-sensitive.\n"},
-    )
-    _assert_folder_kept(repo, capsys, "widget-repo-001.md")
-
-
-def test_manifest_with_more_than_the_rule_list_keeps_the_folder(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _seed_local_rules(
-        repo,
-        {"widget-repo-001.md": _placeholder()},
-        manifest="schema: 2\nowner: widget-team\nrules:\n  - rules/widget-repo-001.md\n",
-    )
-    _assert_folder_kept(repo, capsys, "MANIFEST.yaml")
-
-
-def test_manifest_listing_a_rule_not_on_disk_keeps_the_folder(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _seed_local_rules(
-        repo,
-        {"widget-repo-001.md": _placeholder()},
-        manifest=(
-            "schema: 2\nrules:\n  - rules/widget-repo-001.md\n  - rules/gone.md\n"
-        ),
-    )
-    _assert_folder_kept(repo, capsys, "MANIFEST.yaml")
-
-
-def test_unrecognised_file_keeps_the_folder(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _seed_local_rules(repo, {"widget-repo-001.md": _placeholder()})
-    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/NOTES.md", "why we have these\n")
-    _assert_folder_kept(repo, capsys, "NOTES.md")
-
-
-def test_manifest_without_any_rule_keeps_the_folder(
-    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    _write(repo, f"{LOCAL_REVIEW_RULES_DIR}/MANIFEST.yaml", "schema: 2\nrules: []\n")
-    _assert_folder_kept(repo, capsys, "no rule file")
+    assert "outside the repository" in capsys.readouterr().err
+    assert _tree(outside) == before
+    assert not (repo / "CLAUDE.md").exists()
+    assert not (repo / ".github").exists()
 
 
 def test_no_local_rules_folder_is_silent(
     repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert placeholder_rule_files(repo) == ([], "")
+    assert _cmd_bootstrap(["--resync", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert ".mothership" not in out
+
+
+def test_empty_directories_left_by_a_checkout_are_removed_silently(
+    repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     (repo / LOCAL_REVIEW_RULES_DIR / "rules").mkdir(parents=True)
-    assert placeholder_rule_files(repo) == ([], "")
-    assert _cmd_bootstrap(["--resync"]) == 0
-    assert "kept:" not in capsys.readouterr().out
+    assert _cmd_bootstrap(["--resync", "--json"]) == 0
+    out = capsys.readouterr().out
+    assert not (repo / ".mothership").exists()
+    assert "removed:" not in out
+    manifest = json.loads(out.strip().splitlines()[-1])
+    assert not [p for p in manifest["touched"] if p.startswith(".mothership")]
 
 
-def test_bare_run_leaves_placeholder_rules(repo: pathlib.Path) -> None:
-    folder = _seed_local_rules(repo, {"widget-repo-001.md": _placeholder()})
+def test_bare_run_leaves_the_rules_folder(repo: pathlib.Path) -> None:
+    folder = _seed_local_rules(repo, {"widget-paging-001.md": _REAL_RULE})
     before = _tree(folder)
     assert _cmd_bootstrap([]) == 0
     assert _tree(folder) == before
@@ -1599,19 +1671,20 @@ def test_resync_moves_a_placeholder_only_repo_to_the_connector_reviewer(
     assert _tree(placeholder_repo) == before
 
 
-def test_resync_moves_a_repo_with_a_real_rule_and_keeps_its_rules_folder(
+def test_resync_moves_a_repo_with_a_real_rule_and_removes_its_rules_folder(
     real_rule_repo: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    folder = real_rule_repo / LOCAL_REVIEW_RULES_DIR
-    rules_before = _tree(folder)
-
     assert _cmd_bootstrap(["--resync", "--json"]) == 0
     out = capsys.readouterr().out
+    touched = json.loads(out.strip().splitlines()[-1])["touched"]
 
     _assert_moved_to_the_connector_reviewer(real_rule_repo)
-    # The folder with a real rule is untouched, placeholder and manifest included.
-    assert _tree(folder) == rules_before
-    assert f"kept: {folder}" in out
+    # The real rule goes with the placeholder and the manifest.
+    assert not (real_rule_repo / ".mothership").exists()
+    for name in ("rules/gadget-repo-001.md", "rules/gadget-paging-001.md"):
+        assert f"{LOCAL_REVIEW_RULES_DIR}/{name}" in touched, name
+    assert f"{LOCAL_REVIEW_RULES_DIR}/MANIFEST.yaml" in touched
+    assert "kept:" not in out
     # AGENTS.md existed, so it carries the same block.
     assert (real_rule_repo / "AGENTS.md").read_text() == f"# Agent notes\n\n{_BLOCK}"
 

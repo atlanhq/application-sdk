@@ -28,7 +28,6 @@ from conformance.bootstrap.extract import (
     strip_action_pins,
     unpreserved_tests_yaml_declarations,
 )
-from conformance.bootstrap.local_rules import placeholder_rule_files
 from conformance.bootstrap.render import (
     CONNECTOR_REVIEWER_PRINCIPLES_README,
     LOCAL_REVIEW_RULES_DIR,
@@ -584,6 +583,47 @@ class _ConnectorReviewKitPlan(NamedTuple):
     settings: str | None
     # (file, new content) for ``CLAUDE.md`` and, where one exists, ``AGENTS.md``.
     blocks: tuple[tuple[pathlib.Path, str], ...]
+    # Every path of the old local review-rules folder, in removal order. See
+    # ``_plan_local_review_rules``.
+    rules_removals: tuple[pathlib.Path, ...]
+
+
+def _plan_local_review_rules(root: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """List what removing the old local review-rules folder deletes.
+
+    Every repository reviews against its own principles now, so the whole of
+    ``LOCAL_REVIEW_RULES_DIR`` goes, whatever it holds: ``MANIFEST.yaml``,
+    every rule, and any other file. The paths come children first, so the
+    write phase only has to unlink files and links and ``rmdir`` directories
+    in this order. The rest of ``.mothership/`` is never listed.
+
+    No symlink is followed out of the repository. A folder reached through a
+    link that resolves outside it raises ``ConnectorReviewMergeError``, as an
+    ``AGENTS.md`` linked outside the repository does. A folder that is itself
+    a link inside the repository is removed as the link alone. A link inside
+    the folder is removed as a link: the walk never descends into it, so what
+    it points at stays as it was.
+    """
+    folder = root / LOCAL_REVIEW_RULES_DIR
+    if not folder.is_symlink() and not folder.exists():
+        return ()
+    if not folder.resolve().is_relative_to(root.resolve()):
+        raise ConnectorReviewMergeError(
+            folder, "it is reached through a symlink to outside the repository"
+        )
+    if folder.is_symlink() or not folder.is_dir():
+        return (folder,)
+    paths: list[pathlib.Path] = []
+    # Bottom-up and without following links: a link to a directory is listed
+    # under dirnames but never walked into.
+    for dirpath, dirnames, filenames in os.walk(folder, topdown=False):
+        here = pathlib.Path(dirpath)
+        paths.extend(here / name for name in sorted(filenames))
+        paths.extend(
+            here / name for name in sorted(dirnames) if (here / name).is_symlink()
+        )
+        paths.append(here)
+    return tuple(paths)
 
 
 def _plan_connector_review_kit(root: pathlib.Path) -> _ConnectorReviewKitPlan:
@@ -601,9 +641,11 @@ def _plan_connector_review_kit(root: pathlib.Path) -> _ConnectorReviewKitPlan:
     refused: the write would follow it and replace that file. A link that
     stays inside the repository, such as ``AGENTS.md -> CLAUDE.md``, is merged
     as usual. A dangling link does not exist, so it is left alone like a
-    missing ``AGENTS.md``.
+    missing ``AGENTS.md``. The old local review-rules folder follows the same
+    rule (see ``_plan_local_review_rules``).
     """
     settings = _retire_connector_review_hooks(root / ".claude" / "settings.json")
+    rules_removals = _plan_local_review_rules(root)
     targets = [root / "CLAUDE.md"]
     agents = root / "AGENTS.md"
     if agents.exists():
@@ -615,6 +657,7 @@ def _plan_connector_review_kit(root: pathlib.Path) -> _ConnectorReviewKitPlan:
     return _ConnectorReviewKitPlan(
         settings=settings,
         blocks=tuple((dest, _merge_connector_review_block(dest)) for dest in targets),
+        rules_removals=rules_removals,
     )
 
 
@@ -671,28 +714,29 @@ def _sync_principles_readme(root: pathlib.Path) -> list[tuple[pathlib.Path, str]
     return [(dest, "scaffolded")]
 
 
-def _retire_placeholder_review_rules(
-    root: pathlib.Path,
+def _remove_local_review_rules(
+    root: pathlib.Path, paths: tuple[pathlib.Path, ...]
 ) -> list[tuple[pathlib.Path, str]]:
-    """Remove the repository's own mothership rules when all are placeholders.
+    """Delete the planned review-rules paths, then the parents left empty.
 
-    One real rule keeps the whole folder: see ``conformance.bootstrap.
-    local_rules``. That is reported as ``kept:``, not ``skipped:``. The resync
-    lane reads a ``skipped:`` line as a scaffold bootstrap refused to
-    rewrite, and holds the repository for it; a folder of real rules waiting
-    to be moved by hand is the intended result, not a refusal.
+    Files and links are unlinked, never followed, and each is reported like
+    any retired file. Directories are removed silently: git tracks files, so
+    only the files belong in the ``--json`` manifest. ``.mothership/`` and
+    ``review-rulesets/`` go only when nothing else is left in them.
     """
-    files, kept_because = placeholder_rule_files(root)
-    folder = root / LOCAL_REVIEW_RULES_DIR
-    if kept_because:
-        print(
-            f"kept: {folder}  ({kept_because}; nothing in it was removed. Move"
-            " its rules to .github/connector-reviewer/principles/ by hand)"
-        )
-        return []
-    changes = [(path, _retire_file(path)) for path in files]
-    if changes:
-        _prune_empty_dirs(folder / "rules", root)
+    changes: list[tuple[pathlib.Path, str]] = []
+    for path in paths:
+        if path.is_symlink() or not path.is_dir():
+            path.unlink(missing_ok=True)
+            print(f"removed: {path}  (retired file)")
+            changes.append((path, "removed"))
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            continue
+    if paths:
+        _prune_empty_dirs((root / LOCAL_REVIEW_RULES_DIR).parent, root)
     return changes
 
 
@@ -701,15 +745,15 @@ def _sync_connector_review_kit(
 ) -> list[tuple[pathlib.Path, str]]:
     """Apply the review kit after its merge targets were preflighted.
 
-    Takes the mothership kit out (its files, its hook entry, placeholder
-    rules) and puts the connector reviewer's local side in (the managed block
-    and the principles folder).
+    Takes the mothership kit out (its files, its hook entry, the old local
+    review-rules folder) and puts the connector reviewer's local side in (the
+    managed block and the principles folder).
     """
     changes: list[tuple[pathlib.Path, str]] = []
     for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
         changes.extend(_retire_kit_file(root, root / dest_rel))
     changes.extend(_write_connector_review_settings(root, plan.settings))
-    changes.extend(_retire_placeholder_review_rules(root))
+    changes.extend(_remove_local_review_rules(root, plan.rules_removals))
     for dest, text in plan.blocks:
         changes.append((dest, _bootstrap_file(dest, text)))
     changes.extend(_sync_principles_readme(root))

@@ -308,10 +308,9 @@ RETIRED_CONNECTOR_REVIEW_FILES: tuple[str, ...] = (
 )
 
 # The review rules the repository kept for the mothership reviewer: a
-# ``MANIFEST.yaml`` and a ``rules/`` folder of Markdown files. The kit removes
-# them only when every rule is the generic placeholder most repositories were
-# seeded with (see ``conformance.bootstrap.local_rules``). A folder holding
-# any other rule is left whole: those rules are moved to principles by hand.
+# ``MANIFEST.yaml`` and a ``rules/`` folder of Markdown files. Every repository
+# reviews against its own principles now, so the kit removes this whole folder,
+# real rules included, and nothing else under ``.mothership/``.
 LOCAL_REVIEW_RULES_DIR = ".mothership/review-rulesets/connector-app"
 
 
