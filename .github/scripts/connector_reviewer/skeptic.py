@@ -26,9 +26,28 @@ trigger, the code path, the outcome; agent.trace_chain) against the code.
 - A failed call (a provider error), a spent budget share, or a check past
   the cap changes nothing: no check was made, and a provider error must not
   unblock a real defect.
+- **Already on the base** (FND-5316): when the caller hands the check the
+  finding's code as it is on the base branch (`base_for`), the skeptic also
+  answers whether the failure is introduced or made worse by this pull
+  request, or already happens at the base (`on_base`). A judged verdict
+  (upheld, contested or refuted) with `same_on_base` drops the finding: the
+  caller removes it and says so in the summary. The answer must quote the
+  base line(s) where the failure already happens (`base_evidence`); code
+  checks the quote is in the base copy, is not the finding's own added
+  line, and shares a name with the failing code, and without that the
+  answer counts as `introduced`. With no base code (code the
+  PR removes, a new file or symbol, or a base copy that cannot be read) the
+  answer is not read, and nothing is dropped on an unknown.
+- **A retry turn's finding** (`Finding.retry`, FND-5316): a code bundle's
+  retry of an empty final turn (agent._retry_final) produced findings that
+  were mostly high and none true in a replay. Each one is checked whatever
+  its severity and past the cap, and is dropped unless upheld: a contested,
+  refuted or malformed verdict, and a check that could not be made, all drop
+  it.
 
 Bounded like the approach check (holistic.py): new critical and high findings
-only, at most `max_findings` per round, each check at most `max_lookups`
+(and a retry turn's at any severity), at most `max_findings` per round (a
+retry turn's are not counted), each check at most `max_lookups`
 lookups in all (one response may ask for several; each counts) and then a
 forced verdict, `concurrency` at a time, on a ledger of its
 own carved out of the round's (review.SKEPTIC_SHARE).
@@ -36,13 +55,16 @@ own carved out of the round's (review.SKEPTIC_SHARE).
 
 from __future__ import annotations
 
+import builtins
+import keyword
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import trace
-from .diff import locate_in_text
+from .diff import locate_in_text, snippet_lines
 from .findings import BLOCKING, Finding
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn
 from .prompts import CONNECTOR_PROFILE
@@ -73,6 +95,18 @@ OUTCOMES = (
     "skipped",
 )
 CHANGES = ("refuted", "contested", "malformed")
+# The verdicts a check can give; only these can drop a finding as already on
+# the base (`judge_base`), never "malformed" or a check that was not made.
+JUDGED = ("upheld", "contested", "refuted")
+ON_BASE = ("introduced", "worse", "same_on_base", "unknown")
+SAME_ON_BASE = "same_on_base"
+# The summary note of a retry turn's finding the skeptic did not uphold.
+RETRY_DROP = "it came from a retry of an empty final turn and was not upheld"
+# The summary note of a finding dropped as already on the base.
+BASE_DROP = (
+    "the failure already happens at the base branch, and this pull request "
+    "does not make it worse"
+)
 # The contested note of a check that gave no verdict.
 NO_VERDICT = "the skeptic gave no verdict, so the chain is not confirmed"
 STEP_WHY_KEEP = 160  # characters of the skeptic's note on one step kept in a reason
@@ -90,8 +124,8 @@ class SkepticConfig:
 
 SYSTEM = (
     """\
-You are a skeptical second reviewer. Another reviewer raised ONE finding against a pull request and says
-it must block merge. Your job is to check, against the actual code, whether the finding's causal chain
+You are a skeptical second reviewer. Another reviewer raised ONE finding against a pull request, which is
+checked before it is published or can block merge. Your job is to check, against the actual code, whether the finding's causal chain
 holds: the trigger, each step of the code path, and the outcome.
 """
     + CONNECTOR_PROFILE
@@ -114,6 +148,15 @@ finding, input an attacker or a misconfigured source can send counts as normal. 
 shape, an invalid input, or a chain that needs several unlikely conditions at once is not normal, even
 when every step holds: such a finding does not block. <normal_path> is the other reviewer's claim; check
 it, do not copy it.
+
+Decide whether this pull request causes the failure (on_base). <code_at_base>, when given, is the same
+code as it is on the base branch, before this pull request. On the input the trigger names, does the base
+code reach the same outcome? introduced: the base does not fail this way. worse: the base fails, but this
+pull request makes it more likely or more harmful. same_on_base: the base reaches the same outcome, or a
+worse one, on that input, and this pull request does not make it worse. unknown: you cannot tell, or no
+<code_at_base> is given. Say why in base_why. For same_on_base, quote verbatim in base_evidence the line(s)
+of <code_at_base> where the same failure already happens; same_on_base without a quote found there counts
+as introduced.
 
 - upheld: every step holds in the code and the trigger is a normal input. List every step in `steps`
   with holds=true and what in the code shows it, and set trigger_normal=true. An upheld verdict that
@@ -187,8 +230,21 @@ VERDICT_TOOL: dict[str, Any] = {
                         "required": ["path", "quote"],
                     },
                 },
+                "on_base": {
+                    "type": "string",
+                    "enum": list(ON_BASE),
+                    "description": "Is the failure introduced or made worse by this pull request, or does it already happen at the base (<code_at_base>)? unknown when you cannot tell or no <code_at_base> is given.",
+                },
+                "base_why": {
+                    "type": "string",
+                    "description": "What in <code_at_base> shows it, in one sentence.",
+                },
+                "base_evidence": {
+                    "type": "string",
+                    "description": "Required for same_on_base: the line(s) of <code_at_base>, quoted verbatim without line numbers, where the same failure already happens. same_on_base without it, or with a quote not in <code_at_base>, counts as introduced.",
+                },
             },
-            "required": ["verdict", "reason", "trigger_normal"],
+            "required": ["verdict", "reason", "trigger_normal", "on_base"],
         },
     },
 }
@@ -211,6 +267,8 @@ class Outcome:
     lookups: int = 0
     error: str = ""
     seconds: float = 0.0
+    # Why the finding is dropped (the caller removes it), "" when it is kept.
+    dropped: str = ""
 
     def to_report(self) -> dict[str, Any]:
         return {
@@ -222,16 +280,20 @@ class Outcome:
             "lookups": self.lookups,
             "error": self.error,
             "seconds": self.seconds,
+            "dropped": self.dropped,
         }
 
 
 def candidates(new: list[Finding]) -> list[Finding]:
-    """The findings a skeptic checks: new this round, open and blocking. Gate
-    findings are computed in code, not by a model, so they are not second-guessed."""
+    """The findings a skeptic checks: new this round, open, and blocking or
+    raised by a retry turn (`Finding.retry`). Gate findings are computed in
+    code, not by a model, so they are not second-guessed."""
     return [
         f
         for f in new
-        if f.severity in BLOCKING and f.status == "open" and f.origin == "llm"
+        if (f.severity in BLOCKING or f.retry)
+        and f.status == "open"
+        and f.origin == "llm"
     ]
 
 
@@ -249,7 +311,7 @@ def chain_steps(f: Finding) -> list[dict[str, Any]]:
     return objects((f.chain or EMPTY).get("steps"))
 
 
-def build_input(ws: Workspace, f: Finding, principle: str) -> str:
+def build_input(ws: Workspace, f: Finding, principle: str, base: str = "") -> str:
     line = f.line or f.head_line
     where = f"{f.path}:{line}" if line else f.path
     if line and f.end_line and f.end_line > line:
@@ -302,7 +364,97 @@ def build_input(ws: Workspace, f: Finding, principle: str) -> str:
         parts.append(
             f'<code_at_head path="{f.path}" lines="{lo}-{hi}">\n{window}\n</code_at_head>'
         )
+    if base:
+        parts.append(f"<code_at_base>\n{base}\n</code_at_base>")
     return "\n".join(parts)
+
+
+_LINE_NO = re.compile(r"^ *\d+ ", re.M)
+
+
+def base_source(base: str) -> str:
+    """The code of a `<code_at_base>` excerpt (`review.skeptic_base`): its
+    header line ("path: symbol") and its line numbers removed."""
+    body = base.split("\n", 1)[1] if "\n" in base else ""
+    return _LINE_NO.sub("", body)
+
+
+def _added_lines_quoted(ws: Workspace, f: Finding) -> set[str]:
+    """The lines of `f`'s quote that the PR adds, whitespace-normalised."""
+    fd = ws.diffs.get(f.path)
+    text = ws.text(f.path) or ""
+    if fd is None or not text:
+        return set()
+    lines = text.splitlines()
+    added = {
+        " ".join(lines[n - 1].split()) for n in fd.added_lines if 0 < n <= len(lines)
+    }
+    return {s for s in snippet_lines(f.evidence) if s in added}
+
+
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Names too common to tie a base line to a failure: every keyword and builtin,
+# and a few conventions.
+_NOT_NAMES = (
+    set(keyword.kwlist)
+    | set(keyword.softkwlist)
+    | set(dir(builtins))
+    | {"self", "cls", "args", "kwargs"}
+)
+
+
+def code_names(code: str) -> set[str]:
+    """The Python names and attribute segments in `code` (`a.b.c` gives a, b
+    and c) of at least 3 characters, keywords, builtins and `_NOT_NAMES`
+    left out."""
+    return {n for n in _NAME.findall(code) if len(n) >= 3 and n not in _NOT_NAMES}
+
+
+def base_evidence_problem(ws: Workspace, f: Finding, quote: str, base: str) -> str:
+    """Why `quote` does not prove the failure is already on the base, or ""
+    when it does. It must carry `QUOTE_MIN`+ non-space characters, must not
+    be one of the lines the PR adds that the finding quotes, must be in the
+    base copy the skeptic was shown (`diff.locate_in_text`, the matching the
+    causal-chain trace uses), and must share a name (`code_names`) with the
+    finding's quoted code or its chain's step quotes. Code cannot check that
+    the line shows the same failure; the shared name ties it to the failing
+    code, so an unrelated line of the old function proves nothing."""
+    if len("".join(quote.split())) < QUOTE_MIN:
+        return "no base line quoted as evidence"
+    own = _added_lines_quoted(ws, f)
+    if any(s in own for s in snippet_lines(quote)):
+        return "the evidence quotes the finding's own added line"
+    if not locate_in_text(base_source(base), quote):
+        return "the evidence is not in the base copy"
+    failing = code_names(f.evidence)
+    for s in chain_steps(f):
+        failing |= code_names(str(s.get("code") or ""))
+    if not code_names(quote) & failing:
+        return "the evidence shares no name with the failing code"
+    return ""
+
+
+def judge_base(
+    out: Outcome, args: dict[str, Any], base: str, ws: Workspace, f: Finding
+) -> None:
+    """Mark `out` dropped when the skeptic, shown the base code (`base`),
+    judged the finding, answered that the failure already happens there, and
+    quoted the base line(s) where it does (`base_evidence`), checked in code.
+    Nothing is dropped without base code, on any other answer (a missing or
+    unknown one included), or on a check with no verdict. A `same_on_base`
+    answer whose evidence is missing or not in the base copy is taken as
+    `introduced`: a failure on a line the PR adds is never dropped on the
+    model's word alone."""
+    if not base or out.outcome not in JUDGED or args.get("on_base") != SAME_ON_BASE:
+        return
+    quote = str(args.get("base_evidence") or "")[:QUOTE_MAX]
+    problem = base_evidence_problem(ws, f, quote, base)
+    if problem:
+        note = f"same_on_base taken as introduced: {problem}"
+        out.error = f"{out.error}; {note}" if out.error else note
+        return
+    why = clean(str(args.get("base_why") or ""), STEP_WHY_KEEP)
+    out.dropped = clean(BASE_DROP + (f": {why}" if why else ""))
 
 
 def _parse_verdict(
@@ -409,16 +561,19 @@ def check(
     f: Finding,
     cfg: SkepticConfig,
     principle: str = "",
+    base: str = "",
 ) -> Outcome:
     """One skeptic call on one finding. Never raises for a model failure: the
     outcome says what happened, and only "refuted", "contested" or
     "malformed" (the model answered with no verdict) changes anything. A
-    failed call or a spent budget is no check and changes nothing."""
+    failed call or a spent budget is no check and changes nothing. `base` is
+    the finding's code on the base branch ("" for none): with it, a judged
+    verdict that says the failure is the same there drops the finding."""
     out = Outcome(finding_id=f.id, severity=f.severity)
     t0 = time.monotonic()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": build_input(ws, f, principle)},
+        {"role": "user", "content": build_input(ws, f, principle, base)},
     ]
     try:
         for turn in range(cfg.max_lookups + 1):
@@ -447,6 +602,7 @@ def check(
                 args = parse_args(fn.get("arguments") or "")
                 if name == "skeptic_verdict":
                     _parse_verdict(ws, out, args, len(chain_steps(f)))
+                    judge_base(out, args, base, ws, f)
                     out.seconds = round(time.monotonic() - t0, 1)
                     return out
                 if name in _LOOKUPS and not last and out.lookups < cfg.max_lookups:
@@ -488,8 +644,13 @@ def check(
 def apply(f: Finding, out: Outcome) -> bool:
     """A refuted, contested or malformed finding drops to medium and is marked
     contested (never with an empty note); any other outcome leaves it as it
-    is. Returns whether the finding changed."""
-    if out.outcome not in CHANGES:
+    is. A retry turn's finding that is not upheld is dropped (`out.dropped`),
+    and a dropped one is left as it is too: the caller removes it. Returns
+    whether the finding changed."""
+    if f.retry and out.outcome != "upheld" and not out.dropped:
+        why = out.reason or out.error or out.outcome
+        out.dropped = clean(f"{RETRY_DROP} ({out.outcome}: {why})")
+    if out.dropped or out.outcome not in CHANGES:
         return False
     f.severity = CONTESTED_SEVERITY
     f.contested = out.reason or NO_VERDICT
@@ -503,16 +664,30 @@ def run_all(
     cfg: SkepticConfig,
     principle_for: Any,
     concurrency: int,
+    base_for: Any = None,
 ) -> list[Outcome]:
     """Check every candidate in `new`, `concurrency` at a time, and apply each
     outcome. `principle_for(finding)` renders the principle it cites ("" for
-    none). Candidates past `max_findings` keep their severity, as "skipped"."""
+    none), and `base_for(finding)` its code on the base branch ("" for none,
+    and for every finding when it is not given). Candidates past
+    `max_findings` keep their severity, as "skipped"; a retry turn's findings
+    are always checked and not counted against it. An outcome with `dropped`
+    set is a finding the caller removes."""
     todo = candidates(new)
-    checked, over = todo[: max(cfg.max_findings, 0)], todo[max(cfg.max_findings, 0) :]
+    cap = max(cfg.max_findings, 0)
+    rest = [f for f in todo if not f.retry]
+    checked, over = [f for f in todo if f.retry] + rest[:cap], rest[cap:]
+
+    def base_of(f: Finding) -> str:
+        try:
+            return base_for(f) if base_for else ""
+        except Exception as e:  # noqa: BLE001 - a base that cannot be read is unknown
+            trace.line(f"skeptic {f.id}: base not read ({type(e).__name__})")
+            return ""
 
     def one(f: Finding) -> Outcome:
         try:
-            return check(client, ws, f, cfg, principle_for(f))
+            return check(client, ws, f, cfg, principle_for(f), base_of(f))
         except Exception as e:  # noqa: BLE001 - a skeptic bug must never cost the review
             return Outcome(
                 finding_id=f.id,
@@ -540,7 +715,13 @@ def run_all(
         changed = apply(f, o)
         trace.line(
             f"skeptic {o.finding_id} {o.severity}: {o.outcome}"
-            + (f" → {f.severity}, contested" if changed else ", severity kept")
+            + (
+                " → dropped"
+                if o.dropped
+                else f" → {f.severity}, contested"
+                if changed
+                else ", severity kept"
+            )
             + f" ({o.lookups} lookup(s), {o.seconds:.1f}s)"
             + (f": {trace.short(o.reason, 160)}" if o.reason else "")
             + (f" [{trace.short(o.error, 120)}]" if o.error else "")

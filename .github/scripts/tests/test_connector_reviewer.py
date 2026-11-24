@@ -10278,6 +10278,121 @@ def test_an_answer_is_a_code_comment_or_task_done_on_any_turn(
     assert len(script.requests) == (3 if retry else 2)
 
 
+_SECOND = chained(
+    dict(
+        COMMENT,
+        existing_code="    data = client.get(key)",
+        severity="medium",
+        title="a later finding",
+    )
+)
+
+
+def test_only_the_retry_turns_findings_are_marked(repo: Path):
+    """The skeptic checks every finding of a retry turn, so the mark must be
+    exact: a finding from a later turn (here the second pass) is not one."""
+    ws, bundle = _ws(repo)
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(content="still reasoning"),  # the forced final turn: empty
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response(  # the second pass
+            [
+                tool_call("code_comment", {"comments": [_SECOND]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    lim = _one_turn_limits()
+    lim.second_pass, lim.second_pass_min_lines = 1, 0
+    res = agent_mod.review_bundle(
+        client, ws, bundle, PrincipleSet(), {}, [], lim, retry_empty=True
+    )
+    assert res.retried and res.second_pass_added == 1
+    marks = {f.title: f.retry for f in res.findings}
+    assert marks == {COMMENT["title"]: True, "a later finding": False}
+    st = PRState(findings=res.findings)
+    assert '"retry"' not in json.dumps(st.encode())  # not stored in the state
+
+
+def _retry_run(repo: Path, skeptic_reply: Any) -> tuple[RunResult, Any, Script]:
+    """A whole run whose one code bundle ends on an empty final turn, and whose
+    retry raises one medium finding."""
+    cfg = cfg_for(repo)
+    cfg.limits.max_tool_turns, cfg.limits.plan = 1, 0
+    cfg.limits.turns_per_extra_file, cfg.limits.lines_per_extra_turn = 0, 10**6
+    medium = dict(COMMENT, severity="medium")
+    script = Script(
+        response([tool_call("find_symbol", {"name": "fetch"})]),
+        response(content="still reasoning"),
+        response(
+            [
+                tool_call("code_comment", {"comments": [medium]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+        skeptic=[skeptic_reply],
+    )
+    res, gh = _skeptic_run(repo, script, cfg)
+    assert res.bundles[0].retried and not res.bundles[0].unanswered
+    return res, gh, script
+
+
+@pytest.mark.parametrize(
+    "reply, outcome",
+    [
+        (
+            response(
+                [
+                    tool_call(
+                        "skeptic_verdict",
+                        {"verdict": "contested", "reason": "step 1 does not hold"},
+                    )
+                ]
+            ),
+            "contested",
+        ),
+        (response([tool_call("skeptic_verdict", {"verdict": "maybe"})]), "malformed"),
+        ((400, {}, "bad request"), "error"),
+    ],
+    ids=["contested", "no-verdict", "call-failed"],
+)
+def test_a_retry_turns_finding_the_skeptic_does_not_uphold_is_dropped(
+    repo: Path, reply: Any, outcome: str
+):
+    """A code bundle's retry of an empty final turn produced findings that were
+    mostly high and none true. Each one now faces the skeptic whatever its
+    severity, and one it does not uphold is dropped, not just contested."""
+    res, gh, script = _retry_run(repo, reply)
+
+    assert len(script.skeptic_requests) == 1  # a medium, checked all the same
+    assert state_of(res).findings == []
+    [o] = res.skeptic
+    assert o.outcome == outcome and o.dropped.startswith(
+        "it came from a retry of an empty final turn and was not upheld"
+    )
+    body = gh.comments[0]["body"]
+    assert "The skeptic dropped" in body and "retry of an empty final turn" in body
+
+
+def test_a_retry_turns_finding_the_skeptic_upholds_is_kept(repo: Path):
+    res, gh, script = _retry_run(repo, UPHELD)
+
+    assert len(script.skeptic_requests) == 1
+    [f] = state_of(res).findings
+    assert (f.severity, f.contested) == ("medium", "")
+    assert not res.skeptic[0].dropped
+    assert "The skeptic dropped" not in gh.comments[0]["body"]
+
+
 _TEST_FILE = "tests/unit/other/test_wide.py"
 
 
@@ -13796,6 +13911,257 @@ def test_the_skeptic_takes_a_consumers_behaviour_from_the_cited_principle():
     params: dict[str, Any] = skeptic.VERDICT_TOOL["function"]["parameters"]
     assert "trigger_normal" in params["required"]
     assert params["properties"]["trigger_normal"]["type"] == "boolean"
+
+
+# ---- the skeptic compares against the base branch (FND-5316) -----------------------------------------
+
+
+# SRC_V1's fetch: in the base copy, and it shares the failing call
+# `client.get(key)` with COMMENT's causal chain, so it can justify a drop.
+BASE_LINE = "    return client.get(key)"
+
+
+def _base_verdict(
+    on_base: str | None, verdict: str = "upheld", evidence: str | None = BASE_LINE
+) -> Any:
+    """A skeptic verdict confirming every step, with `on_base` (left out when
+    None) as its answer to "does the base already fail this way?", and
+    `evidence` (left out when None) as the base line it quotes."""
+    args: dict[str, Any] = {
+        "verdict": verdict,
+        "reason": "The code does it.",
+        "steps": [
+            {"step": n, "holds": True, "why": "the quoted line does it"}
+            for n in range(1, 7)
+        ],
+        "trigger_normal": True,
+        "trigger_why": "the default config produces this input",
+        "base_why": "the base fetch returns client.get(key) for the same key",
+    }
+    if on_base is not None:
+        args["on_base"] = on_base
+    if evidence is not None:
+        args["base_evidence"] = evidence
+    return response([tool_call("skeptic_verdict", args)])
+
+
+def _code_at_base(request: dict[str, Any]) -> str:
+    """The <code_at_base> block of a skeptic request, "" when it has none."""
+    msgs = cast(list[dict[str, Any]], request["messages"])
+    text = str(msgs[1]["content"])
+    if "<code_at_base>" not in text:
+        return ""
+    return text.split("<code_at_base>", 1)[1].split("</code_at_base>", 1)[0]
+
+
+def test_a_failure_that_already_happens_at_the_base_is_dropped(
+    repo: Path, tmp_path: Path
+):
+    """The skeptic checked each step at the PR head only, so it upheld blocking
+    findings whose failure the base branch already had, identically or worse.
+    It now sees the finding's function as it is on the base, answers whether
+    the PR introduces or worsens the failure, and a finding the base already
+    has is dropped, with a note in the summary."""
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base")]
+    res, gh = _skeptic_run(repo, script)
+
+    [req] = script.skeptic_requests
+    base = _code_at_base(req)
+    assert "app/storage/fetch.py: fetch" in base
+    assert "def fetch(client, key):" in base and "return client.get(key)" in base
+    assert "data.decode()" not in base  # the head's code is not the base's
+    assert state_of(res).findings == [] and res.new_findings == []
+    [o] = res.skeptic
+    assert o.outcome == "upheld" and o.dropped.startswith(
+        "the failure already happens at the base branch"
+    )
+    # Its base evidence is in the base copy and shares the failing call.
+    assert o.error == ""
+    body = gh.comments[0]["body"]
+    assert "The skeptic dropped" in body and "decode() on a None result" in body
+    assert "returns client.get(key) for the same key" in body
+    assert "Changes requested" not in body
+    assert "blocking" not in gh.statuses[-1]["description"]
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["skeptic"]["checks"][0]["dropped"] == o.dropped
+
+
+@pytest.mark.parametrize(
+    "evidence, problem",
+    [
+        (None, "no base line quoted as evidence"),
+        ("return", "no base line quoted as evidence"),  # too short to prove anything
+        (
+            "    return client.get(key, default=None)",
+            "the evidence is not in the base copy",
+        ),
+        # The finding quotes a line the PR adds; the base copy of `fetch` does
+        # not fail that way, and quoting the new line itself proves nothing.
+        (
+            "    return data.decode()",
+            "the evidence quotes the finding's own added line",
+        ),
+        # In the base copy, but it shares no name with the failing code
+        # (`object` is a builtin), so it proves nothing about this failure.
+        (
+            '    """Fetch one object."""',
+            "the evidence shares no name with the failing code",
+        ),
+    ],
+    ids=["missing", "too-short", "not-in-base", "own-added-line", "unrelated-line"],
+)
+def test_same_on_base_without_base_evidence_is_taken_as_introduced(
+    repo: Path, evidence: str | None, problem: str
+):
+    """A finding on a line the PR adds is compared with its function's base
+    copy, so a "same on the base" answer could drop a new bug on the model's
+    word alone. A drop now needs the base line(s) where the failure already
+    happens, quoted and found in that copy; anything less counts as
+    introduced and the finding stays."""
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base", evidence=evidence)]
+    res, gh = _skeptic_run(repo, script)
+
+    assert _code_at_base(script.skeptic_requests[0])  # the base copy was shown
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    [o] = res.skeptic
+    assert o.outcome == "upheld" and o.dropped == ""
+    assert o.error == f"same_on_base taken as introduced: {problem}"
+    assert "The skeptic dropped" not in gh.comments[0]["body"]
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_code_names_are_names_and_attribute_segments_not_keywords_or_builtins():
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    got = skeptic.code_names("return self.client.get(key) or len(None) if ok")
+    assert got == {"client", "get", "key"}
+
+
+def test_base_evidence_is_matched_without_line_numbers_or_indentation():
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    base = "app/x.py: f\n    1 def f(a):\n   10     return a.b\n"
+    assert skeptic.base_source(base) == "def f(a):\n    return a.b\n"
+    assert skeptic.locate_in_text(skeptic.base_source(base), "return  a.b") == 2
+
+
+@pytest.mark.parametrize("on_base", ["introduced", "worse", "unknown", "maybe", None])
+def test_a_failure_the_pr_introduces_or_worsens_is_kept(repo: Path, on_base: Any):
+    """Only "same on the base" drops: a failure the PR introduces or worsens,
+    an unknown, an unrecognised answer and no answer keep the finding."""
+    script = _review_script()
+    script.skeptic = [_base_verdict(on_base)]
+    res, gh = _skeptic_run(repo, script)
+
+    assert _code_at_base(script.skeptic_requests[0])
+    [f] = state_of(res).findings
+    assert f.severity == "high" and f.contested == ""
+    assert not res.skeptic[0].dropped
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+@pytest.mark.parametrize(
+    "base", [None, "def fetch(:\n"], ids=["missing", "unparseable"]
+)
+def test_an_unreadable_base_never_drops_a_finding(repo: Path, base: str | None):
+    """A base copy that cannot be read is unknown: no base code is shown, and
+    a "same on the base" answer is not read."""
+    path = repo / "app" / "storage" / "fetch.py"
+    if base is None:
+        path.unlink()
+    else:
+        path.write_text(base)
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base")]
+    res, gh = _skeptic_run(repo, script)
+
+    assert _code_at_base(script.skeptic_requests[0]) == ""
+    [f] = state_of(res).findings
+    assert f.severity == "high" and not res.skeptic[0].dropped
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_a_base_read_that_fails_still_runs_the_check(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A base read that raises is an unknown base: the check runs as before,
+    with no base code, and nothing is dropped."""
+
+    def boom(ws: Any, f: Any) -> str:
+        raise ValueError("odd file")
+
+    monkeypatch.setattr(review_mod, "skeptic_base", boom)
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base")]
+    res, gh = _skeptic_run(repo, script)
+
+    [req] = script.skeptic_requests
+    assert _code_at_base(req) == ""
+    [o] = res.skeptic
+    assert (o.outcome, o.dropped) == ("upheld", "")
+    assert state_of(res).findings[0].severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
+def _base_ws(repo: Path, path: str, old: str | None, new: str) -> Workspace:
+    files = parse_unified_diff(_diff_of(path, old, new))
+    head = {path: new}
+    return Workspace(
+        root=repo,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(repo, overrides=head),
+    )
+
+
+def _at(path: str, quote: str) -> Finding:
+    return Finding(path, 1, "high", "bug", "t", "b", quote)
+
+
+@pytest.mark.parametrize(
+    "path, old, new, quote",
+    [
+        # Code the PR removes: no counterpart, so never "already on base".
+        ("app/storage/fetch.py", SRC_V1, SRC_V2, "    return client.get(key)"),
+        # A new file.
+        (
+            "app/storage/fresh.py",
+            None,
+            "def g(x):\n    return x.decode()\n",
+            "    return x.decode()",
+        ),
+        # A new function in a file the base has.
+        (
+            "app/storage/fetch.py",
+            SRC_V1,
+            SRC_V2_NEXT,
+            "    return {k: fetch(client, k) for k in keys}",
+        ),
+    ],
+    ids=["removed-code", "new-file", "new-function"],
+)
+def test_code_with_no_base_counterpart_shows_the_skeptic_no_base(
+    repo: Path, path: str, old: str | None, new: str, quote: str
+):
+    ws = _base_ws(repo, path, old, new)
+    assert review_mod.skeptic_base(ws, _at(path, quote)) == ""
+
+
+def test_the_skeptic_base_is_the_enclosing_function_on_the_base(repo: Path):
+    """The quote is a line the PR adds inside a function the base has. It gets
+    that function as it is on the base, on purpose: whether the old function
+    already failed the same way is the question, and most findings quote an
+    added line."""
+    ws = _base_ws(repo, "app/storage/fetch.py", SRC_V1, SRC_V2)
+    assert 4 in ws.diffs["app/storage/fetch.py"].added_lines  # the quoted line
+    got = review_mod.skeptic_base(
+        ws, _at("app/storage/fetch.py", "    return data.decode()")
+    )
+    assert got.startswith("app/storage/fetch.py: fetch\n")
+    assert "return client.get(key)" in got and "decode" not in got
 
 
 # ---- the causal chain a finding must carry (FND-5316) ------------------------------------------------
