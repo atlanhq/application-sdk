@@ -330,6 +330,8 @@ these. lens has none of this code.
 
 | App-code bundles and test bundles | All bundles ran `[scope] concurrency` at a time, riskiest first, each with its share of the round's budget. On the bad pull requests nearly every review forced a final turn, and two app-code bundles ended on a final turn with no tool call and 0 findings while test bundles beside them produced test-gap findings. The logs show why: the forced final turn spent its whole `review_max_tokens` on reasoning (output tokens equal to reasoning tokens, no tool call). Nothing said the code was not reviewed. | `review.run` runs two phases in one pool: first the bundles that hold code the app ships (`review.split_code_bundles`: a bundle's riskiest file ranks below `tests/`, so app code packed with its tests counts), then the rest, whose budget shares are computed from what the first phase left. An app-code bundle whose loop ends on an empty turn with nothing reported (`stop == "empty_turns"`) gets one more final turn (`agent._retry_final`, via `review_bundle(retry_empty=True)`) with `[agent] final_retry_max_tokens` (default 48,000, twice `review_max_tokens`) and `prompts.RETRY_FINAL` (answer now, do not check again). The retry is not bound by the bundle's budget share or time limit, only by the round ledger; a refused reservation or a failed call leaves the bundle as it was, never failed. A bundle that still ends with no answer (`BundleResult.unanswered`) gets a summary note naming its files (`review.no_review_note`), and the run report has `retried` and `unanswered` per bundle. The status is not changed by it: whether such a bundle should make the review incomplete is left open. Cost: test bundles now start after the app-code bundles finish, so a pull request with both takes up to one more bundle's wall time. |
 
+| A step that quotes one short line | Dropped as "quotes too little code to check" under `STEP_QUOTE_MIN` (12 non-space characters). A valid finding whose whole mechanism was one un-commented line could never meet it. | A quote under the floor still fails when it spans more than one line or matches nothing. One whole line under the floor stands when it pins one place (`agent._short_line_at`): it matches a whole line exactly (whitespace-normalised) and that line is one the PR adds or removes, or the only such line in the file (in the pinned SDK source: the only one). The location recorded prefers the changed line. A bare `return` repeated across unchanged code still fails ("occurs more than once … and on no line this PR changes"): the floor existed because such a match proves nothing. |
+
 Tests adapted: `upheld()` (the default skeptic reply, `UPHELD`) now sets
 `trigger_normal: true`; `test_the_prompt_and_schema_carry_the_harm_fields` checks
 the Severity sentence with "rejection by a consumer".
@@ -337,6 +339,9 @@ the Severity sentence with "rejection by a consumer".
 case is `test_a_skeptic_whose_call_fails_keeps_the_severity`, and its two
 no-verdict cases are `test_a_skeptic_that_answers_with_no_verdict_contests_the_finding`;
 `test_skeptic_stops_after_the_forced_turn_once_lookups_are_spent` now expects medium.
+The `tiny-quote` case of `test_a_finding_whose_mechanism_is_not_traced_through_code_is_dropped`
+quotes two short lines (a single `    return` is now judged by where it is), and a
+`tiny-line-not-there` case checks that a short line matching nothing is dropped.
 
 ### Regression and history facts (FND-5312)
 

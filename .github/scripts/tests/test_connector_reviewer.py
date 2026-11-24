@@ -13637,7 +13637,15 @@ def _step(code: str, path: str = "app/storage/fetch.py") -> dict[str, str]:
             ),
             "step 2 quotes code that is not in app/storage/retry.py",
         ),
-        (_with_steps(_step("    return")), "step 1 quotes too little code to check"),
+        (
+            _with_steps(_step("    return\n    )")),
+            "step 1 quotes too little code to check",
+        ),
+        (
+            # One short line that matches nothing is still not traced.
+            _with_steps(_step("    pass")),
+            "step 1 quotes code that is not in app/storage/fetch.py",
+        ),
         (_with_steps(), "the causal chain has no step through the code"),
         (_with_steps(_step("    data = client.get(key)"), trigger=" "), "no trigger"),
         (_with_steps(_step("    data = client.get(key)"), outcome=""), "no outcome"),
@@ -13646,6 +13654,7 @@ def _step(code: str, path: str = "app/storage/fetch.py") -> dict[str, str]:
         "no-chain",
         "untraced-step",
         "tiny-quote",
+        "tiny-line-not-there",
         "no-steps",
         "no-trigger",
         "no-outcome",
@@ -13666,6 +13675,69 @@ def test_a_finding_whose_mechanism_is_not_traced_through_code_is_dropped(
     rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
     assert why in rep["bundles"][0]["untraced_dropped"][0]
     assert gh.statuses[-1]["state"] == "success"
+
+
+_SHORT_SRC = (
+    "def emit(rows):\n"
+    "    for r in rows:\n"
+    "        log(r)\n"
+    "    x = 1\n"
+    "    return\n"
+    "    return\n"
+)
+# The PR un-comments one short line: `log(r)` is the whole change.
+_SHORT_DIFF = (
+    "diff --git a/app/emit.py b/app/emit.py\n--- a/app/emit.py\n+++ b/app/emit.py\n"
+    "@@ -1,5 +1,6 @@\n"
+    " def emit(rows):\n"
+    "     for r in rows:\n"
+    "+        log(r)\n"
+    "     x = 1\n"
+    "     return\n"
+    "     return\n"
+)
+
+
+@pytest.mark.parametrize(
+    "code, at, why",
+    [
+        ("        log(r)", "app/emit.py:3", ""),  # the changed line itself
+        ("    x = 1", "app/emit.py:4", ""),  # unchanged, but the only such line
+        (
+            "    return",
+            "",
+            "step 1 quotes one short line that occurs more than once in app/emit.py "
+            "and on no line this PR changes",
+        ),
+        ("    pass", "", "step 1 quotes code that is not in app/emit.py"),
+        ("    x = 1\n    return", "", "step 1 quotes too little code to check"),
+    ],
+    ids=["changed-line", "unique-line", "repeated-line", "no-match", "short-run"],
+)
+def test_a_one_line_quote_that_matches_the_code_exactly_is_traced(
+    tmp_path: Path, code: str, at: str, why: str
+):
+    """A valid finding whose whole mechanism is one changed line was dropped as
+    "quotes too little code to check": a short line could never meet the
+    12-character floor. One whole line that matches the code exactly now
+    stands when it pins one place (a line the PR changes, or the only such
+    line in the file). A quote that matches nothing, a short line repeated
+    across unchanged code, and a short run of lines still fail."""
+    head = {"app/emit.py": _SHORT_SRC}
+    ws = Workspace(
+        root=tmp_path,
+        head_text=head,
+        diffs={f.path: f for f in parse_unified_diff(_SHORT_DIFF)},
+        index=build_index(tmp_path, overrides=head),
+    )
+    raw = {
+        "trigger": "A run with many rows",
+        "steps": [{"path": "app/emit.py", "code": code, "effect": "it logs a row"}],
+        "outcome": "One log line per row",
+    }
+    chain, reason = agent_mod.trace_chain(ws, raw)
+    assert reason == why
+    assert (chain["steps"][0]["at"] if chain else "") == at
 
 
 def test_a_traced_chain_is_kept_and_shown_where_each_step_was_found(repo: Path):

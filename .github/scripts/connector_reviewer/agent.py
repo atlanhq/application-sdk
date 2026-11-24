@@ -31,7 +31,7 @@ from typing import Any, cast
 from . import context, prompts, trace
 from .baseline import PRAdditions
 from .bundle import Bundle
-from .diff import anchor, in_removed_lines, locate_in_text
+from .diff import anchor, in_removed_lines, locate_in_text, snippet_lines
 from .facts import Facts
 from .findings import (
     BLOCKING,
@@ -71,7 +71,8 @@ ANSWER_KEEP = 400  # characters of a regression or history answer kept for the s
 _PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
 # A causal chain (`trace_chain`): at most this many steps are read, each step's
 # quote is checked up to STEP_QUOTE_KEEP characters, and must carry at least
-# STEP_QUOTE_MIN non-space characters, as a skeptic's quote must.
+# STEP_QUOTE_MIN non-space characters, as a skeptic's quote must, unless it is
+# one whole line that pins one place (`_short_line_at`).
 MAX_CHAIN_STEPS = 6
 STEP_QUOTE_KEEP = 400
 STEP_QUOTE_MIN = 12
@@ -401,6 +402,37 @@ def locate_step(ws: Workspace, path: str, code: str) -> str:
     return ""
 
 
+def _whole_line_hits(text: str | None, line: str) -> list[int]:
+    """The lines of `text` that are exactly `line`, whitespace-normalised."""
+    return [
+        i
+        for i, t in enumerate((text or "").splitlines(), 1)
+        if " ".join(t.split()) == line
+    ]
+
+
+def _short_line_at(ws: Workspace, path: str, line: str) -> str:
+    """Where a one-line quote under `STEP_QUOTE_MIN` characters is, or "" when
+    it does not pin one place. A finding whose whole mechanism is one changed
+    line (a log call un-commented) can only quote that line, so a short line
+    stands when it matches a whole line exactly and that line is one the PR
+    adds or removes, or is the only such line in the file. A bare `return`
+    that occurs all over an unchanged file proves nothing and still fails.
+    `line` is whitespace-normalised (`snippet_lines`)."""
+    if path.startswith(SDK_PREFIX):
+        text = ws.sdk.text(path[len(SDK_PREFIX) :]) if ws.sdk else None
+        hits = _whole_line_hits(text, line)
+        return f"{path}:{hits[0]}" if len(hits) == 1 else ""
+    hits = _whole_line_hits(ws.text(path), line)
+    fd = ws.diffs.get(path)
+    changed = [n for n in hits if fd is not None and n in fd.added_lines]
+    if changed:
+        return f"{path}:{changed[0]}"
+    if fd is not None and in_removed_lines(fd, line):
+        return f"{path} (removed)"
+    return f"{path}:{hits[0]}" if len(hits) == 1 else ""
+
+
 def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
     """A comment's `causal_chain` checked against the code: (chain, "") when
     every step quotes code that is where it says, or ({}, why not).
@@ -408,7 +440,8 @@ def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
     The chain is what a finding claims happens: the trigger, each step of the
     code path as code the model read, and the wrong outcome. A step's code
     must be at least `STEP_QUOTE_MIN` non-space characters (a bare `return`
-    is in every file) and must be found in the file it names
+    is in every file), or one whole line that pins one place
+    (`_short_line_at`), and must be found in the file it names
     (`locate_step`). A mechanism that is not traced through code the model
     can quote is a story, not a finding (FND-5316)."""
     chain: Mapping[str, Any] = (
@@ -429,11 +462,22 @@ def trace_chain(ws: Workspace, raw: Any) -> tuple[dict[str, Any], str]:
         path = str(step.get("path") or "").strip()[:200]
         code = str(step.get("code") or "")[:STEP_QUOTE_KEEP]
         effect = " ".join(str(step.get("effect") or "").split())
-        if len("".join(code.split())) < STEP_QUOTE_MIN:
+        lines = snippet_lines(code)
+        # A short quote proves something only as one whole line that pins one
+        # place (`_short_line_at`); a short run of lines does not.
+        short = len("".join(code.split())) < STEP_QUOTE_MIN
+        if not lines or (short and len(lines) > 1):
             return {}, f"step {n} quotes too little code to check"
         at = locate_step(ws, path, code) if path else ""
         if not at:
             return {}, f"step {n} quotes code that is not in {path or 'any file'}"
+        if short:
+            at = _short_line_at(ws, path, lines[0])
+            if not at:
+                return {}, (
+                    f"step {n} quotes one short line that occurs more than once in "
+                    f"{path} and on no line this PR changes"
+                )
         if not effect:
             return {}, f"step {n} does not say what its code does"
         steps.append({"at": at, "code": code, "effect": effect})
