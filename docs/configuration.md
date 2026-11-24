@@ -385,6 +385,7 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `OTEL_SEMCONV_STABILITY_OPT_IN` | `http` | Read by OTel instrumentation, once per process. The handler service sets it to `http` when unset, so HTTP metrics use the stable names (`http_server_request_duration_seconds`, in seconds). An explicit value replaces that default: keep `http` in it (or `http/dup` to emit both stable and legacy names), or the legacy `http_server_duration_milliseconds` comes back. |
 
 | `OTEL_WF_NODE_NAME` | _(empty)_ | Kubernetes node name for workflow telemetry. |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | `30` | Timeout for OTLP export operations. |
