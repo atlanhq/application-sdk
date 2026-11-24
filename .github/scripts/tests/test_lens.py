@@ -39,7 +39,13 @@ from lens.diff import (  # noqa: E402
     parse_unified_diff,
     snippet_in_text,
 )
-from lens.event import decide  # noqa: E402
+from lens.event import (  # noqa: E402
+    DISMISS_USAGE,
+    LENS_USAGE,
+    RECHECK_USAGE,
+    USAGE_ERRORS,
+    decide,
+)
 from lens.findings import Finding, PRState, merge_new  # noqa: E402
 from lens.github import GitHub, GitHubError  # noqa: E402
 from lens.holistic import build_input  # noqa: E402
@@ -1497,7 +1503,7 @@ def test_workflow_triggers_only_on_invocation():
 
 def test_maintainer_comment_triggers_and_force_is_parsed():
     assert decide("issue_comment", _comment("/lens"), REPO).run
-    d = decide("issue_comment", _comment("/lens force please"), REPO)
+    d = decide("issue_comment", _comment("/lens force\nplease"), REPO)
     assert d.run and d.force
 
 
@@ -1515,6 +1521,88 @@ def test_maintainer_comment_triggers_and_force_is_parsed():
 )
 def test_untrusted_or_unaddressed_comments_do_not_trigger(event):
     assert not decide("issue_comment", event, REPO).run
+
+
+# ---- unknown /lens words start nothing (FND-5314) ----------------------------------------
+
+
+def _numbered_comment(body):
+    ev = _comment(body)
+    ev["comment"]["id"] = 555
+    return ev
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "/lens frobnicate",
+        "/lens forse",
+        "/lens Forcee now",
+        "/lens please",
+        # A typo after a valid option is still a typo.
+        "/lens force forse",
+        "/lens verify-budget please",
+    ],
+)
+def test_an_unknown_word_after_lens_gets_a_usage_reply_and_no_review(body):
+    d = decide("issue_comment", _numbered_comment(body), REPO)
+    assert not d.run and not d.force and not d.verify_budget
+    assert d.reason == LENS_USAGE and LENS_USAGE in USAGE_ERRORS
+    assert (d.pr, d.comment_id) == (7, 555)
+
+
+@pytest.mark.parametrize(
+    ("body", "force", "verify_budget"),
+    [
+        ("/lens", False, False),
+        ("/lens   ", False, False),
+        ("/lens\n\n", False, False),
+        ("  /lens \r\n", False, False),
+        ("/lens force", True, False),
+        ("/LENS FORCE\n", True, False),
+        ("/lens force verify-budget", True, True),
+        ("/lens verify-budget", False, True),
+        # A note on the lines below the command is for people, not an option.
+        ("/lens\nplease look at the retry change", False, False),
+        ("/lens force\nthe base moved, so review it all again", True, False),
+    ],
+)
+def test_lens_and_its_options_still_start_a_review(body, force, verify_budget):
+    d = decide("issue_comment", _numbered_comment(body), REPO)
+    assert d.run and d.reason == ""
+    assert (d.force, d.verify_budget) == (force, verify_budget)
+    assert not (d.dismiss or d.recheck)
+
+
+def test_the_lens_subcommands_are_unchanged_by_the_usage_reply():
+    assert decide(
+        "issue_comment", _comment("/lens dismiss F-1a2b3c fine"), REPO
+    ).dismiss
+    assert decide("issue_comment", _comment("/lens recheck F-1a2b3c"), REPO).recheck
+    for bad, usage in (
+        ("/lens dismiss", DISMISS_USAGE),
+        ("/lens recheck", RECHECK_USAGE),
+    ):
+        d = decide("issue_comment", _comment(bad), REPO)
+        assert not d.run and d.reason == usage
+
+
+def test_the_cli_answers_an_unknown_lens_word_and_reviews_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    _CliGitHub.reactions, _CliGitHub.comments, _CliGitHub.live = [], [], {}
+    monkeypatch.setattr(cli, "GitHub", _CliGitHub)
+    monkeypatch.setattr(cli, "run", lambda **kw: pytest.fail("a typo bought a review"))
+    monkeypatch.setattr(cli, "recheck", lambda **kw: pytest.fail("not a recheck"))
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    root = str(Path(__file__).resolve().parents[3])
+    argv = ["review", "--repo", "o/r", "--root", root, "--event-name", "issue_comment"]
+    body = _event_file(tmp_path, "/lens forse")
+    assert cli.main([*argv, "--event-path", body]) == 0
+    assert _CliGitHub.comments == [f"lens: {LENS_USAGE}"]
+    assert _CliGitHub.reactions == ["confused"]
 
 
 def test_shipped_workflow_never_checks_out_pr_head():
@@ -5495,7 +5583,7 @@ def test_shipped_config_keeps_the_verify_default_and_names_the_opt_in():
         ("/lens", False, False),
         ("/lens verify-budget", False, True),
         ("/lens force verify-budget", True, True),
-        ("/lens force please", True, False),
+        ("/lens force\nplease", True, False),
     ],
 )
 def test_verify_budget_is_parsed_from_the_comment(body, force, verify_budget):
@@ -7695,6 +7783,126 @@ def test_a_finding_on_removed_code_survives_an_unrelated_push_and_goes_to_verify
     assert res.state is not None
     assert [g.status for g in res.state.findings] == ["open"]
     assert gh.statuses[-1]["state"] == "failure"
+
+
+def _tag(text: str, tag: str) -> str:
+    return text.split(f"<{tag}>\n", 1)[1].split(f"\n</{tag}>", 1)[0]
+
+
+def test_recheck_of_a_finding_on_removed_code_is_not_told_it_is_gone(repo: Path):
+    """`/lens recheck` said "the quoted code is not in this file any more" of
+    code the PR removes, which reads as fixed. It is told what verify is told:
+    the code is removed by this PR, and its absence is not a fix."""
+    gh = _deletion_repo(repo)
+    gh.files[(CLIENT_PATH, "b0")] = CLIENT_V1
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=_rules(repo),
+        client_factory=_factory(_script_with(_dispose_finding())),
+    )
+    assert first.state is not None
+    [f] = first.state.findings
+    res, script = _recheck(
+        gh, repo, [f.id], "", Script(_verdict(f.id, "open", "still"))
+    )
+    user = script.requests[0]["messages"][1]["content"]
+    code_now = _tag(user, "code_now")
+    assert code_now.startswith(
+        f"{review_mod.REMOVED_NOTE}; the site it was removed from, as it is now:)\n"
+    )
+    assert "for attempt in range(3):" in code_now
+    assert "not in this file any more" not in user
+    assert "no longer in" not in user
+    assert (
+        f"- present on merge base: the quoted code is in {CLIENT_PATH}, and this "
+        "PR removes it: its absence at the PR head is not a fix"
+    ) in user
+    assert "await self.engine.dispose()" in _tag(user, "at_merge_base")
+    assert res.resolved_verified == [] and res.resolved_free == []
+
+
+API_PATH = "application_sdk/api.py"
+API_BASE = "def old_api(x):\n    return x\n\n\ndef keep():\n    return 1\n"
+API_HEAD = "def new_api(x):\n    return x * 2\n\n\ndef keep():\n    return 1\n"
+API_DIFF = _one_hunk(
+    API_PATH,
+    [
+        "-def old_api(x):",
+        "-    return x",
+        "+def new_api(x):",
+        "+    return x * 2",
+        " ",
+        " ",
+        " def keep():",
+    ],
+)
+
+
+def _removed_evidence(diff: str, head: dict[str, str], quote: str, base: str) -> Any:
+    [fd] = parse_unified_diff(diff)
+    ws = Workspace(
+        root=Path("/nonexistent"),
+        head_text=head,
+        diffs={fd.path: fd},
+        index=build_index(Path("/nonexistent"), overrides=head),
+    )
+    f = Finding(fd.path, 1, "high", "bug", "t", "b", quote, compatibility=True)
+    added = review_mod.baseline.PRAdditions(symbols={API_PATH: ["new_api"]})
+    return review_mod.recheck_evidence(ws, f, added, lambda p: base, "")
+
+
+def test_recheck_of_removed_code_never_resolves_on_the_symbol_beside_it():
+    """The removal site sits in `new_api`, which the PR adds. That symbol is a
+    neighbour of the removed code, not its subject: a compatibility claim about
+    removing `old_api` must not resolve as "absent on merge base", and the
+    privacy fact names the module only."""
+    ev = _removed_evidence(
+        API_DIFF, {API_PATH: API_HEAD}, "def old_api(x):\n    return x", API_BASE
+    )
+    assert not ev.absent_on_merge_base
+    assert ev.facts[0].startswith("present on merge base: the quoted code is in")
+    assert not any("new_api" in x for x in ev.facts)
+    assert "public: module application_sdk.api" in ev.facts
+    assert ev.code_now.startswith(review_mod.REMOVED_NOTE)
+    assert "def old_api(x):" in ev.at_merge_base
+
+
+def test_recheck_of_removed_code_ignores_a_copy_the_pr_adds():
+    """`return x` is deleted with `old_api` and re-added inside the new
+    `new_api`. That copy is new code, not the quote surviving: the finding
+    stays about the removal and never resolves as absent on the merge base."""
+    head = "def new_api(x):\n    return x\n\n\ndef keep():\n    return 1\n"
+    diff = _one_hunk(
+        API_PATH,
+        [
+            "-def old_api(x):",
+            "-    return x",
+            "+def new_api(x):",
+            "+    return x",
+            " ",
+            " ",
+            " def keep():",
+        ],
+    )
+    ev = _removed_evidence(diff, {API_PATH: head}, "    return x", API_BASE)
+    assert not ev.absent_on_merge_base
+    assert ev.code_now.startswith(review_mod.REMOVED_NOTE)
+    assert not any("new_api" in x for x in ev.facts)
+
+
+def test_recheck_of_code_in_a_deleted_file_says_the_file_is_deleted():
+    ev = _removed_evidence(
+        LEGACY_DIFF,
+        {},
+        "def legacy_token(user):",
+        "def legacy_token(user):\n    return sign(user, ttl=60)\n",
+    )
+    assert ev.code_now == f"{review_mod.REMOVED_NOTE}; the PR deletes the whole file)"
+    assert not ev.absent_on_merge_base
+    assert "not in this file any more" not in ev.code_now
 
 
 LEGACY_PATH = "application_sdk/auth/legacy.py"
