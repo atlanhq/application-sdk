@@ -18,7 +18,7 @@ match one of its globs carries its note.
 
 from __future__ import annotations
 
-import fnmatch
+import functools
 import re
 from dataclasses import dataclass
 
@@ -43,34 +43,93 @@ class Advisory:
 ADVISORIES: tuple[Advisory, ...] = ()
 
 
-def _glob_to_re(glob: str) -> re.Pattern[str]:
-    """`**` crosses directories, `*` does not; `**/` may match zero dirs."""
-    out, i = "", 0
+# One step of a compiled glob: what it is, and the character for a literal.
+#   lit  - consumes that character
+#   one  - `?`: consumes one character other than `/`
+#   star - `*`: consumes characters other than `/`, or none
+#   any  - `**` not followed by `/`: consumes any characters, or none
+#   opt  - `**/`, first step: skips to after `dirs`, or enters it
+#   dirs - `**/`, second step: consumes any characters and leaves only on a `/`
+_Step = tuple[str, str]
+
+
+@functools.lru_cache(maxsize=256)
+def _compile(glob: str) -> tuple[_Step, ...]:
+    steps: list[_Step] = []
+    i = 0
     while i < len(glob):
         if glob.startswith("**/", i):
-            out += "(?:.*/)?"
+            steps += [("opt", ""), ("dirs", "")]
             i += 3
         elif glob.startswith("**", i):
-            out += ".*"
+            steps.append(("any", ""))
             i += 2
         elif glob[i] == "*":
-            out += "[^/]*"
+            steps.append(("star", ""))
             i += 1
         elif glob[i] == "?":
-            out += "[^/]"
+            steps.append(("one", ""))
             i += 1
         else:
-            out += re.escape(glob[i])
+            steps.append(("lit", glob[i]))
             i += 1
-    return re.compile(f"^{out}$")
+    return tuple(steps)
+
+
+def _closure(steps: tuple[_Step, ...], states: set[int]) -> set[int]:
+    """`states` and every step reachable from them without consuming a character."""
+    todo = list(states)
+    while todo:
+        i = todo.pop()
+        kind = steps[i][0] if i < len(steps) else ""
+        skip = (i + 1,) if kind in ("star", "any") else ()
+        if kind == "opt":
+            skip = (i + 1, i + 2)
+        for j in skip:
+            if j not in states:
+                states.add(j)
+                todo.append(j)
+    return states
 
 
 def glob_match(path: str, glob: str) -> bool:
-    return (
-        bool(_glob_to_re(glob).match(path))
-        or fnmatch.fnmatch(path, glob)
-        and "/" not in glob
-    )
+    """Whether the repo-relative `path` matches `glob`, anchored at the root.
+
+    `**` crosses directories and `**/` may match none; `*` and `?` stay within
+    one segment; every other character is literal (no `[...]` classes). The
+    one matcher for advisories, `exempt` and principle `applies-to` globs.
+    lens also falls back to fnmatch for a glob without a slash, where `*`
+    crosses directories; this fork does not, so `*.py` is a root file only.
+
+    Not a regex: a principle's glob is written in the app repo, and a regex
+    built from `a*a*a*…` backtracks exponentially on a near-miss path. This
+    walks the set of steps the path can be at, one character at a time, so a
+    match costs at most len(path) * len(glob) steps."""
+    steps = _compile(glob)
+    states = _closure(steps, {0})
+    for c in path:
+        nxt: set[int] = set()
+        for i in states:
+            if i == len(steps):
+                continue
+            kind, lit = steps[i]
+            if kind == "lit":
+                if c == lit:
+                    nxt.add(i + 1)
+            elif kind == "one":
+                if c != "/":
+                    nxt.add(i + 1)
+            elif kind == "star":
+                if c != "/":
+                    nxt.add(i)
+            elif kind in ("any", "dirs"):
+                nxt.add(i)
+                if kind == "dirs" and c == "/":
+                    nxt.add(i + 1)
+        if not nxt:
+            return False
+        states = _closure(steps, nxt)
+    return len(steps) in states
 
 
 def changed_paths(files: list[FileDiff]) -> list[str]:

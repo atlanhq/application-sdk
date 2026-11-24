@@ -977,6 +977,8 @@ def test_principles_readme_says_what_goes_in_the_folder() -> None:
         "https://github.com/atlanhq/application-sdk/tree/main/.github/"
         "connector-reviewer/principles",
         "`rpNN-*.md`",
+        # A repo principle can be scoped to part of an area with a quoted glob.
+        'applies-to: [contract, "app/workflow_health/**", "app/sq_enricher*/**"]',
     ):
         assert phrase in readme, phrase
     for area in ("`app`", "`generated`", "`tests`", "`contract`", "`ci`"):

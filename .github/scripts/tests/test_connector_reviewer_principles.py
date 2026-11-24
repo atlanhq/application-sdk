@@ -178,11 +178,13 @@ def test_dont_flag_names_what_ci_covers(fleet: list[Principle]) -> None:
 
 
 def test_readme_lists_every_fleet_principle(fleet: list[Principle]) -> None:
-    """The index also pins each file's areas: a dropped ``applies-to`` line
-    would otherwise widen a principle to every file without anyone noticing."""
+    """The index also pins each file's areas and globs: a dropped ``applies-to``
+    line would otherwise widen a principle to every file without anyone
+    noticing. A glob-only principle is not an everywhere one."""
     text = README.read_text(encoding="utf-8")
     for p in fleet:
-        areas = ", ".join(p.applies_to) if p.applies_to else "everywhere"
+        scope = [*p.applies_to, *(f"`{g}`" for g in p.globs)]
+        areas = "everywhere" if p.everywhere else ", ".join(scope)
         assert f"| {p.id} | {p.title} | {areas} |" in text, p.id
 
 

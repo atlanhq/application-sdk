@@ -73,6 +73,7 @@ from connector_reviewer.llm import (
 )
 from connector_reviewer.lock import BUSY_NOTE, older_active_run, run_name
 from connector_reviewer.principles import (
+    Principle,
     PrinciplesError,
     PrincipleSet,
     area_of,
@@ -1067,6 +1068,127 @@ def test_a_file_that_does_not_follow_the_format_is_refused_with_the_reason(text,
         parse_principle(text, "fleet")
 
 
+def _scoped(applies_to: str) -> Principle:
+    """FP01 with `applies_to` as its `applies-to` value."""
+    return parse_principle(FP01.replace("[app, contract]", applies_to), "fleet")
+
+
+def _covers(p: Principle, path: str) -> bool:
+    """Whether a bundle of the one file `path` gets `p`."""
+    return p in PrincipleSet(fleet=[p]).for_paths([path])
+
+
+def test_applies_to_takes_areas_and_quoted_path_globs_in_one_list():
+    p = _scoped('[contract, "app/workflow_health/**", "app/sq_enricher*/**"]')
+    assert p.applies_to == ("contract",)
+    assert p.globs == ("app/workflow_health/**", "app/sq_enricher*/**")
+    # The area, either glob, and nothing else.
+    assert _covers(p, "contract/app.pkl")
+    assert _covers(p, "app/workflow_health/checks.py")
+    assert _covers(p, "app/sq_enricher_v2/run.py")
+    assert not _covers(p, "app/extract/tables.py")
+    assert not _covers(p, "tests/unit/test_checks.py")
+    # A glob-only principle is not an everywhere one: a file in no area, or in an
+    # area the principle does not name, does not get it.
+    only = _scoped('["app/workflow_health/**"]')
+    assert only.applies_to == ()
+    assert not _covers(only, "Dockerfile")
+    assert not _covers(only, "app/main.py")
+    assert _covers(only, "./app/workflow_health/checks.py")
+
+
+def test_a_quoted_area_name_is_still_the_area():
+    """Quoting never turned an area into something else: `["app"]` was read as
+    the area before globs existed, and still is. It must not become a glob that
+    matches only a file named `app`."""
+    p = _scoped("[\"app\", 'tests']")
+    assert (p.applies_to, p.globs) == (("app", "tests"), ())
+    assert _covers(p, "app/extract/tables.py")
+
+
+@pytest.mark.parametrize(
+    ("glob", "path", "expected"),
+    [
+        # `**` crosses directories, and `**/` may match none.
+        ("app/workflow_health/**", "app/workflow_health/a.py", True),
+        ("app/workflow_health/**", "app/workflow_health/x/y/z.py", True),
+        ("app/**/test_*.py", "app/test_a.py", True),
+        ("app/**/test_*.py", "app/x/y/test_a.py", True),
+        ("**/*.pkl", "contract/app.pkl", True),
+        ("**/*.pkl", "app.pkl", True),
+        ("app/workflow_health/**", "app/workflow_health.py", False),
+        ("app/workflow_health/**", "app/other/a.py", False),
+        ("app/workflow_health/**", "src/app/workflow_health/a.py", False),
+        # `*` and `?` stay within one segment.
+        ("app/*.py", "app/main.py", True),
+        ("app/*.py", "app/extract/main.py", False),
+        ("app/sq_enricher*/**", "app/sq_enricher/run.py", True),
+        ("app/sq_enricher*/**", "app/sq_enricher_v2/run.py", True),
+        ("app/sq_enricher*/**", "app/sq_enricher_v2.py", False),
+        ("app/x?.py", "app/x1.py", True),
+        ("app/x?.py", "app/x/.py", False),
+        # A glob is anchored at the repository root, slash or not.
+        ("*.py", "main.py", True),
+        ("*.py", "app/main.py", False),
+        ("Dockerfile", "Dockerfile", True),
+        ("Dockerfile", "app/Dockerfile", False),
+        # Brackets are literal: there are no character classes.
+        ("app/[ab].py", "app/a.py", False),
+        ("app/[ab].py", "app/[ab].py", True),
+    ],
+)
+def test_a_principle_glob_matches_the_repo_relative_path(glob, path, expected):
+    assert _covers(_scoped(f'["{glob}"]'), path) is expected
+
+
+@pytest.mark.parametrize(
+    ("applies_to", "why"),
+    [
+        ('["/app/**"]', "starts with `/`"),
+        ('["app/../secrets/**"]', "has a `.` or `..` segment"),
+        ('["./app/**"]', "has a `.` or `..` segment"),
+        ('["app\\x/**"]', "has a backslash"),
+        ('["app//x/**"]', "has an empty segment"),
+        ('["app/"]', "has an empty segment"),
+        ('[app, ""]', "has an empty entry"),
+        ('["app/**]', "is not quoted properly"),
+        ("[\"app/**']", "is not quoted properly"),
+        # A comma inside quotes splits the entry; neither half is quoted properly.
+        ('["app/a,b/**"]', "is not quoted properly"),
+        # An unquoted glob is read as an area name, and the note says to quote it.
+        ("[app/workflow_health/**]", "a path glob must be quoted"),
+        (
+            '[app, tests, contract, ci, generated, "a/**", "b/**", "c/**", "d/**"]',
+            "has 9 entries; at most 8",
+        ),
+        (f'["app/{"x" * 200}/**"]', "longer than 200 characters"),
+    ],
+)
+def test_a_malformed_applies_to_glob_is_refused_with_the_reason(applies_to, why):
+    with pytest.raises(ValueError, match=re.escape(why)):
+        _scoped(applies_to)
+
+
+def test_a_bundle_gets_a_glob_scoped_principle_only_when_it_touches_a_match(
+    repo: Path,
+):
+    _repo_principle(
+        repo, "rp01-count-assertions.md", RP01.replace("[tests]", '["app/storage/**"]')
+    )
+    principles = principles_of(repo)
+    assert principles.notes == []
+    assert _ids(principles, "app/storage/fetch.py") == ["FP01", "FP02", "RP01"]
+    assert _ids(principles, "app/extract/tables.py") == ["FP01", "FP02"]
+    assert _ids(principles, "tests/unit/test_fetch.py") == ["FP02"]
+    # One matching file brings it to the bundle, and it is rendered for that file only.
+    paths = ["app/extract/tables.py", "app/storage/fetch.py"]
+    assert _ids(principles, *paths) == ["FP01", "FP02", "RP01"]
+    assert (
+        '<principle id="RP01" source="this repository" '
+        'title="Tests assert on extracted counts" for="app/storage/fetch.py">'
+    ) in principles.render_for(paths)
+
+
 def test_a_repo_principle_must_carry_an_rp_id():
     assert parse_principle(RP01, "repo").id == "RP01"
     # A repository cannot add to, or replace, the fleet's FP principles.
@@ -1586,6 +1708,32 @@ def test_glob_semantics():
     assert glob_match("a/b/c.py", "a/**")
     assert glob_match("c.py", "**/*.py")
     assert not glob_match("a/b/c.py", "a/*.py")
+    # Anchored at the root even without a slash: `*` never crosses one.
+    assert not glob_match("a/b.py", "*.py")
+    assert glob_match("b.py", "*.py")
+    # `**/` matches whole directories or none, and leaves only on a `/`.
+    assert glob_match("x.py", "**/**/x.py")
+    assert glob_match("a/b/x.py", "**/**/x.py")
+    assert not glob_match("ax.py", "**/x.py")
+    assert not glob_match("a", "a/**")
+    assert glob_match("a/b/c.py", "a/**.py")
+    assert not glob_match("a/b/c.pyc", "a/**.py")
+    assert glob_match("", "**")
+    assert not glob_match("", "?")
+
+
+def test_a_glob_built_to_backtrack_is_matched_in_linear_time():
+    """A principle's glob comes from the app repo. As a regex, `a*a*…a*z`
+    against a long run of `a` explores every split before failing, and one
+    file in a PR would stall the review."""
+    glob = "app/" + "a*" * 90 + "z"
+    started = time.monotonic()
+    assert not glob_match("app/" + "a" * 180 + "x", glob)
+    assert glob_match("app/" + "a" * 180 + "z", glob)
+    crossing = "app/" + "a*" * 90 + "**z"
+    assert glob_match("app/" + "a" * 180 + "/z", crossing)
+    assert not glob_match("app/" + "a" * 180 + "/y", crossing)
+    assert time.monotonic() - started < 2
 
 
 # ---- ledger & client ----------------------------------------------------------------------
