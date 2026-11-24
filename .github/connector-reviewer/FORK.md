@@ -107,7 +107,7 @@ none of the three. It has `principles.py`:
 |---|---|---|
 | Unit | A card: free Markdown | A principle: front matter (`id`, optional `applies-to`), a `# Title`, and five fields (`Principle`, `Why`, `Ask` with at most three questions, `Don't flag`, `Severity`) |
 | Matched to a file by | The first glob in `rules.toml` that matches | Area, fixed in code (`area_of`): `app`, `generated` (`app/generated/**`, which is never `app`), `tests`, `contract`, `ci` (`.github/**`). No globs. A file outside all five gets only the principles with no `applies-to`. |
-| Sources | The config directory | Fleet principles (`FP01`…) from `--principles-dir` or `CONNECTOR_REVIEWER_PRINCIPLES_DIR`. They live in application-sdk at `.github/connector-reviewer/principles/`, and CI points the reviewer at that directory of its application-sdk checkout; there is no default. Repo principles (`RP01`…) from `<root>/.github/connector-reviewer/principles/` of the repo under review. When the two are the same directory it is read once, as the fleet's. Only files named `^[a-z]{2}\d{2}-.+\.md$` are read. |
+| Sources | The config directory | Fleet principles (`FP01`…) from `--principles-dir` or `CONNECTOR_REVIEWER_PRINCIPLES_DIR`. They live in application-sdk at `.github/connector-reviewer/principles/`, and CI points the reviewer at that directory of its application-sdk checkout; there is no default. Repo principles (`RP01`…) from `.github/connector-reviewer/principles/` of the repo under review's default branch: `--principles-root` (or `CONNECTOR_REVIEWER_PRINCIPLES_ROOT`), a checkout of its own in CI, else `<root>` (FND-5316). When the two are the same directory it is read once, as the fleet's. Only files named `^[a-z]{2}\d{2}-.+\.md$` are read. |
 | Prompt block | `<review_rules>` holding `<rules card="…" for="…">` | `<principles>` holding `<principle id="…" title="…" for="…">` with the five fields; fleet first, then repo, each in id order; a repo principle carries `source="this repository"` and follows a line that says so |
 | A bad file | Not checked | Skipped, with a note in the summary (`PrincipleSet.notes` into `RunResult.notes`). The id must be `FP`/`RP` plus two digits for its source, match the file name, and be unique; an unknown front-matter key or area is an error; a file over 8,000 characters or a symlink is not read. A field may wrap over several lines, and blank lines between fields are optional. |
 | Nothing to load | Reviews with no cards | A fleet directory that is not given, does not exist, holds no principle file, or holds only principle files none of which could be read is a configuration error: exit 2 before any GitHub or model request. A dismissal or a re-check loads no principles and is not affected. |
@@ -332,6 +332,8 @@ these. lens has none of this code.
 
 | A step that quotes one short line | Dropped as "quotes too little code to check" under `STEP_QUOTE_MIN` (12 non-space characters). A valid finding whose whole mechanism was one un-commented line could never meet it. | A quote under the floor still fails when it spans more than one line or matches nothing. One whole line under the floor stands when it pins one place (`agent._short_line_at`): it matches a whole line exactly (whitespace-normalised) and that line is one the PR adds or removes, or the only such line in the file (in the pinned SDK source: the only one). The location recorded prefers the changed line. A bare `return` repeated across unchanged code still fails ("occurs more than once … and on no line this PR changes"): the floor existed because such a match proves nothing. |
 
+| What the code context is read from | The workflow checked the app out at its default branch (`actions/checkout` with no `ref`) and the reviewer indexed it, overlaying only the pull request's changed files (`review.head_side_text`). A pull request against another branch, or a replay of an old one, was reviewed against today's default branch: one finding was dropped as untraced because its chain cited a file that exists only on today's default branch, and a replayed false alarm traced to a helper only that branch has. The repo principles were read from the same checkout. | The workflow checks the app out at the pull request's base commit: a new step runs `python -m connector_reviewer base-ref` (after the App token is minted: a comment event does not carry the base), which reads `base.sha` through the API, the same `base` `review.run` diffs against, and writes `base=` only as 40 hex (`review.base_ref_output`; empty otherwise, and the checkout falls back to its default ref). `review.run` then compares the checkout's commit (`sdk_source.checkout_commit`) with the base and adds a summary note when they differ (`review.base_checkout_note`): a failed resolve, or a base that moved after the resolve step. The repo principles stay on the default branch, read explicitly: a second, sparse checkout of the default branch (`ref: github.event.repository.default_branch`, so a manual dispatch from another ref reads the same) holding only `.github/connector-reviewer/principles/`, passed as `--principles-root` / `CONNECTOR_REVIEWER_PRINCIPLES_ROOT`, so neither the pull request nor the branch it targets can rewrite the principles it is judged by. Unchanged: `base_merged_in`, the diffs and every merge-base read go through the API (`GitHub.merge_base`), not the checkout. Verify's `<at_base_branch>` reads the checkout, so it is now the pull request's base. Security shape: the base checkout is the branch the author targets, read as data and never imported or run, like the pull request's own text; the workflow header says so. |
+
 Tests adapted: `upheld()` (the default skeptic reply, `UPHELD`) now sets
 `trigger_normal: true`; `test_the_prompt_and_schema_carry_the_harm_fields` checks
 the Severity sentence with "rejection by a consumer".
@@ -342,6 +344,8 @@ no-verdict cases are `test_a_skeptic_that_answers_with_no_verdict_contests_the_f
 The `tiny-quote` case of `test_a_finding_whose_mechanism_is_not_traced_through_code_is_dropped`
 quotes two short lines (a single `    return` is now judged by where it is), and a
 `tiny-line-not-there` case checks that a short line matching nothing is dropped.
+`test_it_never_checks_out_pull_request_code` (test_connector_reviewer_workflow.py)
+counts four checkouts, two of the app, each at a ref it names.
 
 ### Regression and history facts (FND-5312)
 
@@ -497,7 +501,8 @@ equivalent.
   `pyproject.toml` path the workspace knows (at most 20), every one read at the
   head under review (`review.sdk_pins_block`: the pull request's own text for a
   file it changed, `GitHub.raw_file_at` at the head otherwise), never from the
-  checkout, which is the default branch. When the head's lock cannot be read,
+  checkout, which is the pull request's base (it was the default branch until
+  the third replay). When the head's lock cannot be read,
   nothing comes from a lock (lens F-d40fdc). `pins_block` puts an
   `<other_sdk_packages>` block in the line review's context, with or without
   the SDK source: `sdk:` covers only application-sdk (which version), the

@@ -14464,6 +14464,111 @@ def test_the_sdk_ref_cli_reads_the_pull_request_heads_lock(
     assert out.read_text() == "ref=\nlabel=\n" and fake.reads == []
 
 
+_SHA_BASE = "b" * 40
+
+
+def test_the_base_ref_cli_writes_the_pull_requests_base_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """FND-5316: the app was checked out at its default branch, whatever the
+    pull request's base. `base-ref` reads the base commit through the API (the
+    event of a comment does not carry it) and writes it for the checkout, only
+    as 40 hex; anything else is an empty output, and the checkout falls back."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    gh = fake_github(base=_SHA_BASE)
+    monkeypatch.setattr(cli, "GitHub", lambda repo: gh)
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    argv = ["base-ref", "--repo", "o/r", "--event-name", "issue_comment"]
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == f"base={_SHA_BASE}\n"
+
+    # Not a commit (a value that could break the output file), no pull request
+    # in the event, or a failed read: an empty base, and still exit 0.
+    for base in ("main\nref=evil", ""):
+        gh.base = base
+        out.write_text("")
+        assert cli.main([*argv, "--event-path", str(event)]) == 0
+        assert out.read_text() == "base=\n"
+    assert "names no base commit" in capsys.readouterr().out
+    gh.base = _SHA_BASE
+    event.write_text(json.dumps({"issue": {"number": 7}}))
+    out.write_text("")
+    assert cli.main([*argv, "--event-path", str(event)]) == 0
+    assert out.read_text() == "base=\n"
+
+    class Down:
+        def pr(self, n: int) -> Any:
+            raise OSError("network")
+
+    monkeypatch.setattr(cli, "GitHub", lambda repo: Down())
+    assert cli.main(["base-ref", "--repo", "o/r", "--pr", "7"]) == 0
+    assert "could not be read (OSError)" in capsys.readouterr().out
+
+
+def test_the_review_says_when_the_app_checkout_is_not_at_the_base(repo: Path):
+    """The review checks that the checkout it indexes is the pull request's
+    base: a failed resolve falls back to the default ref, and the base can move
+    between the resolve step and the review. Off the base, the summary says
+    so; at the base, or with no git checkout (a local run), nothing is said."""
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    at = _git(repo, "rev-parse", "HEAD")
+
+    def summary(base: str) -> str:
+        gh = fake_github(base=base, diffs={(base, "h1"): DIFF})
+        run(
+            gh=gh,
+            number=1,
+            root=repo,
+            cfg=cfg_for(repo),
+            principles=principles_of(repo),
+            client_factory=_factory(_review_script()),
+        )
+        return gh.comments[0]["body"]
+
+    off = summary(_SHA_BASE)
+    assert (
+        f"The app checkout is at {at[:9]}, not at this pull request's base "
+        f"{_SHA_BASE[:9]}" in off
+    )
+    assert "not at this pull request's base" not in summary(at)
+
+
+def test_the_apps_principles_are_read_from_their_own_root(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+):
+    """FND-5316: the code context is now the pull request's base, which the
+    author chooses; the app's own principles still come from its default
+    branch, a checkout of their own (`--principles-root`, or the variable),
+    so the base cannot rewrite the principles the pull request is judged by.
+    Without either, they are read from --root, as before."""
+    monkeypatch.setenv("CONNECTOR_REVIEWER_PRINCIPLES_DIR", str(repo / FLEET_DIR))
+    _repo_principle(repo, "rp01-count-assertions.md", RP01)  # in the base checkout
+    default = tmp_path_factory.mktemp("default-branch")
+    (default / ".github" / "connector-reviewer" / "principles").mkdir(parents=True)
+    (
+        default / ".github" / "connector-reviewer" / "principles" / "rp02-other.md"
+    ).write_text(RP01.replace("RP01", "RP02"))
+    code, seen = _cli_review(
+        monkeypatch, ["--root", str(repo), "--principles-root", str(default)]
+    )
+    assert code == 0
+    assert [p.id for p in seen["run"]["principles"].repo] == ["RP02"]
+    monkeypatch.setenv("CONNECTOR_REVIEWER_PRINCIPLES_ROOT", str(default))
+    code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    assert [p.id for p in seen["run"]["principles"].repo] == ["RP02"]
+    monkeypatch.delenv("CONNECTOR_REVIEWER_PRINCIPLES_ROOT")
+    code, seen = _cli_review(monkeypatch, ["--root", str(repo)])
+    assert [p.id for p in seen["run"]["principles"].repo] == ["RP01"]
+
+
 def test_the_head_lock_is_read_raw_so_a_large_lock_still_resolves():
     """The JSON contents reply carries no content past 1 MB, and an app's
     uv.lock gets that large: the lock is read with the raw media type."""

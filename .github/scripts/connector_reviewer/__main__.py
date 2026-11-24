@@ -5,6 +5,11 @@
     python -m connector_reviewer finalize --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer sdk-ref --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer sdk-ref --root <app checkout>
+    python -m connector_reviewer base-ref --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+
+`base-ref` reads the pull request through the REST API and writes its base
+commit (`base=`, 40 hex, empty when there is none) to `$GITHUB_OUTPUT`; the
+workflow checks the app out at that commit for `--root` (FND-5316).
 
 `finalize` runs after the review step whatever its outcome (`if: always()`): a
 run that crashed, was cancelled or timed out leaves its `pending` status as
@@ -27,15 +32,19 @@ its summary says so; without the flag or the variable (a local run) nothing
 changes.
 
 Run from `.github/scripts` of an application-sdk checkout (where this package
-lives), against a checkout of the BASE branch of the connector app under review
-(`--root`). The reviewer's own config is the one shipped beside this package
+lives), against a checkout of the connector app under review at the pull
+request's BASE commit (`--root`); the summary says so when the checkout is at
+another commit. The reviewer's own config is the one shipped beside this package
 (`.github/connector-reviewer/config.toml` in application-sdk) unless
 `--config-dir` says otherwise: an app repo cannot retune its own reviewer.
 The fleet principles come from `--principles-dir` (or
 `CONNECTOR_REVIEWER_PRINCIPLES_DIR`): in CI, `.github/connector-reviewer/principles/`
 of the application-sdk checkout. A review does not start without them. The app's
-own principles, if any, are read from `<root>/.github/connector-reviewer/principles/`
-of the repo under review (connector_reviewer/principles.py).
+own principles, if any, are read from `.github/connector-reviewer/principles/` of
+the repo under review's DEFAULT branch: the checkout `--principles-root` (or
+`CONNECTOR_REVIEWER_PRINCIPLES_ROOT`) names, else `--root`
+(connector_reviewer/principles.py). In CI that is a checkout of its own, so
+neither the pull request nor the branch it targets can rewrite them.
 `--dry-run` prints the result as JSON and posts nothing — the way to try
 connector-reviewer on any PR, including a historical one. Exit code is 0 whenever
 connector-reviewer ran to a verdict or a deliberate skip; a non-zero exit means
@@ -72,6 +81,7 @@ from .principles import (
     resolve_fleet_dir,
 )
 from .review import (
+    base_ref_output,
     dismiss,
     incomplete_reasons,
     recheck,
@@ -85,6 +95,9 @@ from .sdk_source import Resolution, head_lock, resolve_root, step_output
 # The config that ships with this package: `.github/connector-reviewer/` of the
 # application-sdk checkout the package is run from, not of the repo under review.
 SHIPPED_CONFIG_DIR = Path(__file__).resolve().parents[2] / "connector-reviewer"
+# Where the app's own principles are read from when `--principles-root` is not
+# given: the default-branch checkout in CI. Unset: `--root`.
+PRINCIPLES_ROOT_ENV = "CONNECTOR_REVIEWER_PRINCIPLES_ROOT"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,7 +111,15 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument(
         "--root",
         default=".",
-        help="checkout of the base branch of the repo under review (trusted)",
+        help="checkout of the repo under review at the pull request's base commit "
+        "(read as data)",
+    )
+    r.add_argument(
+        "--principles-root",
+        default=None,
+        help="checkout of the repo under review's default branch, whose "
+        ".github/connector-reviewer/principles/ holds its own principles "
+        "(default: $CONNECTOR_REVIEWER_PRINCIPLES_ROOT, else --root)",
     )
     r.add_argument(
         "--config-dir",
@@ -152,11 +173,22 @@ def main(argv: list[str] | None = None) -> int:
         "--root",
         help="without --repo: a local checkout of the app whose uv.lock is read",
     )
+    b = sub.add_parser(
+        "base-ref",
+        help="write the pull request's base commit to $GITHUB_OUTPUT, for the app "
+        "checkout",
+    )
+    b.add_argument("--repo", required=True)
+    b.add_argument("--pr", type=int)
+    b.add_argument("--event-name")
+    b.add_argument("--event-path")
     args = ap.parse_args(argv)
     if args.cmd == "finalize":
         return _finalize(args)
     if args.cmd == "sdk-ref":
         return _sdk_ref(args)
+    if args.cmd == "base-ref":
+        return _base_ref(args)
 
     event: dict[str, Any] = {}
     if args.event_name:
@@ -220,8 +252,15 @@ def main(argv: list[str] | None = None) -> int:
     # A dismissal or a re-check reads no principle and needs none.
     principles = PrincipleSet()
     if dismissal is None and rechecking is None and waiving is None:
+        # The app's own principles come from its default branch, never from
+        # the base checkout at --root (FND-5316): a pull request, or the branch
+        # it targets, must not rewrite the principles it is judged by.
+        chosen = args.principles_root or os.environ.get(PRINCIPLES_ROOT_ENV) or ""
+        principles_root = Path(chosen).resolve() if chosen else root
         try:
-            principles = load_principles(resolve_fleet_dir(args.principles_dir), root)
+            principles = load_principles(
+                resolve_fleet_dir(args.principles_dir), principles_root
+            )
         except PrinciplesError as e:
             print(f"connector-reviewer: config error: {e}", file=sys.stderr)
             return 2
@@ -479,6 +518,33 @@ def _sdk_ref(args: argparse.Namespace) -> int:
         if res.pin
         else f"connector-reviewer: SDK source not available: {res.reason}"
     )
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(out)
+        except OSError as e:
+            print(
+                f"connector-reviewer: could not write the step output: {e}",
+                file=sys.stderr,
+            )
+    else:
+        print(out, end="")
+    return 0
+
+
+def _base_ref(args: argparse.Namespace) -> int:
+    """`base-ref`: always exit 0. No base is an empty output: the app checkout
+    then takes its default ref, and the review says it is off the base."""
+    number = args.pr or 0
+    if not number and args.event_name and args.event_path:
+        try:
+            event = json.loads(Path(args.event_path).read_text())
+        except (OSError, ValueError):
+            event = {}
+        number = pr_number(args.event_name, event) if isinstance(event, dict) else 0
+    out, said = base_ref_output(GitHub(args.repo), number)
+    print(f"connector-reviewer: pull request base: {said}")
     path = os.environ.get("GITHUB_OUTPUT")
     if path:
         try:

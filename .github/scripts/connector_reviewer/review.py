@@ -244,6 +244,46 @@ def only_pr_changes(
     return kept, dropped, demoted
 
 
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def base_ref_output(gh: GitHub, number: int) -> tuple[str, str]:
+    """The `$GITHUB_OUTPUT` lines of `base-ref`, and a log line.
+
+    `base=` is the pull request's base commit (`base.sha`, the same `base`
+    `run` diffs against), which the workflow checks the app out at, so the
+    unchanged files, the index and the facts are the code this pull request
+    is judged against, not the default branch as it is today (a pull request
+    against another branch, or a replay of an old one). Written only when it
+    is 40 hex; empty otherwise, and the checkout then falls back to its
+    default ref, which `base_checkout_note` reports. Never raises."""
+    if number <= 0:
+        return "base=\n", "no pull request to read the base commit from"
+    try:
+        pr = gh.pr(number) or EMPTY
+        sha = str((pr.get("base") or EMPTY).get("sha") or "")
+    except Exception as e:  # noqa: BLE001 - a failed read is a reason, never a crash
+        return "base=\n", f"the pull request could not be read ({type(e).__name__})"
+    if not _SHA.fullmatch(sha):
+        return "base=\n", "the pull request names no base commit"
+    return f"base={sha}\n", f"base commit {sha[:9]}"
+
+
+def base_checkout_note(root: Path, base: str) -> str:
+    """A note when the app checkout at `root` is a git checkout whose commit
+    is not the pull request's base `base`: `base-ref` failed and the checkout
+    fell back to its default ref, or the base moved between that step and
+    this review. "" when it is at `base`, or `root` is no checkout of its own
+    (a local run)."""
+    at = sdk_source.checkout_commit(root)
+    if not at or at == base:
+        return ""
+    return (
+        f"The app checkout is at {at[:9]}, not at this pull request's base "
+        f"{base[:9]}: unchanged files, the index and the facts were read from it."
+    )
+
+
 def base_merged_in(gh: GitHub, base: str, reviewed_head: str, head: str) -> str:
     """Why `reviewed_head..head` is taken to carry base-branch changes, or ""
     when it carries none.
@@ -517,7 +557,7 @@ def sdk_pins_block(
     """The `<other_sdk_packages>` block for the line review (FND-5316): the
     Atlan SDK packages the head under review pins that `sdk:` cannot read;
     "" when it pins none. Everything is read at that head, never from the
-    checkout, which is the default branch: the lock is `lock` (read at the
+    checkout, which is the pull request's base: the lock is `lock` (read at the
     head; when it could not be read, nothing comes from a lock), and each
     `pyproject.toml` path the workspace knows (at most
     `sdk_source.MAX_PYPROJECTS`) is read with `at_head`, or taken from the
@@ -762,8 +802,14 @@ def run(
     state.exempt = {}
     # A principle file that was skipped is said in the summary, never silently.
     res.notes.extend(principles.notes)
+    # The app checkout is the code this pull request is judged against: its
+    # base commit, not the default branch (FND-5316). Said when it is not.
+    off_base = base_checkout_note(root, base)
+    if off_base:
+        trace.line(off_base)
+        res.notes.append(off_base)
     # The head's own lock (FND-5316): the SDK source and the other-SDK block
-    # are bound to the head this round reviews, never to the default branch.
+    # are bound to the head this round reviews, never to the base checkout.
     lock = sdk_source.head_lock_at(gh, head)
     if sdk_dir is not None:
         sdk, sdk_note = SdkSource.open(
