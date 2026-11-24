@@ -504,6 +504,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # transport applies the environment proxy itself and its other transports
     # only reach localhost; hand-built transports to customer sources live in
     # consumer apps.
+    # P067: tempfile's system temp dir in app code — App.run_scratch_dir is the
+    # consumer-facing replacement; the SDK composes its own run scratch dir.
     assert app_scoped == {
         "B001",
         "B007",
@@ -529,6 +531,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P064",
         "P065",
         "P066",
+        "P067",
         "C002",
         "D001",
         "D002",
@@ -840,6 +843,8 @@ def test_catalog_p_series_present() -> None:
     async def); gated on the SDK release that ships FND-4707.
     P066 is HttpxTransportWithoutProxy — an httpx transport built without
     ``proxy=``, so its client ignores HTTPS_PROXY / NO_PROXY.
+    P067 is TempDirOutsideRunScratch — tempfile.gettempdir() (or mkdtemp /
+    mkstemp with no dir=) in app code instead of App.run_scratch_dir.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -903,6 +908,7 @@ def test_catalog_p_series_present() -> None:
         "P064",
         "P065",
         "P066",
+        "P067",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

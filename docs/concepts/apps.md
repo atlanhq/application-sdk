@@ -265,6 +265,43 @@ class MyConnector(App):
         await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
+### Run Scratch Directory (`self.run_scratch_dir`)
+
+`self.run_scratch_dir` is the run's local scratch directory, e.g.
+`./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456`
+(`{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`). Use it
+for files a run writes locally, instead of `tempfile.gettempdir()`:
+
+- It is the **same string in `run()` and in every `@task` of the run**, so a path
+  the workflow builds and passes to a task is the one the task writes to.
+- `cleanup_files` **removes it** when the run ends (the default `on_complete`), so
+  nothing is left on the worker's disk. The system temp dir is never cleaned.
+- It is **safe in workflow code**: it is computed from the run's identity with
+  string-only `os.path` calls. `tempfile` is refused by the workflow sandbox.
+- It sits under `TEMPORARY_PATH`, so a file under it maps to an object-store key
+  like every other `./local/tmp/...` path.
+
+```python
+async def run(self, input: MyInput) -> MyOutput:
+    output_dir = os.path.join(self.run_scratch_dir, "extract")  # string only
+    return await self.extract(ExtractInput(output_dir=output_dir))
+
+@task(timeout_seconds=600)
+async def extract(self, input: ExtractInput) -> ExtractOutput:
+    os.makedirs(input.output_dir, exist_ok=True)  # create it in the task
+    # A fresh directory per attempt, still removed with the run:
+    attempt_dir = tempfile.mkdtemp(prefix="extract-", dir=input.output_dir)
+    ...
+```
+
+The directory is not created for you. Create it in a task; never in `run()`,
+because workflow code must not touch the filesystem. Reading the property outside
+`run()` or a task raises `AppContextError`. A workflow ID that would place the
+directory outside `TEMPORARY_PATH` (`..` segments) raises `RunTempDirEscapeError`.
+
+Conformance rule P067 flags `tempfile.gettempdir()`, and `tempfile.mkdtemp` /
+`mkstemp` with no `dir=`, in app code.
+
 ### Built-in Cleanup Tasks
 
 Two cleanup tasks and two transfer tasks are available on every `App`:
