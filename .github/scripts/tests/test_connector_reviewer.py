@@ -13863,6 +13863,28 @@ def test_an_unreadable_base_never_drops_a_finding(repo: Path, base: str | None):
     assert "Changes requested" in gh.comments[0]["body"]
 
 
+def test_a_base_read_that_fails_still_runs_the_check(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A base read that raises is an unknown base: the check runs as before,
+    with no base code, and nothing is dropped."""
+
+    def boom(ws: Any, f: Any) -> str:
+        raise ValueError("odd file")
+
+    monkeypatch.setattr(review_mod, "skeptic_base", boom)
+    script = _review_script()
+    script.skeptic = [_base_verdict("same_on_base")]
+    res, gh = _skeptic_run(repo, script)
+
+    [req] = script.skeptic_requests
+    assert _code_at_base(req) == ""
+    [o] = res.skeptic
+    assert (o.outcome, o.dropped) == ("upheld", "")
+    assert state_of(res).findings[0].severity == "high"
+    assert "Changes requested" in gh.comments[0]["body"]
+
+
 def _base_ws(repo: Path, path: str, old: str | None, new: str) -> Workspace:
     files = parse_unified_diff(_diff_of(path, old, new))
     head = {path: new}

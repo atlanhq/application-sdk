@@ -588,10 +588,16 @@ def run_all(
     rest = [f for f in todo if not f.retry]
     checked, over = [f for f in todo if f.retry] + rest[:cap], rest[cap:]
 
+    def base_of(f: Finding) -> str:
+        try:
+            return base_for(f) if base_for else ""
+        except Exception as e:  # noqa: BLE001 - a base that cannot be read is unknown
+            trace.line(f"skeptic {f.id}: base not read ({type(e).__name__})")
+            return ""
+
     def one(f: Finding) -> Outcome:
         try:
-            base = base_for(f) if base_for else ""
-            return check(client, ws, f, cfg, principle_for(f), base)
+            return check(client, ws, f, cfg, principle_for(f), base_of(f))
         except Exception as e:  # noqa: BLE001 - a skeptic bug must never cost the review
             return Outcome(
                 finding_id=f.id,
