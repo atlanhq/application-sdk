@@ -31,6 +31,25 @@ class MyConnector(App):
 - Calling `await self.fetch_data(input)` inside `run()` routes through Temporal activities automatically -- no `execute_activity_method` needed.
 - `App.__init_subclass__` applies Temporal decorators under the hood. You never import from `temporalio`.
 
+### Configuration settings are checked at class definition
+
+The configuration settings in the table below are checked when the class is defined, and a bad value warns (a `DeprecationWarning` plus a logged WARNING naming the class, attribute and value). The readers still coerce it as before, so a run is never aborted by a typo, but the typo is no longer silent. In v4.0.0 each warning becomes an `EntryPointDeclarationError`.
+
+| Setting | Accepted |
+|---|---|
+| `preflight_gate_mode`, `artifact_validation_mode` | `"hard"` or `"soft"` (or `PreflightGateMode`). Anything else resolves to soft. |
+| `preflight_gate_timeout_seconds` | `int`, 5-300 |
+| `preflight_gate_max_attempts` | `int`, 1-3 |
+| `preflight_warmup_ceiling_seconds` | `int`, at least 30 |
+| `preflight_warmup_probe_timeout_seconds` | `int`, 1 up to the ceiling |
+| `preflight_verify_storage` | `bool` (`"no"` is truthy) |
+| `name` | `str` of letters, digits, `.`, `_`, `-` |
+| `version`, `description` | `str` |
+| `tags` | `dict[str, str]` or `None` |
+| `passthrough_modules` | a set of module names, never a bare `str` (`"pandas"` would read as five letters) |
+
+Other settings, such as `asset_validation_rules` and `preflight_warmup_mode`, are not checked. Only a class's own declarations are checked, so an inherited bad value is reported once, at the class that wrote it. A concrete `SqlApp` subclass also warns when `sql_client_class` is unset or not a `BaseSQLClient` subclass, unless it overrides client construction.
+
 ### Multiple Entry Points
 
 If your connector needs more than one independently-triggerable workflow (e.g. metadata extraction *and* query mining), decorate each entry method with `@entrypoint` instead of overriding `run()`:

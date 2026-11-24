@@ -40,6 +40,7 @@ from application_sdk._context_errors import (  # re-exported; defined in the api
     AppContextError,
 )
 from application_sdk._runtime.offload import run_best_effort, run_in_thread
+from application_sdk.app._app_config_validation import validate_app_config
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
     _build_entry_points,
@@ -1529,6 +1530,12 @@ class App(ABC):
         - No valid entry points or run() with proper types found
         """
         super().__init_subclass__(**kwargs)
+
+        # Before the registered-skip: a template or abstract base reports its
+        # own bad declarations too. Warn-only until v4.0.0. Not in the
+        # workflow sandbox, which re-imports app modules on every run.
+        if not workflow.unsafe.in_sandbox():
+            validate_app_config(cls)
 
         # Skip if already registered (check own __dict__ only, not inherited)
         if cls.__dict__.get("_app_registered", False):
