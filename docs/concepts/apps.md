@@ -1490,18 +1490,25 @@ class MyConnector(App):
 2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent. Unless `ATLAN_TASK_QUEUE` is set, the base queue is the SDK's derived one: `atlan-{app}-{deployment}` in a deployed app, or the bare app name when `ATLAN_DEPLOYMENT_NAME` is unset (so `dbt-heavy` locally). See [Task-queue naming](../configuration.md#task-queue-naming). A pool queue inherits a pinned value too. Do not pin `ATLAN_TASK_QUEUE` in a deploy or pool env: the on-demand (`-od`) worker breaks (K031).
 3. If neither is set, a warning is emitted at startup and the activity falls back to the default queue.
 
-**Pkl contract:** every pool used in `@task` must be declared in the app contract so the contract-toolkit can generate the correct deployment manifest:
+**Pkl contract:** every pool used in `@task` must be declared in `deploy.pools` of the app contract, so the contract-toolkit deploys a worker pool that polls its queue. The **first** key is the app's main worker: it polls the base queue and runs every task without `pool=`. Only keys after the first get a dedicated worker pool, so a `pool=` must name one of those. The one exception is a pool you route with a non-empty `ATLAN_POOL_<POOL>_QUEUE` override (step 1 above) in the main worker's env (the first pool's `env`; the workflow runs there, so a dedicated pool's env never reaches it) to a queue a worker you deploy yourself polls; that pool needs no `deploy.pools` key:
 
 ```pkl
-pools {
-  ["heavy"] = new Pool {
-    keda { minReplicaCount = 2 }
-  }
-  ["cold-tier"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 600 }
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {   // main worker: tasks without pool=
+      keda { minReplicaCount = 1 }
+    }
+    ["heavy"] = new Pool {     // @task(pool="heavy")
+      keda { minReplicaCount = 2 }
+    }
+    ["cold-tier"] = new Pool { // @task(pool="cold-tier")
+      keda { minReplicaCount = 0; cooldownPeriod = 600 }
+    }
   }
 }
 ```
+
+Conformance checks the two sides agree. K032 (blocking) fails a `pool=` that names no dedicated pool (a typo, a removed pool, or the first key), because nothing polls its queue and the task's activities hang until they time out. K033 (warning) flags a dedicated pool that no `@task(pool=)` names.
 
 See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design including rollout-drain requirements.
 

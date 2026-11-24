@@ -2313,4 +2313,140 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="K032",
+        canonical_reference=(
+            "application_sdk contract-toolkit/examples/pools/app.pkl — `cold` is "
+            "a key after the first, so the toolkit renders it as a dedicated "
+            "worker pool with its own task queue, the one a task routed with "
+            'pool="cold" is sent to; `hot`, the first key, is the main worker '
+            "and polls the base queue."
+        ),
+        rule_interactions=(
+            "K033 is the other half of the same cross-check: a dedicated pool "
+            "no task routes to. Renaming a pool in the contract without "
+            "renaming its pool= trips both. The contract is the source of "
+            "atlan.yaml, so regenerate after changing deploy.pools (K005)."
+        ),
+        scope=RuleScope.APP,
+        name="TaskPoolNotDeployed",
+        tier=EnforcementTier.BLOCK,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.62.0",
+        rationale=(
+            '@task(pool="x") routes the task\'s activities to '
+            "atlan-<app>-<deployment>-x (resolve_pool_queue). Only a worker pool "
+            "the chart deploys polls that queue, and the contract-toolkit "
+            "deploys one for each deploy.pools key after the first; the first "
+            "key is the main worker, which polls the base queue. The @task "
+            "validator checks only that the name is kebab-case, so a typo, a "
+            "pool removed from the contract, or the main worker's own key sends "
+            "every call of the task to a queue nothing polls. ADR-0016 rejected "
+            "per-call routing because it reopens exactly this failure and "
+            "promised a build-time gate for decoration-time routing; this is "
+            "that gate. BLOCK: no app in the fleet names an undeployed pool "
+            "today, and the failure is a hang, not a degradation. "
+            "Customer impact: every run that reaches the task hangs until its "
+            "activity or workflow timeout (hours) and then fails."
+        ),
+        short_description=(
+            "@task(pool=) names a pool the app does not deploy — its activities "
+            "go to a queue no worker polls and hang"
+        ),
+        full_description=(
+            'A ``@task(pool="x")`` (``application_sdk.app.task``) names a '
+            "pool that is not a dedicated worker pool of the app. A dedicated "
+            "pool is a ``deploy.pools`` key **after the first** in "
+            "``contract/**/*.pkl`` (or, with no contract pools, in the "
+            "``pools:`` mirror of ``atlan.yaml``), a ``deploy.workerPools[]`` "
+            "``name`` in ``atlan.yaml``, or a pool with a non-empty "
+            "``ATLAN_POOL_<POOL>_QUEUE`` in the main worker's env (the first "
+            "pool's ``env`` in the contract, or ``deploy.env`` in "
+            "``atlan.yaml``): the workflow runs on the main worker, so a pool's "
+            "own ``env`` or ``overrides`` never reaches it. The first ``pools`` key is the app's "
+            "main worker: it polls ``atlan-<app>-<deployment>``, not "
+            "``atlan-<app>-<deployment>-<key>``, so naming it in ``pool=`` "
+            "is also a finding.\n"
+            "\n"
+            "``pool=`` is read from a string literal or a module-level string "
+            "constant of the same module; any other expression is not checked.\n"
+            "\n"
+            "**Fix:** correct the name to a declared pool, or declare the pool "
+            "after the first key and regenerate ``atlan.yaml`` with the repo's "
+            "generate task:\n"
+            "\n"
+            "    deploy = new DeployConfig {\n"
+            "      pools {\n"
+            '        ["default"] = new Pool { }   // main worker\n'
+            '        ["heavy"] = new Pool { }     // @task(pool="heavy")\n'
+            "      }\n"
+            "    }\n"
+            "\n"
+            "To run the task on the main worker, drop ``pool=``.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K032] <reason>`` on the "
+            "``pool=`` line. A suppression is almost never correct: the task's "
+            "activities are never picked up.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="K033",
+        canonical_reference=(
+            "application_sdk application_sdk/app/registry.py — "
+            "`resolve_pool_queue` derives the queue a task routed to a pool is "
+            "sent to; a dedicated pool that no task names never receives work."
+        ),
+        rule_interactions=(
+            "K032 is the other half of the same cross-check: a pool= naming a "
+            "pool the app does not deploy. A renamed pool trips both; fix the "
+            "pair together. Regenerate atlan.yaml after changing deploy.pools "
+            "(K005)."
+        ),
+        scope=RuleScope.APP,
+        name="UnusedWorkerPool",
+        tier=EnforcementTier.WARN,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.62.0",
+        rationale=(
+            "Every deploy.pools key after the first renders its own worker "
+            "deployment, KEDA scaler and on-demand mirror, and each one costs "
+            "Temporal worker-deployment versions. A pool no @task(pool=) names "
+            "never receives an activity, which usually means the task that was "
+            "meant to use it lost or misspelled its pool= (the K032 side of the "
+            "same mistake) or the pool outlived the task. WARN, not BLOCK: an "
+            "app can route to a pool by means this check cannot see. "
+            "Customer impact: none directly; an idle pool is cost and a sign "
+            "the intended routing is not happening."
+        ),
+        short_description=(
+            "A dedicated worker pool is declared but no @task(pool=) routes to it"
+        ),
+        full_description=(
+            "A ``deploy.pools`` key after the first in ``contract/**/*.pkl`` "
+            "(or, with no contract pools, in the ``pools:`` mirror of "
+            "``atlan.yaml``) is not named by any ``@task(pool=...)`` in the "
+            "app's Python. The first key is the main worker and is never "
+            "flagged. The rule stays silent when any ``pool=`` value is not a "
+            "string literal or module-level string constant, since that task "
+            "may be the pool's user.\n"
+            "\n"
+            '**Fix:** route the task meant for it with ``@task(pool="<key>")``, '
+            "or delete the pool and regenerate ``atlan.yaml``.\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K033] <reason>`` on the "
+            "pool's key line in the contract (or the comment-only line above "
+            "it), or ``# conformance: ignore[K033] <reason>`` on the key line of "
+            "``atlan.yaml`` — for a pool the app routes to by other means.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
 )

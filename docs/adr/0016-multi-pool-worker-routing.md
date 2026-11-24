@@ -9,7 +9,12 @@ Implemented in application-sdk PR #2351 (BLDX-1342, BLDX-1375, BLDX-1382).
 > carries the same decision and options analysis with naming and design updates applied
 > during implementation: `profile` → `pool`; single `DeployConfig` block → `pools:
 > Mapping<String, Pool>` map; codegen artifact replaced by env-var resolution + conformance
-> rule P016 (BLDX-1485). See §Design Divergences for details.
+> rules K032/K033 (FND-5230). See §Design Divergences for details.
+>
+> **Correction (FND-5230):** earlier revisions named the build-time gate "P016
+> PoolKeyMismatch". No such rule ever shipped (P016 is `EntryPointContractCodeDrift`),
+> so until K032/K033 nothing checked `@task(pool=)` against the contract. The gate
+> is K032 `TaskPoolNotDeployed` and K033 `UnusedWorkerPool`.
 
 ## Context
 
@@ -137,33 +142,40 @@ Keeping the `@task` methods distinct even when implementations are currently ide
 pre-processing, memory-mapped caches, batching parameters, instrumentation) without a breaking
 change to callers.
 
-The corresponding Pkl contract:
+The corresponding Pkl contract (the first key is the main worker, which runs `analyse_light`;
+the dedicated pools come after it):
 
 ```pkl
-pools {
-  ["heavy"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 30 }
-    resources = new ResourceConfig {
-      requests { ["memory"] = "20Gi" }
-      limits   { ["memory"] = "24Gi" }
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      keda { minReplicaCount = 1 }
     }
-  }
-  ["lineage"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 30 }
-    resources = new ResourceConfig {
-      requests { ["memory"] = "700Mi" }
+    ["heavy"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+      resources = new ResourceConfig {
+        requests { ["memory"] = "20Gi" }
+        limits   { ["memory"] = "24Gi" }
+      }
+    }
+    ["lineage"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+      resources = new ResourceConfig {
+        requests { ["memory"] = "700Mi" }
+      }
     }
   }
 }
 ```
 
 **Pool key alignment:** the string in `@task(pool="heavy")` **must exactly match** the key in
-`pools { ["heavy"] = ... }`. This is enforced by conformance rule **P016 PoolKeyMismatch**
-(BLDX-1485) — a blocking CI check, not a warning.
+`deploy.pools { ["heavy"] = ... }`, and that key must not be the first one (see Design Principle 2).
+This is enforced by conformance rule **K032 TaskPoolNotDeployed** — a blocking CI check, not a
+warning.
 
 **Pros:**
 - Pool↔task binding is **known and validated at CI time** — a typo or missing pool key is caught
-  before merge, not when an activity times out on an unstaffed queue (P016).
+  before merge, not when an activity times out on an unstaffed queue (K032).
 - Aligns with ADR-0004 (Build-Time Type Safety Over Runtime Validation).
 - Routing is ordinary app branching — no new concepts for app developers.
 - Queue name is resolved once at wrapper construction time (env var read); no repeated derivation.
@@ -210,7 +222,7 @@ ticket.
 
 The pool key in `pools { ["hot"] = new Pool { ... } }` is the **exact same string** used in
 `@task(pool="hot")` in Python. There is no intermediate name-mapping layer. This eliminates the
-two-declaration problem: you cannot typo one side without P016 failing the CI build.
+two-declaration problem: you cannot typo one side without K032 failing the CI build.
 
 **Pool key format:** pool keys must be **lowercase kebab-case** (e.g. `"heavy"`, `"cold-tier"`).
 This is enforced at decoration time by the `@task` validator and mirrors `App.pkl` `name` keys.
@@ -244,13 +256,21 @@ get different Temporal queues (`qi-app-queue-heavy` vs `other-app-queue-heavy`),
 between contract (Pkl) and deployment (Helm) is `ATLAN_TASK_QUEUE`, which is already set
 unconditionally for every deployment.
 
-### 2. CI validation (P016) as the build-time gate
+### 2. CI validation (K032/K033) as the build-time gate
 
-`@task(pool=...)` names are validated against the `pools:` keys in `atlan.yaml` by conformance
-rule P016 `PoolKeyMismatch` (BLDX-1485). Two sub-checks, both ERROR severity:
+`@task(pool=...)` names are validated against the `deploy.pools` keys of the contract (or the
+`pools:` mirror in `atlan.yaml` when the contract declares none) by two conformance rules:
 
-- **P016a:** a `@task(pool="x")` references a pool not declared in `atlan.yaml`
-- **P016b:** a `pools:` entry has no corresponding `@task(pool=...)` in the Python source
+- **K032 `TaskPoolNotDeployed` (BLOCK):** a `@task(pool="x")` names no dedicated worker pool.
+- **K033 `UnusedWorkerPool` (WARN):** a dedicated pool has no `@task(pool=...)` in the Python
+  source. WARN, because an app can route to a pool by means a static check cannot see.
+
+The contract-toolkit makes the **first** `pools` key the app's main worker. That worker polls the
+base queue `atlan-<app>-<deployment>`, not `atlan-<app>-<deployment>-<key>`. Only keys after the
+first render a dedicated worker pool. So K032 also fails a `pool=` that names the first key, and
+K033 never flags it. A `deploy.workerPools[].name` in a hand-written `atlan.yaml`, or a pool with
+a non-empty `ATLAN_POOL_<POOL>_QUEUE` override in the main worker's env (where the workflow, and
+so `resolve_pool_queue`, runs), also counts as routable.
 
 This replaces the earlier proposal (PR #1991) of a generated `worker_profiles.py` artifact.
 The conformance-rule approach achieves the same build-time safety without adding a generated file
@@ -276,8 +296,8 @@ behaviour. Apps with no pool declarations compile, test, and run without any cha
 |---|---|---|
 | `@task(profile="heavy")` | `@task(pool="heavy")` | `pool` is self-describing; `profile` was ambiguous |
 | `DeployConfig` + a list of extra pools | `pools: Mapping<String, Pool>` | Explicit map; pool key IS the `@task` pool name; no separate `profiles:` indirection |
-| `worker_profiles.py` generated artifact | `ATLAN_POOL_<POOL>_QUEUE` env vars + P016 conformance rule | Simpler; no generated file in app tree; same build-time safety via CI |
-| Profile validated at App registration (runtime) | P016 validated at CI (pre-merge) | Earlier catch; no startup cost |
+| `worker_profiles.py` generated artifact | `ATLAN_POOL_<POOL>_QUEUE` env vars + K032/K033 conformance rules | Simpler; no generated file in app tree; same build-time safety via CI |
+| Profile validated at App registration (runtime) | K032 validated at CI (pre-merge) | Earlier catch; no startup cost |
 | `DeployConfig.profiles: Listing<String>` field | Dropped — pool key = task pool name | Eliminates the indirection; 1:1 mapping is always the common case |
 
 ---
@@ -289,7 +309,7 @@ behaviour. Apps with no pool declarations compile, test, and run without any cha
 - Heavy work no longer inflates the resource floor for the 90%+ common case.
 - Each pool is independently KEDA-scaled to zero — heavy pools cost nothing when idle.
 - App developers get a simple, typed API (`@task(pool="heavy")`) with no new concepts.
-- Pool↔task binding errors surface at CI, not at queue depth / timeout (P016).
+- Pool↔task binding errors surface at CI, not at queue depth / timeout (K032).
 - Backward compatible: zero changes to any existing app, test, or deployment that does not opt in.
 
 ### Negative
@@ -336,7 +356,8 @@ Implemented in **PR #2351** (application-sdk), which covers:
     reached for through the untyped `overrides` escape hatch.
 
 Tracking:
-- **BLDX-1485** — P016 `PoolKeyMismatch` conformance rule (not yet implemented).
+- **FND-5230** — K032 `TaskPoolNotDeployed` / K033 `UnusedWorkerPool` conformance rules
+  (implemented; BLDX-1485 had named this gate "P016 PoolKeyMismatch", which never shipped).
 - **ARUN-1041** — chart does not yet honor `workerPools[].env`, `envOverrides`, or
   `replicaCount`; the toolkit emits them so the gap is visible rather than
   silently dropped. Also open: `capacityType`,
