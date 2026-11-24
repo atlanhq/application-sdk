@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest import mock
 
 import pytest
@@ -106,7 +106,7 @@ def test_process_record_with_metric_record():
     """Test process_record() method with MetricRecord instance."""
     with create_metrics_adapter() as metrics_adapter:
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.COUNTER,
@@ -127,7 +127,7 @@ def test_process_record_with_dict():
     """Test process_record() method with dictionary input."""
     with create_metrics_adapter() as metrics_adapter:
         record = {
-            "timestamp": datetime.now().timestamp(),
+            "timestamp": datetime.now(UTC).timestamp(),
             "name": "test_metric",
             "value": 42.0,
             "type": MetricType.COUNTER.value,
@@ -142,7 +142,7 @@ def test_process_record_with_dict():
 def test_metric_record_exposes_otel_safe_metadata():
     """Unset SDK metric metadata should map to OTel's empty-string defaults."""
     record = MetricRecord(
-        timestamp=datetime.now().timestamp(),
+        timestamp=datetime.now(UTC).timestamp(),
         name="test_metric",
         value=1.0,
         type=MetricType.COUNTER,
@@ -297,7 +297,7 @@ def test_export_record_sends_to_otel_and_console():
     logger after the consolidation — Prometheus is unconditional."""
     with create_metrics_adapter() as metrics_adapter:
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.COUNTER,
@@ -320,7 +320,7 @@ def test_send_to_otel_counter():
             mock_create.return_value = mock_counter
 
             record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="test_counter",
                 value=42.0,
                 type=MetricType.COUNTER,
@@ -346,7 +346,7 @@ def test_send_to_otel_gauge():
             mock_create.return_value = mock_gauge
 
             record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="test_gauge",
                 value=42.0,
                 type=MetricType.GAUGE,
@@ -374,7 +374,7 @@ def test_send_to_otel_histogram():
         mock_create.return_value = mock_histogram
 
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_histogram",
             value=42.0,
             type=MetricType.HISTOGRAM,
@@ -410,21 +410,21 @@ def test_send_to_otel_normalizes_optional_metadata():
             mock_histogram.return_value = mock_histogram_instance
 
             counter_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="optional_counter",
                 value=1.0,
                 type=MetricType.COUNTER,
                 labels={},
             )
             gauge_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="optional_gauge",
                 value=2.0,
                 type=MetricType.GAUGE,
                 labels={},
             )
             histogram_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="optional_histogram",
                 value=3.0,
                 type=MetricType.HISTOGRAM,
@@ -484,7 +484,7 @@ def test_send_to_otel_filters_non_scalar_labels():
             mock_create.return_value = mock_counter
 
             record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="test_counter",
                 value=1.0,
                 type=MetricType.COUNTER,
@@ -521,7 +521,7 @@ def test_log_to_console():
 
         # Create a test metric record
         metric_record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.GAUGE,
@@ -578,7 +578,7 @@ def test_export_record_with_segment_write_key():
                 adapter = AtlanMetricsAdapter()
 
                 record = MetricRecord(
-                    timestamp=datetime.now().timestamp(),
+                    timestamp=datetime.now(UTC).timestamp(),
                     name="test_metric",
                     value=42.0,
                     type=MetricType.COUNTER,
@@ -607,7 +607,7 @@ def test_export_record_without_segment_write_key():
         mock.patch.object(metrics_adapter, "_log_to_console") as mock_log,
     ):
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.COUNTER,

@@ -7,7 +7,7 @@ import threading
 import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -365,7 +365,7 @@ async def test_objectstore_sink_buffering():
         level_mock.name = "INFO"  # Set the name attribute directly
 
         test_message.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": level_mock,
             "extra": {"logger_name": "test_logger"},
             "message": "Test message",
@@ -392,7 +392,7 @@ async def test_objectstore_sink_error_handling():
         # Create a test message with invalid data
         test_message = mock.MagicMock()
         test_message.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": mock.MagicMock(name="INFO"),
             "extra": {"logger_name": "test_logger"},
             "message": "Test message",
@@ -431,7 +431,7 @@ class TestFlushRecordsSinglePass:
             "extra": {},
         }
 
-    async def test_single_partition_writes_one_file(self, tmp_path):
+    async def test_single_partition_writes_one_file(self, tmp_path, non_utc_host):
         """Records within the same hour produce exactly one upload call.
 
         Verifies that the written file is valid gzip-compressed NDJSON and that
@@ -441,7 +441,7 @@ class TestFlushRecordsSinglePass:
 
         import orjson as _orjson
 
-        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
         records = [self._make_record(base_ts + i, f"msg-{i}") for i in range(3)]
         uploaded: list[tuple[str, str]] = []
 
@@ -476,14 +476,15 @@ class TestFlushRecordsSinglePass:
         messages = [_orjson.loads(ln)["message"] for ln in lines]
         assert messages == ["msg-0", "msg-1", "msg-2"]
 
-    async def test_multi_partition_writes_separate_files(self, tmp_path):
+    async def test_multi_partition_writes_separate_files(self, tmp_path, non_utc_host):
         """Records spanning two different hours produce two separate upload calls.
 
-        Asserts that the remote keys correctly map to the hour derived from each
-        record's timestamp — not the hour of the flush call.
+        Asserts that the remote keys correctly map to the UTC hour derived from
+        each record's timestamp — not the hour of the flush call, and not the
+        host's local hour (``non_utc_host`` puts it 5h30m ahead).
         """
-        ts_h10 = datetime(2025, 6, 15, 10, 59, 0).timestamp()
-        ts_h11 = datetime(2025, 6, 15, 11, 1, 0).timestamp()
+        ts_h10 = datetime(2025, 6, 15, 10, 59, 0, tzinfo=UTC).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 1, 0, tzinfo=UTC).timestamp()
         records = [
             self._make_record(ts_h10, "hour10"),
             self._make_record(ts_h11, "hour11"),
@@ -533,9 +534,9 @@ class TestFlushRecordsSinglePass:
         locally so the triggering record still reaches the fresh-writer-open path
         below, and subsequent partitions are processed normally.
         """
-        ts_h10 = datetime(2025, 6, 15, 10, 30, 0).timestamp()
-        ts_h11 = datetime(2025, 6, 15, 11, 10, 0).timestamp()
-        ts_h10b = datetime(2025, 6, 15, 10, 55, 0).timestamp()
+        ts_h10 = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 10, 0, tzinfo=UTC).timestamp()
+        ts_h10b = datetime(2025, 6, 15, 10, 55, 0, tzinfo=UTC).timestamp()
         records = [
             self._make_record(ts_h10, "h10-first"),
             self._make_record(ts_h11, "h11"),  # triggers switch; first upload raises
@@ -584,9 +585,9 @@ class TestFlushRecordsSinglePass:
         with two calls targeting hour10 and one targeting hour11, all with distinct
         local file paths.
         """
-        ts_h10a = datetime(2025, 6, 15, 10, 30, 0).timestamp()
-        ts_h11 = datetime(2025, 6, 15, 11, 10, 0).timestamp()
-        ts_h10b = datetime(2025, 6, 15, 10, 55, 0).timestamp()
+        ts_h10a = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 10, 0, tzinfo=UTC).timestamp()
+        ts_h10b = datetime(2025, 6, 15, 10, 55, 0, tzinfo=UTC).timestamp()
         records = [
             self._make_record(ts_h10a, "h10-first"),
             self._make_record(ts_h11, "h11"),
@@ -634,7 +635,7 @@ class TestLogSinkFanOut:
         level_mock = mock.MagicMock()
         level_mock.name = "INFO"
         test_message.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": level_mock,
             "extra": {"logger_name": "test"},
             "message": "fan-out test",
@@ -670,7 +671,7 @@ class TestLogSinkFanOut:
         level_mock = mock.MagicMock()
         level_mock.name = "INFO"
         test_message.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": level_mock,
             "extra": {"logger_name": "test"},
             "message": "store only",
@@ -1184,7 +1185,7 @@ def test_log_record_model_extracts_exception_attrs_from_loguru_record():
     level_mock = mock.MagicMock()
     level_mock.name = "WARNING"
     test_message.record = {
-        "time": datetime.now(),
+        "time": datetime.now(UTC),
         "level": level_mock,
         "extra": {"logger_name": "test_logger"},
         "message": "Completing activity as failed",
@@ -1211,7 +1212,7 @@ def test_log_record_model_serializes_attempt_without_warning(attempt_value):
     level_mock = mock.MagicMock()
     level_mock.name = "INFO"
     test_message.record = {
-        "time": datetime.now(),
+        "time": datetime.now(UTC),
         "level": level_mock,
         "extra": {"logger_name": "test_logger", "attempt": attempt_value},
         "message": "heartbeat",
@@ -1245,7 +1246,7 @@ def test_log_record_model_extracts_nested_exception_type():
     level_mock = mock.MagicMock()
     level_mock.name = "ERROR"
     test_message.record = {
-        "time": datetime.now(),
+        "time": datetime.now(UTC),
         "level": level_mock,
         "extra": {"logger_name": "test_logger"},
         "message": "failed",
@@ -1278,7 +1279,7 @@ def test_otel_stacktrace_in_attributes_not_body_from_loguru_record(
     level_mock = mock.MagicMock()
     level_mock.name = "ERROR"
     test_message.record = {
-        "time": datetime.now(),
+        "time": datetime.now(UTC),
         "level": level_mock,
         "extra": {"logger_name": "test_logger"},
         "message": "Query failed",
@@ -1486,7 +1487,7 @@ class TestTemporalAttributePassthrough:
         level_mock = mock.MagicMock()
         level_mock.name = "ERROR"
         test_message.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": level_mock,
             "extra": {
                 "logger_name": "test_logger",
@@ -2283,7 +2284,7 @@ class TestProcessRecord:
         level_mock = mock.MagicMock()
         level_mock.name = "INFO"
         msg.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": level_mock,
             "extra": {"logger_name": "x"},
             "message": "hi",
@@ -2314,7 +2315,7 @@ class TestOtlpSinkErrorPath:
         level_mock = mock.MagicMock()
         level_mock.name = "INFO"
         msg.record = {
-            "time": datetime.now(),
+            "time": datetime.now(UTC),
             "level": level_mock,
             "extra": {"logger_name": "x"},
             "message": "m",
@@ -3423,7 +3424,7 @@ def _loguru_message(logger_name: str) -> mock.MagicMock:
     level.name = "WARNING"
     message = mock.MagicMock()
     message.record = {
-        "time": datetime.now(),
+        "time": datetime.now(UTC),
         "level": level,
         "extra": {"logger_name": logger_name},
         "message": "exporter self-log",

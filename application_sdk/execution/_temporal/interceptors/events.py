@@ -843,12 +843,12 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         except Exception:
             logger.warning("Failed to publish activity start event", exc_info=True)
 
-        start_time = time.time()
+        start_time = time.monotonic()
         output = None
         try:
             output = await super().execute_activity(input)
         finally:
-            duration_ms = (time.time() - start_time) * 1000
+            duration_ms = (time.monotonic() - start_time) * 1000
             end_event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
                 event_name=ApplicationEventNames.ACTIVITY_END.value,

@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Generator
 from unittest import mock
 
@@ -63,7 +63,7 @@ def test_process_record_with_trace_record():
     """Test process_record() method with TraceRecord instance."""
     with create_traces_adapter() as traces_adapter:
         record = TraceRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             trace_id="1234567890abcdef",
             span_id="abcdef1234567890",
             parent_span_id="0987654321fedcba",
@@ -94,7 +94,7 @@ def test_process_record_with_dict():
     """Test process_record() method with dictionary input."""
     with create_traces_adapter() as traces_adapter:
         record = {
-            "timestamp": datetime.now().timestamp(),
+            "timestamp": datetime.now(UTC).timestamp(),
             "trace_id": "1234567890abcdef",
             "span_id": "abcdef1234567890",
             "parent_span_id": "0987654321fedcba",
@@ -115,7 +115,7 @@ async def test_send_to_otel():
     with create_traces_adapter() as traces_adapter:
         mock_span = traces_adapter.tracer.start_span.return_value
         record = TraceRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             trace_id="1234567890abcdef",
             span_id="abcdef1234567890",
             name="test_span",
@@ -151,7 +151,7 @@ async def test_log_to_console():
 
             # Create a test trace record
             trace_record = TraceRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 trace_id="1234567890abcdef",
                 span_id="abcdef1234567890",
                 name="test_span",

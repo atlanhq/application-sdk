@@ -31,7 +31,7 @@ import importlib.util
 import threading
 from collections.abc import Iterator
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from unittest import mock
 
@@ -174,7 +174,7 @@ class TestObsModeDerivation:
                 file_name=file_name,
             )
             key = inst._build_remote_key(
-                datetime(2025, 6, 15, 14, 0, 0), "file.json.gz"
+                datetime(2025, 6, 15, 14, 0, 0, tzinfo=UTC), "file.json.gz"
             )
             # Assert the object-store key STRUCTURE, not the runner's path sep:
             # _build_remote_key uses os.path.join, which yields "\" on a Windows
@@ -262,7 +262,7 @@ class TestUpstreamUploadFanOut:
         """End-to-end via ``_flush_records``: a real batch reaches the upstream
         store when SDR mode is on."""
         obs_instance.data_dir = str(tmp_path)
-        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
         records = [_make_record(base_ts + i, f"msg-{i}") for i in range(3)]
 
         deployment_store = mock.MagicMock(name="deployment_store")
@@ -304,7 +304,7 @@ class TestUpstreamUploadFailureSwallowed:
         self, obs_instance, tmp_path
     ):
         obs_instance.data_dir = str(tmp_path)
-        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
         records = [_make_record(base_ts, "msg")]
 
         deployment_store = mock.MagicMock(name="deployment_store")
@@ -431,7 +431,7 @@ class TestAddRecordFlushTasks:
         in-flight upload and deleted its half-written file."""
         obs_instance._batch_size = 5
         sink: list[dict[str, Any]] = []
-        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
         p1, p2, p3, p4 = _patched_sink(obs_instance, _store_sink(sink))
         with p1, p2, p3, p4:
             for i in range(23):
@@ -471,7 +471,7 @@ class TestAddRecordFlushTasks:
             with gzip.open(local_path, "rb") as fh:
                 sink.extend(orjson.loads(line) for line in fh if line.strip())
 
-        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
         p1, p2, p3, p4 = _patched_sink(obs_instance, _upload)
         with p1, p2, p3, p4:
             for i in range(2):
@@ -498,7 +498,7 @@ class TestAddRecordFlushTasks:
         obs_instance._batch_size = 2
         sink: list[dict[str, Any]] = []
         release = asyncio.Event()
-        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp()
         tasks_before = len(asyncio.all_tasks())
         p1, p2, p3, p4 = _patched_sink(obs_instance, _store_sink(sink, release))
         with p1, p2, p3, p4:
@@ -689,7 +689,7 @@ class TestResetStopsDroppedSinks:
     def _metric(name: str) -> dict[str, Any]:
         # Metrics-shaped: no ``message`` key, like the batch that leaked.
         return {
-            "timestamp": datetime(2025, 6, 15, 10, 30, 0).timestamp(),
+            "timestamp": datetime(2025, 6, 15, 10, 30, 0, tzinfo=UTC).timestamp(),
             "metric_name": name,
         }
 

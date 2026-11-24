@@ -614,6 +614,7 @@ extend-select = [
     "LOG009",  # logger.warn() is deprecated — use .warning()
     "BLE001",  # blind `except Exception` / `except BaseException` (FND-4294)
     "RUF100",  # unused `noqa` — keeps every suppression live (FND-4294)
+    "DTZ",     # naive datetime: now()/fromtimestamp()/strptime() without a tz read host-local time (FND-5226)
 ]
 # ANN401 (`typing.Any` in a signature) is deliberately NOT selected here: ~490
 # existing sites would make every run red. .github/scripts/check_ann401_baseline.py
