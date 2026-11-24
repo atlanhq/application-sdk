@@ -22,28 +22,42 @@ the lock names); the review job, which holds the App token and the model key,
 still runs nothing but this package.
 
 1. `gate-ref` (`head_ref_output`) writes the pull request's head ref for a
-   sparse checkout of the head: the CI directories and `uv.lock`, read as data.
-2. `gate-fact` (`make_fact`) reads the conformance version that head's
+   sparse checkout of the head's CI directories, read as data. The
+   repository's default branch is checked out too, `uv.lock` alone.
+2. `gate-fact` (`make_fact`) reads the conformance version the BASE branch's
    `uv.lock` pins (`conformance_pin`; PyPI or its mirror only, a released
    version only), installs exactly that version into a fresh venv with
    `--only-binary :all:` (no build step runs), and runs `gate_render.py` with
    that venv's interpreter, `-I`, from outside the checkout. That script is
-   the C002 drift check of the pinned version, called as it is. The result is
-   the fact file, uploaded as an artifact. Anything that goes wrong is a fact
-   with `status: unavailable` and a reason, never a mismatch.
+   the C002 drift check of that version, called as it is, over the head's
+   files. It also reads the index's version list for the newest release (no
+   install). The result is the fact file, uploaded as an artifact. Anything
+   that goes wrong is a fact with `status: unavailable` and a reason, never a
+   mismatch.
 3. The review job reads the fact (`load_fact`, validated strictly: it came
    from a job that read pull-request files) and uses it only for the head it
-   reviews and the conformance version that head pins (`evaluate`). Every
-   mismatch on a file the whole pull request changes (a rename's old path
-   included) is one finding (`finding_for`). Each round recomputes them, and
-   `reconcile` closes a gate finding whose file now matches or is no longer
-   changed. A round with no usable fact leaves earlier gate findings as they
-   are and says why.
+   reviews and the conformance version the pull request's base pins
+   (`evaluate`; the head's own pin is never read). Each round recomputes the
+   findings, and `reconcile` closes a gate finding whose file now matches or
+   is no longer changed. A round with no usable fact leaves earlier gate
+   findings as they are and says why.
 
-Which files: the pinned version's C002 list (`bootstrap_drift.discover`)
-without the two write-if-absent scaffolds the app owns, `tests.yaml` and
-`renovate.json`. The repository's own `.github/connector-reviewer/principles/`
-and any workflow bootstrap does not write are not gate files.
+Why the base's pin: files are judged against what the branch they merge into
+installs. A pull request that bumps the pin and resyncs is a dependency or
+resync pull request, and exempt (`exempt.py`).
+
+A file is flagged only when all of these hold: it exists on the base (a file
+the pull request adds, or renames onto a managed name, never is); bootstrap
+manages it at the base's pinned version, or it is on `UNMANAGED_FALLBACK` and
+that version does not manage it yet; and the pull request's copy differs from
+the render (for the fallback, from its base copy, `_fallback`) or is deleted.
+Which files bootstrap manages: that version's C002 list
+(`bootstrap_drift.discover`) without the two write-if-absent scaffolds the app
+owns, `tests.yaml` and `renovate.json`. The repository's own
+`.github/connector-reviewer/principles/` and any workflow bootstrap does not
+write are never gate files, edited or deleted. One finding per file. When the
+base's pin is older than the newest release on its index, the summary has one
+note suggesting a bump; it never changes the status.
 
 The finding is high: the status is red for any open finding, and what high
 adds is that the pull request's author cannot dismiss it alone. A local edit to
@@ -258,26 +272,39 @@ def _step(
 def make_fact(
     checkout: Path,
     venv: Path,
+    base_checkout: Path,
     *,
     python: str = sys.executable,
     run: Runner = subprocess.run,
     script: Path = RENDER_SCRIPT,
     fetch: Fetch = _fetch,
 ) -> dict[str, Any]:
-    """The fact for the pull request head checked out at `checkout`. Never
-    raises: whatever goes wrong is `status: unavailable` with a reason."""
+    """The fact for the pull request head checked out at `checkout`,
+    rendered at the conformance version the base branch pins (`uv.lock` of
+    `base_checkout`, the repository's default branch). Never raises: whatever
+    goes wrong is `status: unavailable` with a reason.
+
+    The base's pin, not the head's: the files are judged against what the
+    branch they merge into would install. A pull request that bumps the pin
+    and resyncs is a dependency or resync pull request, and exempt."""
     # Absolute: every subprocess runs from the venv's parent directory.
     checkout, venv = Path(os.path.abspath(checkout)), Path(os.path.abspath(venv))
+    base_checkout = Path(os.path.abspath(base_checkout))
     head = sdk_source.checkout_commit(checkout)
     if not head:
         return _unavailable("the pull request head was not checked out")
-    lock = checkout / sdk_source.LOCK
+    base = sdk_source.checkout_commit(base_checkout)
+    if not base:
+        return _unavailable("the base branch was not checked out", head)
+    lock = base_checkout / sdk_source.LOCK
     try:
         if lock.is_symlink() or not lock.is_file():
-            return _unavailable("the pull request head has no uv.lock", head)
+            return _unavailable("the base branch has no uv.lock", head)
         text = lock.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
-        return _unavailable(f"uv.lock could not be read ({type(e).__name__})", head)
+        return _unavailable(
+            f"the base branch's uv.lock could not be read ({type(e).__name__})", head
+        )
     pin = conformance_pin(text)
     if isinstance(pin, str):
         return _unavailable(pin, head)
@@ -337,7 +364,13 @@ def make_fact(
         return _unavailable(
             "the installed conformance version is not the pinned one", head, pin.version
         )
-    out = {**result, "schema": SCHEMA, "head": head, "conformance": pin.version}
+    out = {
+        **result,
+        "schema": SCHEMA,
+        "head": head,
+        "base": base,
+        "conformance": pin.version,
+    }
     latest = latest_release(pin.index, fetch)
     if latest:
         out["latest"] = latest
@@ -478,7 +511,7 @@ def changed_paths(files: list[FileDiff]) -> list[str]:
 
 
 def _body(m: Mismatch, version: str) -> str:
-    pinned = f"conformance {version} (the version this pull request's `uv.lock` pins)"
+    pinned = f"conformance {version} (the version the base branch's `uv.lock` pins)"
     managed = (
         f"`{BOOTSTRAP}` writes this file and overwrites it on every resync, and the "
         "app's Conformance gate (C002) compares it with the render, so a local change "
@@ -498,7 +531,7 @@ def _body(m: Mismatch, version: str) -> str:
                 if m.removed and not m.added and not m.diff
                 else f"changes it from its base copy (+{m.added} −{m.removed} line(s))."
             )
-            + f" Conformance {version}, the version this pull request's `uv.lock` "
+            + f" Conformance {version}, the version the base branch's `uv.lock` "
             "pins, does not manage it yet, so it is compared with the base branch "
             "instead of a render."
         )
@@ -637,13 +670,15 @@ def evaluate(
     files: list[FileDiff],
     *,
     head: str,
-    lock_text: str | None,
+    base_lock_text: str | None,
     exclude: tuple[str, ...] = DEFAULT_EXCLUDE,
     read_base: Reader | None = None,
     read_head: Reader | None = None,
 ) -> Evaluation:
     """The gate findings of the pull request whose whole diff is `files`, at
-    `head` (whose `uv.lock` text is `lock_text`), from the fact at `path`.
+    `head`, from the fact at `path`. `base_lock_text` is the `uv.lock` of
+    the pull request's base: the fact counts only when it rendered the
+    conformance version that lock pins (the head's own pin is not read).
     `path` None means the gate check is not configured (a local run): no note.
     `read_base` and `read_head` read a file's text at the base and the head;
     with both, a file on `UNMANAGED_FALLBACK` that the pinned version does not
@@ -661,13 +696,16 @@ def evaluate(
                 f"review reads {head[:9]}; `/review force` checks again."
             ],
         )
-    pin = conformance_pin(lock_text) if lock_text is not None else "no uv.lock"
+    pin = (
+        conformance_pin(base_lock_text) if base_lock_text is not None else "no uv.lock"
+    )
     if isinstance(pin, str) or pin.version != fact.conformance:
         return Evaluation(
             None,
             [
                 "Gate-file check not made: it rendered conformance "
-                f"{fact.conformance}, which is not the version this head pins."
+                f"{fact.conformance}, which is not the version the pull request's "
+                "base pins."
             ],
         )
     # Only a hand edit or deletion of a file that exists on the base counts.

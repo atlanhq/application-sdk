@@ -216,6 +216,11 @@ def main(argv: list[str] | None = None) -> int:
         "--checkout", required=True, help="the pull request head, read as data"
     )
     gf.add_argument("--venv", required=True, help="a directory for a new venv")
+    gf.add_argument(
+        "--base-checkout",
+        required=True,
+        help="the base branch, whose uv.lock pins the conformance version rendered",
+    )
     gf.add_argument("--out", required=True, help="where the fact file is written")
     args = ap.parse_args(argv)
     if args.cmd == "gate-ref":
@@ -642,7 +647,9 @@ def _gate_ref(args: argparse.Namespace) -> int:
 def _gate_fact(args: argparse.Namespace) -> int:
     """`gate-fact`: always exit 0. A check that cannot be made is a fact with
     `status: unavailable` and the reason, which the review states."""
-    fact = gate.make_fact(Path(args.checkout), Path(args.venv))
+    fact = gate.make_fact(
+        Path(args.checkout), Path(args.venv), Path(args.base_checkout)
+    )
     out = Path(args.out)
     try:
         out.parent.mkdir(parents=True, exist_ok=True)

@@ -15650,7 +15650,10 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
     monkeypatch.setenv("GITHUB_TOKEN", "ghs_secret")
     monkeypatch.setenv("PYTHONPATH", "/somewhere")
     checkout = tmp_path / "gate-head"
-    head = _git_checkout(checkout, {"uv.lock": _conformance_lock()})
+    # The head pins another version: it is never read.
+    head = _git_checkout(checkout, {"uv.lock": _conformance_lock("0.61.0")})
+    base_dir = tmp_path / "gate-base"
+    base = _git_checkout(base_dir, {"uv.lock": _conformance_lock()})
     runner = _Runner(_render_result())
     venv_dir = tmp_path / "work" / "venv"
     fetched: list[str] = []
@@ -15662,6 +15665,7 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
     fact = gate_mod.make_fact(
         checkout,
         venv_dir,
+        base_dir,
         python="py",
         run=runner,
         script=Path("/s/r.py"),
@@ -15671,6 +15675,8 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
     assert fact["latest"] == "0.60.0"
     assert fetched == ["https://pypi.org/simple/atlan-application-sdk-conformance/"]
     assert fact["status"] == "ok" and fact["head"] == head
+    assert fact["base"] == base
+    # The base branch's pin, not the head's 0.61.0.
     assert fact["conformance"] == "0.60.0"
     assert fact["mismatches"] == {CONFORMANCE_WF: DRIFT}
     venv, pip, render = (c["argv"] for c in runner.calls)
@@ -15692,8 +15698,9 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
 @pytest.mark.parametrize(
     ("setup", "reason"),
     [
-        ("no-checkout", "was not checked out"),
-        ("no-lock", "has no uv.lock"),
+        ("no-checkout", "the pull request head was not checked out"),
+        ("no-base", "the base branch was not checked out"),
+        ("no-lock", "the base branch has no uv.lock"),
         ("bad-pin", "not come from PyPI"),
         ("pip-fails", "installing atlan-application-sdk-conformance 0.60.0 failed"),
         ("render-fails", "the render failed"),
@@ -15717,7 +15724,10 @@ def test_a_gate_check_that_cannot_be_made_is_never_a_mismatch(
         else {"uv.lock": _conformance_lock(registry=registry)}
     )
     if setup != "no-checkout":
-        _git_checkout(checkout, files)
+        _git_checkout(checkout, {"README.md": "head"})
+    base_dir = tmp_path / "gate-base"
+    if setup != "no-base":
+        _git_checkout(base_dir, files)
     result: dict[str, Any] | None = _render_result()
     fail = ""
     if setup == "pip-fails":
@@ -15735,7 +15745,12 @@ def test_a_gate_check_that_cannot_be_made_is_never_a_mismatch(
             "reason": "this conformance version cannot be compared (ImportError)",
         }
     fact = gate_mod.make_fact(
-        checkout, tmp_path / "w" / "venv", python="py", run=_Runner(result, fail)
+        checkout,
+        tmp_path / "w" / "venv",
+        base_dir,
+        python="py",
+        run=_Runner(result, fail),
+        fetch=lambda url: None,
     )
     assert fact["status"] == "unavailable" and "mismatches" not in fact
     assert reason in fact["reason"]
@@ -15746,7 +15761,7 @@ def test_a_gate_check_that_cannot_be_made_is_never_a_mismatch(
         str(path),
         parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
         head=GATE_H1,
-        lock_text=_conformance_lock(),
+        base_lock_text=_conformance_lock(),
     )
     assert ev.findings is None and len(ev.notes) == 1
     assert ev.notes[0].startswith("Gate-file check not made: ")
@@ -15814,7 +15829,9 @@ def test_a_changed_gate_file_that_differs_from_the_render_is_one_high_finding(
         + _diff_of(CHECKS_WF, "a: 1\n", "a: 2\n")
         + DIFF
     )
-    ev = gate_mod.evaluate(path, files, head=GATE_H1, lock_text=_conformance_lock())
+    ev = gate_mod.evaluate(
+        path, files, head=GATE_H1, base_lock_text=_conformance_lock()
+    )
     assert ev.findings is not None and ev.notes == []
     assert ev.checked == [CONFORMANCE_WF, CHECKS_WF] and ev.matching == [CHECKS_WF]
     [f] = ev.findings
@@ -15826,9 +15843,7 @@ def test_a_changed_gate_file_that_differs_from_the_render_is_one_high_finding(
         "",
     )
     assert f.title == f"Bootstrap-managed `{CONFORMANCE_WF}` differs from the render"
-    assert (
-        "conformance 0.60.0 (the version this pull request's `uv.lock` pins)" in f.body
-    )
+    assert "conformance 0.60.0 (the version the base branch's `uv.lock` pins)" in f.body
     assert "+1 −1 line(s), action pins ignored" in f.body
     assert "Edit it in application-sdk" in f.body and "run a resync" in f.body
     assert f.suggestion == DRIFT["diff"]
@@ -15853,7 +15868,7 @@ def test_a_deleted_or_renamed_away_gate_file_is_one_finding(tmp_path: Path):
         path,
         parse_unified_diff(deleted + renamed),
         head=GATE_H1,
-        lock_text=_conformance_lock(),
+        base_lock_text=_conformance_lock(),
     )
     assert ev.findings is not None
     assert sorted(f.path for f in ev.findings) == [CHECKS_WF, CONFORMANCE_WF]
@@ -15865,21 +15880,23 @@ def test_a_deleted_or_renamed_away_gate_file_is_one_finding(tmp_path: Path):
 def test_the_gate_fact_is_used_only_for_the_head_and_version_it_read(tmp_path: Path):
     files = parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW))
     path = _write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT})
-    moved = gate_mod.evaluate(path, files, head=GATE_H2, lock_text=_conformance_lock())
+    moved = gate_mod.evaluate(
+        path, files, head=GATE_H2, base_lock_text=_conformance_lock()
+    )
     assert moved.findings is None
     assert moved.notes == [
         f"Gate-file check not made: it read head {GATE_H1[:9]}, and this review "
         f"reads {GATE_H2[:9]}; `/review force` checks again."
     ]
     bumped = gate_mod.evaluate(
-        path, files, head=GATE_H1, lock_text=_conformance_lock("0.61.0")
+        path, files, head=GATE_H1, base_lock_text=_conformance_lock("0.61.0")
     )
     assert bumped.findings is None
-    assert "not the version this head pins" in bumped.notes[0]
-    no_lock = gate_mod.evaluate(path, files, head=GATE_H1, lock_text=None)
+    assert "not the version the pull request's base pins" in bumped.notes[0]
+    no_lock = gate_mod.evaluate(path, files, head=GATE_H1, base_lock_text=None)
     assert no_lock.findings is None
     # Not configured (a local run): nothing, and no note.
-    unset = gate_mod.evaluate(None, files, head=GATE_H1, lock_text=None)
+    unset = gate_mod.evaluate(None, files, head=GATE_H1, base_lock_text=None)
     assert unset == gate_mod.Evaluation(None)
 
 
@@ -15935,7 +15952,7 @@ def test_an_unchecked_gate_file_is_not_read_as_matching(tmp_path: Path):
     data["unchecked"] = {CONFORMANCE_WF: "a symlink: not read"}
     path.write_text(json.dumps(data))
     ev = gate_mod.evaluate(
-        str(path), files, head=GATE_H1, lock_text=_conformance_lock()
+        str(path), files, head=GATE_H1, base_lock_text=_conformance_lock()
     )
     assert ev.findings == [] and ev.matching == [] and ev.unchecked == [CONFORMANCE_WF]
     assert ev.notes == [
@@ -15945,7 +15962,9 @@ def test_an_unchecked_gate_file_is_not_read_as_matching(tmp_path: Path):
 
 def _gate_pr(head: str, diff: str, files: dict[tuple[str, str], str]) -> Any:
     gh = fake_github(head=head, diffs={("b0", head): diff}, files=files)
-    gh.raw[("uv.lock", head)] = _conformance_lock()
+    gh.raw[("uv.lock", "b0")] = _conformance_lock()
+    # The head pins another version, which the gate check never reads.
+    gh.raw[("uv.lock", head)] = _conformance_lock("0.61.0")
     return gh
 
 
@@ -15986,7 +16005,7 @@ def test_a_review_raises_the_gate_finding_and_closes_it_in_code(
     gh.diffs[(GATE_H1, GATE_H2)] = _diff_of(CONFORMANCE_WF, WF_NEW, WF_OLD)
     gh.files[(CONFORMANCE_WF, GATE_H2)] = WF_OLD
     gh.files[("app/storage/fetch.py", GATE_H2)] = SRC_V2
-    gh.raw[("uv.lock", GATE_H2)] = _conformance_lock()
+    gh.raw[("uv.lock", GATE_H2)] = _conformance_lock("0.61.0")
     second = run(
         gh=gh,
         number=1,
@@ -16199,7 +16218,7 @@ def _shim_eval(tmp_path: Path, diff: str, base: Any, head: Any, **fact: Any) -> 
         _write_fact(tmp_path, **fact),
         parse_unified_diff(diff),
         head=GATE_H1,
-        lock_text=_conformance_lock(),
+        base_lock_text=_conformance_lock(),
         read_base=read_base,
         read_head=read_head,
     )
@@ -16397,7 +16416,7 @@ def test_a_pin_behind_the_latest_release_is_a_note_never_a_finding(
         str(path),
         parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
         head=GATE_H1,
-        lock_text=_conformance_lock(),
+        base_lock_text=_conformance_lock(),
     )
     bump = [n for n in ev.notes if "is behind" in n]
     assert bump == (
@@ -16440,3 +16459,37 @@ def test_a_bump_note_never_changes_the_status(repo: Path, tmp_path: Path):
     assert any("is behind 0.61.0" in n for n in res.notes)
     assert gh.statuses[-1]["state"] == "success"
     assert "is behind 0.61.0" in gh.comments[0]["body"]
+
+
+def test_the_base_branchs_pin_renders_and_the_heads_is_ignored(
+    repo: Path, tmp_path: Path
+):
+    """The head pins 0.61.0 and the base 0.60.0: a fact rendered at the
+    head's version is not used; without the base's lock there is no check."""
+    gh = _gate_pr(
+        GATE_H1,
+        _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW),
+        {(CONFORMANCE_WF, GATE_H1): WF_NEW},
+    )
+    head_pinned = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=_write_fact(
+            tmp_path, mismatches={CONFORMANCE_WF: DRIFT}, version="0.61.0"
+        ),
+    )
+    assert [f for f in state_of(head_pinned).findings if f.origin == "gate"] == []
+    assert any(
+        "not the version the pull request's base pins" in n for n in head_pinned.notes
+    )
+    no_base_lock = gate_mod.evaluate(
+        _write_fact(tmp_path, name="f2.json", mismatches={CONFORMANCE_WF: DRIFT}),
+        parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
+        head=GATE_H1,
+        base_lock_text=None,
+    )
+    assert no_base_lock.findings is None and len(no_base_lock.notes) == 1

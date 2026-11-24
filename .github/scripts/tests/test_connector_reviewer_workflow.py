@@ -328,7 +328,6 @@ def test_the_gate_job_checks_out_the_head_sparse_from_a_tested_ref(
         "/.github/actions/",
         "/.github/scripts/",
         "/renovate.json",
-        "/uv.lock",
     ]
     assert head["with"]["sparse-checkout-cone-mode"] is False
     assert head.get("continue-on-error") is True
@@ -338,7 +337,17 @@ def test_the_gate_job_checks_out_the_head_sparse_from_a_tested_ref(
     ]
     assert sdk["with"]["repository"] == "atlanhq/application-sdk"
     assert sdk["with"]["ref"] == "${{ job.workflow_sha }}"
-    assert len(_uses(gate_job, "actions/checkout")) == 2
+    # The base branch's uv.lock alone: its pin is the version rendered.
+    [base] = [
+        c
+        for c in _uses(gate_job, "actions/checkout")
+        if c["with"].get("path") == "gate-base"
+    ]
+    assert base["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert base["with"]["sparse-checkout"].split() == ["/uv.lock"]
+    assert "repository" not in base["with"]
+    assert base.get("continue-on-error") is True
+    assert len(_uses(gate_job, "actions/checkout")) == 3
 
 
 def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
@@ -354,6 +363,7 @@ def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     assert "env" not in fact  # nothing handed to it, no token among it
     out = "$RUNNER_TEMP/gate-fact/connector-reviewer-gate.json"
     assert f'--out "{out}"' in fact["run"]
+    assert '--base-checkout "$GITHUB_WORKSPACE/gate-base"' in fact["run"]
     uploads = _uses(gate_job, "actions/upload-artifact")
     assert len(uploads) == 2
     assert all(u.get("continue-on-error") is True for u in uploads)

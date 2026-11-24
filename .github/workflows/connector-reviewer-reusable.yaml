@@ -22,12 +22,13 @@ name: Connector reviewer (reusable)
 #   * `gate` (FND-5325, connector_reviewer/gate.py) holds NO secret and no App
 #     token; its own token only reads contents and is not persisted. It is the
 #     one place a pull request's head is checked out, and the one place
-#     third-party code runs: it checks out the head sparse (the CI directories,
-#     `renovate.json` and `uv.lock`, read as data and never imported or run),
-#     installs the atlan-application-sdk-conformance version that head's
-#     uv.lock pins from the index the lock names (PyPI or its mirror only,
-#     wheels only: no build step) into a fresh venv, and runs that version's
-#     C002 drift check over the bootstrap-managed gate files, with the venv's
+#     third-party code runs: it checks out the head sparse (the CI directories
+#     and `renovate.json`, read as data and never imported or run) and the
+#     default branch's `uv.lock` alone, installs the
+#     atlan-application-sdk-conformance version the BASE branch's uv.lock pins
+#     from the index the lock names (PyPI or its mirror only, wheels only: no
+#     build step) into a fresh venv, and runs that version's C002 drift check
+#     over the head's bootstrap-managed gate files, with the venv's
 #     interpreter in isolated mode, from outside the checkout. Its only output
 #     is a JSON fact file, uploaded as an artifact, which the review reads as
 #     untrusted data. The head ref is written by tested Python (`gate-ref`) as
@@ -136,8 +137,8 @@ jobs:
           --event-path "$EVENT_PATH"
 
       # The pull request head, sparse, read as data only: the CI directories
-      # the gate files live in, renovate.json (C002 reads conformance.yaml's
-      # enforcement fallback from it) and uv.lock (the conformance pin).
+      # the gate files live in, and renovate.json (C002 reads conformance.yaml's
+      # enforcement fallback from it).
       - name: Check out the pull request head's CI files and uv.lock (read as data)
         if: steps.gate-ref.outputs.ref != ''
         continue-on-error: true
@@ -149,9 +150,23 @@ jobs:
             /.github/actions/
             /.github/scripts/
             /renovate.json
-            /uv.lock
           sparse-checkout-cone-mode: false
           path: gate-head
+          persist-credentials: false
+
+      # The base branch's uv.lock alone: the conformance version it pins is
+      # the one rendered (the head's pin is never read). The default branch,
+      # by name, as the principles checkout reads it; the review uses the fact
+      # only when the pull request's own base pins the same version.
+      - name: Check out the base branch's uv.lock (read as data)
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            /uv.lock
+          sparse-checkout-cone-mode: false
+          path: gate-base
           persist-credentials: false
 
       # Installs the pinned conformance version into a fresh venv and runs its
@@ -164,6 +179,7 @@ jobs:
           python -m connector_reviewer gate-fact
           --checkout "$GITHUB_WORKSPACE/gate-head"
           --venv "$RUNNER_TEMP/gate-venv"
+          --base-checkout "$GITHUB_WORKSPACE/gate-base"
           --out "$RUNNER_TEMP/gate-fact/connector-reviewer-gate.json"
 
       # The repo's upload pattern (see the run report below): the first attempt

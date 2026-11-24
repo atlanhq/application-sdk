@@ -852,13 +852,15 @@ def run(
     if sdk_note:
         res.notes.append(sdk_note)
     # The gate-file fact (FND-5325): a changed bootstrap-managed file that
-    # differs from what the pinned conformance version renders is one finding,
+    # differs from what the base's pinned conformance version renders is one finding,
     # computed in code. Judged against the whole PR's diff at this head.
     gate_eval = gate.evaluate(
         gate_fact,
         full_files,
         head=head,
-        lock_text=lock.text,
+        # The base's pin decides which version renders (the head's is not
+        # read): read through the API, as data.
+        base_lock_text=gh.raw_file_at(sdk_source.LOCK, base),
         exclude=exclude_patterns(cfg),
         # The fallback for a gate file the pinned version does not manage yet:
         # its base and head copies, read through the API as data.
