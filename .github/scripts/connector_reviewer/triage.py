@@ -72,9 +72,24 @@ class Triage:
         if path not in paths:
             paths.append(path)
 
-    def summary_lines(self) -> list[str]:
-        out: list[str] = []
+    def withheld(self) -> dict[str, list[str]]:
+        """`mechanical` narrowed to the files the model never saw: reason ->
+        paths with no hunk left to review. A reason is noted per hunk, so a
+        file whose import hunk was set aside and whose real change was
+        reviewed is in `mechanical` and not here (FND-5316)."""
+        sent = {fd.path for fd in self.reviewed}
+        out: dict[str, list[str]] = {}
         for reason, paths in self.mechanical.items():
+            kept = [p for p in paths if p not in sent]
+            if kept:
+                out[reason] = kept
+        return out
+
+    def summary_lines(self) -> list[str]:
+        """What was not sent to the model, a line per reason. Only withheld
+        files count: these lines say "not line-reviewed"."""
+        out: list[str] = []
+        for reason, paths in self.withheld().items():
             out.append(f"{reason}: {len(paths)} file(s)")
         if self.duplicate_of:
             out.append(

@@ -3129,6 +3129,44 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
     assert len(fd.hunks) == 1 and "a / b" in fd.render()
 
 
+def test_the_mechanical_box_lists_only_files_the_model_never_saw(
+    repo: Path, tmp_path: Path
+):
+    """FND-5316: triage notes a reason per HUNK, and the summary's box ("not
+    sent to the model") counted every file with one mechanical hunk, so a file
+    whose import hunk was set aside and whose real change was reviewed, and
+    carried findings, was listed as never sent. Only a file with nothing left
+    to review is withheld; the run report and the approach check say the same."""
+    mixed = (
+        "diff --git a/app/mixed.py b/app/mixed.py\n--- a/app/mixed.py\n+++ b/app/mixed.py\n"
+        "@@ -1,1 +1,1 @@\n-import os\n+import os, sys\n"
+        "@@ -10,1 +10,1 @@\n-    return a\n+    return a / b\n"
+    )
+    imports = _file_diff("app/imports.py", ["import os"], ["import os, sys"])
+    gh = fake_github()
+    gh.diffs[("b0", "h1")] = mixed + imports
+    script = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=PrincipleSet(),
+        client_factory=_factory(script),
+    )
+    # The mixed file's real hunk is sent to the model.
+    assert any("return a / b" in _sent(r) for r in script.requests)
+    body = gh.comments[0]["body"]
+    assert "<details><summary>1 file(s) with mechanical changes" in body
+    box = body.split("<details><summary>1 file(s) with mechanical changes")[1]
+    box = box.split("</details>")[0]
+    assert "`app/imports.py`" in box and "app/mixed.py" not in box
+    assert res.triage.summary_lines() == ["imports only: 1 file(s)"]
+    assert res.triage.withheld() == {"imports only": ["app/imports.py"]}
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert rep["triage"]["mechanical"] == {"imports only": 1}
+
+
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
     gh = fake_github()
     diff = "".join(

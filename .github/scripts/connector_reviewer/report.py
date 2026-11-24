@@ -100,7 +100,9 @@ def build(res: RunResult) -> dict[str, Any]:
             for b in res.bundles
         ],
         "triage": {
-            "mechanical": {k: len(v) for k, v in res.triage.mechanical.items()},
+            # Files not sent to the model, per reason (FND-5316: not every file
+            # with a mechanical hunk, since the rest of such a file is reviewed).
+            "mechanical": {k: len(v) for k, v in res.triage.withheld().items()},
             "renames": [f"{a} -> {b}" for a, b in res.triage.renames],
             "duplicates": len(res.triage.duplicate_of),
             "hunks_dropped": res.triage.hunks_dropped,
