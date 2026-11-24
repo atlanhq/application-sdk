@@ -1003,6 +1003,71 @@ This is not asset validation: [Asset-Validation Outcome](#asset-validation-outco
 the app *did* emit that look wrong; `skip_record` records what the app *chose not to* emit. See
 [ADR-0022](../adr/0022-skipped-record-capture.md).
 
+### Recording Per-Item Fetch Failures (`record_fetch_failure`)
+
+An app that fetches items in parallel — one request per report, page or dashboard — records each
+*expected* per-item failure where it happens, inside the per-item coroutine:
+
+```python
+import asyncio
+
+from application_sdk.outputs import FetchFailureReason, record_fetch_failure
+
+async def fetch_report(report_id: str) -> Report | None:
+    try:
+        return await client.get_report(report_id)
+    except ReportNotFound as exc:          # typed and expected: record it here
+        record_fetch_failure(
+            FetchFailureReason.NOT_FOUND,
+            entity_type="Report",
+            record_id=report_id,
+            endpoint="/reports/{id}",
+            http_status=404,
+            detail=str(exc),
+        )
+        return None
+
+@task
+async def extract(self, input: ExtractInput) -> ExtractOutput:
+    async with asyncio.TaskGroup() as tg:  # anything unexpected fails the task
+        tasks = [tg.create_task(fetch_report(r)) for r in report_ids]
+    reports = [t.result() for t in tasks if t.result() is not None]
+    if report_ids and not reports:          # every item failed: an outage, not a partial run
+        raise SourceUnavailableError(...)
+    ...
+```
+
+Three rules make the pattern work:
+
+- **Record at the item, not after the batch.** `gather(..., return_exceptions=True)` followed by an
+  `isinstance(result, Exception)` loop has lost which item failed. Catch inside the per-item
+  coroutine, where the id is in hand.
+- **Catch only typed, expected failures.** Anything else propagates — use `TaskGroup`, or `gather`
+  *without* `return_exceptions` — so the task fails and Temporal retries it.
+- **Raise past a threshold.** The SDK applies none, because only the app knows its denominator. A
+  run where every item failed is an outage and must fail, not end `PARTIAL_SUCCESS`.
+
+`reason` is a closed `FetchFailureReason`: `SOURCE_UNAVAILABLE`, `NOT_FOUND`, `FORBIDDEN`,
+`RATE_LIMITED`. Put specifics in `detail`, and give `endpoint` as a template (`/reports/{id}`), not
+a URL with ids or query strings; both reach the file only.
+
+`record_fetch_failure` is a plain function, not a coroutine. It is safe from the event loop, from
+`gather`/`TaskGroup` child tasks, and from a sync function run through `run_in_thread`, which
+copies the activity's context into the thread. (A thread started some other way does not see the
+activity's sink.) A line holds ids only, so the activity's lines stay in memory until it returns.
+
+When the task returns, the SDK adds `fetch-failures` and `fetch-failures-<reason>` to its metrics
+and uploads its lines. A task that raises records nothing: its retry records its own. After
+`run()` returns, the framework task `merge_fetch_failures` merges every task's lines into
+`{run prefix}/fetch-failures.ndjson`, adds the run artifact `fetch-failures`, and a `SUCCESS`
+result is marked `PARTIAL_SUCCESS`. A run that records nothing is unchanged. Bounding and
+fail-open storage are as for `skip_record`: `MAX_SKIPPED_RECORDS` caps the lines and warnings, and
+`fetch-failures-truncated` / `fetch-failures-unpersisted` account for every failure not in the file.
+
+Use `skip_record` for a record the app *received* and chose not to emit; use
+`record_fetch_failure` when there is no record because the fetch failed. See
+[ADR-0022](../adr/0022-skipped-record-capture.md).
+
 ### Asset-Validation Outcome
 
 `App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
