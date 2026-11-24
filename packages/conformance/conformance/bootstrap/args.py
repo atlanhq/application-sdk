@@ -428,12 +428,15 @@ options:
                                   the reminder's hook entry in .claude/settings.json
                                   (every other setting is kept), and
                                   .mothership/reviewer.yaml;
-                                - removes the rules under
-                                  .mothership/review-rulesets/connector-app/ only
-                                  when every one is the generic placeholder. A
-                                  folder with any other rule is left whole and
-                                  reported as `kept:`; move those rules to the
-                                  principles folder by hand.
+                                - removes the whole
+                                  .mothership/review-rulesets/connector-app/
+                                  folder, every rule in it included, and then
+                                  review-rulesets/ and .mothership/ if that
+                                  leaves them empty. Nothing else under
+                                  .mothership/ is touched. A folder reached
+                                  through a symlink to outside the repository,
+                                  or through a symlinked parent directory, stops
+                                  the kit the way an unmarked block does.
                               Implied by --resync; pass it alone to do this without
                               resyncing tests.yaml/renovate.json. Otherwise opt-in, so
                               a bare bootstrap run never changes local Claude
