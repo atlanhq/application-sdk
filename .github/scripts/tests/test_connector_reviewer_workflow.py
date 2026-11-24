@@ -363,10 +363,13 @@ def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     ]
     assert job["needs"] == "gate"
     assert job["if"] == "${{ !cancelled() }}"
-    [download] = _uses(job, "actions/download-artifact")
-    assert download.get("continue-on-error") is True
+    download, retry = _uses(job, "actions/download-artifact")
+    for step in (download, retry):
+        assert step.get("continue-on-error") is True
+        assert step["with"] == download["with"]
     assert download["with"]["pattern"] == "connector-reviewer-gate*"
     assert download["with"]["merge-multiple"] is True
+    assert retry["if"] == "steps.download-gate.outcome == 'failure'"
     review_steps = _steps(job)
     [review] = [s for s in review_steps if s.get("name") == "Review"]
     assert review_steps.index(download) < review_steps.index(review)

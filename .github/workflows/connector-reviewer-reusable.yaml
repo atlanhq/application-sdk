@@ -344,7 +344,22 @@ jobs:
 
       # The gate job's fact file. Absent (the job failed, or both uploads did):
       # the review says the gate-file check did not run.
+      # The repo's download pattern: a distinctly named retry after a wait.
       - name: Download the gate fact
+        id: download-gate
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: connector-reviewer-gate*
+          merge-multiple: true
+          path: ${{ runner.temp }}/gate-fact
+
+      - name: Wait before the gate fact download retry
+        if: steps.download-gate.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download the gate fact (retry)
+        if: steps.download-gate.outcome == 'failure'
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
