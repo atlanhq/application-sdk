@@ -1422,7 +1422,7 @@ class MyConnector(App):
 **Queue resolution** (evaluated at workflow-run time):
 
 1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override. Hyphens in the pool name are normalised to underscores: `pool="cold-tier"` looks up `ATLAN_POOL_COLD_TIER_QUEUE`.
-2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent.
+2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent. The base queue is the SDK's derived `atlan-{app}-{deployment}` unless `ATLAN_TASK_QUEUE` is set, and a pool queue inherits a pinned value too. Do not pin `ATLAN_TASK_QUEUE` in a deploy or pool env: the on-demand (`-od`) worker breaks (K031).
 3. If neither is set, a warning is emitted at startup and the activity falls back to the default queue.
 
 **Pkl contract:** every pool used in `@task` must be declared in the app contract so the contract-toolkit can generate the correct deployment manifest:

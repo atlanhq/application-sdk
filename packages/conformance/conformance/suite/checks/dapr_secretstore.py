@@ -29,17 +29,17 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    contract_files,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
+    pkl_code_lines,
     safe_read_text,
 )
 from conformance.suite.checks.dapr_objectstore import (
     contract_false_findings,
-    contract_files,
     deploy_dapr_false_line,
     discover,
-    pkl_code_lines,
 )
 from conformance.suite.schema.findings import Finding
 

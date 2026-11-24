@@ -350,6 +350,22 @@ Tracking:
   whatever the pool's grace.
 - Option 3 escalation backstop — separate lower-priority follow-up.
 
+### Amendment (2026-11-24): `ATLAN_TASK_QUEUE` is derived, not set
+
+The Decision above calls `ATLAN_TASK_QUEUE` "the seam between contract (Pkl) and
+deployment (Helm)". For a deployed app, read that seam as the app and deployment
+names instead. When `ATLAN_TASK_QUEUE` is unset, the SDK derives the base queue
+as `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`
+(`application_sdk.common.task_queue`), and the chart appends `-od` to the
+deployment name for the on-demand worker, so each variant polls its own queue.
+
+An app must not pin `ATLAN_TASK_QUEUE` in its contract's deploy or pool `env`
+(or in `atlan.yaml`). A pin overrides the derivation for both variants, so the
+`-od` worker polls the base queue and retries the activity rerouter moves to the
+`-od` queue are never picked up. Pool queues, `{ATLAN_TASK_QUEUE}-{pool}`,
+inherit the pin. Conformance rule K031 `PinnedWorkerTaskQueue` flags it. The
+variable stays available as an override for local and CLI runs.
+
 ---
 
 ## Related ADRs
