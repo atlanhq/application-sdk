@@ -349,3 +349,68 @@ def test_a_dotfile_and_its_undotted_namesake_are_different_files() -> None:
     head = [_f("E002", "foo.py", 3)]
     assert len(introduced(head, [_f("E002", ".foo.py", 3)])) == 1
     assert introduced(head, [_f("E002", "./foo.py", 3)]) == []
+
+
+# -- --gate-introduced: soft mode stops covering what the change adds ---------
+
+
+def test_soft_mode_alone_still_never_fails(repo: Path) -> None:
+    """The control: --exit-zero without the gate is the old soft mode."""
+    (repo / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    assert _run(repo, "--since", "main", "--exit-zero") == 0
+
+
+def test_soft_mode_no_longer_covers_an_introduced_finding(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (repo / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    assert _run(repo, "--since", "main", "--exit-zero", "--gate-introduced") == 1
+    assert "[E002] [INTRODUCED] app/new.py" in capsys.readouterr().out
+
+
+def test_soft_mode_still_excuses_the_backlog(repo: Path) -> None:
+    """One inherited blocker, nothing added: exactly what soft mode is for."""
+    assert _run(repo, "--since", "main", "--exit-zero", "--gate-introduced") == 0
+
+
+def test_soft_mode_still_excuses_an_added_warning(repo: Path) -> None:
+    (repo / "app" / "warn.py").write_text(_WARN_ONLY)
+    assert _run(repo, "--since", "main", "--exit-zero", "--gate-introduced") == 0
+
+
+def test_soft_mode_survives_a_base_that_cannot_be_compared(repo: Path) -> None:
+    """Without a base nothing says what was added. A hard-gate run falls back
+    to the stricter verdict; a soft-mode run must not start failing a repo for
+    its backlog, so it stays at 0."""
+    (repo / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    argv = ("--since", "no-such-ref", "--exit-zero", "--gate-introduced")
+    assert _run(repo, *argv) == 0
+
+
+def test_the_gate_is_inert_without_since(repo: Path) -> None:
+    """Push, schedule and dispatch: soft mode keeps main from going red."""
+    (repo / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    assert _run(repo, "--exit-zero", "--gate-introduced") == 0
+
+
+def test_the_environment_arms_the_gate(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """How CI sets it: once on the job, read by every per-series step."""
+    (repo / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    monkeypatch.setenv(runner.SINCE_ENV, "main")
+    monkeypatch.setenv(runner.GATE_INTRODUCED_ENV, "true")
+    assert _run(repo, "--exit-zero") == 1
+    monkeypatch.setenv(runner.GATE_INTRODUCED_ENV, "false")
+    assert _run(repo, "--exit-zero") == 0
+
+
+def test_an_introduced_finding_annotates_as_an_error_in_soft_mode(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (repo / "app" / "new.py").write_text(_SWALLOW.format(name="new"))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert _run(repo, "--since", "main", "--exit-zero", "--gate-introduced") == 1
+    assert "::error" in capsys.readouterr().out

@@ -124,6 +124,14 @@ class PostgresClient(BaseSQLClient):
 
 The `required` list declares which credential keys must be present. The SDK validates these at connection time and raises a clear error if any are missing.
 
+Each value is made URL-safe before it fills the template, so a connection-form value cannot add a driver parameter or override one in `defaults` (such as `sslmode`):
+
+- `host` must be a hostname, an IPv4 address, or an IPv6 address in square brackets (`[::1]`). A value with a scheme, port, path or query raises `SqlCredentialsParseError`.
+- `port` must be a whole number from 1 to 65535, as an `int` or a string of digits. Anything else raises `SqlCredentialsParseError`.
+- Every other field, `password` included, is percent-encoded, wherever it sits in the template. SQLAlchemy decodes it, so the driver receives the original value. Store raw values, not pre-encoded ones.
+
+`host` and `port` are only validated when the template contains `{host}` or `{port}`.
+
 ## Handler
 
 The `Handler` ABC defines three HTTP endpoints that the Atlan platform calls during connector setup and operation. Each method receives a typed input and returns a typed output. Use your typed credential model to normalize the raw credential payload.

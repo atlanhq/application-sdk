@@ -582,11 +582,14 @@ def register_handler_routes(
         be a credential, and the field path plus the reason is what a caller
         can act on.
         """
+        validation_error = (
+            exc.validation_error if isinstance(exc, RequestContractError) else None
+        )
         errors = (
-            exc.cause.errors(
+            validation_error.errors(
                 include_url=False, include_input=False, include_context=False
             )
-            if isinstance(exc, RequestContractError) and exc.cause is not None
+            if validation_error is not None
             else []
         )
         detail = [

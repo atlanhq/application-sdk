@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from temporalio import activity
 from temporalio.exceptions import FailureError
+from typing_extensions import deprecated
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.app.registry import AppRegistry, TaskRegistry, _running_app_name
@@ -368,8 +369,31 @@ def _current_workflow_type() -> str:
         return ""  # conformance: ignore[E007] activity-context probe; an empty metric attribute is the answer on the local path, not an error worth a log line
 
 
-def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
-    """Add FileReference objects to the per-workflow tracking set in _app_state.
+def _state_run_key(context: TaskContext) -> tuple[str, str]:
+    """``(workflow_id, run_id)`` of the run this activity belongs to.
+
+    Read off ``activity.info()``, as ``TaskStateAccessor`` reads it, so the
+    tracked refs land in the slot ``cleanup_files`` / ``cleanup_storage`` read.
+    Falls back to the task context outside an activity.
+    """
+    try:
+        info = activity.info()
+    except RuntimeError:  # not inside an activity context
+        return (
+            context.workflow_id,
+            context.run_id,
+        )  # conformance: ignore[E007] activity-context probe; the task context names the same run on the local path
+    return (
+        info.workflow_id or context.workflow_id,
+        info.workflow_run_id or context.run_id,
+    )
+
+
+def _track_file_refs(run: tuple[str, str], *refs: FileReference) -> None:
+    """Add FileReference objects to the run's tracking set in _app_state.
+
+    The slot is keyed by ``(workflow_id, run_id)`` and released by the
+    worker's run-state sweeper once the run has closed.
 
     Thread-safe: acquires _app_state_lock for the full read-modify-write so
     concurrent activities cannot clobber each other's additions.
@@ -382,7 +406,7 @@ def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
     )
 
     with _app_state_lock:
-        state = _app_state.setdefault(workflow_id, {})
+        state = _app_state.setdefault(run, {})
         tracked: set[FileReference] = state.setdefault(TRACKED_FILE_REFS_KEY, set())
         tracked.update(refs)
 
@@ -737,7 +761,7 @@ def create_activity_from_task(
 
                 all_refs = _find_file_refs(input_data) + _find_file_refs(result)
                 if all_refs:
-                    _track_file_refs(context.workflow_id, *all_refs)
+                    _track_file_refs(_state_run_key(context), *all_refs)
 
                 return cast("Output", result)
 
@@ -920,8 +944,19 @@ def get_all_task_activities() -> list[Callable[..., Any]]:
     return activities
 
 
+@deprecated(
+    "application_sdk.execution._temporal.activities.get_activity_options is "
+    "deprecated and will be removed in v4.0.0: nothing in the SDK calls it. "
+    "Declare activity options on @task(...) instead; the App builds the "
+    "options it hands Temporal when it registers the task."
+)
 def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
     """Get Temporal activity options from task metadata.
+
+    .. deprecated:: 3.59
+        Not on any dispatch path: a ``@task`` method's options are built by
+        ``app.base._create_task_activity_wrapper``. Declare them on
+        ``@task(...)``. Will be removed in v4.0.0.
 
     Args:
         task_metadata: The task metadata.
@@ -931,37 +966,23 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         ``schedule_to_close_timeout`` only when the task declares a ceiling on
         its retry product — omitted, as before, when it does not.
     """
-    from temporalio.common import (  # noqa: PLC0415 — cold path: only used in retry policy reconstruction
-        RetryPolicy as TemporalRetryPolicy,
-    )
-
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + retry imports errors transitively
-        _with_worker_evicted_non_retryable,
+        RetryPolicy,
+        _to_temporal_retry_policy,
         resolve_activity_time_bounds,
     )
 
-    if task_metadata.retry_policy is not None:
-        rp = task_metadata.retry_policy
-        retry_policy = TemporalRetryPolicy(
-            maximum_attempts=rp.max_attempts,
-            initial_interval=rp.initial_interval,
-            maximum_interval=rp.max_interval,
-            backoff_coefficient=rp.backoff_coefficient,
-            non_retryable_error_types=_with_worker_evicted_non_retryable(
-                list(rp.non_retryable_errors)
-            ),
-        )
-    else:
-        retry_policy = TemporalRetryPolicy(
-            maximum_attempts=task_metadata.retry_max_attempts,
+    retry_policy = _to_temporal_retry_policy(
+        task_metadata.retry_policy
+        if task_metadata.retry_policy is not None
+        else RetryPolicy(
+            max_attempts=task_metadata.retry_max_attempts,
             initial_interval=timedelta(
                 seconds=task_metadata.retry_initial_interval_seconds
             ),
-            maximum_interval=timedelta(
-                seconds=task_metadata.retry_max_interval_seconds
-            ),
-            non_retryable_error_types=_with_worker_evicted_non_retryable([]),
+            max_interval=timedelta(seconds=task_metadata.retry_max_interval_seconds),
         )
+    )
 
     start_to_close, schedule_to_close = resolve_activity_time_bounds(
         task_metadata.timeout_seconds, task_metadata.schedule_to_close_seconds

@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk-api"
-version = "3.58.0"
+version = "3.59.0"
 description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
 license = "Apache-2.0"
 authors = [
@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "fastapi>=0.163.0,<0.164.0",
+    "fastapi>=0.165.0,<0.166.0",
     "pydantic>=2.10.6,<3.0.0",
     # application_sdk/contracts/{base,types}.py import it; same pin as the SDK.
     "typing-extensions>=4.12.2,<5",
@@ -61,7 +61,7 @@ obstore = ["obstore>=0.12.0,<0.13.0"]
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
 # calls. Declared so those function-level imports are an extra's, as on the worker.
 pyatlan = [
-    "pyatlan>=11.7.1,<12",
+    "pyatlan>=11.8.0,<12",
     # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
     # here too so a resolver that ignores requires-python cannot pick pyatlan's
     # py3.9 authlib branch for this wheel.

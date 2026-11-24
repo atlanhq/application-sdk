@@ -36,6 +36,7 @@ from conformance.suite.rules.portability import RULES as _PORTABILITY_RULES
 from conformance.suite.rules.preflight import RULES as _PREFLIGHT_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
 from conformance.suite.rules.retry_ladder import RULES as _RETRY_LADDER_RULES
+from conformance.suite.rules.run_scratch import RULES as _RUN_SCRATCH_RULES
 from conformance.suite.rules.sdr import RULES as _SDR_RULES
 from conformance.suite.rules.security import RULES as _S_RULES
 from conformance.suite.rules.storage import RULES as _STORAGE_RULES
@@ -75,6 +76,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _CLIENT_LIFECYCLE_RULES,
     _OFFLOAD_CANCEL_RULES,
     _HTTPX_PROXY_RULES,
+    _RUN_SCRATCH_RULES,
     _PERSISTENCE_SEAM_RULES,
     _CREDENTIAL_SEAM_RULES,
     _EP_ALIGNMENT_RULES,

@@ -3,7 +3,7 @@
     "C901": 1
   },
   "conformance/bootstrap/command.py": {
-    "C901": 2,
+    "C901": 1,
     "PLR0915": 1
   },
   "conformance/bootstrap/extract.py": {
@@ -286,9 +286,6 @@
     "C901": 6
   },
   "conformance/suite/checks/security/_s002.py": {
-    "C901": 1
-  },
-  "conformance/suite/runner.py": {
     "C901": 1
   },
   "conformance/tools/generate_contract_ledger.py": {

@@ -12,7 +12,7 @@
 services:
   # Serves the RSA public key (JWKS) so Temporal can verify tokens.
   jwks-server:
-    image: nginx:1.31.9-alpine@sha256:90b6bd2aec278b16b98221d64deb1d6d35d164567f507ab0716e6053878315aa
+    image: nginx:1.31.9-alpine@sha256:fb4658584bd9a916ffb6f6e365f97c25cfdb2923801f551ea08356e695f14ff7
     volumes:
       - ./.well-known:/usr/share/nginx/html/.well-known:ro
     healthcheck:
@@ -25,7 +25,7 @@ services:
 
   # Temporal persistence. No host port: only the temporal container talks to it.
   postgresql:
-    image: postgres:18.7@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
+    image: postgres:19.0@sha256:4ae330eb888b3b769aa542424859059d8e37507e365d3d48024446dacd8c4d8d
     environment:
       POSTGRES_PASSWORD: temporal
       POSTGRES_USER: temporal

@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.converter import DataConverter, EncodingPayloadConverter
 
+from application_sdk import _deprecation
+
 if TYPE_CHECKING:
     from application_sdk.app.base import App
 
@@ -23,77 +25,66 @@ if TYPE_CHECKING:
 def create_data_converter(
     additional_converters: list[EncodingPayloadConverter] | None = None,
 ) -> DataConverter:
-    """Create a data converter with Pydantic support.
-
-    When no additional converters are provided, returns the official
-    ``pydantic_data_converter`` directly.
-
-    When app-specific converters are provided, they are prepended to the
-    standard Pydantic converter chain.
+    """Return the SDK's Temporal data converter: the official ``pydantic_data_converter``.
 
     Args:
-        additional_converters: Optional app-specific converters to check first.
+        additional_converters: Deprecated and ignored. It never worked: on
+            temporalio 1.35 (the SDK's floor) building the chain raised
+            ``AttributeError``, and on earlier releases the chain had no JSON
+            converter, so a dict or ``BaseModel`` payload failed with "no known
+            converter". The Pydantic converter already
+            handles ``BaseModel``, dataclasses and plain JSON values. Passing
+            any value, including an empty list, emits a ``DeprecationWarning``.
 
     Returns:
-        Configured DataConverter.
+        The shared ``pydantic_data_converter``.
 
     Example:
         converter = create_data_converter()
         client = await Client.connect("localhost:7233", data_converter=converter)
+
+    .. deprecated:: 3.59
+        ``additional_converters`` is ignored. Will be removed in v4.0.0.
     """
-    if not additional_converters:
-        return pydantic_data_converter
-
-    from temporalio.converter import (  # noqa: PLC0415 — cold path: temporal data converter setup
-        BinaryNullPayloadConverter,
-        BinaryPlainPayloadConverter,
-        BinaryProtoPayloadConverter,
-        CompositePayloadConverter,
-        JSONProtoPayloadConverter,
-    )
-
-    # Build a chain that puts app converters first, then the standard pydantic chain
-    converters: list[EncodingPayloadConverter] = list(additional_converters)
-    converters.extend(
-        [
-            BinaryNullPayloadConverter(),
-            BinaryPlainPayloadConverter(),
-            JSONProtoPayloadConverter(),
-            BinaryProtoPayloadConverter(),
-        ]
-    )
-    # Append the pydantic JSON converter from the official chain
-    for conv in pydantic_data_converter.payload_converter.converters:
-        from temporalio.converter import (  # noqa: PLC0415 — cold path: temporal payload converter setup
-            JSONPlainPayloadConverter,
+    if additional_converters is not None:
+        _deprecation.warn_deprecated(
+            "create_data_converter(additional_converters=...)",
+            "create_data_converter() with no arguments",
+            "4.0.0",
+            note=(
+                "the parameter never produced a working converter and is now "
+                "ignored; the Pydantic converter already serialises BaseModel, "
+                "dataclass and JSON payloads"
+            ),
         )
-
-        if isinstance(conv, JSONPlainPayloadConverter):
-            converters.append(conv)
-            break
-
-    payload_converter = CompositePayloadConverter(*converters)
-    return DataConverter(
-        payload_converter_class=lambda: payload_converter,  # pyright: ignore[reportArgumentType]
-    )
+    return pydantic_data_converter
 
 
 def create_data_converter_for_app(app_class: type[App]) -> DataConverter:
-    """Create a data converter for a specific app, including any app-specific converters.
+    """Return the data converter for *app_class*.
 
-    If the app class declares ``payload_converters``, they are instantiated and
-    placed first in the converter chain.
+    Every app gets the shared ``pydantic_data_converter``. An app class that
+    still declares a ``payload_converters`` attribute, even as ``None``, gets a
+    ``DeprecationWarning``: the attribute is ignored, because the chain it fed
+    never worked (see :func:`create_data_converter`).
 
     Args:
         app_class: The App class to create a converter for.
 
     Returns:
-        Configured DataConverter with app-specific converters (if any).
+        The shared ``pydantic_data_converter``.
     """
-    app_converters: list[EncodingPayloadConverter] | None = None
-
-    converter_classes = getattr(app_class, "payload_converters", None)
-    if converter_classes:
-        app_converters = [cls() for cls in converter_classes]
-
-    return create_data_converter(additional_converters=app_converters)
+    # Any declaration warns, including ``payload_converters = None``: the
+    # attribute itself is what is deprecated, not only a non-empty value.
+    if hasattr(app_class, "payload_converters"):
+        _deprecation.warn_deprecated(
+            "App.payload_converters",
+            "no attribute; remove it from the App class",
+            "4.0.0",
+            note=(
+                "custom payload converters never produced a working converter "
+                "and are now ignored; the Pydantic converter already "
+                "serialises BaseModel, dataclass and JSON payloads"
+            ),
+        )
+    return create_data_converter()

@@ -24,6 +24,7 @@ from conformance.suite.checks._ast_common._safe_swap import (
 )
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
+from conformance.suite.runner import _blocking
 from conformance.suite.schema.extensions import SafeSwap
 from tests._helpers import scan_files
 
@@ -71,6 +72,20 @@ def test_p004_suppressed_inline() -> None:
     src = "from temporalio.client import Client  # conformance: ignore[P004] embedded test harness\n"
     fs = _rule(src, "P004")
     assert len(fs) == 1 and fs[0].suppressed
+
+
+def test_p004_gates_unless_suppressed() -> None:
+    """P004 is suppress-only BLOCK: an unsuppressed import gates, a justified one does not.
+
+    Apps must never import temporalio (FND-5383), so the finding has to reach
+    the gate's blocking set; the inline suppression stays the only way out.
+    """
+    (bare,) = _rule("from temporalio import workflow\n", "P004")
+    (justified,) = _rule(
+        "from temporalio import workflow  # conformance: ignore[P004] drives Temporal itself\n",
+        "P004",
+    )
+    assert _blocking([bare, justified]) == [bare]
 
 
 # ── P005 PrivateOrchestrationInternalImport (app) ───────────────────────────

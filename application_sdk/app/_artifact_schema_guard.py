@@ -251,7 +251,7 @@ def _declared_artifact_schema_keys(
     return _Declarations()
 
 
-def _mentions_file_reference(annotation: Any) -> bool:
+def _mentions_file_reference(annotation: object) -> bool:
     """Whether *annotation* is, or contains, a :class:`FileReference`.
 
     Walks unions, containers and ``Annotated`` metadata rather than testing for

@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -38,6 +38,9 @@ from application_sdk.contracts.base import (  # re-exported; defined with the co
 )
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
+
+if TYPE_CHECKING:
+    from pyatlan_v9.model.assets import Connection
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -765,7 +768,7 @@ class ConnectionRef(BaseModel, frozen=True):
         )
 
     @staticmethod
-    def from_connection(conn: Any) -> ConnectionRef:
+    def from_connection(conn: Connection) -> ConnectionRef:
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.
 
         The pyatlan_v9 struct is flat (all attributes at top level with camelCase
@@ -784,18 +787,21 @@ class ConnectionRef(BaseModel, frozen=True):
 
         return ConnectionRef.model_validate(to_atlas_format(conn))
 
-    def to_connection(self) -> Any:
+    def to_connection(self) -> Connection:
         """Convert back to a pyatlan_v9 Connection (msgspec.Struct).
 
-        ``model_dump(by_alias=True)`` produces the nested Atlas API shape
-        ``{"typeName": ..., "attributes": {...}}``; ``from_atlas_format``
-        flattens that back into the pyatlan_v9 struct.
+        ``model_dump_json(by_alias=True)`` produces the nested Atlas API shape
+        ``{"typeName": ..., "attributes": {...}}``, which
+        ``Connection.from_json`` flattens into the struct.
+
+        Always builds a ``Connection``: a ref whose ``type_name`` names some
+        other asset type is coerced to one.
 
         Returns:
             A pyatlan_v9 Connection msgspec.Struct instance.
         """
-        from pyatlan_v9.model.transform import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
-            from_atlas_format,
+        from pyatlan_v9.model.assets import (  # noqa: PLC0415 — optional dep: pyatlan_v9 (vendored module not always available)
+            Connection,
         )
 
-        return from_atlas_format(self.model_dump(by_alias=True))
+        return Connection.from_json(self.model_dump_json(by_alias=True))

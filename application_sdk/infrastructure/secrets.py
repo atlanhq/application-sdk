@@ -9,7 +9,8 @@ from application_sdk import _deprecation
 # Defined in the api distribution's light module so the handler can raise it on
 # the API host; re-exported here, the same class.
 from application_sdk._context_errors import SecretStoreNotConfiguredError
-from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (  # PreconditionError re-exported for existing importers
@@ -208,7 +209,6 @@ class SecretStoreError(_LegacyErrorCodeMixin, DependencyUnavailableError):
 
     secret_name: str | None = None
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (("secret_name", "secret"),)
 
@@ -226,7 +226,7 @@ class SecretStoreError(_LegacyErrorCodeMixin, DependencyUnavailableError):
             self, message=message, cause=cause, retryable=retryable
         )
         self.secret_name = secret_name
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 class SecretStoreTransientError(SecretStoreError):
@@ -243,6 +243,7 @@ class SecretStoreTransientError(SecretStoreError):
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
 
 
+@dataclass(kw_only=True)
 class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     """The secret store / Dapr sidecar was *unreachable* — a transport failure
     (connection refused, reset mid-handshake, read/write/close error, timeout)
@@ -367,7 +368,6 @@ class SecretNotFoundError(NotFoundError, SecretStoreError):
     parent is ``SecretStoreError`` so ``except SecretStoreError:`` still catches.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
     code: ClassVar[str] = "NOT_FOUND_SECRET"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -506,3 +506,25 @@ class EnvironmentSecretStore:
             for k in os.environ.keys()
             if k.startswith(self._prefix)
         ]
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "SECRET_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "SECRET_STORE_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

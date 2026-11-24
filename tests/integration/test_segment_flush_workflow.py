@@ -56,8 +56,8 @@ _BRIDGE_TIMEOUT_SECONDS = 10.0
 _FAST_SECONDS = 5.0
 
 # Set by the ``segment_client`` fixture and read from workflow code. The
-# workflow reaches this module object unchanged because conftest's
-# ``run_worker`` passes ``tests`` through the Temporal sandbox.
+# workflow reaches this module object unchanged because the test passes this
+# module through the Temporal sandbox; a re-imported copy would read None.
 _client: SegmentClient | None = None
 
 
@@ -201,7 +201,7 @@ async def test_flush_in_workflow_does_not_bridge_or_stall(
     context = AppContext(app_name=SegmentFlushApp._app_name, app_version="1.0.0")
 
     started = time.monotonic()
-    async with run_worker():
+    async with run_worker(passthrough_modules={__name__}):
         result = await executor.execute(
             SegmentFlushApp,
             FlushInput(),

@@ -68,7 +68,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.8"
 
       # pytest comes from the locked `test` group (a default group, as is
       # `dev`, which carries the conformance workspace package several of these
@@ -77,6 +77,14 @@ jobs:
       # held to.
       - name: Run script tests
         run: uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
+
+      # `Any` in an application_sdk signature is held to a per-file baseline
+      # that only shrinks (FND-4301). The pre-commit hook checks the counts;
+      # --base-sha also fails a PR that raises the baseline to fit a new one.
+      - name: Check ANN401 against the base revision's baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen python .github/scripts/check_ann401_baseline.py --base-sha "$BASE_SHA"
 
       # Plain bash, no uv — the script under test is bash + perl and the harness
       # asserts on its output, so keeping it dependency-free keeps it runnable
@@ -97,7 +105,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.8"
 
       # pyright is the exact pin in the locked `dev` group, equal to the
       # pre-commit hook's rev. `--extra workflows` installs what the scripts

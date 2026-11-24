@@ -158,12 +158,10 @@ def run_worker(temporal_client, task_queue):
     @asynccontextmanager
     async def _ctx(**kwargs):
         kwargs.setdefault("shutdown_drain_delay_seconds", 0)
-        worker = create_worker(
-            temporal_client,
-            task_queue,
-            passthrough_modules={"tests"},
-            **kwargs,
-        )
+        # No passthrough for "tests": the test modules that define the apps
+        # are re-imported in the sandbox for every run, as a consumer app's
+        # modules are in production, so workflow code here is checked too.
+        worker = create_worker(temporal_client, task_queue, **kwargs)
         async with worker:
             yield
 

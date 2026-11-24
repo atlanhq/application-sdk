@@ -235,6 +235,49 @@ The file is both a pytest module (the package's own test run) and a script (the
 needs only ruff, which the root env pins to the package's version. A new file
 starts at zero, so new code must stay under both thresholds.
 
+## `Any` in an SDK signature: an ANN401 baseline that only shrinks
+
+ruff's ANN401 flags `typing.Any` in a parameter or return annotation. It is not
+in the root ruff `select`: `application_sdk/` had about 490 such sites when it
+was enabled (FND-4301). They are held instead to
+`.github/scripts/ann401_baseline.json`, per file, by
+`.github/scripts/check_ann401_baseline.py`, with the same three outcomes as the
+baselines above:
+
+- **A count above the baseline fails.** Type the new signature (see
+  [coding.md](coding.md), "No `Any` in a signature"). The failure lists every site in
+  the file.
+- **A count below the baseline also fails.** Lock the improvement in with
+  `--update`.
+- **A baseline count above the base revision's fails.** The
+  `CI script tests` job passes `--base-sha`; a file renamed in the PR keeps its
+  base count. A base with no baseline file is measured on its own tree instead.
+
+```bash
+uv run --frozen python .github/scripts/check_ann401_baseline.py           # check
+uv run --frozen python .github/scripts/check_ann401_baseline.py --update  # lock in a reduction
+```
+
+The baseline is the only suppression. ruff runs with `--isolated`, so it reads
+no config file: `ignore`, `extend-ignore`, `per-file-ignores`,
+`extend-per-file-ignores`, `exclude`, `extend-exclude`, a nested `ruff.toml` and
+`flake8-annotations.allow-star-arg-any` cannot hide a site. `--ignore-noqa` does
+the same for `# noqa: ANN401`. `test_check_ann401_baseline.py` writes each of
+those into a throwaway tree and asserts the sites are still counted. Because no
+config is read, the target version is passed explicitly and a test holds it to
+`requires-python`.
+
+The counts are per file, not per site. Swapping one `Any` for another in the
+same file leaves the count unchanged and passes; the ratchet stops a file's
+count from rising, and review is what catches a like-for-like swap.
+
+A tree with no ANN401 left passes: an empty measurement is accepted when ruff,
+run the same way, still flags a canary with a known `Any` signature. A ruff
+that stopped reporting the rule fails instead of matching an emptied baseline.
+
+The `ann401-baseline` pre-commit hook runs the check on every change under
+`application_sdk/`.
+
 ## An artifact upload retry must use a DIFFERENT artifact name
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
@@ -394,6 +437,20 @@ contains(github.event.pull_request.labels.*.name, 'e2e') &&
 [`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py)
 enforces that term and fails any workflow or scaffold that subscribes to
 `labeled`. Both the gates and the input go once the fleet has resynced.
+
+**Review is requested by comment too, in a workflow of its own.** In connector
+repos `/review` asks the connector reviewer for an AI review of the pull
+request, judged against application-sdk's fleet principles and the
+repository's own (`.github/connector-reviewer/principles/` in each). It is not
+a test command: the scaffolded `connector-reviewer.yaml` handles it, calling
+`connector-reviewer-reusable.yaml`, on `issue_comment` and `workflow_dispatch`
+only. The result is one summary comment and a `connector-reviewer` status on
+the head commit. Unlike `test-commands.yaml` it has no `concurrency:` group:
+the reviewer holds its own lock, found by the run name, so a running review
+finishes and a second request is dropped. It replaces the review gate that ran
+on every pull request and review event (`connector-review-gate.yaml`, retired
+in FND-5317; `bootstrap` removes it and its script, and C002 reports a copy
+still on disk).
 
 ## Bot-opened PRs are never labelled
 
@@ -562,7 +619,7 @@ then skips every step, or runs a script that passes at once, is billed a full
 runner minute. In a reusable that every connector calls, that minute is paid on
 every PR, push and merge-group run across the fleet (FND-3320:
 `renovate-artifacts` in `tests-reusable.yaml`, and the merge-group no-ops in
-`commits.yaml`, `release-gate.yaml` and `connector-review-gate.yaml`).
+`commits.yaml` and `release-gate.yaml`).
 
 **It is safe for a required check** as long as the job `name:` is a static
 string. A job-level skip still files its check run, with conclusion `skipped`,
@@ -607,14 +664,13 @@ enter the queue until its required checks are green on its head, so a check
 whose inputs are identical on the queue commit can only repeat that verdict,
 and every repeat bills a runner across the fleet (FND-3321).
 
-Seven bootstrap callers declare `merge_group:`. Each check is either
+Six bootstrap callers declare `merge_group:`. Each check is either
 base-sensitive or not:
 
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
 | `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
-| `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
 | `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
@@ -844,7 +900,7 @@ Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
   `update-fleet-dashboards.yaml`, FND-3337).
 * `commits.yaml`, `conformance-upload-sarif-reusable.yaml`, `stale.yml`,
   `tag-and-release.yaml`, `release-version-bump.yaml`: their one job each.
-* Bootstrap templates: `connector-review-gate.yaml`, `release-gate.yaml`.
+* Bootstrap template: `release-gate.yaml`.
 
 Short fleet jobs that stay on `ubuntu-latest`:
 
@@ -1442,6 +1498,7 @@ lanes are a deliberate exception to the baseline, recorded here (FND-4651).
 |---|---|---|
 | Third-party GitHub Actions, and the toolchains `actions/setup-*` and `astral-sh/setup-uv` install | 7 days | `renovate-config/default.json`, github-actions release-age rule |
 | The uv cache-key literal in `setup-deps` | 7 days | `renovate.json`, astral-sh/uv release-age rule |
+| Local dev images in `local/` compose files (major, minor, patch; digests are not held) | 7 days | `renovate.json`, local dev images release-age rule |
 | Third-party PyPI (major, minor, patch) | 3 days | `renovate-config/default.json`, PyPI release-age rule |
 | Lock refresh (`lockFileMaintenance`), fleet | 3 days | `renovate-config/self-hosted.js`, `--window P3D` |
 | Lock refresh, application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D` |

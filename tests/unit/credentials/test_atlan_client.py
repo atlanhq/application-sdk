@@ -382,3 +382,43 @@ class TestPyatlanV9ClientHeaderContractRealClient:
         # update_headers is a method on the real client — confirm the
         # contract our _apply_app_headers helper checks for is present.
         assert callable(getattr(client, "update_headers", None))
+
+
+# ---------------------------------------------------------------------------
+# AtlanClientMixin — the cached client is closed with its run (FND-5220)
+# ---------------------------------------------------------------------------
+
+
+class TestAtlanClientMixinClientClosedWithRun:
+    async def test_cached_client_aclose_is_awaited_when_the_run_is_released(
+        self,
+    ) -> None:
+        from application_sdk.app import base as app_base
+
+        run = ("wf-atlan", "run-atlan")
+        cred_ref = CredentialRef(name="my-atlan", credential_type="atlan_api_token")
+        resolved = AtlanApiToken(token="tok", base_url="https://t.atlan.com")
+        # The real run-keyed state, as a task on this worker sees it.
+        mixin = _make_mixin_app(MagicMock(), resolved_cred=resolved)
+        mixin.app_state = app_base.TaskStateAccessor()  # type: ignore[attr-defined]
+        client = MagicMock()
+        client.aclose = AsyncMock()
+
+        try:
+            with (
+                patch.object(app_base, "_current_run_key", return_value=run),
+                patch(
+                    "application_sdk.credentials.atlan_client.create_async_atlan_client",
+                    return_value=client,
+                ),
+            ):
+                assert await mixin.get_or_create_async_atlan_client(cred_ref) is client
+
+            client.aclose.assert_not_awaited()
+            await app_base._release_run_state(run)
+        finally:
+            with app_base._app_state_lock:
+                app_base._app_state.pop(run, None)
+
+        client.aclose.assert_awaited_once()
+        assert run not in app_base._runs_with_app_state()

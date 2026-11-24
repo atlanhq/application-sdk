@@ -2192,6 +2192,58 @@ class TestRunWorkerMode:
 # --------------------------------------------------------------------------- #
 
 
+class _FakeUvicornServer:
+    """Stands in for ``uvicorn.Server``: ``serve()`` returns at once."""
+
+    async def serve(self, sockets: Any = None) -> None:
+        return None
+
+
+class _FakeDaprSidecar:
+    """A keep-alive HTTP/1.1 Dapr stand-in on loopback TCP, on its own thread.
+
+    TCP, not a unix socket: anyio's unix-socket stream is not tied to an event
+    loop, so only a TCP keep-alive connection reproduces the cross-loop
+    failure. Serving from a separate thread matches a real sidecar: the
+    client's pooled connection is the only thing tied to the caller's loop.
+    """
+
+    def __init__(self, responses: dict[str, bytes]) -> None:
+        import http.server
+
+        paths: list[str] = []
+        self.paths = paths
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"  # keep-alive, like the Dapr sidecar
+
+            def do_GET(self) -> None:
+                paths.append(self.path)
+                body = responses.get(self.path, b"{}")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                return None
+
+        self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self._server.daemon_threads = True
+        self.base_url = f"http://127.0.0.1:{self._server.server_port}"
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "_FakeDaprSidecar":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+
 class TestRunHandlerMode:
     """Behavioral tests for run_handler_mode()."""
 
@@ -2210,6 +2262,10 @@ class TestRunHandlerMode:
                 "application_sdk.execution._temporal.converter.create_data_converter_for_app"
             ),
             patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch(
+                "application_sdk.storage.preflight.verify_object_store_access",
+                new_callable=AsyncMock,
+            ),
             # These tests use a MagicMock for App, so stub the validator.
             patch("application_sdk.main.validate_app_class"),
         )
@@ -2223,7 +2279,9 @@ class TestRunHandlerMode:
     def test_uses_default_handler_when_no_custom_loaded(self) -> None:
         """When load_handler_class returns None, DefaultHandler is instantiated."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_pre, p_validate = self._common_patches(
+            infra
+        )
 
         # asyncio.run must execute coroutines (so _create_infrastructure returns infra)
         # but we don't want _flush_observability's coroutine to run real code.
@@ -2232,6 +2290,7 @@ class TestRunHandlerMode:
             p_load_app,
             p_conv,
             p_set,
+            p_pre,
             p_validate,
             patch(
                 "application_sdk.main.load_handler_class",
@@ -2242,8 +2301,9 @@ class TestRunHandlerMode:
                 return_value=MagicMock(),
             ) as mock_default,
             patch(
-                "application_sdk.handler.service._run_app_handler_service"
-            ) as mock_run_svc,
+                "application_sdk.handler.create_app_handler_service"
+            ) as mock_create_svc,
+            patch("uvicorn.Server", return_value=_FakeUvicornServer()),
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -2253,15 +2313,17 @@ class TestRunHandlerMode:
             run_handler_mode(cfg)
 
         mock_default.assert_called_once()
-        mock_run_svc.assert_called_once()
-        kwargs = mock_run_svc.call_args.kwargs
+        mock_create_svc.assert_called_once()
+        kwargs = mock_create_svc.call_args.kwargs
         assert kwargs["enable_temporal_core_metrics"] is False
         assert kwargs["prometheus_bind_address"] == "127.0.0.1:9464"
 
     def test_uses_custom_handler_when_loaded(self) -> None:
         """When load_handler_class returns a class, that class is instantiated."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_pre, p_validate = self._common_patches(
+            infra
+        )
         custom_cls = MagicMock()
         custom_cls.__name__ = "MyCustomHandler"
         custom_cls.return_value = MagicMock()
@@ -2271,12 +2333,14 @@ class TestRunHandlerMode:
             p_load_app,
             p_conv,
             p_set,
+            p_pre,
             p_validate,
             patch(
                 "application_sdk.main.load_handler_class",
                 return_value=custom_cls,
             ),
-            patch("application_sdk.handler.service._run_app_handler_service"),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("uvicorn.Server", return_value=_FakeUvicornServer()),
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -2290,17 +2354,21 @@ class TestRunHandlerMode:
     def test_handler_mode_validates_app_class(self) -> None:
         """run_handler_mode must validate the loaded app class — currently it does not."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_pre, p_validate = self._common_patches(
+            infra
+        )
         with (
             p_infra,
             p_load_app,
             p_conv,
             p_set,
+            p_pre,
             p_validate,
             patch("application_sdk.main.validate_app_class") as mock_validate,
             patch("application_sdk.main.load_handler_class", return_value=None),
             patch("application_sdk.handler.DefaultHandler"),
-            patch("application_sdk.handler.service._run_app_handler_service"),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("uvicorn.Server", return_value=_FakeUvicornServer()),
             patch(
                 "application_sdk.main._flush_observability",
                 new_callable=AsyncMock,
@@ -2313,16 +2381,20 @@ class TestRunHandlerMode:
     def test_handler_mode_closes_infrastructure(self) -> None:
         """Handler mode should close infrastructure on exit (parity with worker/combined)."""
         infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
+        p_infra, p_load_app, p_conv, p_set, p_pre, p_validate = self._common_patches(
+            infra
+        )
         with (
             p_infra,
             p_load_app,
             p_conv,
             p_set,
+            p_pre,
             p_validate,
             patch("application_sdk.main.load_handler_class", return_value=None),
             patch("application_sdk.handler.DefaultHandler"),
-            patch("application_sdk.handler.service._run_app_handler_service"),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("uvicorn.Server", return_value=_FakeUvicornServer()),
             patch(
                 "application_sdk.infrastructure.context.close_infrastructure",
                 new_callable=AsyncMock,
@@ -2335,6 +2407,127 @@ class TestRunHandlerMode:
             cfg = AppConfig(mode="handler", app_module="pkg:FakeApp")
             run_handler_mode(cfg)
         mock_close.assert_awaited_once()
+
+    # Loopback only: any connect to another host is still refused.
+    @pytest.mark.allow_hosts(["127.0.0.1"])
+    def test_dapr_client_built_used_and_closed_on_one_loop(self) -> None:
+        """The startup Dapr call, a request's secret fetch and the shutdown close
+        all succeed with the real ``AsyncDaprClient``.
+
+        The client's pooled keep-alive connection belongs to the loop that
+        opened it. When handler mode created infrastructure, served and closed
+        on three ``asyncio.run`` loops, the first secret fetch failed with
+        ``Event loop is closed`` and ``close_infrastructure`` raised the same.
+        """
+        import httpx
+        import uvicorn
+
+        from application_sdk.infrastructure._dapr import http as dapr_http
+        from application_sdk.infrastructure._dapr.client import DaprSecretStore
+        from application_sdk.infrastructure.context import (
+            InfrastructureContext,
+            clear_infrastructure,
+            get_infrastructure,
+        )
+
+        loops: dict[str, asyncio.AbstractEventLoop] = {}
+        fetched: list[str] = []
+
+        async def _fake_create_infrastructure() -> InfrastructureContext:
+            loops["create"] = asyncio.get_running_loop()
+            client = dapr_http.AsyncDaprClient(base_url=sidecar.base_url, retries=0)
+            await client.get_metadata()  # the startup metadata call
+            return InfrastructureContext(
+                secret_store=DaprSecretStore(client), _dapr_client=client
+            )
+
+        async def _serve_fetches_secret(self: Any, sockets: Any = None) -> None:
+            loops["serve"] = asyncio.get_running_loop()
+            self.started = True  # what uvicorn.run checks after serve() returns
+            infra = get_infrastructure()
+            assert infra is not None and infra.secret_store is not None
+            fetched.append(await infra.secret_store.get("cred"))
+
+        responses = {
+            "/v1.0/metadata": b"{}",
+            "/v1.0/secrets/secretstore/cred": b'{"cred": "value"}',
+        }
+        try:
+            with (
+                _FakeDaprSidecar(responses) as sidecar,
+                # Undo the unit-tier sidecar interceptor for this test only:
+                # the real pooled transport is what this test is about.
+                patch.object(
+                    dapr_http.httpx, "AsyncHTTPTransport", httpx.AsyncHTTPTransport
+                ),
+                patch(
+                    "application_sdk.main._create_infrastructure",
+                    _fake_create_infrastructure,
+                ),
+                patch(
+                    "application_sdk.storage.preflight.verify_object_store_access",
+                    new_callable=AsyncMock,
+                ),
+                patch(
+                    "application_sdk.main.load_app_class",
+                    return_value=_fake_app_class(),
+                ),
+                patch("application_sdk.main.validate_app_class"),
+                patch("application_sdk.main.load_handler_class", return_value=None),
+                patch("application_sdk.handler.DefaultHandler"),
+                patch(
+                    "application_sdk.execution._temporal.converter.create_data_converter_for_app"
+                ),
+                patch("application_sdk.handler.create_app_handler_service"),
+                patch("application_sdk.handler.service.create_app_handler_service"),
+                # Patch the method, not the class: the request path runs on
+                # whatever loop serves, however the server is started.
+                patch.object(uvicorn.Server, "serve", _serve_fetches_secret),
+                patch(
+                    "application_sdk.main._flush_observability",
+                    new_callable=AsyncMock,
+                ) as mock_flush,
+            ):
+                run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
+        finally:
+            clear_infrastructure()
+
+        assert fetched == ["value"]
+        assert loops["create"] is loops["serve"]
+        assert sidecar.paths == ["/v1.0/metadata", "/v1.0/secrets/secretstore/cred"]
+        assert get_infrastructure() is None
+        mock_flush.assert_awaited_once()
+
+    def test_flushes_observability_when_close_infrastructure_raises(self) -> None:
+        """A failing close must not skip the final observability flush."""
+        infra = self._make_infra()
+        p_infra, p_load_app, p_conv, p_set, p_pre, p_validate = self._common_patches(
+            infra
+        )
+        with (
+            p_infra,
+            p_load_app,
+            p_conv,
+            p_set,
+            p_pre,
+            p_validate,
+            patch("application_sdk.main.load_handler_class", return_value=None),
+            patch("application_sdk.handler.DefaultHandler"),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("uvicorn.Server", return_value=_FakeUvicornServer()),
+            patch(
+                "application_sdk.infrastructure.context.close_infrastructure",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("close failed"),
+            ),
+            patch(
+                "application_sdk.main._flush_observability",
+                new_callable=AsyncMock,
+            ) as mock_flush,
+            pytest.raises(RuntimeError, match="close failed"),
+        ):
+            run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
+        mock_flush.assert_awaited_once()
 
 
 # --------------------------------------------------------------------------- #
@@ -2798,7 +2991,6 @@ class TestInlineImportSymbols:
             ("application_sdk.execution._temporal.auth", "TemporalAuthConfig"),
             ("application_sdk.execution._temporal.auth", "TemporalAuthManager"),
             ("application_sdk.handler", "DefaultHandler"),
-            ("application_sdk.handler.service", "_run_app_handler_service"),
             ("application_sdk.handler", "create_app_handler_service"),
             ("application_sdk.infrastructure.context", "InfrastructureContext"),
             ("application_sdk.infrastructure.context", "set_infrastructure"),

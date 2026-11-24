@@ -10,6 +10,7 @@ from typing import Any, Callable, ClassVar
 from loguru import logger
 from opentelemetry import trace as otel_trace
 from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry.metrics import Counter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
@@ -322,8 +323,110 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "dedup_key",
         "chunk_offset",
         "chunk_length",
+        # ── Credential resolution / preflight gate diagnostics ───────────
+        "input_type",
+        "inline_keys",
+        "missing_refs",
+        # ── Workflow execution diagnostics ───────────────────────────────
+        "eviction_attempts",
+        "max_eviction_retries",
+        "legacy_workflow_type",
+        "canonical_workflow_type",
+        "skipped_count",
     }
 )
+
+# Every literal kwarg an SDK log call passes must be in ``_KNOWN_EXTRA_KEYS`` or
+# carry a passthrough prefix; ``tests/unit/observability/test_log_extra_allowlist.py``
+# scans the package for that. Keys that still get dropped (an app's dynamic
+# ``**fields``, a third-party ``extra=``) are counted on this metric, labelled by
+# key, and logged once per key at DEBUG so the drop is visible instead of silent.
+_DROPPED_KEY_METRIC = "log.extra_key.dropped"
+_METER_NAME = "application_sdk.observability"
+# Bounds the metric's ``key`` label: a caller spreading data-derived keys must
+# not grow one series per key. Keys past the cap share the overflow label.
+_DROPPED_KEY_LABEL_CAP = 64
+_DROPPED_KEY_OVERFLOW_LABEL = "_other"
+# Bounds the once-only bookkeeping: a worker that sees an unbounded stream of
+# distinct keys must not retain every one. Past the cap, new keys are still
+# counted (under the overflow label) but no longer reported at DEBUG.
+_DROPPED_KEY_TRACK_CAP = 1024
+_dropped_keys_lock = threading.Lock()
+_dropped_keys_seen: set[str] = set()
+# Keys dropped for the first time and not yet reported. The DEBUG line cannot be
+# emitted where the drop happens — that is inside the loguru sink, and logging
+# there re-enters loguru's handler lock — so the adapter drains this after its
+# own loguru call returns.
+_dropped_keys_unreported: list[str] = []
+# Keys that own a label value on the metric; at most ``_DROPPED_KEY_LABEL_CAP``.
+_dropped_keys_labelled: set[str] = set()
+_dropped_key_counter: Counter | None = None
+
+
+def _dropped_key_metric() -> Counter:
+    """The dropped-key counter, created on the first drop.
+
+    Created lazily so nothing binds to a meter before ``run_main()`` configures
+    the ``MeterProvider``.
+    """
+    global _dropped_key_counter
+    if _dropped_key_counter is None:
+        from opentelemetry import (  # noqa: PLC0415 — cold path: only reached once a key is dropped
+            metrics as _otel_metrics,
+        )
+
+        _dropped_key_counter = _otel_metrics.get_meter(_METER_NAME).create_counter(
+            _DROPPED_KEY_METRIC,
+            unit="1",
+            description=(
+                "Structured log fields dropped because their key is neither in "
+                "the export allowlist nor under a passthrough prefix, so they "
+                "never reached OTLP or the object-store log sink. Labelled by "
+                "the dropped key."
+            ),
+        )
+    return _dropped_key_counter
+
+
+def _record_dropped_key(key: str) -> None:
+    """Count one dropped field and queue its key for a once-only DEBUG report."""
+    with _dropped_keys_lock:
+        if (
+            key not in _dropped_keys_seen
+            and len(_dropped_keys_seen) < _DROPPED_KEY_TRACK_CAP
+        ):
+            _dropped_keys_seen.add(key)
+            _dropped_keys_unreported.append(key)
+            if len(_dropped_keys_labelled) < _DROPPED_KEY_LABEL_CAP:
+                _dropped_keys_labelled.add(key)
+        label = key if key in _dropped_keys_labelled else _DROPPED_KEY_OVERFLOW_LABEL
+    try:
+        _dropped_key_metric().add(1, {"key": label})
+    except Exception:  # noqa: S110, BLE001 — runs inside the log sink; a broken meter must never drop the record, and logging here would recurse
+        pass
+
+
+def _reset_dropped_keys_for_testing() -> None:
+    """Forget every dropped key, labelled key and pending report. Test-only.
+
+    A pending report is emitted by the next adapter call in the process, which
+    in a test suite is another test's — possibly one counting calls on a
+    mocked logger.
+    """
+    with _dropped_keys_lock:
+        _dropped_keys_seen.clear()
+        _dropped_keys_labelled.clear()
+        _dropped_keys_unreported.clear()
+
+
+def _take_unreported_dropped_keys() -> list[str]:
+    """Return the keys dropped since the last call, each only ever returned once."""
+    if not _dropped_keys_unreported:
+        return []
+    with _dropped_keys_lock:
+        keys = list(_dropped_keys_unreported)
+        _dropped_keys_unreported.clear()
+    return keys
 
 
 _PREFIXES_PASSTHROUGH = (
@@ -428,8 +531,13 @@ def _build_extra_dict(
             continue
         if k in _KNOWN_EXTRA_KEYS:
             extra[k] = _normalize_log_extra_value(k, v)
-        elif k.startswith(_PREFIXES_PASSTHROUGH) and v is not None:
-            extra[k] = v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
+        elif k.startswith(_PREFIXES_PASSTHROUGH):
+            if v is not None:
+                extra[k] = (
+                    v if isinstance(v, (bool, int, float, str, bytes)) else str(v)
+                )
+        else:
+            _record_dropped_key(k)
     for key, value in _extract_exception_attributes(exception).items():
         extra[key] = value
     return extra
@@ -559,6 +667,22 @@ def _normalize_log_extra_value(key: str, value: Any) -> Any:
     if key == "attempt" and value is not None:
         return str(value)
     return value
+
+
+def _flatten_stdlib_extra(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Spread a stdlib-style ``extra={...}`` dict into the fields to bind.
+
+    The SDK installs :class:`AtlanLoggerAdapter` as Temporal's ``workflow.logger``,
+    so code written for a stdlib logger passes its fields as ``extra={...}``.
+    Bound as-is, that is one field named ``extra``, which the export allowlist
+    drops along with everything inside it. Explicit keyword fields win over a
+    same-named ``extra`` entry. A non-dict ``extra`` is left for the allowlist.
+    """
+    extra = kwargs.get("extra")
+    if not isinstance(extra, dict):
+        return kwargs
+    rest = {k: v for k, v in kwargs.items() if k != "extra"}
+    return {**extra, **rest}
 
 
 def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any, ...]]:
@@ -1340,6 +1464,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
+            kwargs = _flatten_stdlib_extra(kwargs)
             if log_type is not None:
                 kwargs["log_type"] = log_type
             msg, kwargs = self.process(msg, kwargs)
@@ -1356,6 +1481,21 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 "Error in %s logging", level_name.lower(), exc_info=True
             )
             self._sync_flush()
+        self._report_dropped_keys()
+
+    def _report_dropped_keys(self) -> None:
+        """Log each structured-log key the export allowlist dropped, once per key.
+
+        Runs after the loguru call, outside the sink where the drop was seen.
+        """
+        for key in _take_unreported_dropped_keys():
+            self.debug(
+                "Log field %r is not in the export allowlist and was dropped "
+                "from OTLP and the object-store log sink; add it to "
+                "_KNOWN_EXTRA_KEYS in application_sdk/observability/"
+                "logger_adaptor.py or give it a passthrough prefix",
+                key,
+            )
 
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
         """Log a debug level message; *kwargs* are bound as context fields."""

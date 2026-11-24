@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**21 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**22 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -45,6 +45,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 | [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | yes | 0.9.0 |
 | [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | yes | 0.9.0 |
 | [E021](#e021) | `DependencyUnavailableOverriddenToUser` | `warn` | `both` | `failure-category` | yes | 0.47.0 |
+| [E022](#e022) | `LegacyDefaultErrorCode` | `warn` | `both` | `legacy-error-code` | yes | 0.60.0 |
 
 ---
 
@@ -789,7 +790,13 @@ opaque helper) still needs `from e`.  `raise group.exceptions[i]` inside `except
 BaseExceptionGroup as group` (or `except*`) is accepted: the member keeps its own
 `__cause__`, which `from group` would overwrite. Only a proven group counts: an app
 class that merely exposes an `exceptions` sequence (`except AggregateError as group`)
-still fires.
+still fires. The same member reached through a local is accepted when every binding of
+that local is a plain assignment inside the handler: `raise fault` where `fault` is only
+ever `group` or `<group or fault>.exceptions[i]` (the walk down nested groups to a
+leaf), and `raise leaves[i]` where `leaves` is only ever `group.exceptions`.  The walk's
+seed binds the group itself; re-raising that object is the caught exception, not a
+replacement.  Any other binding of the local (a new exception in one branch, a wrapper
+call, a parameter, a loop target) still fires.
 
 ---
 
@@ -1048,5 +1055,44 @@ Only the class that assigns the override is flagged; subclasses that inherit it 
 fixed by the same edit.  A DEPENDENCY_UNAVAILABLE leaf raised for a customer source
 *without* an override is not detected: the rule matches the structural pattern and does
 not infer intent from names.
+
+---
+
+## E022 — `LegacyDefaultErrorCode` {#e022}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `legacy-error-code` · **Autofixable:** yes · **Since:** 0.60.0
+
+> Class binds DEFAULT_ERROR_CODE in the SDK's deprecated AAF-* vocabulary — the code ClassVar is the one error vocabulary
+
+**Rationale:** An error class that binds DEFAULT_ERROR_CODE in the SDK's AAF-* vocabulary carries two
+codes: the code ClassVar the wire envelope and dashboards read, and an AAF-* code only
+str() shows. The SDK dropped the second vocabulary (FND-4299): its AAF-* names warn on
+access and are removed in v4.0.0, when such a class stops importing. Customer impact: a
+failure is filed under one code on the dashboard and another in the log line, so on-call
+matching a log to an alert, or grouping incidents by code, gets two answers for one
+fault.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/failures.py — each error class names its failure with its own `code`
+  ClassVar and nothing else; none of the three reference apps binds DEFAULT_ERROR_CODE
+  or imports an AAF-* constant.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+
+A class body binds `DEFAULT_ERROR_CODE` and either:
+
+* reaches an SDK class that carries an AAF-* code (`StorageError`, `CredentialError`,
+  `SecretStoreError`, …) through its bases, so it overrides that code.  The base may be
+  imported from `application_sdk` by name or through a module alias, or be an
+  app-defined intermediate in the same module or imported from the scanned repo; or
+* binds it to the SDK's `ErrorCode` or an AAF-* constant (`APP_ERROR`, `STORAGE_CONFIG`,
+  …) from `application_sdk.errors`, in the value or the annotation.
+
+An app's own `DEFAULT_ERROR_CODE` on its own class, typed with its own code class, is
+not flagged: it is not the SDK's legacy vocabulary.
+
+Fix: delete the `DEFAULT_ERROR_CODE` line and give the class its own `code:
+ClassVar[str]` (prefixed with its category, see P003).  The class keeps its `[AAF-…]`
+`str()` prefix from the SDK base until v4.0.0, so log text does not change.
 
 ---

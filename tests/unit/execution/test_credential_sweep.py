@@ -135,3 +135,202 @@ class TestWorkerLifecycle:
             await app_worker.run()
 
         assert not os.path.lexists(live)
+
+
+# ---------------------------------------------------------------------------
+# FND-5220: the run's _app_state slot is released on every worker, its
+# values closed, once Temporal reports the run closed.
+# ---------------------------------------------------------------------------
+
+
+def _seed_slot(run: tuple[str, str], **values: Any) -> None:
+    """A task of *run* on this worker stored *values* in its app-state slot."""
+    with mock.patch.object(app_base, "_current_run_key", return_value=run):
+        state = app_base.TaskStateAccessor()
+        for key, value in values.items():
+            state.set(key, value)
+
+
+class _AsyncClient:
+    """Stands in for an AsyncAtlanClient: closes with ``aclose()``."""
+
+    def __init__(self) -> None:
+        self.aclose = mock.AsyncMock()
+
+
+class _SyncClient:
+    """Stands in for a client with only a synchronous ``close()``."""
+
+    def __init__(self) -> None:
+        self.close = mock.Mock()
+
+
+class TestReleaseAppState:
+    async def test_closed_runs_slots_are_released_and_running_ones_kept(
+        self,
+    ) -> None:
+        async_client, sync_client, live_client = (
+            _AsyncClient(),
+            _SyncClient(),
+            _AsyncClient(),
+        )
+        _seed_slot(("wf-a", "run-done"), atlan=async_client, source=sync_client)
+        _seed_slot(("wf-b", "run-live"), atlan=live_client)
+
+        await credential_sweep.sweep_closed_runs(
+            _client(
+                {
+                    "run-done": WorkflowExecutionStatus.COMPLETED,
+                    "run-live": WorkflowExecutionStatus.RUNNING,
+                }
+            )
+        )
+
+        assert app_base._runs_with_app_state() == [("wf-b", "run-live")]
+        async_client.aclose.assert_awaited_once()
+        sync_client.close.assert_called_once()
+        live_client.aclose.assert_not_awaited()
+
+    async def test_a_value_cached_under_two_keys_is_closed_once(self) -> None:
+        client = _AsyncClient()
+        _seed_slot(("wf-a", "run-done"), validated=client, named=client)
+
+        await app_base._release_run_state(("wf-a", "run-done"))
+
+        client.aclose.assert_awaited_once()
+
+    async def test_one_failing_close_does_not_stop_the_rest(self) -> None:
+        broken, ok = _AsyncClient(), _AsyncClient()
+        broken.aclose.side_effect = RuntimeError("socket gone")
+        _seed_slot(("wf-a", "run-done"), broken=broken, ok=ok)
+
+        await app_base._release_run_state(("wf-a", "run-done"))
+
+        ok.aclose.assert_awaited_once()
+        assert app_base._runs_with_app_state() == []
+
+    async def test_values_without_a_close_and_classes_are_left_alone(self) -> None:
+        _seed_slot(("wf-a", "run-done"), number=3, cls=_SyncClient, none=None)
+
+        await app_base._release_run_state(("wf-a", "run-done"))
+
+        assert app_base._runs_with_app_state() == []
+
+    async def test_tracked_local_files_go_with_the_slot(self, tmp_path: Any) -> None:
+        from application_sdk.constants import TRACKED_FILE_REFS_KEY
+        from application_sdk.contracts.types import FileReference
+
+        data = tmp_path / "part-0.parquet"
+        data.write_bytes(b"rows")
+        sidecar = tmp_path / "part-0.parquet.sha256"
+        sidecar.write_text("abc")
+        _seed_slot(
+            ("wf-a", "run-done"),
+            **{TRACKED_FILE_REFS_KEY: {FileReference(local_path=str(data))}},
+        )
+
+        await app_base._release_run_state(("wf-a", "run-done"))
+
+        assert not data.exists() and not sidecar.exists()
+
+    async def test_tracked_local_files_stay_when_cleanup_is_off(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.constants import TRACKED_FILE_REFS_KEY
+        from application_sdk.contracts.types import FileReference
+
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
+        data = tmp_path / "part-0.parquet"
+        data.write_bytes(b"rows")
+        _seed_slot(
+            ("wf-a", "run-done"),
+            **{TRACKED_FILE_REFS_KEY: {FileReference(local_path=str(data))}},
+        )
+
+        await app_base._release_run_state(("wf-a", "run-done"))
+
+        assert data.exists()
+        assert app_base._runs_with_app_state() == []
+
+    async def test_two_workers_each_release_their_own_slot(self) -> None:
+        """Extract ran on worker A, cleanup on worker B: both end empty.
+
+        Each worker's sweeper sees only its own process, so the two are
+        simulated one after the other against the same fake Temporal.
+        """
+        temporal = _client({"run-1": WorkflowExecutionStatus.COMPLETED})
+        for client_on_worker in (_AsyncClient(), _AsyncClient()):
+            _seed_slot(("wf-a", "run-1"), atlan=client_on_worker)
+            await credential_sweep.sweep_closed_runs(temporal)
+            assert app_base._runs_with_app_state() == []
+            client_on_worker.aclose.assert_awaited_once()
+
+    async def test_worker_shutdown_releases_every_slot(self) -> None:
+        client = _AsyncClient()
+        _seed_slot(("wf-a", "run-live"), atlan=client)
+        inner = mock.AsyncMock()
+        app_worker = AppWorker(
+            inner, start_event_params={}, shutdown_drain_delay_seconds=0
+        )
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker._emit_worker_start_event"
+        ):
+            async with app_worker:
+                assert app_base._runs_with_app_state() == [("wf-a", "run-live")]
+
+        assert app_base._runs_with_app_state() == []
+        client.aclose.assert_awaited_once()
+
+
+class TestReleaseIsBoundedAndCancellationSafe:
+    async def test_a_hung_sync_close_is_abandoned_off_the_shared_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+        import threading
+
+        release = threading.Event()
+
+        class _Hangs:
+            def __init__(self) -> None:
+                self.close = mock.Mock(side_effect=lambda: release.wait(5))
+
+        monkeypatch.setattr(app_base, "_STATE_VALUE_CLOSE_TIMEOUT_SECONDS", 0.05)
+        pool = mock.AsyncMock()
+        monkeypatch.setattr(app_base, "run_in_thread", pool)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await app_base._close_state_value(_Hangs())
+            assert any(t.name == "app-state-close" for t in threading.enumerate())
+            pool.assert_not_awaited()  # the shared blocking pool is never used
+        finally:
+            release.set()
+
+    async def test_shutdown_finishes_a_release_the_cancelled_sweeper_started(
+        self,
+    ) -> None:
+        import asyncio
+
+        started, finish = asyncio.Event(), asyncio.Event()
+        client = _AsyncClient()
+
+        async def _slow_close() -> None:
+            started.set()
+            await finish.wait()
+
+        client.aclose.side_effect = _slow_close
+        _seed_slot(("wf-a", "run-done"), atlan=client)
+
+        sweep = asyncio.create_task(app_base._release_run_state(("wf-a", "run-done")))
+        await started.wait()
+        sweep.cancel()  # what stopping the sweeper does at shutdown
+        with pytest.raises(asyncio.CancelledError):
+            await sweep
+        assert app_base._runs_with_app_state() == []  # slot already taken out
+
+        finish.set()
+        await credential_sweep.release_all_runs()
+
+        client.aclose.assert_awaited_once()
+        assert not app_base._releases_in_flight

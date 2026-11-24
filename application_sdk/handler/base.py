@@ -12,11 +12,14 @@ from __future__ import annotations
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from application_sdk import _deprecation
 from application_sdk._context_errors import AppContextError
-from application_sdk.errors import HANDLER_ERROR, ErrorCode
-from application_sdk.errors.base import AppError
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import AppError, _LegacyErrorCodeMixin
 from application_sdk.handler.context import get_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
@@ -40,15 +43,21 @@ if TYPE_CHECKING:
     from application_sdk.handler.context import HandlerContext
 
 
-class HandlerError(AppError):
+@dataclass(kw_only=True)
+class HandlerError(_LegacyErrorCodeMixin, AppError):
     """Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 
     Category varies by raise site; defaults to INTERNAL until callers are
     migrated to typed errors (Phase 5 triage).
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = HANDLER_ERROR
     code: ClassVar[str] = "HANDLER"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("handler_name", "handler"),
+        ("app_name", "app"),
+    )
+    http_status: int = 500
+    handler_name: str = ""
 
     def __init__(
         self,
@@ -67,25 +76,9 @@ class HandlerError(AppError):
             stacklevel=2,
         )
         AppError.__init__(self, message=message, cause=cause, app_name=app_name or None)
-        self._legacy_error_code = error_code
         self.http_status = http_status
         self.handler_name = handler_name
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.handler_name:
-            parts.append(f"handler={self.handler_name}")
-        if self.app_name:
-            parts.append(f"app={self.app_name}")
-        return " | ".join(parts)
+        self._set_legacy_error_code(error_code)
 
 
 class Handler(ABC):
@@ -305,3 +298,21 @@ class DefaultHandler(Handler):
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         """Always returns empty metadata."""
         return SqlMetadataOutput(objects=[])
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "HANDLER_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

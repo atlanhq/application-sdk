@@ -11,13 +11,9 @@ MRO convention: categorical leaf first, domain base second.
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors import (
-    CREDENTIAL_ERROR,
-    CREDENTIAL_NOT_FOUND,
-    CREDENTIAL_PARSE_ERROR,
-    CREDENTIAL_VALIDATION_ERROR,
-    ErrorCode,
-)
+from application_sdk import _deprecation
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import AppError, _LegacyErrorCodeMixin
 
 # Re-exported: importable from here before FND-4917 moved __str__ to the mixin.
@@ -76,7 +72,6 @@ class CredentialError(_LegacyErrorCodeMixin, AuthError):
 
     credential_name: str | None = None
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
     code: ClassVar[str] = "AUTH_CREDENTIAL"
     _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         ("credential_name", "credential"),
@@ -95,7 +90,7 @@ class CredentialError(_LegacyErrorCodeMixin, AuthError):
     ) -> None:
         self._CATEGORICAL_BASE.__init__(self, message=message, cause=cause)
         self.credential_name = credential_name
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
 
 @dataclass(kw_only=True)
@@ -106,7 +101,6 @@ class CredentialNotFoundError(NotFoundError, CredentialError):
     parent is ``CredentialError`` so ``except CredentialError:`` still catches.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_NOT_FOUND
     code: ClassVar[str] = "NOT_FOUND_CREDENTIAL"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -126,7 +120,6 @@ class CredentialParseError(InvalidInputError, CredentialError):
     domain parent is ``CredentialError``.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
     code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_PARSE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -157,7 +150,6 @@ class CredentialValidationError(InvalidInputError, CredentialError):
     domain parent is ``CredentialError``.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR
     code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_VALIDATION"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -178,3 +170,33 @@ class CredentialValidationError(InvalidInputError, CredentialError):
             cause=cause,
             error_code=error_code,
         )
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CREDENTIAL_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "CREDENTIAL_NOT_FOUND": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "CREDENTIAL_PARSE_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+    "CREDENTIAL_VALIDATION_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

@@ -153,7 +153,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/transform_templates.py, "
             "conformance/suite/rules/portability.py, "
             "conformance/suite/rules/atomic_publish.py, "
-            "conformance/suite/rules/retry_ladder.py"
+            "conformance/suite/rules/retry_ladder.py, "
+            "conformance/suite/rules/run_scratch.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -173,7 +174,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.retry_ladder` (P060), "
             "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
             "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), "
-            "`suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK) "
+            "`suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), "
+            "`suite.checks.run_scratch` (P067, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",

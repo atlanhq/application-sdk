@@ -20,8 +20,8 @@ from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution.retry import NO_RETRY, RetryPolicy
 
-# Module-level counter dict — shared between test thread and worker thread
-# (because passthrough_modules={"tests"} disables sandbox for this module).
+# Module-level counter dict — shared between the test and activity code.
+# Activities run outside the workflow sandbox, so they see this same dict.
 _attempt_counters: dict[str, int] = {}
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ repos:
   # `--fix` keeps the auto-fix isort used to give: an unsorted import block
   # is rewritten in place (and the hook still fails, so CI stays a check).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.5
+    rev: v0.17.6
     hooks:
       - id: ruff-check
         args: ["--fix"]
@@ -110,7 +110,7 @@ repos:
         name: check mkdocs extra_javascript hosts
         entry: python .github/scripts/check_mkdocs_script_hosts.py
         language: python
-        additional_dependencies: ["pyyaml==6.0.3"]
+        additional_dependencies: ["pyyaml==6.0.4"]
         files: ^(mkdocs\.yml|\.github/scripts/check_mkdocs_script_hosts\.py)$
         pass_filenames: false
       # The pyright hook above never sees .github/scripts ([tool.pyright]
@@ -135,4 +135,15 @@ repos:
         entry: uv run --frozen python packages/conformance/tests/test_complexity_baseline.py
         language: system
         files: ^packages/conformance/(conformance/.*\.py|ruff_complexity_baseline\.json|pyproject\.toml)$
+        pass_filenames: false
+      # ruff ANN401 (`typing.Any` in a signature) is not in ruff's `select`:
+      # application_sdk/ had ~490 sites when it was enabled. They are held to
+      # .github/scripts/ann401_baseline.json, per file, which only shrinks
+      # (FND-4301, docs/standards/coding.md). Locally without a base SHA; CI's
+      # `CI script tests` job also holds the baseline to the base revision's.
+      - id: ann401-baseline
+        name: ANN401 (Any in signatures) baseline
+        entry: uv run --frozen python .github/scripts/check_ann401_baseline.py
+        language: system
+        files: ^(application_sdk/.*\.py|\.github/scripts/(ann401_baseline\.json|check_ann401_baseline\.py)|pyproject\.toml)$
         pass_filenames: false

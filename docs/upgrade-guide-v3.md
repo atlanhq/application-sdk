@@ -713,9 +713,11 @@ Passthrough modules are declared on the `App` class itself as a `ClassVar` (a `s
 
 ```python
 class MyConnector(App):
-    passthrough_modules = {"my_connector", "third_party_lib"}
+    passthrough_modules = {"third_party_lib"}
     ...
 ```
+
+Most apps need none. The worker passes through every library already imported when it starts, and re-imports only your app's own package in the sandbox, so Temporal checks your workflow code. Do not list your own package: that turns the check off. See [Workflow Sandbox and Passthrough Modules](concepts/apps.md#workflow-sandbox-and-passthrough-modules).
 
 ### Concurrency defaults follow the pod's limits
 
@@ -1430,6 +1432,19 @@ The SDK's Redis clients still work, but they are deprecated too: the lock was th
 | `infrastructure.OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation |
 | `infrastructure.InputBinding` | No input-binding replacement (the SDK never shipped an implementation). To receive messages, use `SubscriptionConfig` with `create_app_handler_service(subscriptions=...)` |
 | `infrastructure.BindingRequest` | pass `operation`, `data` and `metadata` to `Binding.invoke()`; nothing accepted a `BindingRequest` |
+
+---
+
+## Legacy `AAF-*` error codes (deprecated, removed in v4.0.0)
+
+An SDK error class names its failure with one vocabulary, its `code` ClassVar (`NOT_FOUND_CREDENTIAL`, `DEPENDENCY_UNAVAILABLE_STORAGE`, …). The older `AAF-{COMP}-{ID}` `ErrorCode` is no longer declared on any class. Each of these still works and warns. B001 flags each import, and E022 flags a class that binds `DEFAULT_ERROR_CODE` in this vocabulary. `str()` on a legacy-coded error keeps its `[AAF-…]` prefix until v4.0.0, so log text does not change.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.errors.ErrorCode` and its 39 constants (`APP_ERROR`, `STORAGE_CONFIG`, `CREDENTIAL_NOT_FOUND`, …) | the `code` (or `qualified_code`) of the error class |
+| `Cls.DEFAULT_ERROR_CODE`, `err.error_code` | `Cls.code`, `err.qualified_code` |
+| the `error_code=` keyword of an SDK error constructor | raise an `AppError` subclass whose `code` names the failure |
+| `DEFAULT_ERROR_CODE = …` on your own subclass of an SDK error | delete it, and give the class its own `code: ClassVar[str]` |
 
 ---
 

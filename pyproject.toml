@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.58.0"
+version = "3.59.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -21,7 +21,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "atlan-application-sdk-api==3.58.0",
+    "atlan-application-sdk-api==3.59.0",
     # The OTLP gRPC exporters only, not the opentelemetry-exporter-otlp meta
     # package: that also pulls the HTTP exporter, which nothing imports.
     "opentelemetry-exporter-otlp-proto-grpc>=1.45.0,<2.0.0",
@@ -37,9 +37,9 @@ dependencies = [
     # python-multipart parses the object-store upload route's form. The rest of
     # [standard] (fastapi-cli, jinja2, email-validator, pydantic-settings, ...)
     # was never imported and shipped in every connector image.
-    "fastapi>=0.163.0,<0.164.0",
+    "fastapi>=0.165.0,<0.166.0",
     "uvicorn[standard]>=0.30.0,<1.0.0",
-    "pyatlan>=11.7.1,<12",  # floor carries authlib~=1.9.1 (CVE-2026-96760) to consumers
+    "pyatlan>=11.8.0,<12",  # floor carries authlib~=1.9.1 (CVE-2026-96760) to consumers
     "httpx>=0.27.0,<0.29.0",
     "httpx-retries>=0.6.0,<0.7.0",
     # Published floor (not just [tool.uv] constraint-dependencies, which only
@@ -221,7 +221,7 @@ dev = [
     # Exact pin, equal to the ruff-pre-commit rev in .pre-commit-config.yaml
     # (enforced by .github/scripts/tests/test_lint_guards.py), so `uv run ruff`
     # and the CI hook lint, format and sort imports identically.
-    "ruff==0.17.5",
+    "ruff==0.17.6",
     # Exact pin: both pyright pre-commit hooks (check_pyright_baseline.py, for
     # the SDK tree and for .github/scripts) run this pyright, and each baseline
     # records it, so a bump must regenerate both baselines in the same PR.
@@ -423,6 +423,7 @@ exclude = [
     "application_sdk/credentials/types.py",
     "application_sdk/credentials/utils.py",
     "application_sdk/errors/__init__.py",
+    "application_sdk/errors/_legacy_codes.py",
     "application_sdk/errors/base.py",
     "application_sdk/errors/categories.py",
     "application_sdk/errors/http.py",
@@ -614,6 +615,12 @@ extend-select = [
     "BLE001",  # blind `except Exception` / `except BaseException` (FND-4294)
     "RUF100",  # unused `noqa` — keeps every suppression live (FND-4294)
 ]
+# ANN401 (`typing.Any` in a signature) is deliberately NOT selected here: ~490
+# existing sites would make every run red. .github/scripts/check_ann401_baseline.py
+# holds application_sdk/ to .github/scripts/ann401_baseline.json, per file, and
+# that file is the only suppression: the check runs ruff --isolated, so an
+# ignore or per-file-ignores entry for ANN401 here would have no effect
+# (FND-4301, docs/standards/ci.md).
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]

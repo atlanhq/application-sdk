@@ -161,7 +161,7 @@ handlers race with validation.
   `py-spy`, similar) at module top level in code loaded during
   worker startup, without an accompanying entry in the Temporal
   sandbox passthrough list
-  (`application_sdk/execution/_temporal/worker.py`).
+  (`application_sdk/execution/sandbox.py`).
 - Adds a new background thread, signal handler, or `atexit` hook in
   startup code (combined-mode entry point, app `__init__`,
   decorators that fire at import time) that touches `random.*`,
@@ -172,6 +172,14 @@ handlers race with validation.
   module, what it imports during validation, why the passthrough is
   safe (i.e. why the module's behaviour is deterministic from
   Temporal's POV).
+- Passes an app's own package, or a package root such as
+  `application_sdk`, through the sandbox (in `sandbox.py`,
+  `create_worker(passthrough_modules=...)` or an App's
+  `passthrough_modules`). Temporal matches passthrough by prefix and
+  never checks a passed-through module, so this silently turns off
+  the non-determinism check for that workflow code. A new top-level
+  `application_sdk` module must be classified in `sandbox.py`
+  (`_SDK_PASSTHROUGH_PACKAGES` or `_SDK_SANDBOXED_PACKAGES`).
 
 **Why generalize:** failures in this class look different (profiler
 crashes, signal-handler races, "works locally, breaks on CI") but

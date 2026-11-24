@@ -372,6 +372,17 @@ adding a new queryable field is a deliberate one-line change next to the emitter
 prefixes (`atlan.`, `temporal.`, `failure.`, `exception.`, `otel.`, `tenant.`, `workflow_run.`) pass
 through without being individually listed.
 
+A dropped key is not silent. Each drop adds 1 to the `log.extra_key.dropped` counter, labelled with
+the dropped `key` (at most 64 distinct labels per process; later keys share `_other`). The first drop
+of each key also logs one DEBUG line naming it; past 1024 distinct keys per process, new keys are
+only counted, so a stream of data-derived keys cannot grow the worker's memory. A unit test (`tests/unit/observability/test_log_extra_allowlist.py`)
+fails when an SDK log call passes a literal field that is not allowlisted, so in practice the counter
+measures app fields and third-party `extra=` keys, which the test cannot see.
+
+`AtlanLoggerAdapter` accepts a stdlib-style `extra={...}` dict and spreads its entries into the bound
+fields; an explicit keyword field wins over an `extra` entry with the same name. The SDK installs the
+adapter as Temporal's `workflow.logger`, so code written for a stdlib logger keeps its fields.
+
 ### Log provenance: the `source` field
 
 Every record carries a low-cardinality `source` attribute answering *which layer emitted this line*.
@@ -423,6 +434,14 @@ for dashboards and alerts:
 | `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate): <message>`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
 | `activity.started` | INFO | `activity.started <ActivityType>` |
 | `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
+
+`workflow.started` and `workflow.ended` are logged once per run even when the run spans several
+workflow-instance lifetimes (a cache eviction, or a worker restart that hands the run to another
+worker). `workflow.started` comes from the lifetime that runs the first workflow task live;
+`workflow.ended` comes from the lifetime that finishes the run live. A lifetime that rebuilds the run
+by replaying history logs no `started`, and eviction teardown logs no `ended`. The `(<ms>ms)` duration
+and `temporal.workflow.duration_ms` are history time measured from the run's first workflow task, so
+they stay correct when the finishing worker did not see the start.
 
 The body after the token is a **human-readable summary, not a contract** — it names the subject and,
 on failure, folds in the first line of the exception message (truncated) and the root-cause frame, so

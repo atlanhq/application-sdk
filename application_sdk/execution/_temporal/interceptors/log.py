@@ -536,9 +536,6 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # ``is_replaying`` may still be True, preventing over-suppression.
         set_replay_predicate(workflow.unsafe.is_replaying_history_events)
 
-        if workflow.unsafe.is_replaying():
-            return await self.next.execute_workflow(input)
-
         identity: dict[str, str | int | float] = {
             "temporal.workflow.id": info.workflow_id or "",
             "temporal.workflow.run_id": info.run_id or "",
@@ -548,15 +545,24 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "atlan.correlation_id": correlation_id,
         }
 
-        try:
-            started_msg = _lifecycle_message(
-                "workflow.started", str(identity["temporal.workflow.type"])
-            )
-            logger.info(started_msg, **identity)
-        except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard; logging failure must never block workflow execution
-            pass
+        # workflow.started / workflow.ended are run-level lines, but a run can
+        # span several workflow-instance lifetimes (cache eviction, a worker
+        # restart handing the run to another worker). ``started`` is logged by
+        # the lifetime that executes the first task live; a rehydrated lifetime
+        # enters here replaying and skips it. ``ended`` is logged by whichever
+        # lifetime finishes the run live, so it is gated at exit, not entry:
+        # eviction teardown and replay of a closed history both end with
+        # ``is_replaying()`` true and log nothing. Same rule as
+        # ``_MetricsWorkflowInboundInterceptor``.
+        if not workflow.unsafe.is_replaying():
+            try:
+                started_msg = _lifecycle_message(
+                    "workflow.started", str(identity["temporal.workflow.type"])
+                )
+                logger.info(started_msg, **identity)
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard; logging failure must never block workflow execution
+                pass
 
-        start_ns = time.monotonic_ns()
         status = "OK"
         exc_caught: BaseException | None = None
         try:
@@ -567,38 +573,52 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             exc_caught = e
             raise
         finally:
-            duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
-            ended_attrs: dict[str, str | int | float] = {
-                **identity,
-                "otel.status_code": status,
-                "temporal.workflow.duration_ms": duration_ms,
-            }
             try:
-                wf_type = str(identity["temporal.workflow.type"])
-                if status == "ERROR":
-                    ended_attrs.update(_extract_failure_attrs(exc_caught))
-                    # A deliberate preflight-gate block is an expected, typed
-                    # outcome, not a crash — log it terse (no stack). Its
-                    # classification is already in ended_attrs via the failure
-                    # details. Real failures keep the ERROR traceback.
-                    if is_preflight_block(exc_caught):
-                        blocked_msg = _lifecycle_message(
-                            "workflow.ended", f"{wf_type} {_blocked_suffix(exc_caught)}"
-                        )
-                        logger.warning(blocked_msg, **ended_attrs)
-                    else:
-                        failed_msg = _lifecycle_message(
-                            "workflow.ended",
-                            f"{wf_type} {_failure_suffix(exc_caught, ended_attrs)}",
-                        )
-                        logger.error(failed_msg, exc_info=True, **ended_attrs)
-                else:
-                    ok_msg = _lifecycle_message(
-                        "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
-                    )
-                    logger.info(ok_msg, **ended_attrs)
+                if not workflow.unsafe.is_replaying():
+                    self._log_workflow_ended(identity, info, status, exc_caught)
             except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard in finally; logging failure must never block workflow completion
                 pass
+
+    @staticmethod
+    def _log_workflow_ended(
+        identity: dict[str, str | int | float],
+        info: workflow.Info,
+        status: str,
+        exc_caught: BaseException | None,
+    ) -> None:
+        # History time, not this process's clock: a rehydrated lifetime did
+        # not observe the run's start.
+        duration_ms = round(
+            (workflow.now() - info.start_time).total_seconds() * 1000, 1
+        )
+        ended_attrs: dict[str, str | int | float] = {
+            **identity,
+            "otel.status_code": status,
+            "temporal.workflow.duration_ms": duration_ms,
+        }
+        wf_type = str(identity["temporal.workflow.type"])
+        if status == "ERROR":
+            ended_attrs.update(_extract_failure_attrs(exc_caught))
+            # A deliberate preflight-gate block is an expected, typed
+            # outcome, not a crash — log it terse (no stack). Its
+            # classification is already in ended_attrs via the failure
+            # details. Real failures keep the ERROR traceback.
+            if is_preflight_block(exc_caught):
+                blocked_msg = _lifecycle_message(
+                    "workflow.ended", f"{wf_type} {_blocked_suffix(exc_caught)}"
+                )
+                logger.warning(blocked_msg, **ended_attrs)
+            else:
+                failed_msg = _lifecycle_message(
+                    "workflow.ended",
+                    f"{wf_type} {_failure_suffix(exc_caught, ended_attrs)}",
+                )
+                logger.error(failed_msg, exc_info=True, **ended_attrs)
+        else:
+            ok_msg = _lifecycle_message(
+                "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
+            )
+            logger.info(ok_msg, **ended_attrs)
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +679,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 execution_type="activity",
                 workflow_id=info.workflow_id or "",
                 workflow_run_id=info.workflow_run_id or "",
+                workflow_type=info.workflow_type or "",
                 activity_id=info.activity_id or "",
                 activity_type=info.activity_type or "",
                 task_queue=info.task_queue or "",

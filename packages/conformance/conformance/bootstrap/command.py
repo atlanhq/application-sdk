@@ -17,6 +17,7 @@ import pathlib
 import sys
 import tomllib
 from collections.abc import Callable
+from typing import NamedTuple
 
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, parse_bootstrap_args
 from conformance.bootstrap.autodetect import apply_bootstrap_autodetection
@@ -28,8 +29,9 @@ from conformance.bootstrap.extract import (
     unpreserved_tests_yaml_declarations,
 )
 from conformance.bootstrap.render import (
+    CONNECTOR_REVIEWER_PRINCIPLES_README,
+    LOCAL_REVIEW_RULES_DIR,
     MANAGED_ACTION_FILES,
-    MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_FILES,
@@ -419,13 +421,15 @@ class ConnectorReviewMergeError(ValueError):
         super().__init__(f"cannot safely merge {dest}: {reason}")
 
 
+# Hook scripts earlier kits wired into ``.claude/settings.json``. The last one
+# is the mothership kit's SessionStart reminder (FND-5317).
 _RETIRED_CONNECTOR_REVIEW_HOOK_COMMANDS = frozenset(
     {
         ".claude/hooks/check-review-before-commit.sh",
         ".claude/hooks/review-rules-freshness.sh",
+        ".claude/hooks/connector-review-reminder.sh",
     }
 )
-_CONNECTOR_REVIEW_REMINDER_COMMAND = ".claude/hooks/connector-review-reminder.sh"
 _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK = """\
 ## Mandatory pre-commit review (L1–L4)
 
@@ -452,84 +456,97 @@ def _is_retired_connector_review_hook(command: object) -> bool:
     )
 
 
-def _merge_connector_review_settings(dest: pathlib.Path) -> str | None:
-    """Replace retired kit hooks with one non-blocking reminder."""
-    if not dest.exists():
-        settings: dict[str, object] = {}
-        original = ""
-    else:
-        try:
-            original = dest.read_text(encoding="utf-8")
-            loaded = json.loads(original)
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ConnectorReviewMergeError(dest, str(error)) from error
-        if not isinstance(loaded, dict):
-            raise ConnectorReviewMergeError(dest, "root must be a JSON object")
-        settings = loaded
+def _without_retired_review_hooks(entry: object) -> tuple[object | None, bool]:
+    """Return *entry* without the kit's hooks, and whether that changed it.
 
-    hooks = settings.get("hooks")
-    if hooks is None:
-        hooks = {}
-        settings["hooks"] = hooks
-    if not isinstance(hooks, dict):
-        raise ConnectorReviewMergeError(dest, "'hooks' must be a JSON object")
-    changed = False
-    for event, entries in hooks.items():
-        if not isinstance(entries, list):
-            raise ConnectorReviewMergeError(dest, f"hooks.{event} must be an array")
-        retained = []
-        for entry in entries:
-            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
-                retained.append(entry)
-                continue
-            entry_hooks = entry["hooks"]
-            kept_hooks = [
-                hook
-                for hook in entry_hooks
-                if not (
-                    isinstance(hook, dict)
-                    and _is_retired_connector_review_hook(hook.get("command"))
-                )
-            ]
-            if len(kept_hooks) == len(entry_hooks):
-                retained.append(entry)
-            elif kept_hooks:
-                retained.append({**entry, "hooks": kept_hooks})
-                changed = True
-            else:
-                changed = True
-        if retained != entries:
-            hooks[event] = retained
-    reminder_entries = hooks.setdefault("SessionStart", [])
-    if not isinstance(reminder_entries, list):
-        raise ConnectorReviewMergeError(dest, "hooks.SessionStart must be an array")
-    if not any(
-        isinstance(entry, dict)
-        and any(
+    *entry* is one matcher group of a hook event. ``None`` means the kit's
+    hooks were all the group held, so the whole group goes. A group that also
+    runs something else keeps that and loses only the kit's hook.
+    """
+    if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+        return entry, False
+    kept = [
+        hook
+        for hook in entry["hooks"]
+        if not (
             isinstance(hook, dict)
-            and hook.get("command") == _CONNECTOR_REVIEW_REMINDER_COMMAND
-            for hook in entry.get("hooks", [])
-            if isinstance(entry.get("hooks"), list)
+            and _is_retired_connector_review_hook(hook.get("command"))
         )
-        for entry in reminder_entries
-    ):
-        reminder_entries.append(
-            {
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": _CONNECTOR_REVIEW_REMINDER_COMMAND,
-                        "timeout": 10,
-                    }
-                ]
-            }
-        )
+    ]
+    if len(kept) == len(entry["hooks"]):
+        return entry, False
+    return ({**entry, "hooks": kept} if kept else None), True
+
+
+def _prune_review_hooks(hooks: dict[str, object]) -> bool:
+    """Drop the kit's hooks from *hooks* in place; return whether any went.
+
+    An event the kit's hook was the only member of is removed with it: that
+    list existed only because bootstrap created it. An event nothing was
+    removed from is not touched, empty or not.
+    """
+    changed = False
+    for event, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            continue
+        pruned = [_without_retired_review_hooks(entry) for entry in entries]
+        if not any(entry_changed for _, entry_changed in pruned):
+            continue
         changed = True
-    return json.dumps(settings, indent=2) + "\n" if changed else original
+        retained = [entry for entry, _ in pruned if entry is not None]
+        if retained:
+            hooks[event] = retained
+        else:
+            del hooks[event]
+    return changed
 
 
-def _merge_connector_review_claude(dest: pathlib.Path) -> str:
-    """Return CLAUDE.md with one replaceable, centrally-owned review block."""
+def _read_settings(dest: pathlib.Path) -> dict[str, object] | None:
+    """Return the parsed settings file, or ``None`` when it is not an object."""
+    try:
+        loaded = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConnectorReviewMergeError(dest, str(error)) from error
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _retire_connector_review_hooks(dest: pathlib.Path) -> str | None:
+    """Return ``.claude/settings.json`` without the review kit's hook entries.
+
+    ``None`` leaves the file as it is: it is absent, or holds none of the
+    kit's hooks. ``""`` means those hooks were all the file held, so the file
+    itself goes: bootstrap created it for them. Anything else is the new
+    content, in which every other setting is unchanged.
+
+    Only the kit's own entries are removed. What that empties is cleaned up
+    one level at a time (the matcher group, then the event, then ``hooks``),
+    and nothing else is touched. The file is re-serialised the way the kit
+    wrote it when it added the entry, so a file bootstrap last wrote differs
+    only by the removed entry.
+
+    A file that cannot be parsed raises ``ConnectorReviewMergeError``: it may
+    still name the reminder script, and the kit must not delete a script a
+    hook still points at.
+    """
+    settings = _read_settings(dest) if dest.exists() else None
+    hooks = settings.get("hooks") if settings is not None else None
+    if settings is None or not isinstance(hooks, dict):
+        return None
+    if not _prune_review_hooks(hooks):
+        return None
+    if not hooks:
+        del settings["hooks"]
+    return json.dumps(settings, indent=2) + "\n" if settings else ""
+
+
+def _merge_connector_review_block(dest: pathlib.Path) -> str:
+    """Return *dest* with one replaceable, centrally-owned review block.
+
+    *dest* is ``CLAUDE.md`` or ``AGENTS.md``. The same rules apply to both: a
+    marked block is replaced in place, the one known unmarked legacy block is
+    replaced when it ends the file, a file with neither gets the block
+    appended, and anything else raises rather than overwrite a hand edit.
+    """
     block = render("connector-review-claude.md")
     if not dest.exists():
         return block
@@ -558,38 +575,205 @@ def _merge_connector_review_claude(dest: pathlib.Path) -> str:
     return f"{text[:begin]}{block.rstrip()}\n{text[end:].lstrip()}"
 
 
-def _sync_connector_review_kit(
-    root: pathlib.Path, settings: str | None, claude: str
-) -> list[tuple[pathlib.Path, str]]:
-    """Write the review kit after its merge targets were preflighted."""
-    changes: list[tuple[pathlib.Path, str]] = []
-    for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES:
-        dest = root / dest_rel
-        changes.append(
-            (dest, _bootstrap_file(dest, render(template_name), executable=executable))
+class _ConnectorReviewKitPlan(NamedTuple):
+    """What the kit will merge, worked out before anything is written."""
+
+    # New ``.claude/settings.json`` content. ``None`` leaves the file alone and
+    # ``""`` deletes it. See ``_retire_connector_review_hooks``.
+    settings: str | None
+    # (file, new content) for ``CLAUDE.md`` and, where one exists, ``AGENTS.md``.
+    blocks: tuple[tuple[pathlib.Path, str], ...]
+    # Every path of the old local review-rules folder, in removal order. See
+    # ``_plan_local_review_rules``.
+    rules_removals: tuple[pathlib.Path, ...]
+
+
+def _plan_local_review_rules(root: pathlib.Path) -> tuple[pathlib.Path, ...]:
+    """List what removing the old local review-rules folder deletes.
+
+    Every repository reviews against its own principles now, so the whole of
+    ``LOCAL_REVIEW_RULES_DIR`` goes, whatever it holds: ``MANIFEST.yaml``,
+    every rule, and any other file. The paths come children first, so the
+    write phase only has to unlink files and links and ``rmdir`` directories
+    in this order. The rest of ``.mothership/`` is never listed.
+
+    No symlink is followed. A folder reached through a link that resolves
+    outside the repository raises ``ConnectorReviewMergeError``, as an
+    ``AGENTS.md`` linked outside the repository does, and so does a folder
+    whose ``.mothership/`` or ``review-rulesets/`` is a link to anywhere: what
+    the walk would delete is then some other directory. A folder that is
+    itself a link inside the repository is removed as the link alone. A link
+    inside the folder is removed as a link: the walk never descends into it,
+    so what it points at stays as it was. A subdirectory that cannot be read
+    raises too, rather than leave part of the folder behind unreported.
+    """
+    folder = root / LOCAL_REVIEW_RULES_DIR
+    if not folder.is_symlink() and not folder.exists():
+        return ()
+    real_root = root.resolve()
+    if not folder.resolve().is_relative_to(real_root):
+        raise ConnectorReviewMergeError(
+            folder, "it is reached through a symlink to outside the repository"
         )
+    if (
+        folder.parent.resolve()
+        != real_root / pathlib.Path(LOCAL_REVIEW_RULES_DIR).parent
+    ):
+        raise ConnectorReviewMergeError(
+            folder, "it is reached through a symlinked parent directory"
+        )
+    if folder.is_symlink() or not folder.is_dir():
+        return (folder,)
 
+    def _unreadable(error: OSError) -> None:
+        raise ConnectorReviewMergeError(folder, f"part of it cannot be read: {error}")
+
+    paths: list[pathlib.Path] = []
+    # Bottom-up and without following links: a link to a directory is listed
+    # under dirnames but never walked into.
+    for dirpath, dirnames, filenames in os.walk(
+        folder, topdown=False, onerror=_unreadable
+    ):
+        here = pathlib.Path(dirpath)
+        paths.extend(here / name for name in sorted(filenames))
+        paths.extend(
+            here / name for name in sorted(dirnames) if (here / name).is_symlink()
+        )
+        paths.append(here)
+    return tuple(paths)
+
+
+def _plan_connector_review_kit(root: pathlib.Path) -> _ConnectorReviewKitPlan:
+    """Work out the kit's merges without writing anything.
+
+    Raises ``ConnectorReviewMergeError`` when a target cannot be merged
+    safely. All of them are read first so that a refusal leaves the whole kit
+    as it was: the old guidance, its hook and the script the hook runs stay
+    together rather than half of them going.
+
+    ``AGENTS.md`` is mirrored only where the repository already has one.
+    ``CLAUDE.md`` is created when absent, as it always was.
+
+    An ``AGENTS.md`` that is a symlink to a file outside the repository is
+    refused: the write would follow it and replace that file. A link that
+    stays inside the repository, such as ``AGENTS.md -> CLAUDE.md``, is merged
+    as usual. A dangling link does not exist, so it is left alone like a
+    missing ``AGENTS.md``. The old local review-rules folder follows the same
+    rule (see ``_plan_local_review_rules``).
+    """
+    settings = _retire_connector_review_hooks(root / ".claude" / "settings.json")
+    rules_removals = _plan_local_review_rules(root)
+    targets = [root / "CLAUDE.md"]
+    agents = root / "AGENTS.md"
+    if agents.exists():
+        if not agents.resolve().is_relative_to(root.resolve()):
+            raise ConnectorReviewMergeError(
+                agents, "it is a symlink to a file outside the repository"
+            )
+        targets.append(agents)
+    return _ConnectorReviewKitPlan(
+        settings=settings,
+        blocks=tuple((dest, _merge_connector_review_block(dest)) for dest in targets),
+        rules_removals=rules_removals,
+    )
+
+
+def _prune_empty_dirs(start: pathlib.Path, root: pathlib.Path) -> None:
+    """Remove *start*, then each parent below *root*, while they are empty."""
+    current = start
+    while current != root and root in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _retire_kit_file(
+    root: pathlib.Path, dest: pathlib.Path
+) -> list[tuple[pathlib.Path, str]]:
+    """Delete one retired kit file and the directories that leaves empty."""
+    if _retire_file(dest) != "removed":
+        return []
+    _prune_empty_dirs(dest.parent, root)
+    return [(dest, "removed")]
+
+
+def _write_connector_review_settings(
+    root: pathlib.Path, settings: str | None
+) -> list[tuple[pathlib.Path, str]]:
+    """Apply the planned ``.claude/settings.json`` change, if there is one."""
+    dest = root / ".claude" / "settings.json"
+    if settings is None:
+        return []
+    if settings:
+        return [(dest, _bootstrap_file(dest, settings))]
+    dest.unlink()
+    print(f"removed: {dest}  (it held only the retired connector-review hook)")
+    _prune_empty_dirs(dest.parent, root)
+    return [(dest, "removed")]
+
+
+def _sync_principles_readme(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
+    """The repository's own principles folder: a README, written if absent.
+
+    The folder belongs to the repository. Bootstrap only makes sure it exists
+    and says what goes in it, and never rewrites the README afterwards.
+    """
+    dest_rel, template_name = CONNECTOR_REVIEWER_PRINCIPLES_README
+    dest = root / dest_rel
+    if dest.exists():
+        print(f"ok (exists): {dest}  (this repository's own; never overwritten)")
+        return [(dest, "exists")]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(render(template_name), encoding="utf-8")
+    print(f"scaffolded: {dest}")
+    return [(dest, "scaffolded")]
+
+
+def _remove_local_review_rules(
+    root: pathlib.Path, paths: tuple[pathlib.Path, ...]
+) -> list[tuple[pathlib.Path, str]]:
+    """Delete the planned review-rules paths, then the parents left empty.
+
+    Files and links are unlinked, never followed, and each is reported like
+    any retired file. Directories are removed silently: git tracks files, so
+    only the files belong in the ``--json`` manifest. ``.mothership/`` and
+    ``review-rulesets/`` go only when nothing else is left in them.
+    """
+    changes: list[tuple[pathlib.Path, str]] = []
+    for path in paths:
+        if path.is_symlink() or not path.is_dir():
+            path.unlink(missing_ok=True)
+            print(f"removed: {path}  (retired file)")
+            changes.append((path, "removed"))
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            continue
+    if paths:
+        _prune_empty_dirs((root / LOCAL_REVIEW_RULES_DIR).parent, root)
+    return changes
+
+
+def _sync_connector_review_kit(
+    root: pathlib.Path, plan: _ConnectorReviewKitPlan
+) -> list[tuple[pathlib.Path, str]]:
+    """Apply the review kit after its merge targets were preflighted.
+
+    Takes the mothership kit out (its files, its hook entry, the old local
+    review-rules folder) and puts the connector reviewer's local side in (the
+    managed block and the principles folder).
+    """
+    changes: list[tuple[pathlib.Path, str]] = []
     for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
-        dest = root / dest_rel
-        if _retire_file(dest) == "removed":
-            changes.append((dest, "removed"))
-
-    if settings is not None:
-        settings_dest = root / ".claude" / "settings.json"
-        changes.append((settings_dest, _bootstrap_file(settings_dest, settings)))
-
-    claude_dest = root / "CLAUDE.md"
-    changes.append((claude_dest, _bootstrap_file(claude_dest, claude)))
-
-    gitignore_dest = root / ".gitignore"
-    ignore_line = ".mothership/.cache/"
-    text = gitignore_dest.read_text(encoding="utf-8") if gitignore_dest.exists() else ""
-    if ignore_line in text.splitlines():
-        print(f"ok (exists): {gitignore_dest}  (connector-review cache ignored)")
-        changes.append((gitignore_dest, "exists"))
-    else:
-        updated = f"{text.rstrip()}\n{ignore_line}\n" if text else f"{ignore_line}\n"
-        changes.append((gitignore_dest, _bootstrap_file(gitignore_dest, updated)))
+        changes.extend(_retire_kit_file(root, root / dest_rel))
+    changes.extend(_write_connector_review_settings(root, plan.settings))
+    changes.extend(_remove_local_review_rules(root, plan.rules_removals))
+    for dest, text in plan.blocks:
+        changes.append((dest, _bootstrap_file(dest, text)))
+    changes.extend(_sync_principles_readme(root))
     return changes
 
 
@@ -677,7 +861,6 @@ def main(argv: list[str]) -> int:
     # resyncing its scaffolds, and which of the two happened decides how an
     # unmergeable target is reported below.
     kit_requested = kwargs.pop("connector_review_kit") == "true"
-    connector_review_kit = kit_requested or resync
     apply_bootstrap_autodetection(kwargs, root)
     # Popped after autodetection, which is what fills in an opt-in already on
     # disk, and for the same reason as resync: it picks whether a file exists,
@@ -687,14 +870,10 @@ def main(argv: list[str]) -> int:
     # Validate shared config before bootstrap writes anything. The kit must
     # never overwrite a hand-maintained review block or a malformed settings
     # file during a fleet rollout.
-    connector_review_settings: str | None = None
-    connector_review_claude = ""
-    if connector_review_kit:
+    kit_plan: _ConnectorReviewKitPlan | None = None
+    if kit_requested or resync:
         try:
-            connector_review_settings = _merge_connector_review_settings(
-                root / ".claude" / "settings.json"
-            )
-            connector_review_claude = _merge_connector_review_claude(root / "CLAUDE.md")
+            kit_plan = _plan_connector_review_kit(root)
         except ConnectorReviewMergeError as error:
             # Asked for by name: the whole invocation was about the kit, so
             # fail loudly and write nothing.
@@ -706,12 +885,13 @@ def main(argv: list[str]) -> int:
             # can't be read back is skipped (see _resync_scaffold) and let the
             # rest of the resync land. Otherwise one hand-edited CLAUDE.md
             # would block a repo's tests.yaml/renovate.json catch-up too.
+            # "connector review kit" is the phrase the resync lane matches to
+            # tell this skip from a scaffold refusal; keep it.
             print(
                 f"skipped: {error}; the connector review kit was left untouched"
-                " (migrate the block by hand, then re-run with"
+                " (fix that file by hand, then re-run with"
                 " --connector-review-kit)"
             )
-            connector_review_kit = False
 
     # Resolve the two 0-touch levers, each independently expressible:
     #
@@ -794,10 +974,8 @@ def main(argv: list[str]) -> int:
         _record(path, status)
     for path, status in _sync_contract_ledger(root):
         _record(path, status)
-    if connector_review_kit:
-        for path, status in _sync_connector_review_kit(
-            root, connector_review_settings, connector_review_claude
-        ):
+    if kit_plan is not None:
+        for path, status in _sync_connector_review_kit(root, kit_plan):
             _record(path, status)
 
     if emit_json:

@@ -944,6 +944,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "member keeps its own ``__cause__``, which ``from group`` would overwrite.\n"
             "Only a proven group counts: an app class that merely exposes an\n"
             "``exceptions`` sequence (``except AggregateError as group``) still fires.\n"
+            "The same member reached through a local is accepted when every binding\n"
+            "of that local is a plain assignment inside the handler: ``raise fault``\n"
+            "where ``fault`` is only ever ``group`` or ``<group or fault>.exceptions[i]``\n"
+            "(the walk down nested groups to a leaf), and ``raise leaves[i]`` where\n"
+            "``leaves`` is only ever ``group.exceptions``.  The walk's seed binds the\n"
+            "group itself; re-raising that object is the caught exception, not a\n"
+            "replacement.  Any other binding of the local (a new exception in one\n"
+            "branch, a wrapper call, a parameter, a loop target) still fires.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
@@ -1283,6 +1291,59 @@ RULES: tuple[RuleDefinition, ...] = (
             "raised for a customer source *without* an override is not detected:\n"
             "the rule matches the structural pattern and does not infer intent from\n"
             "names.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="E022",
+        canonical_reference=(
+            "atlan-mysql-app app/failures.py — each error class names its failure "
+            "with its own `code` ClassVar and nothing else; none of the three "
+            "reference apps binds DEFAULT_ERROR_CODE or imports an AAF-* constant."
+        ),
+        scope=RuleScope.BOTH,
+        name="LegacyDefaultErrorCode",
+        tier=EnforcementTier.WARN,
+        category="legacy-error-code",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.60.0",
+        rationale=(
+            "An error class that binds DEFAULT_ERROR_CODE in the SDK's AAF-* "
+            "vocabulary carries two codes: the code ClassVar the wire envelope and "
+            "dashboards read, and an AAF-* code only str() shows. The SDK dropped "
+            "the second vocabulary (FND-4299): its AAF-* names warn on access and "
+            "are removed in v4.0.0, when such a class stops importing. "
+            "Customer impact: a failure is filed under one code on the dashboard and "
+            "another in the log line, so on-call matching a log to an alert, or "
+            "grouping incidents by code, gets two answers for one fault."
+        ),
+        short_description=(
+            "Class binds DEFAULT_ERROR_CODE in the SDK's deprecated AAF-* vocabulary — "
+            "the code ClassVar is the one error vocabulary"
+        ),
+        full_description=(
+            "A class body binds ``DEFAULT_ERROR_CODE`` and either:\n"
+            "\n"
+            "* reaches an SDK class that carries an AAF-* code (``StorageError``,\n"
+            "  ``CredentialError``, ``SecretStoreError``, …) through its bases, so it\n"
+            "  overrides that code.  The base may be imported from ``application_sdk``\n"
+            "  by name or through a module alias, or be an app-defined intermediate in\n"
+            "  the same module or imported from the scanned repo; or\n"
+            "* binds it to the SDK's ``ErrorCode`` or an AAF-* constant (``APP_ERROR``,\n"
+            "  ``STORAGE_CONFIG``, …) from ``application_sdk.errors``, in the value or\n"
+            "  the annotation.\n"
+            "\n"
+            "An app's own ``DEFAULT_ERROR_CODE`` on its own class, typed with its own\n"
+            "code class, is not flagged: it is not the SDK's legacy vocabulary.\n"
+            "\n"
+            "Fix: delete the ``DEFAULT_ERROR_CODE`` line and give the class its own\n"
+            "``code: ClassVar[str]`` (prefixed with its category, see P003).  The\n"
+            "class keeps its ``[AAF-…]`` ``str()`` prefix from the SDK base until\n"
+            "v4.0.0, so log text does not change.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
