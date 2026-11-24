@@ -385,20 +385,80 @@ def test_block_keeps_the_conformance_command_and_its_exit_cases() -> None:
         assert case in _BLOCK
 
 
+def _flat(text: str) -> str:
+    """*text* with every run of whitespace as one space, so a re-wrap passes."""
+    return " ".join(text.split())
+
+
 def test_block_describes_the_connector_reviewer() -> None:
     assert "## After opening a pull request: the connector reviewer\n" in _BLOCK
+    flat = _flat(_BLOCK)
     for phrase in (
-        "commenting `/review` on the pull request",
+        "It reviews only when asked.",
+        "- `/review` reviews the pull request.",
         "- `/review force` reviews again",
-        "a `connector-reviewer` status on the\n  head commit",
-        "`/review dismiss F-xxxxxx <reason>`",
-        "`/review recheck F-xxxxxx <what changed, or why it is wrong>`",
-        "`/review waive <reason>`",
+        "a `connector-reviewer` status on the head commit",
+        "- `/review dismiss F-xxxxxx <reason>`",
+        "- `/review recheck F-xxxxxx <what changed, or why it is wrong>`",
+        "- `/review waive <reason>`",
         "https://github.com/atlanhq/application-sdk/tree/main/.github/"
         "connector-reviewer/principles",
         "The repository's CI configuration remains authoritative for enforcement.",
     ):
-        assert phrase in _BLOCK, phrase
+        assert phrase in flat, phrase
+
+
+def test_block_states_the_command_grammar() -> None:
+    """event.py: every word on the `/review` line must be a known option, or the
+    reviewer replies with usage and runs nothing; a note goes on the next line.
+    The plain-review options are `force` and `verify-budget`."""
+    flat = _flat(_BLOCK)
+    for phrase in (
+        "every word on its line must be part of one of the commands below",
+        "Any other word gets a usage reply and nothing runs.",
+        "put it on the next line; the reviewer does not read it.",
+        # dismiss/recheck/waive are read from the whole comment, so a note on
+        # the next line must not start with one of them.
+        "Do not start that note with `dismiss`, `recheck` or `waive`.",
+        "Add `verify-budget` after it",
+    ):
+        assert phrase in flat, phrase
+
+
+def test_block_explains_contested_findings_and_the_status() -> None:
+    """A contested finding is medium: it no longer blocks merge, but the status
+    stays red until every finding of any severity is closed."""
+    flat = _flat(_BLOCK)
+    for phrase in (
+        'A finding marked "⚖️ contested" was raised as high',
+        "It is now medium, so it does not block merge and the author may dismiss it.",
+        "The status is green only when every finding, of any severity,",
+        "Each finding names the principle it cites.",
+    ):
+        assert phrase in flat, phrase
+
+
+def test_block_points_at_the_repositorys_own_principles() -> None:
+    flat = _flat(_BLOCK)
+    for phrase in (
+        "This repository's own principles are in"
+        " `.github/connector-reviewer/principles/`",
+        "`rp01-<slug>.md`",
+        "To add one, follow the README in that folder.",
+        "That folder belongs to this repository.",
+    ):
+        assert phrase in flat, phrase
+    # The README the block points at is the one bootstrap scaffolds there.
+    assert _README_REL == ".github/connector-reviewer/principles/README.md"
+
+
+def test_block_no_longer_claims_what_is_untrue() -> None:
+    """Earlier wording: no review "needed" for exempt PRs (they are reported
+    exempt only once someone asks), and a blanket ban on editing `.github/`
+    that contradicted the repository's own principles folder."""
+    flat = _flat(_BLOCK)
+    assert "No review is needed for" not in flat
+    assert "Do not edit bootstrap-managed files under `.github/`" not in flat
 
 
 def test_block_says_what_an_agent_may_do() -> None:

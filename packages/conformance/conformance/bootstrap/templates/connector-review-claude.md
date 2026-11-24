@@ -38,35 +38,60 @@ CONFORMANCE_SINCE=origin/main uv run atlan-application-sdk-conformance detect \
 
 Every pull request that changes behaviour should be reviewed by the connector
 reviewer. It judges the change against principles, not a rule list, and it does
-not repeat what conformance or CI already checks.
+not repeat what conformance or CI already checks. It reviews only when asked.
 
-- Ask for a review by commenting `/review` on the pull request. It reviews only
-  when asked. After a new push, comment `/review` again: only the new commits
-  are reviewed.
+Ask by commenting on the pull request. The command must start the comment, and
+every word on its line must be part of one of the commands below. Any other
+word gets a usage reply and nothing runs. To add a note for the people reading
+the pull request, put it on the next line; the reviewer does not read it. Do
+not start that note with `dismiss`, `recheck` or `waive`.
+
+- `/review` reviews the pull request. After a new push, comment it again: only
+  the commits since the last review are reviewed.
 - `/review force` reviews again even when the head commit was already reviewed
   or the pull request is exempt, and redoes the approach check. The cost cap
-  per pull request still holds.
-- The result is one summary comment and a `connector-reviewer` status on the
-  head commit.
+  per pull request still holds. Add `verify-budget` after it only when the
+  summary suggests it.
+- `/review dismiss F-xxxxxx <reason>` closes a finding that is wrong. Give the
+  real reason. Never dismiss a finding to get a green result. The author of a
+  pull request cannot dismiss a high or critical finding on it.
+- `/review recheck F-xxxxxx <what changed, or why it is wrong>` asks the
+  reviewer to judge one finding again against the code.
+- `/review waive <reason>` sets the review aside for the current head commit,
+  for when the reviewer is unavailable. The reason is recorded on the pull
+  request.
+
+What comes back:
+
+- One summary comment, and a `connector-reviewer` status on the head commit.
+  The status is green only when every finding, of any severity, is fixed,
+  dismissed or resolved by a recheck.
+- Each finding names the principle it cites. A critical or high finding blocks
+  merge.
+- A finding marked "⚖️ contested" was raised as high, but a second, independent
+  check found evidence in the code against it. It is now medium, so it does not
+  block merge and the author may dismiss it. Read both reasons, then fix it or
+  dismiss it.
+- The approach check at the top of the summary is advice. Act on it or leave it.
+- `/review` on these pull requests reports them exempt instead of reviewing
+  them: Renovate and Dependabot updates, bootstrap resync pull requests,
+  version-bump pull requests (those still need `/gate-check`), and changes made
+  only to Markdown or `docs/`, unless they touch
+  `.github/connector-reviewer/`, `CLAUDE.md`, `AGENTS.md` or `.claude/`.
+
+The principles:
+
 - Read the principles before changing code they cover. The fleet principles are
   in application-sdk at `.github/connector-reviewer/principles/`
   (https://github.com/atlanhq/application-sdk/tree/main/.github/connector-reviewer/principles).
-  This repository's own are in `.github/connector-reviewer/principles/`.
-- Fix each finding. If a finding is wrong, close it with
-  `/review dismiss F-xxxxxx <reason>` and give the real reason. Never dismiss a
-  finding to get a green result. The author of a pull request cannot dismiss a
-  high or critical finding on it.
-- `/review recheck F-xxxxxx <what changed, or why it is wrong>` asks the
-  reviewer to look at one finding again.
-- The approach check at the top of the summary is advice. Act on it or leave it.
-- No review is needed for: dependency bumps from Renovate, bootstrap resync pull
-  requests, version-bump pull requests (those need `/gate-check`), and
-  docs-only changes that do not touch the principle files, `CLAUDE.md`,
-  `AGENTS.md` or `.claude/`.
-- If the reviewer is unavailable, anyone with write access can comment
-  `/review waive <reason>`. The reason is recorded on the pull request.
-- Do not edit bootstrap-managed files under `.github/` in this repository.
-  Change them in application-sdk; a resync brings them here.
+- This repository's own principles are in
+  `.github/connector-reviewer/principles/`, one file each, named
+  `rp01-<slug>.md`, `rp02-<slug>.md` and so on. To add one, follow the README
+  in that folder. The reviewer reads them from the default branch, so a new
+  principle applies once it is merged.
+- That folder belongs to this repository. Bootstrap only creates its README
+  when it is missing. Every other bootstrap-managed file under `.github/` is
+  changed in application-sdk, not here; a resync brings the change.
 
 ### What an agent may do
 
