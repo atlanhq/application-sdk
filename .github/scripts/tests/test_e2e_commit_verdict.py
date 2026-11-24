@@ -542,11 +542,9 @@ def test_the_pending_mark_is_written_by_every_run_that_owns_the_verdict(
 ) -> None:
     """The same owners as the step that later records the verdict, so no
     `pending` is ever left without a run that replaces it."""
-    steps = job(workflow, "discover-e2e")["steps"]
-    step = next(
-        s
-        for s in steps
-        if s.get("name") == "Mark the e2e verdict pending on the head commit"
+    step = step_named(
+        job(workflow, "discover-e2e"),
+        "Mark the e2e verdict pending on the head commit",
     )
     contexts = {
         "github": {"event_name": event_name},
@@ -577,10 +575,8 @@ def test_the_pending_mark_targets_the_tested_head(
     workflow: dict[str, Any], github: dict[str, Any], sha: str
 ) -> None:
     """`github.sha` is the merge ref on a PR run, but the tip on a dispatch."""
-    steps = job(workflow, "discover-e2e")["steps"]
-    step = next(
-        s
-        for s in steps
-        if s.get("name") == "Mark the e2e verdict pending on the head commit"
+    step = step_named(
+        job(workflow, "discover-e2e"),
+        "Mark the e2e verdict pending on the head commit",
     )
     assert evaluate_operand(step["env"]["HEAD_SHA"], {"github": github}) == sha
