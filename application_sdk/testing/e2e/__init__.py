@@ -18,6 +18,10 @@ Full-DAG AE harness (new — subclass per connector)::
     from application_sdk.testing.e2e import DAGSpec  # N DAG runs in one suite
     from application_sdk.testing.e2e import SQLAppE2ETest          # SQL connectors
     from application_sdk.testing.e2e import SystemAppE2ETest       # system apps
+
+Route suites (an app whose work is an HTTP route on the tenant)::
+
+    from application_sdk.testing.e2e import RouteE2ETest
     from application_sdk.testing.e2e.payload import AgentSpec, ConnectionSpec
 
 The Automation Engine run types a suite grades (``DAGRunResult``,
@@ -53,6 +57,7 @@ if TYPE_CHECKING:
     from application_sdk.testing.e2e.logs import LogCollector
     from application_sdk.testing.e2e.payload import RunMode
     from application_sdk.testing.e2e.portforward import kube_http_call
+    from application_sdk.testing.e2e.route import RouteE2ETest
     from application_sdk.testing.e2e.sql_app import SQLAppE2ETest
     from application_sdk.testing.e2e.system_app import (
         FieldCondition,
@@ -84,6 +89,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "LogCollector": ("application_sdk.testing.e2e.logs", "LogCollector"),
     "RunMode": ("application_sdk.testing.e2e.payload", "RunMode"),
     "kube_http_call": ("application_sdk.testing.e2e.portforward", "kube_http_call"),
+    "RouteE2ETest": ("application_sdk.testing.e2e.route", "RouteE2ETest"),
     "SQLAppE2ETest": ("application_sdk.testing.e2e.sql_app", "SQLAppE2ETest"),
     "FieldCondition": ("application_sdk.testing.e2e.system_app", "FieldCondition"),
     "FieldOp": ("application_sdk.testing.e2e.system_app", "FieldOp"),
@@ -107,6 +113,7 @@ _EAGER_SUBMODULES: tuple[str, ...] = (
     "logs",
     "payload",
     "portforward",
+    "route",
     "sql_app",
     "system_app",
     "tenant_pool",
@@ -128,6 +135,7 @@ __all__ = [
     "FullDAGOutcome",
     "ResolvedDAG",
     "RunMode",
+    "RouteE2ETest",
     "SQLAppE2ETest",
     "FieldCondition",
     "FieldOp",

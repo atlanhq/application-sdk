@@ -62,6 +62,7 @@ __all__ = [
     "NoWorkerOnTaskQueueError",
     "ProgressWatchdogUnreachableError",
     "RequestDelivery",
+    "RouteNotReadyError",
     "SeededConnectionNotSearchableError",
     "StoreAssertDisabledError",
     "StoreAssertQueueAmbiguousError",
@@ -353,3 +354,29 @@ class StoreAssertDisabledError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_STORE_ASSERT_DISABLED"
     expected_state: str | None = "ATLAN_STORE_ASSERT_ENABLED=true on the app's pod"
+
+
+@dataclass(kw_only=True)
+class RouteNotReadyError(PreconditionError):
+    """A route suite's ``readiness_path`` never answered 2xx.
+
+    Raised by :class:`~application_sdk.testing.e2e.route.RouteE2ETest` before
+    its first test, after waiting ``readiness_timeout_seconds``. The app was
+    installed and its build verified, but its route did not serve: a pod still
+    reconciling, a scale-from-zero that never woke, or an ingress that does not
+    route to the app.
+
+    Attributes:
+        url: The readiness URL that never answered 2xx.
+        attempts: How many requests were made.
+        elapsed_seconds: Wall-clock time the wait consumed.
+        last_error: The last answer seen, an ``HTTP <code>`` or a transport
+            error. A 404 and a refused connection point at different layers.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_ROUTE_NOT_READY"
+    expected_state: str | None = "app route answering 2xx through the tenant ingress"
+    url: str | None = None
+    attempts: int | None = None
+    elapsed_seconds: float | None = None
+    last_error: str | None = None
