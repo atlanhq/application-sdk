@@ -13916,7 +13916,9 @@ def test_the_skeptic_takes_a_consumers_behaviour_from_the_cited_principle():
 # ---- the skeptic compares against the base branch (FND-5316) -----------------------------------------
 
 
-BASE_LINE = "    return client.get(key)"  # SRC_V1's fetch: in the base copy
+# SRC_V1's fetch: in the base copy, and it shares the failing call
+# `client.get(key)` with COMMENT's causal chain, so it can justify a drop.
+BASE_LINE = "    return client.get(key)"
 
 
 def _base_verdict(
@@ -13974,7 +13976,8 @@ def test_a_failure_that_already_happens_at_the_base_is_dropped(
     assert o.outcome == "upheld" and o.dropped.startswith(
         "the failure already happens at the base branch"
     )
-    assert o.error == ""  # its base evidence was found in the base copy
+    # Its base evidence is in the base copy and shares the failing call.
+    assert o.error == ""
     body = gh.comments[0]["body"]
     assert "The skeptic dropped" in body and "decode() on a None result" in body
     assert "returns client.get(key) for the same key" in body
@@ -13999,8 +14002,14 @@ def test_a_failure_that_already_happens_at_the_base_is_dropped(
             "    return data.decode()",
             "the evidence quotes the finding's own added line",
         ),
+        # In the base copy, but it shares no name with the failing code
+        # (`object` is a builtin), so it proves nothing about this failure.
+        (
+            '    """Fetch one object."""',
+            "the evidence shares no name with the failing code",
+        ),
     ],
-    ids=["missing", "too-short", "not-in-base", "own-added-line"],
+    ids=["missing", "too-short", "not-in-base", "own-added-line", "unrelated-line"],
 )
 def test_same_on_base_without_base_evidence_is_taken_as_introduced(
     repo: Path, evidence: str | None, problem: str
@@ -14022,6 +14031,13 @@ def test_same_on_base_without_base_evidence_is_taken_as_introduced(
     assert o.error == f"same_on_base taken as introduced: {problem}"
     assert "The skeptic dropped" not in gh.comments[0]["body"]
     assert "Changes requested" in gh.comments[0]["body"]
+
+
+def test_code_names_are_names_and_attribute_segments_not_keywords_or_builtins():
+    from connector_reviewer import skeptic  # noqa: PLC0415 - module under test
+
+    got = skeptic.code_names("return self.client.get(key) or len(None) if ok")
+    assert got == {"client", "get", "key"}
 
 
 def test_base_evidence_is_matched_without_line_numbers_or_indentation():

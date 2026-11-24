@@ -33,8 +33,9 @@ trigger, the code path, the outcome; agent.trace_chain) against the code.
   (upheld, contested or refuted) with `same_on_base` drops the finding: the
   caller removes it and says so in the summary. The answer must quote the
   base line(s) where the failure already happens (`base_evidence`); code
-  checks the quote is in the base copy and is not the finding's own added
-  line, and without that the answer counts as `introduced`. With no base code (code the
+  checks the quote is in the base copy, is not the finding's own added
+  line, and shares a name with the failing code, and without that the
+  answer counts as `introduced`. With no base code (code the
   PR removes, a new file or symbol, or a base copy that cannot be read) the
   answer is not read, and nothing is dropped on an unknown.
 - **A retry turn's finding** (`Finding.retry`, FND-5316): a code bundle's
@@ -54,6 +55,8 @@ own carved out of the round's (review.SKEPTIC_SHARE).
 
 from __future__ import annotations
 
+import builtins
+import keyword
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -389,12 +392,33 @@ def _added_lines_quoted(ws: Workspace, f: Finding) -> set[str]:
     return {s for s in snippet_lines(f.evidence) if s in added}
 
 
+_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Names too common to tie a base line to a failure: every keyword and builtin,
+# and a few conventions.
+_NOT_NAMES = (
+    set(keyword.kwlist)
+    | set(keyword.softkwlist)
+    | set(dir(builtins))
+    | {"self", "cls", "args", "kwargs"}
+)
+
+
+def code_names(code: str) -> set[str]:
+    """The Python names and attribute segments in `code` (`a.b.c` gives a, b
+    and c) of at least 3 characters, keywords, builtins and `_NOT_NAMES`
+    left out."""
+    return {n for n in _NAME.findall(code) if len(n) >= 3 and n not in _NOT_NAMES}
+
+
 def base_evidence_problem(ws: Workspace, f: Finding, quote: str, base: str) -> str:
     """Why `quote` does not prove the failure is already on the base, or ""
     when it does. It must carry `QUOTE_MIN`+ non-space characters, must not
-    be one of the lines the PR adds that the finding quotes, and must be in
-    the base copy the skeptic was shown (`diff.locate_in_text`, the matching
-    the causal-chain trace uses)."""
+    be one of the lines the PR adds that the finding quotes, must be in the
+    base copy the skeptic was shown (`diff.locate_in_text`, the matching the
+    causal-chain trace uses), and must share a name (`code_names`) with the
+    finding's quoted code or its chain's step quotes. Code cannot check that
+    the line shows the same failure; the shared name ties it to the failing
+    code, so an unrelated line of the old function proves nothing."""
     if len("".join(quote.split())) < QUOTE_MIN:
         return "no base line quoted as evidence"
     own = _added_lines_quoted(ws, f)
@@ -402,6 +426,11 @@ def base_evidence_problem(ws: Workspace, f: Finding, quote: str, base: str) -> s
         return "the evidence quotes the finding's own added line"
     if not locate_in_text(base_source(base), quote):
         return "the evidence is not in the base copy"
+    failing = code_names(f.evidence)
+    for s in chain_steps(f):
+        failing |= code_names(str(s.get("code") or ""))
+    if not code_names(quote) & failing:
+        return "the evidence shares no name with the failing code"
     return ""
 
 
