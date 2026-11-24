@@ -873,8 +873,8 @@ def _run_close_in_own_thread(closer: Callable[[], object]) -> "asyncio.Future[ob
             error = exc
         try:
             loop.call_soon_threadsafe(_settle, outcome, error)
-        except RuntimeError:
-            pass  # the loop has closed; nothing is waiting any more
+        except RuntimeError:  # conformance: ignore[E002] the event loop has closed (worker exit), so nothing awaits this close any more
+            pass
 
     threading.Thread(target=_run, name="app-state-close", daemon=True).start()
     return future
