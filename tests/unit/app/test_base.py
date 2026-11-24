@@ -19,6 +19,7 @@ from application_sdk.app.base import (
     AppContextError,
     AppError,
     AppStateAccessor,
+    DetachedRun,
     NonRetryableError,
     PersistentStateAccessor,
     RetryableError,
@@ -822,6 +823,128 @@ class TestContinueWith:
         kwargs = cont.call_args.kwargs
         assert kwargs["args"] == [new_input]
         assert kwargs["memo"] == {"correlation_id": "corr-9"}
+
+
+# =============================================================================
+# start_detached()
+# =============================================================================
+
+
+class TestStartDetached:
+    def _app(self, *, in_run: bool = True) -> App:
+        from application_sdk.app.context import AppContext
+
+        class _SDApp(App):
+            name = "sd-app"
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+            @entrypoint(name="follow-up")
+            async def follow_up(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _SDApp()
+        if in_run:
+            app._context = AppContext(
+                app_name="sd-app",
+                app_version="0.0.1",
+                run_id="rid",
+                correlation_id="corr-7",
+            )
+        return app
+
+    async def test_raises_outside_run(self) -> None:
+        with pytest.raises(AppContextError, match="start_detached"):
+            await self._app(in_run=False).start_detached(
+                "follow-up", _BLDXInput(), workflow_id="wf-1"
+            )
+
+    async def test_unknown_entrypoint_is_rejected(self) -> None:
+        from application_sdk.execution._temporal._backend_errors import (
+            UnknownEntryPointError,
+        )
+
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.start_child_workflow",
+                new_callable=mock.AsyncMock,
+            ) as start,
+            pytest.raises(UnknownEntryPointError, match="no-such"),
+        ):
+            await self._app().start_detached(
+                "no-such", _BLDXInput(), workflow_id="wf-1"
+            )
+        start.assert_not_called()
+
+    async def test_starts_an_abandoned_child_of_the_canonical_type(self) -> None:
+        from datetime import timedelta
+
+        from temporalio.workflow import ParentClosePolicy
+
+        child_input = _BLDXInput(value="v")
+        with mock.patch(
+            "application_sdk.app.base.workflow.start_child_workflow",
+            new_callable=mock.AsyncMock,
+            return_value=mock.Mock(first_execution_run_id="child-run"),
+        ) as start:
+            run = await self._app().start_detached(
+                "follow-up",
+                child_input,
+                workflow_id="follow-up-1",
+                timeout_seconds=600,
+                retry_max_attempts=2,
+            )
+
+        assert run == DetachedRun(
+            started=True, workflow_id="follow-up-1", run_id="child-run"
+        )
+        assert start.call_args.args == ("sd-app:follow-up", child_input)
+        kwargs = start.call_args.kwargs
+        assert kwargs["id"] == "follow-up-1"
+        assert kwargs["parent_close_policy"] is ParentClosePolicy.ABANDON
+        assert kwargs["execution_timeout"] == timedelta(seconds=600)
+        assert kwargs["retry_policy"].maximum_attempts == 2
+        assert kwargs["memo"] == {"correlation_id": "corr-7"}
+
+    async def test_defaults_to_a_per_run_id_no_timeout_and_no_retry(self) -> None:
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.start_child_workflow",
+                new_callable=mock.AsyncMock,
+                return_value=mock.Mock(first_execution_run_id="child-run"),
+            ) as start,
+            mock.patch(
+                "application_sdk.app.base.workflow.info",
+                return_value=mock.Mock(workflow_id="parent-wf"),
+            ),
+        ):
+            run = await self._app().start_detached("follow-up", _BLDXInput())
+
+        assert run.workflow_id == "parent-wf-follow-up"
+        kwargs = start.call_args.kwargs
+        assert kwargs["id"] == "parent-wf-follow-up"
+        assert kwargs["execution_timeout"] is None
+        assert kwargs["retry_policy"].maximum_attempts == 1
+        assert kwargs["parent_close_policy"].name == "ABANDON"
+
+    async def test_an_already_running_id_returns_false(self) -> None:
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+
+        refused = WorkflowAlreadyStartedError("follow-up-1", "sd-app:follow-up")
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.start_child_workflow",
+                new_callable=mock.AsyncMock,
+                side_effect=refused,
+            ),
+            mock.patch("application_sdk.app.base._safe_log"),
+        ):
+            run = await self._app().start_detached(
+                "follow-up", _BLDXInput(), workflow_id="follow-up-1"
+            )
+
+        assert run == DetachedRun(started=False, workflow_id="follow-up-1")
 
 
 # =============================================================================

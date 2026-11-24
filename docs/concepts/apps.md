@@ -1399,6 +1399,37 @@ class IncrementalExtractor(App):
 
 ---
 
+## Starting an Entry Point Without Waiting
+
+`start_detached()` starts one of the App's own entry points as a child workflow and returns as soon as Temporal records the start. The child keeps running after the run closes, for any reason. The run never waits for it, so the run's duration and status never depend on it, and a failing child never fails the run.
+
+```python
+class ReportApp(App):
+    async def run(self, input: ReportInput) -> ReportOutput:
+        out = await self.build_report(input)
+        await self.start_detached(
+            "notify",
+            NotifyInput(report_id=out.report_id),
+            workflow_id=f"notify-{input.owner}",  # at most one running per owner
+            timeout_seconds=3600,
+        )
+        return out
+
+    @entrypoint(name="notify")
+    async def notify(self, input: NotifyInput) -> NotifyOutput:
+        ...
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `workflow_id` | `{this run's workflow id}-{entrypoint}` | The child's id. While a workflow with this id is running, nothing starts and `started` is `False`. |
+| `timeout_seconds` | `None` | Upper bound on the child's whole execution. |
+| `retry_max_attempts` | `1` | How many times the whole child may run if it fails. |
+
+It returns a `DetachedRun(started, workflow_id, run_id)`. Only the App's own entry points can be started; an unknown name raises `UnknownEntryPointError`. The child carries the run's correlation id in its memo.
+
+---
+
 ## Worker Pools
 
 By default every task runs on the app's primary Temporal task queue. Use `pool=` on `@task` to route a task to a dedicated worker pool — useful for activities that need different resource profiles (CPU-heavy crawls, memory-intensive exports, etc.).
