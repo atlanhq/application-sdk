@@ -125,6 +125,7 @@ def _row(
         "inputCount": asset.inputs,
         "refCount": asset.refs,
         "resolvableRefCount": asset.resolvable_refs,
+        "refConnectors": sorted(asset.ref_connectors),
         "fieldsTotal": asset.fields_total,
         "fieldsWithLineage": asset.fields_with_lineage,
         "fieldsPending": asset.fields_pending,
