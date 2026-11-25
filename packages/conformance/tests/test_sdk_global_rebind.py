@@ -88,6 +88,28 @@ def test_b010_fires_on_the_normalize_wrapper_rebind() -> None:
         "from application_sdk.handler import service\ndelattr(service, 'X')\n",
         "from application_sdk import handler\nsetattr(handler.service, name, 1)\n",
         "from application_sdk.app.base import App as A\nA.config.timeout = 5\n",
+        "from application_sdk.handler import service\nfor service.X in [1]:\n    pass\n",
+        "from application_sdk.handler import service\n"
+        "async def f():\n    async for service.X in g():\n        pass\n",
+        "from application_sdk.handler import service\n"
+        "with open('f') as service.X:\n    pass\n",
+        "from application_sdk.handler import service\n"
+        "with a, b as (c, service.X):\n    pass\n",
+        "from application_sdk.handler import service\n[0 for service.X in [1]]\n",
+        # Inside a function, the module's alias is still in force...
+        "from application_sdk.handler import service\n"
+        "def patch():\n    service.X = 1\n",
+        # ...including through a global declaration that also assigns it...
+        "from application_sdk.handler import service\n"
+        "def patch():\n    global service\n    service.X = 1\n",
+        # ...and an import made inside the function binds it there.
+        "def patch():\n"
+        "    from application_sdk.handler import service\n"
+        "    service.X = 1\n",
+        # A method sees the module, not the class body's names.
+        "from application_sdk.handler import service\n"
+        "class C:\n    service = None\n"
+        "    def m(self):\n        service.X = 1\n",
     ],
 )
 def test_b010_fires_on_every_rebind_form(src: str) -> None:
@@ -124,6 +146,36 @@ def test_b010_message_without_a_known_replacement_points_at_raising_a_gap() -> N
         "from .local import service\nservice.X = 1\n",
         # A star import binds nothing B010 can resolve.
         "from application_sdk.handler.service import *\n",
+        # A parameter shadows the module's alias.
+        "from application_sdk.handler import service\n"
+        "def update(service):\n    service.option = 1\n",
+        "from application_sdk.handler import service\n"
+        "f = lambda service: setattr(service, 'x', 1)\n",
+        "from application_sdk.handler import service\n"
+        "async def update(*, service=None):\n    service.option = 1\n",
+        # So does any local binding, wherever it sits in the function.
+        "from application_sdk.handler import service\n"
+        "def update():\n    service.option = 1\n    service = make()\n",
+        "from application_sdk.handler import service\n"
+        "def update():\n    for service in items():\n        service.option = 1\n",
+        "from application_sdk.handler import service\n"
+        "def update():\n    with make() as service:\n        service.option = 1\n",
+        "from application_sdk.handler import service\n"
+        "def update():\n"
+        "    try:\n        pass\n    except Exception as service:\n"
+        "        service.note = 1\n",
+        "from application_sdk.handler import service\n"
+        "def update():\n    import other.service as service\n    service.x = 1\n",
+        # A comprehension variable shadows it inside the comprehension.
+        "from application_sdk.handler import service\n"
+        "[setattr(service, 'x', 1) for service in items()]\n",
+        # A class body's assignment shadows it in the class body.
+        "from application_sdk.handler import service\n"
+        "class C:\n    service = make()\n    service.x = 1\n",
+        # Bound both ways at module level: ambiguous, not flagged.
+        "try:\n    from application_sdk.handler import service\n"
+        "except ImportError:\n    service = None\n"
+        "service.X = 1\n",
     ],
 )
 def test_b010_is_silent(src: str) -> None:

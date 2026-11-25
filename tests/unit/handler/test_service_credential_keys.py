@@ -26,8 +26,8 @@ not.
 
 from __future__ import annotations
 
+import shutil
 import sys
-import textwrap
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
@@ -288,26 +288,25 @@ class TestPrepareRequestBody:
 
 
 _VALIDATE_PACKAGE = "fnd4688_validate_app"
+#: A real toolkit-generated tree: contract-toolkit's ``minimal`` example, whose
+#: ``AppInputContract`` declares ``target: str = ""``.
+_MINIMAL_GENERATED = (
+    Path(__file__).resolve().parents[3]
+    / "contract-toolkit"
+    / "examples"
+    / "minimal"
+    / "app"
+    / "generated"
+)
 
 
 @pytest.fixture
 def validate_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    generated = tmp_path / _VALIDATE_PACKAGE / "generated"
-    generated.mkdir(parents=True)
-    (tmp_path / _VALIDATE_PACKAGE / "__init__.py").write_text("")
-    (generated / "__init__.py").write_text("")
-    (generated / "_input.py").write_text(
-        textwrap.dedent(
-            """
-            from application_sdk.templates.contracts import ExtractionInput
-
-
-            class AppInputContract(ExtractionInput):
-                oauth_client_id: str
-            """
-        )
-    )
-    (generated / "manifest.json").write_text("{}")
+    package = tmp_path / _VALIDATE_PACKAGE
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    generated = package / "generated"
+    shutil.copytree(_MINIMAL_GENERATED, generated)
     monkeypatch.syspath_prepend(str(tmp_path))
     try:
         yield generated
@@ -316,25 +315,38 @@ def validate_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[P
             del sys.modules[name]
 
 
-def test_validate_on_the_host_runs_prepare_request_body(validate_host: Path) -> None:
-    class _RenamingHandler(DefaultHandler):
-        def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
-            if "legacyClientId" in body:
-                body = {**body, "oauth_client_id": body["legacyClientId"]}
-            return body
+class _FlatteningHandler(DefaultHandler):
+    """Accepts a legacy ``{"target": {"name": ...}}`` shape."""
 
+    def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        target = body.get("target")
+        if isinstance(target, dict):
+            return {**body, "target": target.get("name", "")}
+        return body
+
+
+def _validate(handler: Handler, generated: Path) -> int:
     client = TestClient(
         build_asgi_app(
-            _RenamingHandler(),
+            handler,
             app_name="validate-host",
             app_package=_VALIDATE_PACKAGE,
-            generated_dir=validate_host,
+            generated_dir=generated,
             object_store=None,
         ),
         raise_server_exceptions=False,
     )
-    response = client.post("/workflows/v1/validate", json={"legacyClientId": "c-1"})
-    assert response.status_code == 200, response.text
+    response = client.post(
+        "/workflows/v1/validate", json={"target": {"name": "orders"}}
+    )
+    return response.status_code
+
+
+def test_validate_on_the_host_runs_prepare_request_body(validate_host: Path) -> None:
+    # The legacy shape does not fit the generated contract as sent...
+    assert _validate(DefaultHandler(), validate_host) == 422
+    # ...and fits once the handler's hook has rewritten it.
+    assert _validate(_FlatteningHandler(), validate_host) == 200
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +435,17 @@ class TestDeprecatedServiceGlobals:
         assert "kerberos" in handler.seen["metadata"]
         assert handler.metadata_input is not None
         assert handler.metadata_input.connection_config["legacy-key"] == _LIFTED
+
+    def test_wrapper_keeps_the_handler_keys(
+        self, normalize_wrapped: list[dict[str, Any]]
+    ) -> None:
+        """A wrapper around the original still gets the handler's extra keys."""
+        handler = _KerberosHandler()
+        _post_routes(_worker(handler))
+        assert normalize_wrapped, "wrapper was not called"
+        for route in _ROUTES:
+            assert "kerberos" in handler.seen[route], route
+        assert service._handler_credential_keys.get() == frozenset()
 
     def test_handler_keys_compose_with_key_rebinding(
         self, unbound_legacy_globals: None

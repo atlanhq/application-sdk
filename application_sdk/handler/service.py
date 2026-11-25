@@ -36,6 +36,7 @@ import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -175,16 +176,26 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     register_handler_routes,
 )
 
+#: The serving handler's ``extra_credential_keys`` while a legacy
+#: ``_normalize_credentials`` wrapper runs. The wrapper takes only the body, so
+#: this is how the original it calls learns them.
+_handler_credential_keys: ContextVar[frozenset[str]] = ContextVar(
+    "_handler_credential_keys", default=frozenset()
+)
+
 
 def _sdk_normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """The SDK's credential normalization, as ``service._normalize_credentials`` served it.
 
-    Honours a rebound ``service._CREDENTIAL_KEYS``, so an app that wraps this
-    function and also extends the key set keeps both until v4.0.0.
+    Honours a rebound ``service._CREDENTIAL_KEYS`` and the serving handler's
+    ``extra_credential_keys``, so an app that wraps this function keeps both
+    until v4.0.0.
     """
     rebound_keys = globals().get("_CREDENTIAL_KEYS")
     keys = _SDK_CREDENTIAL_KEYS if rebound_keys is None else frozenset(rebound_keys)
-    return _contracts_normalize_credentials(body, keys=keys)
+    return _contracts_normalize_credentials(
+        body, keys=keys | _handler_credential_keys.get()
+    )
 
 
 _LEGACY_NORMALIZATION_GLOBALS: dict[str, object] = {
@@ -264,7 +275,11 @@ def _worker_request_normalizer(handler: Handler) -> _RequestNormalizer:
             "_RequestNormalizer | None", rebound.get("_normalize_credentials")
         )
         if rebound_fn is not None:
-            return rebound_fn(prepared)
+            token = _handler_credential_keys.set(handler_keys)
+            try:
+                return rebound_fn(prepared)
+            finally:
+                _handler_credential_keys.reset(token)
         rebound_keys = cast("frozenset[str] | None", rebound.get("_CREDENTIAL_KEYS"))
         keys = _SDK_CREDENTIAL_KEYS if rebound_keys is None else rebound_keys
         return _contracts_normalize_credentials(
