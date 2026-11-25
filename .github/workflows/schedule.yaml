@@ -4,34 +4,30 @@ on:
   schedule:
     - cron: 0 0 * * * # daily at 00:00
 
-permissions:
-  issues: write
-  pull-requests: write
+# Each job grants its own permissions; nothing is granted workflow-wide.
+permissions: {}
 
 jobs:
+  # application-sdk's own issues and PRs, through the same reusable the fleet
+  # calls (FND-4930). Until FND-4930 this was an inline copy of stale.yml that
+  # ran with debug-only: true since the initial commit, so it minted a token
+  # every night and labelled nothing. It now labels for real: Stale label plus
+  # a comment after 60 idle days. days-before-close stays at -1, so nothing is
+  # ever closed. No application-sdk PR workflow triggers on `labeled`
+  # (FND-3839), so a label starts no CI run.
   stale:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Mint fleet App token
-        id: app-token
-        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: application-sdk
-
-      - name: Close Stale PRs
-        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11
-        with:
-          repo-token: ${{ steps.app-token.outputs.token }}
-          stale-issue-message: 'Stale Issue'
-          stale-pr-message: 'Stale Pull Request'
-          stale-issue-label: 'Stale'
-          stale-pr-label: 'Stale'
-          days-before-stale: 60
-          debug-only: 'true'
+    # The reusable's writes are capped by the caller's grant; the App token
+    # (minted inside it, scoped to this repo) carries its own permissions,
+    # and the GITHUB_TOKEN fallback uses these.
+    permissions:
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/stale.yml
+    with:
+      debug-only: false
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
 
   # Nightly: every rule's canonical_reference still names a path and symbol
   # that exist on the three reference apps' main (FND-4665).

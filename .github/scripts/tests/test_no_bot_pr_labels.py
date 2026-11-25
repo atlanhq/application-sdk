@@ -125,11 +125,9 @@ _GRANDFATHERED: dict[str, tuple[int, str]] = {
     ".github/workflows/stale.yml": (
         1,
         "actions/stale: debug-only by default, so writes no label unless a "
-        "caller opts in. Opting in for PRs would label connector PRs.",
-    ),
-    ".github/workflows/schedule.yaml": (
-        1,
-        "actions/stale on application-sdk's own issues/PRs.",
+        "caller opts in. application-sdk's own schedule.yaml opts in for its "
+        "own issues/PRs, whose PR workflows take no `labeled`; a connector "
+        "opting in for PRs would label connector PRs.",
     ),
 }
 
