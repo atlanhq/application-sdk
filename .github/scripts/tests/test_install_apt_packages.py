@@ -13,16 +13,12 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import install_apt_packages
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import install_apt_packages  # noqa: E402
-from install_apt_packages import (  # noqa: E402
+from install_apt_packages import (
     InvalidPackages,
     commands,
     main,

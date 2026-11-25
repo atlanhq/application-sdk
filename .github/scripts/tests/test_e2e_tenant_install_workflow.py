@@ -16,13 +16,9 @@ backlog is worth its own ticket, not a guard that has to be born disabled.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
-import yaml
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW = _REPO_ROOT / ".github/workflows/e2e-tenant-install.yaml"
+from _workflows import load_workflow
 
 #: Any `${{ inputs.* }}` reference, which is what must not appear inside `run:`.
 _INPUT_REF = re.compile(r"\$\{\{\s*inputs\.[A-Za-z0-9_-]+\s*\}\}")
@@ -30,7 +26,7 @@ _INPUT_REF = re.compile(r"\$\{\{\s*inputs\.[A-Za-z0-9_-]+\s*\}\}")
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    return load_workflow("e2e-tenant-install.yaml")
 
 
 def _steps(workflow: dict) -> list[dict]:

@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import conformance_release
-from _frozen_clock import freeze_clock  # noqa: E402
+import pytest
+from _frozen_clock import freeze_clock
 
 # ---------------------------------------------------------------------------
 # Helpers

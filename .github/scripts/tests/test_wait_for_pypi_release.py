@@ -9,10 +9,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import wait_for_pypi_release as mod
 

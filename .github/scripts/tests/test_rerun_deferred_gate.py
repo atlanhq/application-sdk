@@ -7,31 +7,19 @@ leave alone, fail open) is exercised with no network access.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import rerun_deferred_gate  # noqa: E402
-from rerun_deferred_gate import DEFER_STEP_NAME, main, repair  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _gha_expr import evaluate  # noqa: E402
+import rerun_deferred_gate
+from _gha_expr import evaluate
+from _workflows import job, load_workflow, step_named
+from rerun_deferred_gate import DEFER_STEP_NAME, main, repair
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "a96a27b0000000000000000000000000000000aa"
 WORKFLOW_ID = 4242
 SELF = 38060382427
 NEWER = 38060546809
-
-_REUSABLE = (
-    Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
-)
 
 
 def _run(
@@ -185,14 +173,10 @@ def test_main_always_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(scope="module")
 def gate_job() -> dict[str, Any]:
-    return yaml.safe_load(_REUSABLE.read_text(encoding="utf-8"))["jobs"]["tests-passed"]
+    return job(load_workflow("tests-reusable.yaml"), "tests-passed")
 
 
 _REPAIR = "Re-run a newer gate that gave up waiting for this verdict"
-
-
-def _step(job: dict[str, Any], name: str) -> dict[str, Any]:
-    return next(s for s in job["steps"] if s.get("name") == name)
 
 
 def test_the_step_this_repair_looks_for_exists(gate_job: dict[str, Any]) -> None:
@@ -211,7 +195,7 @@ def test_only_the_acting_run_repairs(
         "github": {"event_name": "pull_request"},
         "needs": {"discover-e2e": {"result": discover}},
     }
-    assert evaluate(_step(gate_job, _REPAIR)["if"], contexts) is expected
+    assert evaluate(step_named(gate_job, _REPAIR)["if"], contexts) is expected
 
 
 def test_the_repair_follows_the_recorded_verdict_and_fails_open(
@@ -222,7 +206,7 @@ def test_the_repair_follows_the_recorded_verdict_and_fails_open(
         _REPAIR
     )
     assert names.index(_REPAIR) < names.index("Enforce gate")
-    step = _step(gate_job, _REPAIR)
+    step = step_named(gate_job, _REPAIR)
     assert step["continue-on-error"] is True
     assert step["env"]["GH_TOKEN"] == "${{ secrets.ORG_PAT_GITHUB || github.token }}"
     assert "rerun_deferred_gate.py" in step["run"]

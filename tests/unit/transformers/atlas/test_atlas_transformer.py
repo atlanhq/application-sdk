@@ -15,7 +15,7 @@ in-memory mutation of stub objects.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -509,8 +509,14 @@ def test_enrich_converts_created_and_last_altered_timestamps(
             "connection_qualified_name": CONN_QN,
         },
     )
-    assert isinstance(enriched["attributes"]["source_created_at"], datetime)
-    assert isinstance(enriched["attributes"]["source_updated_at"], datetime)
+    # Epoch milliseconds are an instant: they convert to an aware UTC datetime,
+    # not the host's local wall-clock fields (a naive value never equals these).
+    assert enriched["attributes"]["source_created_at"] == datetime(
+        2023, 11, 14, 22, 13, 20, tzinfo=UTC
+    )
+    assert enriched["attributes"]["source_updated_at"] == datetime(
+        2023, 11, 14, 22, 21, 40, tzinfo=UTC
+    )
 
 
 def test_enrich_does_not_stamp_last_sync_fields(transformer: AtlasTransformer):

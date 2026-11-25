@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import importlib
 import warnings
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from unittest import mock
 
@@ -90,7 +90,12 @@ class TestRetentionSweepRemoved:
             ),
         ):
             await obs._flush_records(
-                [{"timestamp": datetime(2026, 6, 15, 12).timestamp(), "msg": "x"}]
+                [
+                    {
+                        "timestamp": datetime(2026, 6, 15, 12, tzinfo=UTC).timestamp(),
+                        "msg": "x",
+                    }
+                ]
             )
 
         mock_upload.assert_awaited_once()

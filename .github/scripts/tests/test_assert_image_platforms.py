@@ -10,14 +10,10 @@ buildx's attestation entries.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
+import assert_image_platforms as ap
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import assert_image_platforms as ap  # noqa: E402
 
 _BOTH = "linux/amd64,linux/arm64"
 

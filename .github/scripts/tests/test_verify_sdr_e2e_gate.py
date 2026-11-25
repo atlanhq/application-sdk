@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import verify_sdr_e2e_gate as mod
 
 
@@ -52,8 +48,6 @@ import itertools  # noqa: E402
 from typing import Any  # noqa: E402
 
 import yaml  # noqa: E402
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _gha_expr import evaluate  # noqa: E402
 
 WORKFLOW = Path(__file__).resolve().parents[3] / ".github/workflows/pull_request.yaml"

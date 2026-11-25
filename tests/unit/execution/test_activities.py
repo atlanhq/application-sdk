@@ -202,9 +202,10 @@ class TestGetAllTaskActivities:
                 return _ActOutput()
 
         activities = get_all_task_activities()
-        # 2 user tasks + 7 framework tasks (upload, download, verify_refs,
-        # upload_refs, cleanup_files, cleanup_storage, merge_skipped_records) = 9
-        assert len(activities) == 9
+        # 2 user tasks + 8 framework tasks (upload, download, verify_refs,
+        # upload_refs, cleanup_files, cleanup_storage, merge_skipped_records,
+        # merge_fetch_failures) = 10
+        assert len(activities) == 10
 
     def test_returns_activities_for_all_apps(self) -> None:
         class _AppA(App):
@@ -250,9 +251,9 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities()
-        # 1 user task per app (2) + 7 framework tasks per app (14) = 16
+        # 1 user task per app (2) + 8 framework tasks per app (16) = 18
         # (no dedup — each app has its own qualified activity names)
-        assert len(activities) == 16
+        assert len(activities) == 18
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities
@@ -407,16 +408,16 @@ class TestTrackFileRefs:
 
     def test_noop_when_no_refs(self) -> None:
         # No refs → does not import _app_state, does not raise.
-        _track_file_refs("wf-1")
+        _track_file_refs(("wf-1", "run-1"))
 
     def test_adds_refs_to_app_state(self) -> None:
         from application_sdk.app.base import _app_state
 
         ref = FileReference(local_path="/tmp/foo")
-        _track_file_refs("wf-test-track", ref)
+        _track_file_refs(("wf-test-track", "run-1"), ref)
         from application_sdk.constants import TRACKED_FILE_REFS_KEY
 
-        assert ref in _app_state["wf-test-track"][TRACKED_FILE_REFS_KEY]
+        assert ref in _app_state[("wf-test-track", "run-1")][TRACKED_FILE_REFS_KEY]
 
     def test_upload_refs_output_retained_refs_are_tracked_beside_transient_twin(
         self,
@@ -436,8 +437,8 @@ class TestTrackFileRefs:
         found = _find_file_refs(UploadRefsOutput(prefix="p", refs=[retained]))
         assert found == [retained]
 
-        _track_file_refs("wf-test-upload-refs", *found, transient)
-        tracked = _app_state["wf-test-upload-refs"][TRACKED_FILE_REFS_KEY]
+        _track_file_refs(("wf-test-upload-refs", "run-1"), *found, transient)
+        tracked = _app_state[("wf-test-upload-refs", "run-1")][TRACKED_FILE_REFS_KEY]
         assert {retained, transient} <= tracked
 
 

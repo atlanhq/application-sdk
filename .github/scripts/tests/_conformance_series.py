@@ -10,13 +10,12 @@ derived here from those steps — once — for every test that needs it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
+import _workflows
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CONFORMANCE = REPO_ROOT / ".github" / "workflows" / "conformance-reusable.yaml"
+CONFORMANCE = _workflows.WORKFLOWS / "conformance-reusable.yaml"
 
 #: The job's id in the reusable.  The caller's job id plus this job's `name`
 #: form the required context (`suite / Conformance Gate`).
@@ -38,7 +37,7 @@ class Series:
 
 
 def load_workflow() -> dict[str, Any]:
-    return yaml.safe_load(CONFORMANCE.read_text(encoding="utf-8"))
+    return _workflows.load_workflow(CONFORMANCE)
 
 
 def suite_job(workflow: dict[str, Any] | None = None) -> dict[str, Any]:

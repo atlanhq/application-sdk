@@ -32,7 +32,7 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 |------|---------|---------|-------------|
 | `--temporal-host` | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`) |
 | `--temporal-namespace` | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
-| `--task-queue` | `ATLAN_TASK_QUEUE` | _(derived from app)_ | Task queue name |
+| `--task-queue` | `ATLAN_TASK_QUEUE` | _(derived from app)_ | Task queue name. For local and CLI runs; do not pin `ATLAN_TASK_QUEUE` in a deployed app's deploy or pool env — the on-demand (`-od`) worker breaks (K031). See [Task-queue naming](../configuration.md#task-queue-naming) |
 
 ---
 

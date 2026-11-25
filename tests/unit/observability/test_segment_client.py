@@ -304,12 +304,16 @@ class TestBuildTrackEvent:
         assert event.properties["description"] == "desc!"
         assert event.properties["unit"] == "ms"
 
-    def test_timestamp_is_iso_format(self):
+    def test_timestamp_is_iso_format_in_utc(self, non_utc_host):
+        """ISO 8601 with an explicit UTC offset, whatever the host's zone.
+
+        A naive ``fromtimestamp(ts).isoformat()`` on this UTC+05:30 host gives
+        ``2023-11-15T03:43:20`` with no offset, which Segment reads as UTC.
+        """
         client = _disabled_client()
         record = _make_record(timestamp=1_700_000_000.0)
         event = client._build_track_event(record)
-        # ISO 8601 format from datetime.fromtimestamp(...).isoformat().
-        assert "T" in event.timestamp
+        assert event.timestamp == "2023-11-14T22:13:20+00:00"
 
     def test_userid_uses_tenant_name_label_when_present(self):
         """tenant_name takes precedence over other tenant identifiers and is

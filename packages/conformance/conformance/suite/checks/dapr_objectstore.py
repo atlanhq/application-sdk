@@ -25,16 +25,17 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    YAML_KV_RE,
+    _make_pkl_finding_suppressed,
+    _parse_pkl_directives,
+    contract_files,
     discover_contract_repo,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
+    pkl_code_lines,
     safe_read_text,
     strip_yaml_comment,
-)
-from conformance.suite.checks.legacy_contract._directives_pkl import (
-    _make_pkl_finding_suppressed,
-    _parse_pkl_directives,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -44,11 +45,9 @@ _RULE_ID = "K029"
 __all__ = [
     "SERIES",
     "contract_false_findings",
-    "contract_files",
     "deploy_dapr_false_line",
     "discover",
     "main",
-    "pkl_code_lines",
     "scan_all",
 ]
 
@@ -57,11 +56,6 @@ __all__ = [
 # :func:`pkl_code_lines`, so a commented-out assignment or one quoted inside a
 # string (a ``longDescription``, say) is not a setting.
 _PKL_FALSE_RE = re.compile(r"\bobjectstore\s*=\s*false\b")
-
-# YAML key/value on one line: indentation, key, value (comment not yet removed).
-_YAML_KV_RE = re.compile(
-    r"^(?P<indent>[ ]*)(?P<key>[A-Za-z_][\w-]*)[ \t]*:(?P<value>.*)$"
-)
 
 # YAML 1.1 false spellings; contract-toolkit renders ``false``.
 _YAML_FALSE = frozenset({"false", "False", "FALSE", "no", "No", "NO", "off", "Off"})
@@ -76,72 +70,6 @@ _FIX = (
 def discover(root: Path) -> list[Path]:
     """Return ``[root]`` for a pkl-contract-driven app repo, else ``[]``."""
     return discover_contract_repo(root)
-
-
-def pkl_code_lines(text: str) -> list[str]:
-    r'''``text``'s lines with Pkl comments and string literals blanked out.
-
-    Covers ``//`` and ``/* */`` comments and every Pkl string form: ``"..."``,
-    ``"""..."""`` and their custom-delimiter variants ``#"..."#`` and
-    ``#"""..."""#``. Blanked characters become spaces (newlines are kept), so
-    line and column numbers still match the source. A ``\(...)`` interpolation
-    is blanked with the string it sits in.
-    '''
-    out: list[str] = []
-    i, n = 0, len(text)
-
-    def blank(chunk: str) -> str:
-        return "".join("\n" if c == "\n" else " " for c in chunk)
-
-    while i < n:
-        if text.startswith("//", i):
-            end = text.find("\n", i)
-            end = n if end == -1 else end
-            out.append(blank(text[i:end]))
-            i = end
-            continue
-        if text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            end = n if end == -1 else end + 2
-            out.append(blank(text[i:end]))
-            i = end
-            continue
-        pounds = 0
-        while i + pounds < n and text[i + pounds] == "#":
-            pounds += 1
-        if i + pounds < n and text[i + pounds] == '"':
-            start = i
-            j = i + pounds
-            quote = '"""' if text.startswith('"""', j) else '"'
-            close = quote + "#" * pounds
-            j += len(quote)
-            while j < n:
-                # Only a string without pound delimiters treats ``\`` as an escape.
-                if pounds == 0 and text[j] == "\\":
-                    j += 2
-                    continue
-                if text.startswith(close, j):
-                    j += len(close)
-                    break
-                if quote == '"' and text[j] == "\n":
-                    break  # unterminated single-line string: stop at the line end
-                j += 1
-            out.append(blank(text[start:j]))
-            i = j
-            continue
-        out.append(text[i])
-        i += 1
-    return "".join(out).splitlines()
-
-
-def contract_files(root: Path) -> list[Path]:
-    """Hand-written ``contract/**/*.pkl``, skipping hidden dirs (pkl caches)."""
-    contract_dir = root / "contract"
-    return sorted(
-        p
-        for p in contract_dir.rglob("*.pkl")
-        if not any(part.startswith(".") for part in p.relative_to(contract_dir).parts)
-    )
 
 
 def contract_false_findings(
@@ -206,7 +134,7 @@ def deploy_dapr_false_line(text: str, component: str) -> int | None:
     for lineno, raw in enumerate(text.splitlines(), start=1):
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
-        m = _YAML_KV_RE.match(raw)
+        m = YAML_KV_RE.match(raw)
         if m is None:
             continue
         indent = len(m.group("indent"))

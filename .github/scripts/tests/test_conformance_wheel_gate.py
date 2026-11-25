@@ -13,17 +13,13 @@ from __future__ import annotations
 
 import ast
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from typing import Sequence
 
+import conformance_wheel_gate as gate
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import conformance_wheel_gate as gate  # noqa: E402
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 GATE_CMD = "python .github/scripts/conformance_wheel_gate.py"

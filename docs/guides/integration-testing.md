@@ -324,7 +324,7 @@ To inspect intermediates while debugging, turn it off for that session only — 
 os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
 ```
 
-This one is read at run time rather than at import, so its position is not load-bearing.
+This one is read when the worker starts rather than at import, so its position relative to the imports is not load-bearing; it must be set before the worker fixture starts. Each run keeps the value it started with.
 
 ## Markers and CI tiering — the directory *is* the boundary
 

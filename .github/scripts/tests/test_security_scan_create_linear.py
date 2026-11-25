@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from typing import Any
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import security_scan_create_linear as ssl
 

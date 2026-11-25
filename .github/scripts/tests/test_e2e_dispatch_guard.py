@@ -19,18 +19,14 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
 from pathlib import Path
-
-import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # The gate is imported only so the drift test can hold its copy of
 # check_run_age_key against the guard's; production never imports across scripts.
-import poll_check_runs_gate as gate  # noqa: E402
-from e2e_dispatch_guard import (  # noqa: E402
+import poll_check_runs_gate as gate
+import pytest
+import yaml
+from e2e_dispatch_guard import (
     _CHECKS_MAX_PAGES,
     _PASSING_CONCLUSIONS,
     Claimant,

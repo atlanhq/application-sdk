@@ -16,21 +16,17 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import bound_lock_branch as lanes
 import conformance_wheel_gate as gate
+import pytest
 import renovate_approval_conditions as approval
 import renovate_conformance_lock_sync as sync
+import yaml
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "renovate-conformance-lock-sync.yaml"

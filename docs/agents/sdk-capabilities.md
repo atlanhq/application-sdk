@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.58.0
-source-sha:    eddb71aedf168cf1cd7842286211a9685f0c3ba8
-source-date:   2026-11-20T20:27:37+05:30
+sdk-version:   3.58.1
+source-sha:    d5043463095a10dfa169004618140d9746959440
+source-date:   2026-11-24T12:10:31Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 43 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 13 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 15 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
@@ -298,7 +298,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `_app_state`
 
 - **Import:** `from application_sdk.app.base import _app_state`
-- **Signature:** `_app_state: dict[str, dict[str, Any]]`
+- **Signature:** `_app_state: dict[tuple[str, str], dict[str, Any]]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
 
@@ -3140,6 +3140,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** A field the record's qualifiedName is built from is blank. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
+#### `FetchFailureReason`
+
+- **Import:** `from application_sdk.outputs import FetchFailureReason`
+- **Signature:** `class FetchFailureReason`
+- **Summary:** Why an item could not be fetched. A closed set, so failures aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
 #### `MalformedRecord`
 
 - **Import:** `from application_sdk.outputs import MalformedRecord`
@@ -3197,6 +3204,13 @@ Output collectors and record models for Automation Engine
 - **Signature:** `get_outputs() -> OutputCollector`
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+#### `record_fetch_failure`
+
+- **Import:** `from application_sdk.outputs import record_fetch_failure`
+- **Signature:** `record_fetch_failure(reason: FetchFailureReason, *, ...)`
+- **Summary:** Record that one item could not be fetched, keeping its id for review after the run.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
 
 #### `skip_record`
 

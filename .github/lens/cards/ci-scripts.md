@@ -1,6 +1,7 @@
 # ci-scripts: Python drivers under .github/scripts
 - Flag: a new script, or a new branch in one, with no case in `.github/scripts/tests/` (success, failure/fallback, no-change paths).
 - Flag: side effects (`git`, `gh`, `pkl`, `uvx`, network) called ad hoc instead of through one thin wrapper tests can stub; ref CAS/lease logic copied instead of reusing `.github/scripts/_gh_refs.py`.
+- Flag: a new or edited script that defines its own `gh` wrapper (`_run_gh`, `_gh`, `gh_json`, a `subprocess.run(["gh", ...])`) instead of `.github/scripts/_gh.py`, or its own `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writer instead of `.github/scripts/_gha.py`; a `POST` through `_gh.gh` without `idempotent=False`. Exempt: scripts a workflow sparse-checks-out as a single file and scripts vendored into consumer repos (docs/standards/ci.md).
 - Flag: `subprocess` with `shell=True` or commands built from PR/branch/label text; tokens on argv; unchecked return codes that let a failure exit 0.
 - Flag: a gate that exits 0 or fails open when its input is missing, empty or unparseable.
 - Flag: secret values in stdout, errors or files; `::add-mask::` emitted on a stdout that is redirected into `$GITHUB_ENV` (use a `--mask-only` mode); masking only "sensitive-looking" keys instead of every scalar.

@@ -16,10 +16,8 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import git_auth
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import git_auth  # noqa: E402
 
 #: A synthetic value; never a real token.
 TOKEN = "ghs_SENTINEL_git_auth_token"

@@ -333,6 +333,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "legacy_workflow_type",
         "canonical_workflow_type",
         "skipped_count",
+        "fetch_failure_count",
     }
 )
 

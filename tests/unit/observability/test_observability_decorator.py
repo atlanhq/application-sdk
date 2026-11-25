@@ -58,7 +58,7 @@ def _decorator_clock() -> Iterator[_HandClock]:
     """
     clock = _HandClock()
     with private_stdlib(observability_decorator, "time") as local_time:
-        with patch.object(local_time, "time", clock):
+        with patch.object(local_time, "monotonic", clock):
             yield clock
 
 

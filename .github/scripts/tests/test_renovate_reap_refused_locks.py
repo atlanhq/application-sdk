@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import base64
-import os
-import sys
 import urllib.error
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__))))
-
-import renovate_reap_refused_locks as reaper  # noqa: E402
-import renovate_uv_lock_bounded as bounded  # noqa: E402
+import renovate_reap_refused_locks as reaper
+import renovate_uv_lock_bounded as bounded
 
 PACKAGES = """
 [[package]]

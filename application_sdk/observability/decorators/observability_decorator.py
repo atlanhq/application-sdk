@@ -42,7 +42,7 @@ def _record_success_observability(
     start_time: float,
 ) -> None:
     """Helper function to record success observability data."""
-    duration_ms = (time.time() - start_time) * 1000
+    duration_ms = (time.monotonic() - start_time) * 1000
 
     # Debug logging before recording trace
     logger.debug(
@@ -110,7 +110,7 @@ def _record_error_observability(
     error: Exception,
 ) -> None:
     """Helper function to record error observability data."""
-    duration_ms = (time.time() - start_time) * 1000
+    duration_ms = (time.monotonic() - start_time) * 1000
 
     logger.error("Error in function: %s", func_name, exc_info=True)
 
@@ -216,7 +216,7 @@ def observability(
             """Time the call and record its outcome; shared by both wrappers."""
             trace_id = str(uuid.uuid4())
             span_id = str(uuid.uuid4())
-            start_time = time.time()
+            start_time = time.monotonic()
             actual_logger.debug("Starting function: %s", func_name)
             try:
                 yield

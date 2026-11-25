@@ -16,16 +16,12 @@ central pull (FND-3337). What these guard:
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
+import fleet_dashboards_collect as fdc
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import fleet_dashboards_collect as fdc
 
 REPO = "atlanhq/atlan-example-app"
 SLUG = "atlanhq_atlan-example-app"

@@ -176,7 +176,8 @@ class TestCreateWorker:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """LogInterceptor, MetricsInterceptor, TraceInterceptor are
-        unconditional and the EventInterceptor stays gated by env var."""
+        unconditional, behind RunFlagsInterceptor, which pins the run-shaping
+        flags ahead of every interceptor that reads them."""
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "true")
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
 
@@ -202,6 +203,7 @@ class TestCreateWorker:
             create_worker(client)
 
         interceptor_types = [type(i).__name__ for i in interceptors_used]
+        assert interceptor_types[0] == "RunFlagsInterceptor"
         assert "LogInterceptor" in interceptor_types
         assert "MetricsInterceptor" in interceptor_types
         assert "TraceInterceptor" in interceptor_types
@@ -209,9 +211,18 @@ class TestCreateWorker:
         # CleanupInterceptor is no longer registered — cleanup is via App.on_complete()
         assert "CleanupInterceptor" not in interceptor_types
 
-    def test_event_interceptor_disabled_via_env(
+    def test_event_interceptor_stays_registered_when_disabled_via_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Events off at worker start no longer drops the event interceptor.
+
+        A run that started on a pod with events on must replay here, and its
+        history has ``publish_event`` commands. So the workflow side and the
+        ``publish_event`` activity stay registered, and the worker's "off" is
+        carried by RunFlagsInterceptor, which pins it on runs this worker
+        starts. Only the activity start/end events (not workflow commands)
+        follow the worker's value directly.
+        """
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "false")
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
 
@@ -223,11 +234,23 @@ class TestCreateWorker:
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
+        from application_sdk.execution._temporal.interceptors.events import (
+            EventActivityInboundInterceptor,
+            EventInterceptor,
+            publish_event,
+        )
+        from application_sdk.execution._temporal.run_flags import (
+            RunFlags,
+            RunFlagsInterceptor,
+        )
+
         client = _make_mock_client()
         interceptors_used: list = []
+        activities_used: list = []
 
         def capture_worker(*args, **kwargs):
             interceptors_used.extend(kwargs.get("interceptors", []))
+            activities_used.extend(kwargs.get("activities", []))
             return mock.MagicMock()
 
         with mock.patch(
@@ -237,7 +260,16 @@ class TestCreateWorker:
             create_worker(client)
 
         interceptor_types = [type(i).__name__ for i in interceptors_used]
-        assert "EventInterceptor" not in interceptor_types
+        assert "EventInterceptor" in interceptor_types
+        assert publish_event in activities_used
+        run_flags = interceptors_used[0]
+        assert isinstance(run_flags, RunFlagsInterceptor)
+        assert run_flags._inbound_cls._live == RunFlags(events=False, cleanup=True)
+        (events,) = [i for i in interceptors_used if isinstance(i, EventInterceptor)]
+        assert not isinstance(
+            events.intercept_activity(mock.MagicMock()),
+            EventActivityInboundInterceptor,
+        )
         # The observability trio still runs.
         assert "LogInterceptor" in interceptor_types
         assert "MetricsInterceptor" in interceptor_types

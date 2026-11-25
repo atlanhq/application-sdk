@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import dispatch_vuln_triage as dvt
+import pytest
 
 
 def _ok(*_args, **_kwargs):

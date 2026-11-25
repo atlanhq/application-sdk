@@ -92,6 +92,7 @@ from typing_extensions import deprecated
 from application_sdk import _deprecation
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.app._app_config_validation import warn_config_problem
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
@@ -444,6 +445,47 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     )
 
 
+def _check_sql_client_class(cls: type[SqlApp]) -> None:
+    """Warn at class definition when a concrete ``SqlApp`` has no usable client.
+
+    ``_init_sql_client`` checks ``sql_client_class`` only inside a running
+    task, so a subclass that forgets it otherwise fails in the worker, not at
+    import or in unit tests. Skipped for a template (``_app_registered`` set
+    on the class itself), an abstract base, and a class that overrides
+    ``_init_sql_client`` and so never reads the attribute. Warn-only until
+    ``APP_CONFIG_ERROR_VERSION``.
+    """
+    if (
+        cls.__dict__.get("_app_registered", False)
+        or _temporal_workflow.unsafe.in_sandbox()
+    ):
+        return
+    # ABCMeta fills __abstractmethods__ only after __init_subclass__ runs, so
+    # scan the way App.__init_subclass__ does.
+    if any(
+        getattr(getattr(cls, m, None), "__isabstractmethod__", False) for m in dir(cls)
+    ):
+        return
+    if cls._init_sql_client is not SqlApp._init_sql_client:
+        return
+    client_class = cls.sql_client_class
+    if client_class is None:
+        problem = (
+            "on a concrete SqlApp means every extract task fails in the "
+            "worker with SqlClientClassNotSetError; set it to your "
+            "BaseSQLClient subclass"
+        )
+    else:
+        from application_sdk.clients.sql import (  # noqa: PLC0415 — only for a declared client; keeps template import light
+            BaseSQLClient,
+        )
+
+        if isinstance(client_class, type) and issubclass(client_class, BaseSQLClient):
+            return
+        problem = "is not a BaseSQLClient subclass"
+    warn_config_problem(cls, "sql_client_class", client_class, problem)
+
+
 class SqlApp(App):
     """Consolidated SQL metadata extraction App.
 
@@ -511,6 +553,12 @@ class SqlApp(App):
 
     # ── SQL client ──────────────────────────────────────────────────────
     sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # Before super(): App registration sets _app_registered on cls,
+        # which would make every concrete app read as a template.
+        _check_sql_client_class(cls)
+        super().__init_subclass__(**kwargs)
 
     # ── SQL templates (set in subclass) ─────────────────────────────────
     fetch_database_sql: ClassVar[str] = ""

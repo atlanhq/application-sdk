@@ -11,27 +11,20 @@ runner, so these are deliberately YAML-shape assertions.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
-import yaml
+from _bump_skip import without_bump_skip
+from _workflows import ACTIONS, WORKFLOWS, load_workflow, triggers
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-
-_WORKFLOW = (
-    Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
-)
-_TWINGATE_ACTION = (
-    Path(__file__).resolve().parents[3] / ".github/actions/twingate-connect/action.yml"
-)
+_WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
+_TWINGATE_ACTION = ACTIONS / "twingate-connect" / "action.yml"
 
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    return load_workflow(_WORKFLOW)
 
 
 @pytest.fixture(scope="module")
@@ -41,9 +34,7 @@ def jobs(workflow: dict) -> dict:
 
 @pytest.fixture(scope="module")
 def inputs(workflow: dict) -> dict:
-    # `on:` round-trips as the YAML 1.1 boolean True under PyYAML.
-    on = workflow.get("on") or workflow.get(True)
-    return on["workflow_call"]["inputs"]
+    return triggers(workflow)["workflow_call"]["inputs"]
 
 
 def test_both_jobs_exist(jobs: dict) -> None:
@@ -257,11 +248,11 @@ def test_a_lifecycle_job_failure_does_not_fail_the_run(jobs: dict) -> None:
 
 def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
     # Chris blocker #1: api.dataforge.atlan.dev is VPN-gated, so each job must
-    # check out + globalprotect-connect before the lifecycle script runs.
+    # check out + twingate-connect before the lifecycle script runs.
     for job in ("wake-dataforge-source", "pause-dataforge-source"):
         steps = jobs[job]["steps"]
         uses = [s.get("uses", "") for s in steps]
-        assert any("globalprotect-connect" in u for u in uses), job
+        assert any("twingate-connect" in u for u in uses), job
         assert any("actions/checkout" in u for u in uses), job
         # the script call comes last, and never puts the resource id on argv
         run_steps = [s.get("run", "") for s in steps if "run" in s]
@@ -269,22 +260,22 @@ def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
         assert not any("--resource-id" in r for r in run_steps), job
 
 
-def test_both_jobs_try_twingate_before_globalprotect(
-    workflow: dict, jobs: dict
-) -> None:
+def test_dataforge_path_has_no_globalprotect_fallback() -> None:
+    # FND-4169: Twingate is the only route; GlobalProtect is being retired.
+    assert "globalprotect-connect" not in _WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_both_jobs_connect_over_twingate(workflow: dict, jobs: dict) -> None:
     on = workflow.get("on") or workflow.get(True)
     assert "TWINGATE_SHARED_KEY" in on["workflow_call"]["secrets"]
     for job in ("wake-dataforge-source", "pause-dataforge-source"):
         steps = jobs[job]["steps"]
         uses = [s.get("uses", "") for s in steps]
         tg = next(i for i, u in enumerate(uses) if "twingate-connect" in u)
-        gp = next(i for i, u in enumerate(uses) if "globalprotect-connect" in u)
-        assert tg < gp, job
 
-        twingate, globalprotect = steps[tg], steps[gp]
-        cleanup = steps[gp - 1]
+        twingate, cleanup = steps[tg], steps[tg + 1]
         pin_gate = "env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''"
-        for step in (twingate, cleanup, globalprotect):
+        for step in (twingate, cleanup):
             assert step["if"].startswith(pin_gate), (job, step["name"])
         assert "env.HAS_TWINGATE_KEY == 'true'" in twingate["if"], job
         assert jobs[job]["env"]["HAS_TWINGATE_KEY"] == (
@@ -301,9 +292,6 @@ def test_both_jobs_try_twingate_before_globalprotect(
         assert not re.search(
             r"^\s*(if|for|while|case)\b", cleanup["run"], re.MULTILINE
         ), job
-        assert (
-            f"steps.{twingate['id']}.outputs.connected != 'true'" in globalprotect["if"]
-        ), job
 
         assert twingate["continue-on-error"] is True, job
         assert twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
@@ -315,9 +303,50 @@ def test_both_jobs_try_twingate_before_globalprotect(
         assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
 
 
+def test_test_jobs_connect_over_twingate(jobs: dict) -> None:
+    for job in ("integration", "e2e"):
+        steps = cast("list[dict[str, Any]]", jobs[job]["steps"])
+        uses = [s.get("uses", "") for s in steps]
+        tg = next(i for i, u in enumerate(uses) if "twingate-connect" in u)
+
+        twingate, cleanup = steps[tg], steps[tg + 1]
+        gate = "inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''"
+        for step in (twingate, cleanup):
+            assert step["if"].startswith(gate), (job, step["name"])
+            assert step["continue-on-error"] is True, (job, step["name"])
+        assert "env.HAS_TWINGATE_KEY == 'true'" in twingate["if"], job
+        assert jobs[job]["env"]["HAS_TWINGATE_KEY"] == (
+            "${{ secrets.TWINGATE_SHARED_KEY != '' }}"
+        )
+        assert "steps.twingate.outcome == 'failure'" in cleanup["if"], job
+        assert "steps.twingate.outcome == 'cancelled'" in cleanup["if"], job
+        assert "twingate stop" in cleanup["run"], job
+        assert cleanup["run"].startswith("set -euo pipefail\n"), job
+        assert not re.search(
+            r"^\s*(if|for|while|case)\b", cleanup["run"], re.MULTILINE
+        ), job
+        assert twingate["with"]["resubnet-docker"] == "true", job
+
+        assert (
+            twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
+        ), job
+        assert (
+            twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        ), job
+        assert "TWINGATE_SHARED_KEY" not in jobs[job]["env"], job
+
+        checkout = next(
+            s
+            for s in steps
+            if cast("dict[str, Any]", s.get("with") or {}).get("path")
+            == "application-sdk-scripts"
+        )
+        assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
+
+
 def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
-    action = yaml.safe_load(_TWINGATE_ACTION.read_text(encoding="utf-8"))
-    script = action["runs"]["steps"][0]["run"]
+    action = load_workflow(_TWINGATE_ACTION)
+    script = next(s for s in action["runs"]["steps"] if s.get("id") == "connect")["run"]
     bounded = sum(
         int(n) + int(k or 0)
         for k, n in re.findall(r"timeout (?:-k (\d+) )?(\d+) ", script)
@@ -333,7 +362,12 @@ def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
     probe_attempts = int(action["inputs"]["probe-attempts"]["default"])
     bounded += probe_attempts * (10 + 3)
     assert "timeout " in script and "-k " in script
-    for job in ("wake-dataforge-source", "pause-dataforge-source"):
+    for job in (
+        "wake-dataforge-source",
+        "pause-dataforge-source",
+        "integration",
+        "e2e",
+    ):
         step = next(
             s for s in jobs[job]["steps"] if "twingate-connect" in s.get("uses", "")
         )
@@ -341,7 +375,7 @@ def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
 
 
 def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> None:
-    """The 172.17/16 re-subnet lives in globalprotect-connect, not at call sites.
+    """The 172.17/16 re-subnet lives in the VPN connect actions, not at call sites.
 
     Atlan's internal ELBs share Docker's default bridge subnet, so it has to move
     before the tunnel routes 172.17/16 via tun0. That was four byte-identical
@@ -351,11 +385,22 @@ def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> 
     """
     assert "default-address-pools" not in _WORKFLOW.read_text(encoding="utf-8")
 
-    # Every dataforge VPN call site opts in, so folding it in changed nothing.
-    for name, job in jobs.items():
-        for step in job.get("steps") or []:
-            if "globalprotect-connect" not in step.get("uses", ""):
+    # Every dataforge call site that runs Docker afterwards opts in.
+    for name in ("integration", "e2e"):
+        for step in jobs[name].get("steps") or []:
+            if "twingate-connect" not in step.get("uses", ""):
                 continue
             with_ = step.get("with") or {}
             if with_.get("mothership-url", "").endswith("dataforge.atlan.dev"):
                 assert with_.get("resubnet-docker") == "true", name
+
+
+def test_both_vpn_actions_resubnet_docker_identically() -> None:
+    def resubnet(path: Path) -> dict:
+        steps = load_workflow(path)["runs"]["steps"]
+        step = next(s for s in steps if "default-address-pools" in s.get("run", ""))
+        assert steps.index(step) == 0, path
+        return step
+
+    gp = ACTIONS / "globalprotect-connect" / "action.yml"
+    assert resubnet(_TWINGATE_ACTION) == resubnet(gp)

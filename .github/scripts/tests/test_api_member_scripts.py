@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import detect_api_member as detect
+import probe_app_api_member as probe
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import detect_api_member as detect  # noqa: E402
-import probe_app_api_member as probe  # noqa: E402
 
 _MEMBER = """
 [project]

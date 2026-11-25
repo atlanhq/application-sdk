@@ -6,14 +6,10 @@ import email.message
 import inspect
 import io
 import json
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import renovate_fleet_scan as rfs
-from _frozen_clock import freeze_clock  # noqa: E402
+from _frozen_clock import freeze_clock
 
 # ---------------------------------------------------------------------------
 # Scope resolution + query building
