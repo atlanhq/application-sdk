@@ -6,12 +6,13 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 
 ### How values are read
 
-Every typed variable follows the same rules:
+Every variable follows the same rules:
 
-- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured.
+- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured. This holds for string variables too (names, paths, URLs): `ATLAN_APPLICATION_NAME=` means `default`, not an empty name. Surrounding whitespace is ignored.
 - **A malformed value means the default, with a warning.** `OTEL_BATCH_SIZE=abc` or an `inf` timeout does not stop the process. It logs a warning naming the variable and the value, and uses the default. Values read at import time (most of this page) warn on stderr, because logging is not set up yet. Values read later warn through the SDK logger.
 - **Booleans:** `true`, `1`, `yes` and `on` enable. `false`, `0`, `no` and `off` disable. Matching is case-insensitive and ignores surrounding whitespace. Any other word warns and keeps the default.
 - **Choices** (for example `ATLAN_OOM_RESTART_CHECK`, `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE`): an unrecognised word warns and keeps the default.
+- **Durations** (the `ATLAN_OBSTORE_*_TIMEOUT` variables): one or more number-and-unit terms such as `30s`, `90s`, `1h 30m` or `1.5h`. Units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `M` (months) and `y`, plus their long forms. A bare number has no unit and is rejected (it warns and keeps the default), except `0`, which is accepted as zero, as the object-store client accepts it.
 
 `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` is the one exception: an explicitly empty value disables server-side cursors, as it always has.
 
@@ -309,9 +310,9 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
-| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. |
-| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. |
-| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. An invalid value logs a warning and keeps the default. |
+| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. A value that is not a duration (see [How values are read](#how-values-are-read)) warns and keeps the default, as do the other `ATLAN_OBSTORE_*_TIMEOUT` variables. |
+| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. A malformed or negative value logs a warning and keeps the default. |
+| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. A malformed or negative value logs a warning and keeps the default. |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its in-flight part file and checkpoint sidecar (`.sdk-partial/{name}.part` and `.sdk-partial/{name}.transfer-state` beside the destination), and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Interval (seconds) between in-progress heartbeat log lines during a long upload/download. `0` disables heartbeats. |
 | `ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS` | `30` | Interval (seconds) between progress marks while an activity waits on a per-destination storage lock (a second download of the same path queues behind the first). Capped at a quarter of `ATLAN_MAX_NO_PROGRESS_SECONDS` so a queued activity is never killed as stalled; floored at `1`. |

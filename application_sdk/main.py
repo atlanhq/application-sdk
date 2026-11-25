@@ -62,6 +62,7 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_bool as _env_bool
 from application_sdk.common._env import env_int as _env_int
+from application_sdk.common._env import env_str as _env_str
 from application_sdk.common.backoff import Backoff
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.discovery import (
@@ -272,7 +273,7 @@ class AppConfig:
         )
 
         def _env(key: str, default: str = "") -> str:
-            return os.environ.get(key, default)
+            return _env_str(key, default)
 
         mode = args.mode or _env("ATLAN_APP_MODE")
         if not mode:
@@ -774,7 +775,7 @@ async def _create_infrastructure() -> InfrastructureContext:
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
-        components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
+        components_dir = Path(_env_str("DAPR_COMPONENTS_PATH", "./components"))
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 

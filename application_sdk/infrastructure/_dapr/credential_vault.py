@@ -14,6 +14,7 @@ import orjson
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation
+from application_sdk.common._env import env_str
 from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreachableError is a re-export kept for importers of this module (shipped surface)
     ColdStartRaceError,
     DaprSidecarUnreachableError,
@@ -141,16 +142,13 @@ class DaprCredentialVault:
             # store otherwise.  Heracles writes credential configs to whichever
             # store the app is pointed at; in non-SDR / local / CI environments
             # that is the deployment store.
-            import os  # noqa: PLC0415 — cold path
             from pathlib import Path  # noqa: PLC0415 — cold path
 
             from application_sdk.storage.binding import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                 is_binding_configured,
             )
 
-            components_dir = Path(
-                os.environ.get("DAPR_COMPONENTS_PATH", "./components")
-            )
+            components_dir = Path(env_str("DAPR_COMPONENTS_PATH", "./components"))
             upstream_configured = is_binding_configured(
                 UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
             )
