@@ -121,7 +121,10 @@ class CoverageRecorder:
         except Exception:  # noqa: BLE001
             return None
 
-    def __len__(self) -> int:
+    @property
+    def recorded_keys(self) -> int:
+        """How many keys hold anything. Not ``__len__``: a recorder must stay
+        truthy when empty, or ``recorder or fallback`` in app code drops it."""
         return len(self._by_key)
 
 
@@ -136,11 +139,10 @@ class NoOpCoverageRecorder:
 
     partial = unusable = note = field_missing = missing
 
+    recorded_keys = 0
+
     def get(self, key: str) -> None:
         return None
-
-    def __len__(self) -> int:
-        return 0
 
 
 def create_recorder(enabled: bool) -> CoverageRecorder | NoOpCoverageRecorder:
