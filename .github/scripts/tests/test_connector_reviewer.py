@@ -16099,6 +16099,282 @@ def test_a_gate_finding_is_not_rechecked_by_the_model(repo: Path, tmp_path: Path
     assert "computed in code from the bootstrap render" in res.reason
 
 
+# A hand-edited gate file next to a gate file that matches the render and an
+# app file: the one PR the three tests below review.
+_TWEAK = "# local tweak"  # only in the hand-edited gate file's diff
+_MATCH_OLD, _MATCH_NEW = "a: 1\n", "a: 2 # resynced\n"
+_SRC_MARK = "decode()"  # in the app file's diff
+
+
+def _mixed_gate_pr() -> Any:
+    return _gate_pr(
+        GATE_H1,
+        _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)
+        + _diff_of(CHECKS_WF, _MATCH_OLD, _MATCH_NEW)
+        + DIFF,
+        {
+            (CONFORMANCE_WF, GATE_H1): WF_NEW,
+            (CHECKS_WF, GATE_H1): _MATCH_NEW,
+            ("app/storage/fetch.py", GATE_H1): SRC_V2,
+        },
+    )
+
+
+def _line_review_of_the_gate_file() -> Script:
+    """A line review that, shown the hand-edited gate file, raises its own
+    medium finding on it: what the reviewer did before (two findings for one
+    edit). Every other bundle finishes clean."""
+    raised = {"done": False}
+    medium = {
+        "path": CONFORMANCE_WF,
+        "existing_code": _TWEAK,
+        "severity": "medium",
+        "category": "bug",
+        "title": "The hand edit changes the Conformance gate",
+        "content": "The edit changes the managed gate, so the gate runs differently.",
+        "suggestion_code": "",
+        "causal_chain": {
+            "trigger": "Any pull request",
+            "steps": [
+                {
+                    "path": CONFORMANCE_WF,
+                    "code": _TWEAK,
+                    "effect": "the managed gate file differs from the render",
+                },
+                {
+                    "path": CONFORMANCE_WF,
+                    "code": "name: Conformance",
+                    "effect": "the Conformance gate runs from the edited file",
+                },
+            ],
+            "outcome": "the gate runs differently from the fleet",
+        },
+    }
+
+    def reply(body: dict[str, Any]) -> Any:
+        if _offers(body, "approve_all_comments"):
+            return response([tool_call("approve_all_comments", {})])
+        if _TWEAK in json.dumps(body) and not raised["done"]:
+            raised["done"] = True
+            return response(
+                [
+                    tool_call("code_comment", {"comments": [medium]}),
+                    tool_call("task_done", {"state": "DONE"}, 1),
+                ]
+            )
+        return response([tool_call("task_done", {"state": "DONE"})])
+
+    return Script(*([reply] * 40))
+
+
+def _review_mixed(repo: Path, tmp_path: Path, script: Script, **kw: Any) -> Any:
+    gh = _mixed_gate_pr()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        **kw,
+    )
+    return gh, res
+
+
+def _bundle_paths(res: RunResult) -> set[str]:
+    """Every file whose diff entered a line-review bundle's prompt."""
+    return {
+        p
+        for b in res.bundles
+        for s in b.sources
+        if s.get("kind") == "diff"
+        for p in s.get("files", {})
+    }
+
+
+def test_a_hand_edited_gate_file_is_one_finding_and_never_line_reviewed(
+    repo: Path, tmp_path: Path
+):
+    """The gate finding already says what is wrong and how to fix it (revert
+    it, or change it in application-sdk), so the line review is not shown the
+    file and cannot raise a second finding on the same edit. The summary says
+    why it was not line-reviewed, so nothing is skipped silently, and it is
+    not an unread file: the verdict is complete."""
+    script = _line_review_of_the_gate_file()
+    gh, res = _review_mixed(
+        repo,
+        tmp_path,
+        script,
+        gate_fact=_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}),
+    )
+    st = state_of(res)
+    on_file = [f for f in st.open_findings() if f.path == CONFORMANCE_WF]
+    [f] = on_file
+    assert f.origin == "gate" and st.open_findings() == [f]
+    assert res.gate_covered == {CONFORMANCE_WF: f.id}
+    # Not in any line-review bundle, nor in the approach check.
+    assert CONFORMANCE_WF not in _bundle_paths(res)
+    assert all(_TWEAK not in json.dumps(r) for r in script.requests)
+    assert script.approach_requests
+    assert all(_TWEAK not in json.dumps(r) for r in script.approach_requests)
+    # Said in the summary, against the gate finding, and not an unread file.
+    body = gh.comments[0]["body"]
+    assert f"- `{CONFORMANCE_WF}` — covered by the gate finding {f.id}" in body
+    assert CONFORMANCE_WF not in st.unread
+    assert not review_mod.incomplete_reasons(res)
+    assert gh.statuses[-1]["state"] == "failure"  # the gate finding blocks
+
+
+def test_the_other_files_of_a_pr_with_a_gate_finding_are_still_reviewed(
+    repo: Path, tmp_path: Path
+):
+    """Only the file with the gate finding is held out: the app file and the
+    gate file that matches the render are line-reviewed and seen by the
+    approach check as before."""
+    script = _line_review_of_the_gate_file()
+    _, res = _review_mixed(
+        repo,
+        tmp_path,
+        script,
+        gate_fact=_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}),
+    )
+    assert res.gate is not None and res.gate.matching == [CHECKS_WF]
+    assert {"app/storage/fetch.py", CHECKS_WF} <= _bundle_paths(res)
+    assert CONFORMANCE_WF not in _bundle_paths(res)
+    sent = json.dumps(script.requests)
+    assert _SRC_MARK in sent and "resynced" in sent
+    approach = json.dumps(script.approach_requests)
+    assert "resynced" in approach and _TWEAK not in approach
+
+
+def test_a_gate_file_with_no_gate_finding_is_still_line_reviewed(
+    repo: Path, tmp_path: Path
+):
+    """No gate finding on the file (it matches the render, or no gate check
+    could be made) means nothing covers it: it is line-reviewed as before,
+    and what the line review finds on it stands."""
+    for fact in (
+        _write_fact(tmp_path),  # every changed gate file matches the render
+        _write_fact(tmp_path, GATE_H2, name="moved.json"),  # no usable fact
+        None,  # the gate check is not configured
+    ):
+        script = _line_review_of_the_gate_file()
+        gh, res = _review_mixed(repo, tmp_path, script, gate_fact=fact)
+        st = state_of(res)
+        assert [f for f in st.findings if f.origin == "gate"] == []
+        assert res.gate_covered == {}, fact
+        assert {CONFORMANCE_WF, CHECKS_WF} <= _bundle_paths(res), fact
+        assert _TWEAK in json.dumps(script.requests)
+        [f] = [x for x in st.open_findings() if x.path == CONFORMANCE_WF]
+        assert f.origin != "gate" and f.severity == "medium"
+        assert "covered by the gate finding" not in gh.comments[0]["body"]
+
+
+def test_a_covered_gate_file_s_added_symbols_reach_no_prompt(
+    repo: Path, tmp_path: Path
+):
+    """A covered Python gate file's new function is not listed in
+    `<symbols_added_by_this_pr>` for the other files' bundles; with no gate
+    finding on it, it is listed as before."""
+    gate_py = ".github/scripts/release_gate.py"
+    old = "def check():\n    return True\n"
+    new = old + "\n\ndef skip_the_gate():\n    return False\n"
+    listed = f"{gate_py}: skip_the_gate"  # the symbols block's line, nowhere else
+    for fact, covered in (
+        (_write_fact(tmp_path, mismatches={gate_py: DRIFT}), True),
+        (_write_fact(tmp_path, name="clean.json"), False),
+    ):
+        gh = _gate_pr(
+            GATE_H1,
+            _diff_of(gate_py, old, new) + DIFF,
+            {
+                (gate_py, "b0"): old,
+                (gate_py, GATE_H1): new,
+                ("app/storage/fetch.py", GATE_H1): SRC_V2,
+            },
+        )
+        script = Script()
+        res = run(
+            gh=gh,
+            number=1,
+            root=repo,
+            cfg=cfg_for(repo),
+            principles=principles_of(repo),
+            client_factory=_factory(script),
+            gate_fact=fact,
+        )
+        assert bool(res.gate_covered) is covered
+        sent = json.dumps(script.requests) + json.dumps(script.approach_requests)
+        assert (listed in sent) is not covered, fact
+        assert "app/storage/fetch.py" in _bundle_paths(res)
+
+
+def test_covered_follows_what_reconcile_keeps_open():
+    """A file is covered while its gate finding is open or raised this round;
+    a dismissed gate finding covers nothing, so the line review judges the
+    file again."""
+    st = PRState()
+    m = gate_mod.Mismatch("drifted", 1, 1, "-a\n+b")
+    f = gate_mod.finding_for(CONFORMANCE_WF, m, "0.60.0")
+    g = gate_mod.finding_for(CHECKS_WF, m, "0.60.0")
+    gate_mod.reconcile(st, [f, g], 1)
+    both = {CONFORMANCE_WF: f.id, CHECKS_WF: g.id}
+    assert gate_mod.covered(st, gate_mod.Evaluation([f, g])) == both
+    # No usable fact, or a path not compared: still open, still covered.
+    assert gate_mod.covered(st, gate_mod.Evaluation(None)) == both
+    ev = gate_mod.Evaluation([f], unchecked=[CHECKS_WF])
+    assert gate_mod.covered(st, ev) == both
+    # Matching the render this round: closed, covers nothing.
+    assert gate_mod.covered(st, gate_mod.Evaluation([f])) == {CONFORMANCE_WF: f.id}
+    # Dismissed by a person: covers nothing, though the file still differs.
+    f.status, f.fixed_by = "wontfix", "dismissed"
+    assert gate_mod.covered(st, gate_mod.Evaluation([f, g])) == {CHECKS_WF: g.id}
+
+
+def test_a_gate_file_stays_out_of_line_review_while_its_gate_finding_is_open(
+    repo: Path, tmp_path: Path
+):
+    """A later round whose gate check cannot be used (the head moved since
+    the fact was read) leaves the gate finding open (gate.reconcile), so the
+    file it covers stays out of the line review too: a further edit to it does
+    not bring the second finding back."""
+    script = _line_review_of_the_gate_file()
+    gh, first = _review_mixed(
+        repo,
+        tmp_path,
+        script,
+        gate_fact=_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}),
+    )
+    [f] = state_of(first).open_findings()
+    more = WF_NEW + "# another tweak\n"
+    gh.head = GATE_H2
+    gh.diffs[("b0", GATE_H2)] = (
+        _diff_of(CONFORMANCE_WF, WF_OLD, more)
+        + _diff_of(CHECKS_WF, _MATCH_OLD, _MATCH_NEW)
+        + DIFF
+    )
+    gh.diffs[(GATE_H1, GATE_H2)] = _diff_of(CONFORMANCE_WF, WF_NEW, more)
+    gh.files[(CONFORMANCE_WF, GATE_H2)] = more
+    gh.files[(CHECKS_WF, GATE_H2)] = _MATCH_NEW
+    gh.files[("app/storage/fetch.py", GATE_H2)] = SRC_V2
+    gh.raw[("uv.lock", GATE_H2)] = _conformance_lock("0.61.0")
+    second = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        # Read at the earlier head: not usable for this one.
+        gate_fact=_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}),
+    )
+    assert second.gate is not None and second.gate.findings is None
+    assert state_of(second).open_findings() == [f]
+    assert second.gate_covered == {CONFORMANCE_WF: f.id}
+    assert CONFORMANCE_WF not in _bundle_paths(second)
+    assert "another tweak" not in json.dumps(script.requests)
+
+
 RENDER_SCRIPT = (
     Path(__file__).resolve().parents[1] / "connector_reviewer" / "gate_render.py"
 )
