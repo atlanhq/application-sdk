@@ -416,6 +416,22 @@ class TestSharedStoreSettings:
             {"s3_bucket": "b", "endpoint": "http://minio:9000"}
         )
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://s3.us-west-2.amazonaws.com",
+            "https://s3.cn-north-1.amazonaws.com.cn",
+        ],
+    )
+    def test_aws_endpoint_keeps_the_bucket_region_lookup(self, monkeypatch, endpoint):
+        """An AWS endpoint is still AWS S3: a bucket in another region needs
+        its own region to sign, so the lookup must still run."""
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        assert _cloud_module._needs_region_lookup(
+            {"s3_bucket": "b", "endpoint": endpoint}
+        )
+
     def test_partial_static_keys_warn_and_fall_back_to_ambient(self):
         with patch.object(_cloud_module, "_log") as mock_log:
             kwargs = self._s3_kwargs(

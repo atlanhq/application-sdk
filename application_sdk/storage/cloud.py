@@ -718,11 +718,15 @@ _S3_REGION_LOOKUP_TIMEOUT_SECONDS = 10.0
 def _needs_region_lookup(extra: dict[str, Any]) -> bool:
     """True when an S3 store has no region and talks to AWS S3 itself.
 
-    A custom endpoint (``extra["endpoint"]`` or the ``AWS_ENDPOINT_URL`` /
-    ``AWS_ENDPOINT`` env vars) is not AWS S3's own, so it gets no lookup.
+    A non-AWS ``extra["endpoint"]`` (MinIO, R2, ...) has no bucket region to
+    look up, so it gets no lookup; an AWS endpoint in ``extra["endpoint"]``
+    still does, since S3 needs the bucket's own region to sign for it. The
+    ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT`` env vars skip the lookup as before.
     """
+    from application_sdk._obstore_config import endpoint_is_aws  # noqa: PLC0415
+
     return not extra.get("region") and not (
-        (extra.get("endpoint") or "").strip()
+        not endpoint_is_aws((extra.get("endpoint") or "").strip())
         or os.environ.get("AWS_ENDPOINT_URL")
         or os.environ.get("AWS_ENDPOINT")
     )
