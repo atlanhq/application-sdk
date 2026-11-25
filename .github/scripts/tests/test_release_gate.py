@@ -444,7 +444,9 @@ def test_a_version_bump_needs_gate_check_but_no_review() -> None:
     assert _decide(BUMP, "success", bump).passes
     blocked = _decide(BUMP, "", bump)
     assert not blocked.passes
-    assert any("/gate-check" in line for line in blocked.lines)
+    assert any("/gate-check" in line for line in blocked.failed)
+    # The review duty passed: it is not reported as a second failure.
+    assert not any(line.startswith("Connector review") for line in blocked.failed)
 
 
 def test_an_ordinary_pr_has_only_the_review_duty() -> None:
@@ -513,10 +515,19 @@ def test_emit_writes_the_summary_and_annotates_a_failure(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     summary = tmp_path / "summary.md"
-    outcome = rg.Outcome(False, ("Connector review: no",))
+    outcome = rg.Outcome(
+        False,
+        ("Release gate: no", "Connector review: yes"),
+        ("Release gate: no",),
+    )
     assert rg.emit(outcome, rg.ReviewFacts(), str(summary)) == 1
-    assert "::error title=Release Gate::Connector review: no" in capsys.readouterr().out
-    assert "Release Gate failed" in summary.read_text()
+    out = capsys.readouterr().out
+    assert "::error title=Release Gate::Release gate: no" in out
+    assert "::error title=Release Gate::Connector review" not in out
+    assert "Connector review: yes" in out
+    text = summary.read_text()
+    assert "Release Gate failed" in text
+    assert "- ❌ Release gate: no" in text and "- ✅ Connector review: yes" in text
     assert rg.emit(rg.Outcome(True, ("ok",)), rg.ReviewFacts(), "") == 0
 
 

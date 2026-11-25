@@ -328,8 +328,11 @@ def decide_review(facts: ReviewFacts, head_sha: str) -> tuple[bool, str]:
 
 @dataclass(frozen=True)
 class Outcome:
+    """The verdict: one line per duty, and which of those lines failed."""
+
     passes: bool
     lines: tuple[str, ...]
+    failed: tuple[str, ...] = ()
 
 
 def decide(
@@ -342,16 +345,18 @@ def decide(
 ) -> Outcome:
     """Both duties: a release PR's gate-check, then the reviewer's verdict."""
     lines: list[str] = []
-    passes = True
+    failed: list[str] = []
+    duties: list[tuple[str, tuple[bool, str]]] = []
     release = decide_release(head_ref, labels, gate_check_state, pins)
     if release is not None:
-        ok, message = release
-        passes = passes and ok
-        lines.append(f"Release gate: {message}")
-    ok, message = decide_review(review, head_sha)
-    passes = passes and ok
-    lines.append(f"Connector review: {message}")
-    return Outcome(passes, tuple(lines))
+        duties.append(("Release gate", release))
+    duties.append(("Connector review", decide_review(review, head_sha)))
+    for name, (ok, message) in duties:
+        line = f"{name}: {message}"
+        lines.append(line)
+        if not ok:
+            failed.append(line)
+    return Outcome(not failed, tuple(lines), tuple(failed))
 
 
 def _cell(text: str, keep: int = 200) -> str:
@@ -364,7 +369,9 @@ def render_summary(outcome: Outcome, review: ReviewFacts) -> str:
     """The job summary: the verdict, then the reviewer's open findings."""
     head = "Release Gate passed" if outcome.passes else "Release Gate failed"
     out = [f"## {'✅' if outcome.passes else '❌'} {head}", ""]
-    out += [f"- {line}" for line in outcome.lines]
+    out += [
+        f"- {'❌' if line in outcome.failed else '✅'} {line}" for line in outcome.lines
+    ]
     if review.url:
         out += ["", f"Reviewer summary: {review.url}"]
     if review.findings and review.state != "success":
@@ -523,8 +530,10 @@ def run_gate(args: argparse.Namespace) -> int:  # pragma: no cover - CLI glue
 
 def emit(outcome: Outcome, review: ReviewFacts, summary_file: str) -> int:
     """Print the verdict, write the job summary, and return the exit code."""
+    # Only a failing duty is an error annotation: a release PR blocked on its
+    # gate-check still shows its review duty as passed, not as a second error.
     for line in outcome.lines:
-        print(line if outcome.passes else f"::error title=Release Gate::{line}")
+        print(f"::error title=Release Gate::{line}" if line in outcome.failed else line)
     if summary_file:
         try:
             with open(summary_file, "a", encoding="utf-8") as fh:
