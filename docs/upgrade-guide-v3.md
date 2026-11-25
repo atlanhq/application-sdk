@@ -496,6 +496,12 @@ class MyHandler(Handler):
 
 The `load()` method is removed — handler context (secrets, state) is injected automatically via `self.context`. Access credentials in handler methods with `await self.context.get_secret(name)`.
 
+### Connector-specific credential keys
+
+Do not patch `application_sdk.handler.service` to change how requests are normalized. Rebinding `service._CREDENTIAL_KEYS` or `service._normalize_credentials` is deprecated (removal in v4.0.0), reaches only the worker, and is flagged by conformance rules B001 and B010.
+
+When a v2 flat credential arrives (top-level `host`, `authType`, ...), the SDK lifts the shared keys into `input.credentials` and, on the worker and the API host alike, also every top-level field of your generated credential form (for example `kerberos` or an auth-type object such as `basic`). Declare the field in `contract/app.pkl` and regenerate; there is nothing to configure in code. A field the form declares never makes a body a credential on its own.
+
 ---
 
 ## Step 5: Upgrade the Application Entry Point
