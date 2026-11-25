@@ -445,7 +445,7 @@ The object-store backend is configured via Dapr component YAML at deploy time (s
 | Mode | Required fields |
 |------|----------------|
 | Static access key | `accessKey` + `secretKey` (+ optional `sessionToken` for temporary/STS-derived base creds) |
-| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `accessKey`/`secretKey`/`sessionToken` for base identity) |
+| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `externalId` for a trust policy with an `sts:ExternalId` condition, `accessKey`/`secretKey`/`sessionToken` for base identity) |
 | Instance profile / IRSA / env vars | Omit all credential fields |
 
 `boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras install nothing more. They are deprecated and removed in v4.0.0; drop them from `pyproject.toml` (conformance rule D017 warns on each).
@@ -472,6 +472,23 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 |------|----------------|
 | Inline service-account key | Any SA JSON field that includes `private_key` or `private_key_id` |
 | ADC / Workload Identity / metadata server | `bucket` + `project_id` only (no `private_key`) |
+
+### `CloudStore` (customer buckets)
+
+`CloudStore.from_credentials` reads the `csa-connectors-objectstore` credential (`authType`, `username`, `password`, `token`, `extra`) and builds its store through the same settings as the Dapr binding, so the same credentials give the same store on both paths. For S3:
+
+| Field | Effect |
+|-------|--------|
+| `username` + `password` | Static access key; `token` adds the STS session token for temporary credentials |
+| `extra.aws_role_arn` | AssumeRole via STS (+ optional `aws_external_id`, `aws_role_session_name`); `username`/`password`/`token` become the base identity |
+| `extra.endpoint` | S3-compatible endpoint (MinIO, R2, ...). Must be `https://`: CloudStore always uses TLS with certificate verification and refuses an `http://` endpoint. A non-AWS endpoint disables object tagging and skips the bucket-region lookup (an AWS endpoint keeps the lookup) |
+| `extra.force_path_style`, `extra.disable_tagging` | Path-style requests; explicit tagging override (wins over the non-AWS auto-detect) |
+| `extra.conditional_put`, `extra.copy_if_not_exists`, `extra.checksum_algorithm` | obstore's `aws_conditional_put`, `aws_copy_if_not_exists`, `aws_checksum_algorithm` |
+| `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
+
+ADLS also accepts `extra.endpoint` (`https://` only). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
+
+Store construction lives in `application_sdk/_obstore_config.py`: each front-end (the Dapr binding, `CloudStore`, the API host) fills an `S3StoreSettings`, `AzureStoreSettings` or `GCSStoreSettings`, and `build_*_store` is the only code that turns settings into obstore config. A fix to that translation reaches every path.
 
 ---
 

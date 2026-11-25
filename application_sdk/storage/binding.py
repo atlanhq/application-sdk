@@ -22,18 +22,24 @@ the infrastructure context, for all supported cloud backends:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+
+    from application_sdk._obstore_config import (
+        AzureStoreSettings,
+        GCSStoreSettings,
+        S3StoreSettings,
+    )
 
 #: ``{secret_name: {key: value}}`` — the shape Dapr's secret API returns, keyed
 #: by the ``secretKeyRef.name`` that asked for it.  Built by ``main.py`` from a
@@ -157,29 +163,6 @@ def _nonempty(meta: dict[str, str], *keys: str) -> str:
 def _coerce_bool(value: str) -> bool:
     """Coerce a Dapr metadata bool string to Python bool (case-insensitive)."""
     return value.strip().lower() in {"true", "1", "yes"}
-
-
-def _endpoint_is_aws(endpoint: str) -> bool:
-    """Return True when *endpoint* points to real AWS (or the empty string).
-
-    Handles every scheme form an endpoint may carry:
-    * ``https://s3.amazonaws.com`` — standard AWS public endpoint
-    * ``http://...`` — e.g. LocalStack over plain HTTP
-    * scheme-less ``host:port`` — e.g. ``minio.local:9000``
-    * SDK-internal URI forms: ``s3://``, ``objectstore://``, ``adls://``
-
-    Any endpoint whose hostname ends in ``.amazonaws.com`` or
-    ``.amazonaws.com.cn`` is treated as AWS. An absent/empty endpoint means
-    the caller is relying on the default AWS credential chain — also AWS.
-    Everything else (MinIO, Ceph, R2, B2, GCS-S3-interop, custom CNAMEs) is
-    treated as non-AWS and obstore's default object-tagging will be disabled.
-    """
-    if not endpoint:
-        return True  # no custom endpoint → real AWS
-    # Ensure urlparse can extract the hostname regardless of scheme.
-    normalised = endpoint if "//" in endpoint else f"//{endpoint}"
-    host = (urlparse(normalised).hostname or "").rstrip(".")
-    return host.endswith((".amazonaws.com", ".amazonaws.com.cn"))
 
 
 def _secret_ref_target(ref: dict) -> tuple[str, str]:
@@ -375,11 +358,10 @@ def is_binding_configured(
 def _build_s3_config(
     name: str,
     meta: dict[str, str],
-    sdk_client_options: dict[str, object],
-) -> tuple[str, dict[str, str], dict[str, object], object, dict[str, str] | None]:
-    """Translate S3 Dapr binding metadata into obstore S3Store constructor args.
+) -> tuple[S3StoreSettings, dict[str, str] | None]:
+    """Translate S3 Dapr binding metadata into :class:`S3StoreSettings`.
 
-    Returns *(bucket, config, client_options, credential_provider, put_attributes)*.
+    Returns *(settings, put_attributes)*.
 
     *put_attributes* is a ``{"Storage-Class": "<class>"}`` dict when
     ``storageClass`` is set in the binding metadata, or ``None`` otherwise.
@@ -387,12 +369,8 @@ def _build_s3_config(
     write through that store automatically receives the correct storage class
     as an obstore put attribute (requires obstore ≥ 0.10.0).
     """
+    from application_sdk._obstore_config import S3StoreSettings  # noqa: PLC0415
     from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
-
-    bucket = meta.get("bucket", "")
-    config: dict[str, str] = {}
-    client_options: dict[str, object] = dict(sdk_client_options)
-    credential_provider = None
 
     # Region: explicit metadata wins; otherwise fall back to the standard AWS
     # env vars. Dapr's Go binding leaves region resolution to the AWS SDK
@@ -405,63 +383,13 @@ def _build_s3_config(
         or os.environ.get("AWS_REGION", "")
         or os.environ.get("AWS_DEFAULT_REGION", "")
     )
-    if resolved_region:
-        config["aws_region"] = resolved_region
     endpoint = _nonempty(meta, "endpoint")
-    if endpoint:
-        config["aws_endpoint"] = endpoint
-        client_options["user_agent"] = "aws-sdk-go-v2 atlan-application-sdk"
-        # Match Dapr (and the Azure branch below): an http:// endpoint means
-        # plaintext, so infer allow_http from the scheme. obstore's reqwest
-        # client is https-only by default and rejects http at request-build time
-        # ("HTTP error: builder error") otherwise. An explicit disableSSL below
-        # still works and is now redundant for http endpoints.
-        if endpoint.lower().startswith("http://"):
-            client_options["allow_http"] = True
-    if _coerce_bool(meta.get("forcePathStyle", "")):
-        config["aws_virtual_hosted_style_request"] = "false"
-    if _coerce_bool(meta.get("disableSSL", "")):
-        client_options["allow_http"] = True
-    if _coerce_bool(meta.get("insecureSSL", "")):
-        client_options["allow_invalid_certificates"] = True
+    insecure = _coerce_bool(meta.get("insecureSSL", ""))
+    if insecure:
         _get_logger().warning(
             "insecureSSL=true disables certificate verification for S3 binding '%s'",
             name,
         )
-
-    # --- Object tagging ---------------------------------------------------
-    # obstore sends x-amz-tagging by default; many S3-compatible stores (B2,
-    # R2, GCS-S3-interop) hard-reject the header.  Auto-disable it for any
-    # non-AWS endpoint.  An explicit disableTagging field always takes precedence.
-    # Never log the resolved endpoint: on the secure k8s path it can come from
-    # the secret store, and emitting it would leak the value to WARNING logs.
-    if _nonempty(meta, "disableTagging"):
-        if _coerce_bool(meta["disableTagging"]):
-            config["aws_disable_tagging"] = "true"
-        elif not _endpoint_is_aws(endpoint):
-            _get_logger().warning(
-                "disableTagging=false on a non-AWS endpoint (endpoint_configured=%s) "
-                "— obstore will send x-amz-tagging which many S3-compatible stores "
-                "(B2, R2, GCS-interop) reject; set disableTagging=true to suppress "
-                "the header",
-                bool(endpoint),
-            )
-    elif not _endpoint_is_aws(endpoint):
-        config["aws_disable_tagging"] = "true"
-
-    # --- Optional pass-through overrides ----------------------------------
-    # These fields are new additions; absent fields leave the obstore default
-    # unchanged so existing customer configs are unaffected.
-    if _nonempty(meta, "conditionalPut"):
-        config["aws_conditional_put"] = meta["conditionalPut"]
-    if _nonempty(meta, "copyIfNotExists"):
-        config["aws_copy_if_not_exists"] = meta["copyIfNotExists"]
-    if _nonempty(meta, "checksumAlgorithm"):
-        config["aws_checksum_algorithm"] = meta["checksumAlgorithm"]
-    if _nonempty(meta, "serverSideEncryption"):
-        config["aws_server_side_encryption"] = meta["serverSideEncryption"]
-    if _nonempty(meta, "sseKmsKeyId"):
-        config["aws_sse_kms_key_id"] = meta["sseKmsKeyId"]
 
     if _nonempty(meta, "trustAnchorArn"):
         raise StorageConfigError(
@@ -469,55 +397,80 @@ def _build_s3_config(
             "use assumeRoleArn for STS or omit credentials for IRSA / instance-profile auth"
         )
 
+    access_key = _nonempty(meta, "accessKey")
+    secret_key = _nonempty(meta, "secretKey")
+    session_token = _nonempty(meta, "sessionToken")
+    credential_provider = None
     if _nonempty(meta, "assumeRoleArn"):
         from application_sdk.storage._credential_providers import (  # noqa: PLC0415
             make_s3_assume_role_provider,
         )
 
-        base_access_key = _nonempty(meta, "accessKey") or None
-        base_secret_key = _nonempty(meta, "secretKey") or None
-        base_session_token = _nonempty(meta, "sessionToken") or None
-        if bool(base_access_key) != bool(base_secret_key):
+        if bool(access_key) != bool(secret_key):
             _get_logger().warning(
                 "S3 binding '%s': assumeRoleArn requires both accessKey and "
                 "secretKey for base credentials; only one was set — "
                 "accessKey, secretKey, and sessionToken all ignored",
                 name,
             )
-            base_access_key = None
-            base_secret_key = None
-            base_session_token = None
+            access_key = secret_key = session_token = ""
 
         credential_provider = make_s3_assume_role_provider(
             role_arn=meta["assumeRoleArn"],
             session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
             # No region: see cloud.py's identical fix — resolved_region is for
-            # the data-plane config above, not the STS session.
-            base_access_key=base_access_key,
-            base_secret_key=base_secret_key,
-            base_session_token=base_session_token,
+            # the data-plane config, not the STS session.
+            base_access_key=access_key or None,
+            base_secret_key=secret_key or None,
+            base_session_token=session_token or None,
+            # Required when the role's trust policy has an sts:ExternalId
+            # condition; the provider drops a blank one.
+            external_id=_nonempty(meta, "externalId") or None,
         )
-    else:
-        access_key = _nonempty(meta, "accessKey")
-        secret_key = _nonempty(meta, "secretKey")
-        if access_key and secret_key:
-            config["aws_access_key_id"] = access_key
-            config["aws_secret_access_key"] = secret_key
-            if _nonempty(meta, "sessionToken"):
-                config["aws_session_token"] = meta["sessionToken"]
-        elif access_key or secret_key:
-            _get_logger().warning(
-                "S3 binding '%s': both accessKey and secretKey are required for "
-                "static credentials; only one was set — ignoring both and falling "
-                "back to the ambient credential chain",
-                name,
-            )
-        elif _nonempty(meta, "sessionToken"):
-            _get_logger().warning(
-                "S3 binding '%s': sessionToken requires accessKey + secretKey; "
-                "ignoring sessionToken and falling back to the ambient credential chain",
-                name,
-            )
+    elif access_key and secret_key:
+        pass
+    elif access_key or secret_key:
+        _get_logger().warning(
+            "S3 binding '%s': both accessKey and secretKey are required for "
+            "static credentials; only one was set — ignoring both and falling "
+            "back to the ambient credential chain",
+            name,
+        )
+        access_key = secret_key = session_token = ""
+    elif session_token:
+        _get_logger().warning(
+            "S3 binding '%s': sessionToken requires accessKey + secretKey; "
+            "ignoring sessionToken and falling back to the ambient credential chain",
+            name,
+        )
+        session_token = ""
+
+    settings = S3StoreSettings(
+        bucket=meta.get("bucket", ""),
+        region=resolved_region,
+        endpoint=endpoint,
+        # Dapr's Go binding identifies itself this way to custom endpoints.
+        user_agent="aws-sdk-go-v2 atlan-application-sdk" if endpoint else "",
+        allow_http=_coerce_bool(meta.get("disableSSL", "")),
+        allow_invalid_certificates=insecure,
+        force_path_style=_coerce_bool(meta.get("forcePathStyle", "")),
+        # An explicit disableTagging always wins over the non-AWS auto-detect.
+        disable_tagging=(
+            _coerce_bool(meta["disableTagging"])
+            if _nonempty(meta, "disableTagging")
+            else None
+        ),
+        access_key_id=access_key,
+        secret_access_key=secret_key,
+        session_token=session_token,
+        # Absent fields leave the obstore default unchanged.
+        conditional_put=_nonempty(meta, "conditionalPut"),
+        copy_if_not_exists=_nonempty(meta, "copyIfNotExists"),
+        checksum_algorithm=_nonempty(meta, "checksumAlgorithm"),
+        server_side_encryption=_nonempty(meta, "serverSideEncryption"),
+        sse_kms_key_id=_nonempty(meta, "sseKmsKeyId"),
+        credential_provider=credential_provider,
+    )
 
     # --- Storage class (obstore ≥ 0.10.0 put attribute) -------------------
     storage_class = _nonempty(meta, "storageClass")
@@ -525,39 +478,24 @@ def _build_s3_config(
         {"Storage-Class": storage_class} if storage_class else None
     )
 
-    return bucket, config, client_options, credential_provider, put_attributes
+    return settings, put_attributes
 
 
 def _build_azure_config(
     name: str,
     meta: dict[str, str],
-    sdk_client_options: dict[str, object],
-) -> tuple[str, dict[str, str], dict[str, object], object, dict[str, str] | None]:
-    """Translate Azure Blob Dapr binding metadata into obstore AzureStore constructor args.
+) -> tuple[AzureStoreSettings, dict[str, str] | None]:
+    """Translate Azure Blob Dapr binding metadata into :class:`AzureStoreSettings`.
 
-    Returns *(container, config, client_options, credential_provider, put_attributes)*.
+    Returns *(settings, put_attributes)*.
 
     *put_attributes* is ``{"x-ms-access-tier": "<tier>"}`` when ``storageClass``
     is set in the binding metadata, or ``None`` otherwise.
     """
+    from application_sdk._obstore_config import AzureStoreSettings  # noqa: PLC0415
     from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
 
-    account = meta.get("accountName", "")
-    container = meta.get("containerName", "")
-    az_config: dict[str, str] = {}
-    az_client_options: dict[str, object] = dict(sdk_client_options)
-    az_credential_provider = None
-
-    if account:
-        az_config["azure_storage_account_name"] = account
-    if _nonempty(meta, "endpoint"):
-        az_config["azure_storage_endpoint"] = meta["endpoint"]
-        if meta["endpoint"].lower().startswith("http://"):
-            az_client_options["allow_http"] = True
-    if _coerce_bool(meta.get("useEmulator", "")):
-        az_config["azure_storage_use_emulator"] = "true"
-        az_client_options["allow_http"] = True
-
+    authority_host = ""
     if _nonempty(meta, "azureEnvironment"):
         env_name = meta["azureEnvironment"]
         host = _AZURE_AUTHORITY_HOSTS.get(env_name)
@@ -566,7 +504,7 @@ def _build_azure_config(
                 f"[{name}] Unknown azureEnvironment {env_name!r}. "
                 f"Valid values: {', '.join(_AZURE_AUTHORITY_HOSTS)}"
             )
-        az_config["azure_storage_authority_host"] = host
+        authority_host = host
 
     tenant_id = _nonempty(meta, "azureTenantId", "tenantId")
     client_id = _nonempty(meta, "azureClientId", "clientId")
@@ -601,10 +539,13 @@ def _build_azure_config(
             name,
         )
 
+    # Exactly one auth mode's fields reach the settings.
+    credential_provider = None
+    federated_token_file = ""
     if account_key:
-        az_config["azure_storage_account_key"] = account_key
+        sas_token = tenant_id = client_id = client_secret = ""
     elif sas_token:
-        az_config["azure_storage_sas_key"] = sas_token
+        tenant_id = client_id = client_secret = ""
     elif cert_data or cert_file:
         if not tenant_id or not client_id:
             raise StorageConfigError(
@@ -616,34 +557,42 @@ def _build_azure_config(
 
         # azureCertificate must be PEM text; for binary PFX supply
         # azureCertificateFile pointing to a file on disk instead.
-        az_credential_provider = make_azure_certificate_provider(
+        credential_provider = make_azure_certificate_provider(
             tenant_id=tenant_id,
             client_id=client_id,
             certificate_path=cert_file or None,
             certificate_data=cert_data.encode() if cert_data else None,
             certificate_password=cert_password or None,
-            authority_host=az_config.get("azure_storage_authority_host"),
+            authority_host=authority_host or None,
         )
+        tenant_id = client_id = client_secret = ""
     elif tenant_id and client_id and client_secret:
-        az_config["azure_storage_tenant_id"] = tenant_id
-        az_config["azure_storage_client_id"] = client_id
-        az_config["azure_storage_client_secret"] = client_secret
+        pass
     elif tenant_id and client_id:
         # AKS Workload Identity: the AAD webhook injects AZURE_FEDERATED_TOKEN_FILE;
         # obstore picks it up when tenant_id + client_id are set with no secret.
-        az_config["azure_storage_tenant_id"] = tenant_id
-        az_config["azure_storage_client_id"] = client_id
-        if _nonempty(meta, "azureFederatedTokenFile"):
-            az_config["azure_storage_federated_token_file"] = meta[
-                "azureFederatedTokenFile"
-            ]
+        federated_token_file = _nonempty(meta, "azureFederatedTokenFile")
     elif client_id:
-        az_config["azure_storage_client_id"] = client_id
+        tenant_id = client_secret = ""
+    else:
+        tenant_id = client_id = client_secret = ""
 
-    if _nonempty(meta, "msiEndpoint"):
-        az_config["azure_storage_msi_endpoint"] = meta["msiEndpoint"]
-    if _nonempty(meta, "msiResourceId"):
-        az_config["azure_storage_msi_resource_id"] = meta["msiResourceId"]
+    settings = AzureStoreSettings(
+        container=meta.get("containerName", ""),
+        account_name=meta.get("accountName", ""),
+        endpoint=_nonempty(meta, "endpoint"),
+        use_emulator=_coerce_bool(meta.get("useEmulator", "")),
+        authority_host=authority_host,
+        account_key=account_key,
+        sas_key=sas_token,
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        federated_token_file=federated_token_file,
+        msi_endpoint=_nonempty(meta, "msiEndpoint"),
+        msi_resource_id=_nonempty(meta, "msiResourceId"),
+        credential_provider=credential_provider,
+    )
 
     # --- Storage class (Azure access tier) ------------------------------------
     storage_class = _nonempty(meta, "storageClass")
@@ -651,30 +600,24 @@ def _build_azure_config(
         {"x-ms-access-tier": storage_class} if storage_class else None
     )
 
-    return (
-        container,
-        az_config,
-        az_client_options,
-        az_credential_provider,
-        put_attributes,
-    )
+    return settings, put_attributes
 
 
 def _build_gcs_config(
     meta: dict[str, str],
-) -> tuple[str, dict[str, str], dict[str, str] | None]:
-    """Translate GCS Dapr binding metadata into obstore GCSStore constructor args.
+) -> tuple[GCSStoreSettings, dict[str, str] | None]:
+    """Translate GCS Dapr binding metadata into :class:`GCSStoreSettings`.
 
-    Returns *(bucket, config, put_attributes)*.
+    Returns *(settings, put_attributes)*.
 
     *put_attributes* is ``{"X-Goog-Storage-Class": "<class>"}`` when ``storageClass``
     is set in the binding metadata, or ``None`` otherwise.
     """
     import orjson  # noqa: PLC0415 — defensive: keep inline
 
-    bucket = meta.get("bucket", "")
-    gcs_config: dict[str, str] = {}
+    from application_sdk._obstore_config import GCSStoreSettings  # noqa: PLC0415
 
+    service_account_key = ""
     # Build service-account JSON only when actual credential material is
     # supplied.  ``project_id`` alone is not credential material — daprd's
     # gcp-bucket binding schema requires ``project_id`` in component
@@ -689,7 +632,7 @@ def _build_gcs_config(
         # templating from K8s secrets can produce literal two-char "\n".
         if "private_key" in sa_data:
             sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
-        gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
+        service_account_key = orjson.dumps(sa_data).decode()
 
     # --- Storage class --------------------------------------------------------
     storage_class = _nonempty(meta, "storageClass")
@@ -697,7 +640,12 @@ def _build_gcs_config(
         {"X-Goog-Storage-Class": storage_class} if storage_class else None
     )
 
-    return bucket, gcs_config, put_attributes
+    return (
+        GCSStoreSettings(
+            bucket=meta.get("bucket", ""), service_account_key=service_account_key
+        ),
+        put_attributes,
+    )
 
 
 def _adc_is_external_account() -> bool:
@@ -733,6 +681,31 @@ def _adc_is_external_account() -> bool:
             exc_info=True,
         )
         return False
+
+
+def _with_gcs_adc_provider(settings: GCSStoreSettings) -> GCSStoreSettings:
+    """*settings* with a google-auth credential provider when ADC needs one.
+
+    Only Workload Identity Federation (``external_account``) ADC needs it:
+    obstore's built-in GCS credential-file decoder rejects ``external_account``
+    (GitHub OIDC → GCP) but handles every other ADC subtype (service-account
+    key file, authorized_user, GKE metadata server) on its own via
+    ``config=None``. Gating on this keeps the common ADC path zero-network, so
+    hermetic unit/emulator tests don't resolve credentials. A service-account
+    key or an explicit provider is left untouched. Shared by
+    the Dapr binding and ``CloudStore`` so both resolve keyless GCS the same way.
+    """
+    if (
+        settings.service_account_key
+        or settings.credential_provider is not None
+        or not _adc_is_external_account()
+    ):
+        return settings
+    from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+        make_gcs_adc_provider,
+    )
+
+    return dataclasses.replace(settings, credential_provider=make_gcs_adc_provider())
 
 
 def create_store_from_binding_with_put_attrs(
@@ -841,67 +814,27 @@ def _create_store_core(
         return create_local_store(root_path), None
 
     # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig so
-    # timeouts and pool sizes are sized for GB-class transfers.  Store creation
-    # (including logging and retry wiring) is delegated to make_*_store in
+    # timeouts and pool sizes are sized for GB-class transfers.  Translating the
+    # settings into obstore config is delegated to build_*_store in
     # application_sdk/_obstore_config.py — the single source of truth shared with
     # cloud.py and the API host.
     from application_sdk._obstore_config import (  # noqa: PLC0415
-        make_azure_store,
-        make_gcs_store,
-        make_s3_store,
-        obstore_client_options,
+        build_azure_store,
+        build_gcs_store,
+        build_s3_store,
     )
 
-    sdk_client_options = obstore_client_options()
-
     if store_kind == "s3":
-        bucket, config, client_options, credential_provider, put_attrs = (
-            _build_s3_config(name, meta, sdk_client_options)
-        )
-        store = make_s3_store(
-            bucket,
-            config if config else None,
-            client_options=client_options,
-            credential_provider=credential_provider,
-        )
-        return store, put_attrs
+        s3_settings, put_attrs = _build_s3_config(name, meta)
+        return build_s3_store(s3_settings), put_attrs
 
     if store_kind == "azure":
-        container, az_config, az_client_options, az_credential_provider, put_attrs = (
-            _build_azure_config(name, meta, sdk_client_options)
-        )
-        store = make_azure_store(
-            container,
-            az_config if az_config else None,
-            client_options=az_client_options,
-            credential_provider=az_credential_provider,
-        )
-        return store, put_attrs
+        az_settings, put_attrs = _build_azure_config(name, meta)
+        return build_azure_store(az_settings), put_attrs
 
     if store_kind == "gcs":
-        bucket, gcs_config, put_attrs = _build_gcs_config(meta)
-        gcs_credential_provider = None
-        # Only Workload Identity Federation (`external_account`) ADC needs the
-        # google-auth provider: obstore's built-in GCS credential-file decoder
-        # rejects `external_account` (GitHub OIDC → GCP) but handles every other
-        # ADC subtype (service-account key file, authorized_user, GKE metadata
-        # server) on its own via ``config=None``. Gating on this keeps the common
-        # ADC path zero-network (so hermetic unit/emulator tests don't resolve
-        # credentials), and only reaches for google-auth when obstore can't cope.
-        if not gcs_config and _adc_is_external_account():
-            from application_sdk.storage._credential_providers import (  # noqa: PLC0415
-                make_gcs_adc_provider,
-            )
-
-            gcs_credential_provider = make_gcs_adc_provider()
-        store = make_gcs_store(
-            bucket,
-            # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
-            gcs_config if gcs_config else None,
-            client_options=sdk_client_options,
-            credential_provider=gcs_credential_provider,
-        )
-        return store, put_attrs
+        gcs_settings, put_attrs = _build_gcs_config(meta)
+        return build_gcs_store(_with_gcs_adc_provider(gcs_settings)), put_attrs
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
 

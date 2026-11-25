@@ -10,6 +10,33 @@
       "symbol": "APP_CONTEXT_ERROR"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_azure_store is deprecated; use build_azure_store with an AzureStoreSettings, which applies the shared endpoint and credential rules \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_azure_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_gcs_store is deprecated; use build_gcs_store with a GCSStoreSettings \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_gcs_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_s3_store is deprecated; use build_s3_store with an S3StoreSettings, which applies the shared endpoint, tagging and credential rules \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_s3_store"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "ARTIFACT_SCHEMAS_STEM is deprecated; use application_sdk.common._generated_tree.ARTIFACT_SCHEMAS_STEM \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",

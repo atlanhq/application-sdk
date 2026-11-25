@@ -26,8 +26,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk._obstore_config import (
-    make_azure_store,
-    make_s3_store,
+    AzureStoreSettings,
+    S3StoreSettings,
+    build_azure_store,
+    build_s3_store,
     obstore_client_options,
 )
 from application_sdk.handler import (
@@ -82,16 +84,16 @@ def _http_options() -> dict[str, object]:
 
 def _minio(bucket: str) -> HostObjectStore:
     require_reachable(f"{MINIO_ENDPOINT}/minio/health/live", "MinIO")
-    store = make_s3_store(
-        bucket,
-        {
-            "aws_endpoint": MINIO_ENDPOINT,
-            "aws_region": "us-east-1",
-            "aws_access_key_id": _S3_USER,
-            "aws_secret_access_key": _S3_PASS,
-            "aws_virtual_hosted_style_request": "false",
-            "aws_disable_tagging": "true",
-        },
+    store = build_s3_store(
+        S3StoreSettings(
+            bucket=bucket,
+            endpoint=MINIO_ENDPOINT,
+            region="us-east-1",
+            access_key_id=_S3_USER,
+            secret_access_key=_S3_PASS,
+            force_path_style=True,
+            disable_tagging=True,
+        ),
         label="host-s3",
         client_options=_http_options(),  # type: ignore[arg-type]
     )
@@ -100,13 +102,13 @@ def _minio(bucket: str) -> HostObjectStore:
 
 def _azurite(container: str) -> HostObjectStore:
     require_reachable(f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}", "Azurite")
-    store = make_azure_store(
-        container,
-        {
-            "azure_storage_account_name": AZURITE_ACCOUNT,
-            "azure_storage_account_key": _AZ_KEY,
-            "azure_storage_endpoint": f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}",
-        },
+    store = build_azure_store(
+        AzureStoreSettings(
+            container=container,
+            account_name=AZURITE_ACCOUNT,
+            account_key=_AZ_KEY,
+            endpoint=f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}",
+        ),
         label="host-azure",
         client_options=_http_options(),  # type: ignore[arg-type]
     )
