@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from application_sdk.common._env import env_str as _env_str
 from application_sdk.infrastructure._bootstrap import _create_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -224,7 +225,13 @@ async def run_dev_combined(
     async with (
         embedded_dapr(app_id=app_name) as _dapr,
         embedded_runtime(
-            namespace=temporal_namespace or "default",
+            # Same precedence AppConfig applies (kwarg → ATLAN_TEMPORAL_NAMESPACE
+            # → ATLAN_WORKFLOW_NAMESPACE → "default"). The runtime's namespace is
+            # passed on to _build_dev_config explicitly, so an env var skipped
+            # here would never be applied.
+            namespace=temporal_namespace
+            or _env_str("ATLAN_TEMPORAL_NAMESPACE", "")
+            or _env_str("ATLAN_WORKFLOW_NAMESPACE", "default"),
             temporal_ui=temporal_ui,
             temporal_ui_port=temporal_ui_port,
         ) as _rt,
@@ -322,10 +329,23 @@ async def _run_dev_combined_inner(
                     json=credentials,
                     timeout=10,
                 )
+                if not resp.is_success:
+                    logger.error(
+                        "Credential provisioning failed: POST /workflows/v1/dev/local-vault "
+                        "returned HTTP %d; not starting the workflow",
+                        resp.status_code,
+                    )
+                    return
                 result = resp.json()
                 credential_guid = result.get("data", {}).get(
                     "credential_guid"
                 ) or result.get("credential_guid")
+                if not credential_guid:
+                    logger.error(
+                        "Credential provisioning returned no credential_guid; "
+                        "not starting the workflow"
+                    )
+                    return
                 logger.info("Auto-provisioned credentials: guid=%s", credential_guid)
 
                 # Step 2: Start workflow (mimics Heracles/AE)
@@ -336,6 +356,12 @@ async def _run_dev_combined_inner(
                     json=workflow_input,
                     timeout=30,
                 )
+                if not resp.is_success:
+                    logger.error(
+                        "Workflow start failed: POST /workflows/v1/start returned HTTP %d",
+                        resp.status_code,
+                    )
+                    return
                 start_result = resp.json()
                 wf_data = start_result.get("data", {})
                 workflow_id = wf_data.get("workflow_id", "")

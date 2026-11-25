@@ -369,3 +369,142 @@ class TestRunDevCombinedProvisioning:
             await captured[0]
 
         assert fake_client.post.await_count == 2
+
+    @staticmethod
+    async def _drive_provisioning(
+        monkeypatch: pytest.MonkeyPatch, post_responses: list[MagicMock]
+    ) -> tuple[AsyncMock, MagicMock]:
+        """Run ``_provision_and_start`` against canned POST responses."""
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        captured: list[object] = []
+
+        def _capture_task(coro):
+            captured.append(coro)
+            return MagicMock()
+
+        fake_client = AsyncMock()
+        fake_client.__aenter__.return_value = fake_client
+        fake_client.__aexit__.return_value = None
+        fake_client.get = AsyncMock(return_value=MagicMock(status_code=200))
+        fake_client.post = AsyncMock(side_effect=post_responses)
+
+        with (
+            patch(
+                "application_sdk.dev._runner._create_infrastructure",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch("application_sdk.main.run_combined_mode", new_callable=AsyncMock),
+            private_stdlib("application_sdk.dev._runner", "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_task", side_effect=_capture_task),
+            patch("httpx.AsyncClient", return_value=fake_client),
+            patch("application_sdk.dev._runner.logger") as log,
+        ):
+            await run_dev_combined(_fake_app_class(), credentials={"host": "h"})
+            assert len(captured) == 1
+            await captured[0]
+        return fake_client, log
+
+    async def test_rejected_provisioning_does_not_start_the_workflow(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A 403 from local-vault (non-local deployment) stops before /start."""
+        rejected = MagicMock(status_code=403, is_success=False)
+        rejected.json = MagicMock(return_value={"detail": "forbidden"})
+
+        client, log = await self._drive_provisioning(monkeypatch, [rejected])
+
+        assert client.post.await_count == 1
+        assert "HTTP %d" in log.error.call_args.args[0]
+        assert 403 in log.error.call_args.args
+        assert "Workflow started" not in capsys.readouterr().out
+
+    async def test_provisioning_without_a_guid_does_not_start_the_workflow(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        empty = MagicMock(status_code=200, is_success=True)
+        empty.json = MagicMock(return_value={"data": {}})
+
+        client, log = await self._drive_provisioning(monkeypatch, [empty])
+
+        assert client.post.await_count == 1
+        assert "no credential_guid" in log.error.call_args.args[0]
+
+    async def test_failed_start_is_not_reported_as_started(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        cred = MagicMock(status_code=200, is_success=True)
+        cred.json = MagicMock(return_value={"credential_guid": "g1"})
+        failed = MagicMock(status_code=500, is_success=False)
+
+        client, log = await self._drive_provisioning(monkeypatch, [cred, failed])
+
+        assert client.post.await_count == 2
+        assert "Workflow start failed" in log.error.call_args.args[0]
+        failed.json.assert_not_called()
+        assert "Workflow started" not in capsys.readouterr().out
+
+
+class TestRunDevCombinedNamespace:
+    """The embedded runtime boots in the namespace AppConfig would resolve."""
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            ({"ATLAN_TEMPORAL_NAMESPACE": "ci"}, "ci"),
+            ({"ATLAN_WORKFLOW_NAMESPACE": "legacy"}, "legacy"),
+            (
+                {
+                    "ATLAN_TEMPORAL_NAMESPACE": "ci",
+                    "ATLAN_WORKFLOW_NAMESPACE": "legacy",
+                },
+                "ci",
+            ),
+            ({}, "default"),
+        ],
+    )
+    async def test_namespace_env_vars_reach_the_embedded_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        _stub_embedded_daemons: list[dict[str, object]],
+        env: dict[str, str],
+        expected: str,
+    ) -> None:
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        monkeypatch.delenv("ATLAN_TEMPORAL_NAMESPACE", raising=False)
+        monkeypatch.delenv("ATLAN_WORKFLOW_NAMESPACE", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        with (
+            patch(
+                "application_sdk.dev._runner._create_infrastructure",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch("application_sdk.main.run_combined_mode", new_callable=AsyncMock),
+        ):
+            await run_dev_combined(_fake_app_class())
+
+        assert _stub_embedded_daemons[-1]["namespace"] == expected
+
+    async def test_explicit_namespace_beats_the_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        _stub_embedded_daemons: list[dict[str, object]],
+    ) -> None:
+        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        monkeypatch.setenv("ATLAN_TEMPORAL_NAMESPACE", "ci")
+        with (
+            patch(
+                "application_sdk.dev._runner._create_infrastructure",
+                new_callable=AsyncMock,
+                return_value=MagicMock(),
+            ),
+            patch("application_sdk.infrastructure.context.set_infrastructure"),
+            patch("application_sdk.main.run_combined_mode", new_callable=AsyncMock),
+        ):
+            await run_dev_combined(_fake_app_class(), temporal_namespace="kwarg")
+
+        assert _stub_embedded_daemons[-1]["namespace"] == "kwarg"

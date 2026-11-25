@@ -310,6 +310,12 @@ class TestCreateInfrastructureEventBinding:
 
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        # _create_infrastructure awaits the sidecar before anything else; with a
+        # non-local ATLAN_DEPLOYMENT_NAME the real wait polls localhost:3500.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.wait_for_dapr_sidecar",
+            AsyncMock(),
+        )
 
     async def test_event_binding_created_when_component_registered(
         self,
@@ -376,6 +382,12 @@ class TestCreateInfrastructureUpstreamStore:
 
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
+        # _create_infrastructure awaits the sidecar before anything else; with a
+        # non-local ATLAN_DEPLOYMENT_NAME the real wait polls localhost:3500.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.wait_for_dapr_sidecar",
+            AsyncMock(),
+        )
 
     async def test_upstream_storage_none_when_optional_helper_returns_none(
         self,

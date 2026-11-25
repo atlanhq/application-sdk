@@ -186,11 +186,13 @@ def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
     if budget is None:
         return
     # A disabled post-drain deadline (<= 0) is unbounded; count the derived
-    # value so the check still reflects what the grace was split for.
+    # value so the check still reflects what the grace was split for, and
+    # print the value counted so the warning's sum adds up.
+    counted_post_drain = post_drain if post_drain > 0 else budget.post_drain_seconds
     total = (
         SHUTDOWN_DRAIN_DELAY_SECONDS
         + drain
-        + (post_drain if post_drain > 0 else budget.post_drain_seconds)
+        + counted_post_drain
         # Kept back for daprd's stop after the process exits; eating into it
         # leaves the sidecar to be SIGKILLed.
         + budget.headroom_seconds
@@ -203,7 +205,7 @@ def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
             "overrides to derive them from the grace",
             SHUTDOWN_DRAIN_DELAY_SECONDS,
             drain,
-            post_drain,
+            counted_post_drain,
             budget.headroom_seconds,
             total,
             SHUTDOWN_GRACE_SECONDS_ENV,

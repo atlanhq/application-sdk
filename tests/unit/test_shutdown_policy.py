@@ -170,6 +170,20 @@ class TestLogShutdownBudget:
         log.warning.assert_called_once()
         assert 33 in log.warning.call_args.args
 
+    def test_overrun_with_disabled_post_drain_prints_the_counted_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A disabled post-drain deadline (0) is counted as the derived 8 s, and
+        the warning prints 8 so its sum adds up: 5 + 18 + 8 + 2 = 33."""
+        monkeypatch.setenv("ATLAN_SHUTDOWN_GRACE_SECONDS", "30")
+        monkeypatch.setenv("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "18")
+        monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+        with patch("application_sdk._shutdown_policy.logger") as log:
+            _log_shutdown_budget()
+        _, delay, drain, post_drain, headroom, total, *_ = log.warning.call_args.args
+        assert post_drain == 8
+        assert delay + drain + post_drain + headroom == total == 33
+
     def test_derived_bounds_fit_the_grace(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

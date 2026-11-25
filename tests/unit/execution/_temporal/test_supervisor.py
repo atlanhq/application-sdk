@@ -256,12 +256,18 @@ class TestRunWorkerWithRestart:
         # in between, so once it is drawn the supervisor is about to wait on it.
         backing_off = asyncio.Event()
 
-        def long_backoff(*_a: Any) -> float:
-            backing_off.set()
-            return 10.0
+        class _LongBackoff:
+            # Stands in for the supervisor's own ``Backoff`` reference, so the
+            # process-global ``random`` module stays untouched.
+            def __init__(self, **_kwargs: float) -> None:
+                pass
+
+            def delay(self, _attempt: int) -> float:
+                backing_off.set()
+                return 10.0
 
         monkeypatch.setattr(
-            "application_sdk.common.backoff.random.uniform", long_backoff
+            "application_sdk.execution._temporal.supervisor.Backoff", _LongBackoff
         )
         shutdown = asyncio.Event()
         calls = {"n": 0}
