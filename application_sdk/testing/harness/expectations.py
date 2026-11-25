@@ -69,6 +69,7 @@ __all__ = [
     "LineageEdge",
     "LineageEdgeCounts",
     "LineageEdgeRead",
+    "LocatedName",
     "Present",
     "SampleRead",
     "Unreadable",
@@ -113,9 +114,31 @@ class Unreadable:
 #: One per-type count, or the fact that it could not be read.
 CountRead: TypeAlias = Union[int, Unreadable]
 
+@dataclass(frozen=True, slots=True)
+class LocatedName:
+    """One sampled qualified name, with the qualified names of its ancestors.
+
+    The location check counts depth by splitting a qualified name on ``/``,
+    which reads one level too deep for every ``/`` inside a name: a table named
+    ``a/b``, or one under a schema named ``a/b``. An asset carries its ancestors'
+    qualified names as attributes (``databaseQualifiedName``,
+    ``schemaQualifiedName``, ...), and each is an exact prefix of its own, so
+    together they give the real segment boundaries without parsing names.
+
+    Attributes:
+        qualified_name: The sampled asset's qualified name.
+        ancestors: Its ancestors' qualified names, outermost first. Empty when
+            none were read, which leaves the plain ``/`` count as the verdict.
+    """
+
+    qualified_name: str
+    ancestors: tuple[str, ...] = ()
+
+
 #: One per-type sample of qualified names, or the fact that it could not be
-#: read. ``Sequence[str]`` rather than ``list[str]`` so a caller may pass a tuple.
-SampleRead: TypeAlias = Union[Sequence[str], Unreadable]
+#: read. ``Sequence`` rather than ``list`` so a caller may pass a tuple. A bare
+#: ``str`` is a name with no ancestors read.
+SampleRead: TypeAlias = Union[Sequence[Union[str, LocatedName]], Unreadable]
 
 
 # ---------------------------------------------------------------------------
@@ -818,29 +841,35 @@ def evaluate_locations(
         if isinstance(sample, Unreadable):
             findings.append(_unreadable(type_name, sample, checking="depth"))
             continue
-        for qualified_name in sample:
+        for entry in sample:
             findings.extend(
-                _evaluate_one_location(
-                    type_name, qualified_name, prefix=prefix, depth=depth
-                )
+                _evaluate_one_location(type_name, entry, prefix=prefix, depth=depth)
             )
     return findings
 
 
 def _evaluate_one_location(
-    type_name: str, qualified_name: str, *, prefix: str, depth: int
+    type_name: str, sample: str | LocatedName, *, prefix: str, depth: int
 ) -> Sequence[Finding]:
     """Check one sampled qualified name against the connection prefix and depth.
 
+    The ``/`` count decides, except when it reads too deep and the sample
+    carries its ancestors' qualified names: then the ancestor boundaries decide
+    (see :func:`_ancestor_depth`). A name at the declared depth never reads them.
+
     Args:
         type_name: Asset type the sample belongs to.
-        qualified_name: The sampled qualified name.
+        sample: The sampled qualified name, with or without its ancestors.
         prefix: Connection qualified name with its trailing separator.
         depth: Segments the name must carry below ``prefix``.
 
     Returns:
         At most one finding.
     """
+    if isinstance(sample, LocatedName):
+        qualified_name, ancestors = sample.qualified_name, sample.ancestors
+    else:
+        qualified_name, ancestors = sample, ()
     if not qualified_name.startswith(prefix):
         return (
             Finding(
@@ -857,6 +886,9 @@ def _evaluate_one_location(
     # conventionally don't end in "/", so this is defensive.)
     tail = qualified_name[len(prefix) :].rstrip("/")
     below = tail.split("/") if tail else []
+    if len(below) > depth and ancestors:
+        if _ancestor_depth(qualified_name, ancestors, prefix=prefix) == depth:
+            return ()
     if len(below) != depth:
         return (
             Finding(
@@ -869,6 +901,35 @@ def _evaluate_one_location(
             ),
         )
     return ()
+
+
+def _ancestor_depth(
+    qualified_name: str, ancestors: Sequence[str], *, prefix: str
+) -> int | None:
+    """Levels below the connection, counted along the ancestor boundaries.
+
+    Walks connection -> each ancestor -> the asset. Every step must start with
+    the previous qualified name plus ``/`` and add something after it, so a
+    ``/`` inside a name is part of one step rather than a level of its own. An
+    ancestor equal to the asset's own name (a view may carry its own
+    ``viewQualifiedName``) is not a level and is passed over.
+
+    Args:
+        qualified_name: The sampled asset's qualified name.
+        ancestors: Its ancestors' qualified names, outermost first.
+        prefix: Connection qualified name with its trailing separator.
+
+    Returns:
+        The number of steps, or ``None`` when a boundary does not line up, so
+        the caller reports the ``/`` count as before.
+    """
+    previous = prefix.rstrip("/")
+    levels = [a for a in ancestors if a and a != qualified_name]
+    for boundary in (*levels, qualified_name):
+        if not boundary.startswith(previous + "/") or len(boundary) == len(previous) + 1:
+            return None
+        previous = boundary
+    return len(levels) + 1
 
 
 def evaluate_attributes(

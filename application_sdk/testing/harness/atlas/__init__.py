@@ -58,6 +58,7 @@ from application_sdk.testing.harness.expectations import (
     AssetRef,
     LineageEdge,
     LineageEdgeCounts,
+    LocatedName,
 )
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
@@ -89,6 +90,7 @@ Reading: TypeAlias = Union[Settled[T], Indeterminate[T]]
 __all__ = [
     "ADMIN_ROLE_NAME",
     "DEFAULT_TYPE_NAMES",
+    "SQL_QN_ANCESTOR_ATTRIBUTES",
     "AdminIdentity",
     # Re-exported from ``harness.expectations``, where it has to live so the
     # evaluator can name it without importing this module: it is what
@@ -97,6 +99,7 @@ __all__ = [
     "AssetAttributes",
     "AssetRef",
     "LineageEdgeCounts",
+    "LocatedName",
     "Reading",
     "admin_identity",
     "atlas_client",
@@ -109,6 +112,7 @@ __all__ = [
     "poll_for_connection",
     "read_asset_attributes",
     "sample_asset_attributes",
+    "sample_located_names",
     "sample_qualified_names",
     # Leaf
     "UnknownConnectorTypeError",
@@ -593,11 +597,6 @@ async def count_total_assets(
     return Settled(label=name, attempts=attempts, elapsed=elapsed, value=total)
 
 
-# How many hits per wanted sample :func:`sample_qualified_names` asks for, so a
-# hit it skips is replaced from the same page.
-_SAMPLE_OVERFETCH = 3
-
-
 async def sample_qualified_names(
     client: AsyncAtlanClient,
     connection_qualified_name: str,
@@ -614,10 +613,6 @@ async def sample_qualified_names(
     asset" field the Atlan UI filters on, and is required to be populated on
     every asset — so the query matches on it directly, not just the QN path
     prefix, to sample the assets exactly as the product surfaces them.
-
-    An asset whose own ``name`` contains ``/`` is never sampled: depth is
-    counted by splitting the qualified name on ``/``, so such a name reads one
-    level too deep however correctly it is nested.
 
     Args:
         client: An open client from :func:`atlas_client`.
@@ -653,10 +648,8 @@ async def sample_qualified_names(
             .where(Asset.TYPE_NAME.eq(type_name))
             .include_on_results(Asset.QUALIFIED_NAME)
             .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
-            .include_on_results(Asset.NAME)
         ).to_request()
-        # Over-fetch so a skipped hit (below) does not shrink the sample.
-        request.dsl.size = per_type * _SAMPLE_OVERFETCH
+        request.dsl.size = per_type
         results = await client.asset.search(request)
         page = results.current_page() or []
         # Asset.qualified_name is str | None; the `if qn` narrows it to str so
@@ -665,15 +658,112 @@ async def sample_qualified_names(
         qns: list[str] = []
         for asset in page:
             qn = asset.qualified_name
-            # The location check counts depth by splitting the qualified name on
-            # "/", so an asset whose own name holds a "/" (a SQL table may be
-            # named `a/b`) reads one level too deep. It cannot be graded, so it
-            # is not sampled.
-            if qn and "/" not in (asset.name or ""):
+            if qn:
                 qns.append(qn)
             if len(qns) >= per_type:
                 break
         return qns
+
+    try:
+        sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))
+    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
+        return _unreadable(label, started, error)
+    name, attempts, elapsed = _one_shot(label, started)
+    return Settled(
+        label=name,
+        attempts=attempts,
+        elapsed=elapsed,
+        value=dict(zip(type_names, sampled, strict=True)),
+    )
+
+
+#: The ancestor qualified-name attributes of the SQL hierarchy, outermost first.
+#: Each entry is one level; its names are alternatives, the first one an asset
+#: carries is read (a column's parent is a table or a view). A level an asset
+#: does not carry is passed over.
+SQL_QN_ANCESTOR_ATTRIBUTES: tuple[tuple[str, ...], ...] = (
+    ("databaseQualifiedName",),
+    ("schemaQualifiedName",),
+    ("tableQualifiedName", "viewQualifiedName"),
+)
+
+
+async def sample_located_names(
+    client: AsyncAtlanClient,
+    connection_qualified_name: str,
+    type_names: Sequence[str],
+    *,
+    ancestor_attributes: Sequence[Sequence[str]] = SQL_QN_ANCESTOR_ATTRIBUTES,
+    per_type: int = 3,
+) -> Reading[Mapping[str, Sequence[LocatedName]]]:
+    """Sample up to *per_type* qualified names per type, with their ancestors'.
+
+    :func:`sample_qualified_names` with the ancestor qualified names read in the
+    same search, one request per type. The location check counts depth by
+    splitting a name on ``/``; when that reads too deep, these are the real
+    segment boundaries (see
+    :class:`~application_sdk.testing.harness.expectations.LocatedName`).
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        connection_qualified_name: Connection prefix to sample under.
+        type_names: Atlan type names to sample.
+        ancestor_attributes: One entry per ancestor level, outermost first, each
+            naming the attributes that may hold that level's qualified name.
+            Defaults to :data:`SQL_QN_ANCESTOR_ATTRIBUTES`.
+        per_type: How many names to sample per type.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying type
+        name -> the sampled names, or
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate` when the
+        search could not be read, for the reason given on
+        :func:`sample_qualified_names`.
+    """
+    from pyatlan.model.assets import Asset  # noqa: PLC0415
+    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+    label = f"located-name samples under {connection_qualified_name}"
+    started = time.monotonic()
+    if not type_names:
+        name, attempts, elapsed = _one_shot(label, started)
+        return Settled(label=name, attempts=attempts, elapsed=elapsed, value={})
+    prefix = f"{connection_qualified_name}/"
+    connection_qn = connection_qualified_name
+    levels = tuple(tuple(level) for level in ancestor_attributes)
+    attributes = tuple(dict.fromkeys(a for level in levels for a in level))
+
+    async def _sample_one(type_name: str) -> list[LocatedName]:
+        builder = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .where(Asset.QUALIFIED_NAME.startswith(prefix))
+            .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
+            .where(Asset.TYPE_NAME.eq(type_name))
+            .include_on_results(Asset.QUALIFIED_NAME)
+            .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+        )
+        for attribute in attributes:
+            builder = builder.include_on_results(attribute)
+        request = builder.to_request()
+        request.dsl.size = per_type
+        results = await client.asset.search(request)
+        sampled: list[LocatedName] = []
+        for asset in results.current_page() or []:
+            qualified_name = asset.qualified_name
+            if not qualified_name:
+                continue
+            values = _returned_attributes(asset, attributes)
+            ancestors = tuple(
+                found
+                for level in levels
+                if (found := next((v for a in level if (v := values.get(a))), None))
+                and isinstance(found, str)
+            )
+            sampled.append(LocatedName(qualified_name, ancestors))
+            if len(sampled) >= per_type:
+                break
+        return sampled
 
     try:
         sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))

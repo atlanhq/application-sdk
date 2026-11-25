@@ -161,6 +161,7 @@ from application_sdk.testing.harness.expectations import (
     Finding,
     LineageEdge,
     LineageEdgeRead,
+    LocatedName,
     SampleRead,
     Unreadable,
     evaluate_attributes,
@@ -1308,13 +1309,22 @@ class BaseE2ETest:
     #     type. (The harness folds these types into its count-poll wait, so the
     #     samples are read AFTER ES indexes them, but a genuinely-zero type is
     #     still only surfaced by the floor.)
-    #   * Depth is computed by splitting the QN tail on "/", so it assumes
-    #     qualifiedName segments don't themselves contain "/". The sampler skips
-    #     an asset whose own name holds one (a SQL table may be named `a/b`), but
-    #     a slash in a PARENT's name still mis-counts; BI / object-store
-    #     connectors whose QNs embed slashes would mis-count — don't enable it
-    #     there without adjusting.
+    #   * Depth is the number of "/"-separated segments below the connection.
+    #     When that reads too deep (a "/" inside a table, schema or database
+    #     name), the sampled asset's ancestor qualified names decide instead:
+    #     see ``asset_qn_ancestor_attributes``.
     expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
+
+    # The attributes that hold a sampled asset's ancestor qualified names, one
+    # entry per level, outermost first; within a level the first attribute the
+    # asset carries is read. They are read with the depth samples and consulted
+    # only when the "/" count reads too deep, so a "/" inside a name still
+    # grades. Default: the SQL hierarchy. A BI or object-store connector whose
+    # qualified names embed "/" names its own parent attributes here to use
+    # ``expected_asset_qn_depth`` at all.
+    asset_qn_ancestor_attributes: ClassVar[tuple[tuple[str, ...], ...]] = (
+        atlas.SQL_QN_ANCESTOR_ATTRIBUTES
+    )
 
     # Opt-in: validate the VALUES published assets carry, not just how many
     # landed and where. Maps typeName -> attribute name (as Atlan spells it) ->
@@ -4849,10 +4859,11 @@ class BaseE2ETest:
         sample_reads: Mapping[str, SampleRead] = {}
         if dag.expected_asset_qn_depth:
             sample_reads = as_samples(
-                await atlas.sample_qualified_names(
+                await atlas.sample_located_names(
                     client,
                     self.connection_qualified_name,
                     tuple(dag.expected_asset_qn_depth),
+                    ancestor_attributes=self.asset_qn_ancestor_attributes,
                 ),
                 tuple(dag.expected_asset_qn_depth),
             )
@@ -5045,7 +5056,10 @@ class BaseE2ETest:
             connection_read=connection_read,
             lineage_read=lineage_read,
             asset_qn_samples={
-                name: list(value)
+                name: [
+                    entry.qualified_name if isinstance(entry, LocatedName) else entry
+                    for entry in value
+                ]
                 for name, value in samples.items()
                 if not isinstance(value, Unreadable)
             },
