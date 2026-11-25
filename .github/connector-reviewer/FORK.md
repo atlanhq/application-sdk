@@ -710,6 +710,111 @@ names.
   usage reply and starts nothing. Options come from the first line only, so a note
   on the lines below a bare `/review` or `/lens` still reviews.
 
+## Review depth (FND-5316)
+
+A live review of a 42-file connector pull request withheld 13 files as mechanical,
+9 of them wrongly, reported weakened test expectations for a file whose tests had
+only been re-wrapped, and forced the final turn of 3 of its 5 bundles at the
+context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
+
+- **Mechanical rename (both copies, `triage.py`).** A token swap counts as a rename
+  only when both names are defined in this repository: the old one in a base copy
+  of a changed Python file, the new one in a head copy (a def, class, variable,
+  parameter or exception name, never a name bound only by an import), or modules
+  of the changed paths (`triage.definitions`). A name after a dot must be a member
+  defined here (a method, class attribute, `self.x`/`cls.x`, or a module-level def
+  or class), after a receiver of this repository: `self`, `cls`, a class defined
+  here or a changed path's module (`Definitions.renames(receiver=…)`; lens F-80e1ac:
+  pooled member names let an unrelated rename of `error` to `warning` bless
+  `logger.error` -> `logger.warning`). So `json` -> `orjson`,
+  `logger.error` -> `logger.warning` and `client.get` -> `client.post` go to the line
+  review however many files repeat them. A hunk whose imports drop one binding and
+  add another, as (module, name, alias) (`import json` -> `import orjson`,
+  `from a import f` -> `from b import f`, `from m import f as send` -> `from m import g
+  as send`), is not "imports only" (`hunk_imports_only`), unless the only difference
+  is a module the pull request renames (`triage.renamed_modules`); imports added,
+  regrouped or reordered still are. `baseline.py`, `diff.py` and `index.py` are
+  unchanged and still byte-identical between the copies. Tests adapted: the
+  rename cases now hand triage the renamed function's definition on each side and
+  its diff, so the def site counts as a renamed file too (the 100-file case counts
+  101 files), and the two
+  `test_import_only_means_nothing_but_import_statements` cases that swapped `os`
+  for `sys` and `a` for `b` now expect a line review, with same-module cases added.
+
+- **Weakened expectations (connector-reviewer only: lens has no facts).**
+  `facts.weakened_expectations` now takes both copies of each changed test file
+  (`review.run` reads the base copy at the reviewed range's base, shared with triage,
+  and the head copy from `head_side_text`; both call sites, the trace's facts and
+  `compute_facts`, pass them). When both parse, each function's expectations are
+  compared as syntax trees (`facts._structural`): an `assert`'s condition (its
+  message is not the expectation), `pytest.raises(...)`, and assert methods. A
+  re-wrap, reformat or reordering reports nothing; an assertion gone or changed
+  still does, with its base line. The line rules carry over: an expectation that
+  moved to a test the pull request adds is not lost, a changed one is one with the
+  same left side gained in the same function, a deleted test counts only with a
+  lost expectation, a new skip counts unless one like it was removed. Helper
+  functions in a test file are compared too, as the line rules did through the
+  hunk header. When any changed test file's copy is missing or does not parse,
+  every file falls back to the diff lines: a move between a file read one way and
+  a file read the other was otherwise reported as a removal (lens F-0290b2).
+
+- **Principles (connector-reviewer only).** `PrincipleSet.in_order` gives a bundle's
+  principles room in this order: those whose `applies-to` names one of its files,
+  fleet then repo, a glob before an area; then those with no `applies-to`, which
+  cover every file and say least about these ones. `render_for(paths, max_chars)`
+  renders them in full while they fit `[agent] principles_max_tokens` (24,000
+  estimated tokens) and lists the rest by id and title. A title-only principle still
+  applies: `cite` and `grade_by_principle` read the whole set, so a finding citing
+  one is graded by its Severity text, which the model saw only as a title. On the
+  live pull request every principle matched by area (`[app]`), so this ordering cut
+  nothing there; the context ceiling below is what fixed its depth. lens's rule
+  cards are matched by glob, first match per file, and are not changed.
+  Test adapted: `test_principles_are_rendered_once_each_with_their_files_and_five_fields`
+  now expects the everywhere principle FP02 after the repo's RP01.
+
+- **Limits (both copies, unless the limit exists only here).** Sized so a pull request
+  of 100 files and about 4,000 changed lines (2x a 50-file / 2,000-line one) finishes
+  without hitting any of them. Every cap stays; the reasons are in the config comments.
+
+  | Limit | Old | New | Copies |
+  |---|---|---|---|
+  | `[agent] context_limit_tokens` | 60,000 | 200,000 | both |
+  | `[agent] max_tool_turns` / `max_tool_turns_cap` | 16 / 30 | 24 / 48 | both |
+  | `[agent] plan_max_tokens` | 8,000 | 24,000 | both |
+  | `[agent] bundle_time_limit_s` | 120 | 240 | connector-reviewer (lens has none) |
+  | `[agent] principles_max_tokens` | none | 24,000 | connector-reviewer (lens has rule cards) |
+  | `[budget] cap_usd_per_pr` | 1.00 | 3.75 | both |
+  | `[scope] max_bundles` | 8 | 16 | both |
+  | `[scope] max_changed_files` | 60 | 200 | both |
+  | re-pack size past `max_bundles` | half the ceiling (30,000) | `review.MAX_REPACK_DIFF_TOKENS` = 30,000 | both |
+  | approach check `max_input_tokens` / `max_lookups` (`holistic.check`) | 8,000 / 4 | 32,000 / 8 | both |
+  | `review_max_tokens`, `final_retry_max_tokens` | 24,000 | 24,000 (unchanged) | both |
+
+  The window: the LiteLLM proxy reports `max_input_tokens` 922,000 for gpt-6-luna, as
+  quoted in mothership's `atlanClaw/src/agent.ts`. Nothing in this repository or the
+  gateway's docs states it, so it is cited as that. The ceiling of 200,000 is 22% of
+  it. It also stays under 272,000: the provider bills a longer prompt on separate
+  long-context meters (abacus: `6-luna LongCo`), whose rate `[model.price]` does not
+  carry, so the reservation would under-price it. No `max_tokens` goes above 24,000,
+  the value every review turn already sends: a 400 is fatal in `llm.Client` and
+  opens the run-wide breaker. The re-pack size had been half the ceiling, and would
+  have become a 100,000-token diff with no room left to read anything, so it is a
+  constant at its old value. Tests adapted: the shipped-config tests allow a cap up
+  to $4.00 and a time limit up to 300 s (16 bundles, 4 at a time, inside 20 minutes);
+  `test_files_past_the_bundle_cap_are_unread` patches `MAX_REPACK_DIFF_TOKENS`
+  instead of the ceiling.
+
+- **A ceiling hit is never silent (both copies).** When the context ceiling forces a
+  bundle's final turn, `BundleResult.ceiling_turn` records the turn. Before turn
+  `agent.SHALLOW_BEFORE_TURN` (4) the bundle is `shallow`: `review.run` adds
+  `review.shallow_note` ("Bundle `x` was reviewed shallowly: it reached the context
+  ceiling at turn 3 of 24 …") to the incomplete reasons, so the status is red,
+  "review incomplete", and its files go to `pending_files` like a failed bundle's
+  (when every bundle failed, the head is left unreviewed and the next run redoes
+  it). Its findings are kept. The run report has `ceiling_turn` and `shallow` per
+  bundle. This follows the verdict rule that the status is never green unless every
+  part of the change was read.
+
 ## Not changed, and worth knowing before the next change
 
 Nothing listed at the moment. The three items that were here (the test-file

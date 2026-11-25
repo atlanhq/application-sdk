@@ -43,7 +43,8 @@ Client options (passed via ``S3Store(client_options=…)``):
 
 Proxy / TLS (obstore reads none of these itself, so we plumb them explicitly):
 
-* ``HTTPS_PROXY`` / ``HTTP_PROXY`` — obstore's ``proxy_url``.
+* ``HTTPS_PROXY``, then ``ALL_PROXY`` — obstore's ``proxy_url`` (resolved by
+  :mod:`application_sdk._proxy`, the rule every SDK connection follows).
 * ``NO_PROXY`` — obstore's ``proxy_excludes`` (only when a proxy is set).
 * ``SSL_CERT_DIR`` — custom CA certs for private-CA stores (e.g. self-hosted
   MinIO), loaded into obstore's ``root_certificate``. Same env var the SDK's httpx
@@ -68,7 +69,6 @@ from __future__ import annotations
 import contextlib
 import os
 import threading
-import urllib.request
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
 
@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 
 from application_sdk._env import env_duration, env_int, env_str
 from application_sdk._logging import get_logger
+from application_sdk._proxy import no_proxy, proxy_for
 
 logger = get_logger(__name__)
 
@@ -130,22 +131,24 @@ def _default_user_agent() -> str:
 
 
 def _obstore_proxy_url() -> str | None:
-    """Return the proxy URL from HTTPS_PROXY/HTTP_PROXY, or None.
+    """Return the proxy URL for object-store traffic, or None.
 
     obstore doesn't read proxy env vars itself, so we pass it explicitly.
+    Object stores are reached over HTTPS, so this is the ``https`` proxy
+    (``HTTPS_PROXY``, then ``ALL_PROXY``); there is no fallback to
+    ``HTTP_PROXY``. No host is given: obstore applies ``NO_PROXY`` itself.
     """
-    proxies = urllib.request.getproxies()
-    return proxies.get("https") or proxies.get("http") or None
+    return proxy_for("https")
 
 
 def _obstore_proxy_excludes() -> str | None:
     """Return NO_PROXY (obstore's ``proxy_excludes``), or None.
 
-    Unlike Temporal — which knows its single target host and resolves the bypass
-    itself via ``proxy_bypass_environment`` — obstore matches NO_PROXY per-host
+    Unlike Temporal — which knows its single target host and passes it to
+    ``_proxy.proxy_for`` — obstore matches NO_PROXY per-host
     at request time, so we just hand it the raw list.
     """
-    return urllib.request.getproxies_environment().get("no") or None
+    return no_proxy()
 
 
 def obstore_client_options() -> ClientConfig:
