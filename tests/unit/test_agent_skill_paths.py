@@ -42,23 +42,21 @@ _PLACEHOLDER = re.compile(r"[<>{}*$]")
 
 
 def _skill_markdown_files() -> list[Path]:
-    """Every regular .md file under the skill dirs, not following symlinks.
+    """Every .md file under the skill dirs, not descending into linked dirs.
 
-    A symlinked skill is checked at its target: the ``.agents`` links point
-    at ``.claude/skills``, and the conformance skills and the remediate
-    skill point into ``packages/conformance``, whose content ships to
-    connector apps and names paths relative to them.
+    A symlinked skill directory is skipped: the ``.agents`` links point at
+    ``.claude/skills``, which is walked anyway, and the conformance skills
+    point into ``packages/conformance``, whose content ships to connector
+    apps and names paths relative to them. A symlinked *file* (the remediate
+    skill, linked to the bootstrap template) is read through its link: it is
+    this repo's skill, so the paths it names must resolve here too.
     """
     files: list[Path] = []
     for skill_dir in _SKILL_DIRS:
         for dirpath, dirnames, filenames in os.walk(skill_dir):
             base = Path(dirpath)
             dirnames[:] = [d for d in dirnames if not (base / d).is_symlink()]
-            files.extend(
-                base / name
-                for name in filenames
-                if name.endswith(".md") and not (base / name).is_symlink()
-            )
+            files.extend(base / name for name in filenames if name.endswith(".md"))
     return sorted(files)
 
 
@@ -89,7 +87,9 @@ def _dead_paths() -> list[str]:
 def test_skill_files_are_found() -> None:
     # Guards the walk itself: a path change that finds no skills would
     # make the resolution test pass vacuously.
-    assert len(_skill_markdown_files()) > 10
+    files = _skill_markdown_files()
+    assert len(files) > 10
+    assert _REPO / ".claude" / "skills" / "remediate" / "SKILL.md" in files
 
 
 def test_every_backticked_repo_path_in_a_skill_resolves() -> None:
@@ -121,9 +121,9 @@ def test_agents_skills_are_symlinks_into_claude_skills() -> None:
     )
     for link in agents.iterdir():
         target = link.resolve()
-        assert target.parent == claude and target.is_dir(), (
+        assert target == claude / link.name and target.is_dir(), (
             f"{link.relative_to(_REPO)} -> {os.readlink(link)} does not resolve "
-            "to a skill in .claude/skills"
+            f"to .claude/skills/{link.name}"
         )
 
 
