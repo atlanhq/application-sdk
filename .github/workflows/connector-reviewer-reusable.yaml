@@ -17,8 +17,28 @@ name: Connector reviewer (reusable)
 # Security shape (review this before changing it):
 #   * `issue_comment` runs the caller from ITS default branch, with secrets,
 #     and this file from the ref the caller pins. That is safe only because no
-#     step checks out, installs or runs pull-request code. There are four
-#     checkouts, none of them imported or run:
+#     step runs pull-request code, and the job that holds the secrets never
+#     checks it out or installs anything. Two jobs:
+#   * `gate` (FND-5325, connector_reviewer/gate.py) holds NO secret and no App
+#     token; its own token only reads contents and is not persisted. It is the
+#     one place a pull request's head is checked out, and the one place
+#     third-party code runs: it checks out the head sparse (the CI directories
+#     and `renovate.json`, read as data and never imported or run) and the
+#     `uv.lock` alone of the base it merges into (the first parent of its test
+#     merge, `refs/pull/<n>/merge`), installs the
+#     atlan-application-sdk-conformance version the BASE branch's uv.lock pins
+#     from the index the lock names (PyPI or its mirror only, wheels only: no
+#     build step) into a fresh venv, and runs that version's C002 drift check
+#     over the head's bootstrap-managed gate files, with the venv's
+#     interpreter in isolated mode, from outside the checkout. Its only output
+#     is a JSON fact file, uploaded as an artifact, which the review reads as
+#     untrusted data. The head ref is written by tested Python (`gate-ref`) as
+#     `refs/pull/<number>/head`, the number an int. It runs in a job of its
+#     own, on its own runner, so that nothing it installs can reach the review
+#     job's secrets: a venv isolates packages, not credentials.
+#   * `review` holds the secrets and runs only the reviewer (standard library
+#     Python, with this repository's `.github/scripts/_gha.py` step-output
+#     writer beside it). It has four checkouts, none of them imported or run:
 #       - the caller's default branch, sparse, only its
 #         `.github/connector-reviewer/principles/` (the app's own principles,
 #         trusted: the pull request and the branch it targets cannot rewrite
@@ -39,8 +59,9 @@ name: Connector reviewer (reusable)
 #         40-hex commit of atlanhq/application-sdk before it is written
 #         (connector_reviewer/sdk_source.py).
 #     The reviewer reads the pull request's diff, head-side file text and head
-#     uv.lock through the REST API as data. Do not add a step that checks out
-#     the pull request head.
+#     uv.lock through the REST API as data. Do not add a step to this job that
+#     checks out the pull request head or installs a package: that belongs in
+#     a job with no secret, like `gate`.
 #   * Who may ask is decided in the reviewer (connector_reviewer/event.py,
 #     tested), not in shell here, per docs/standards/ci.md.
 #   * The reviewer acts on GitHub as the fleet App, with a token minted per run
@@ -58,6 +79,8 @@ name: Connector reviewer (reusable)
 # the running one or cancel the running one; the reviewer wants neither. The
 # review in progress finishes, and a request that arrives meanwhile is dropped
 # with a note (connector_reviewer/lock.py, the first thing the review does).
+# The lock reads every job of an older run, `gate` and `review` alike: the run
+# blocks a newer one while any of its jobs is queued or within the job timeout.
 
 on:
   workflow_call:
@@ -73,8 +96,147 @@ permissions:
   contents: read
 
 jobs:
+  # The gate-file check (FND-5325): a pull request that changes a
+  # bootstrap-managed gate file (a managed workflow shim, the reviewer's own
+  # among them, or a vendored action or script) is compared with what the
+  # conformance version its base pins renders (never the head's own pin), and
+  # a mismatch is one finding in the
+  # review. No secret here, on purpose (see the header). A check that cannot
+  # be made is a fact that says why; a step that cannot hand on its output
+  # (`gate-ref`, `gate-base`, `gate-fact`) fails, the steps after it are
+  # skipped, and the review says the check did not run. Never a finding, and
+  # the review runs whatever happens here.
+  gate:
+    name: Gate-file check
+    runs-on: ubuntu-latest
+    # Above the bounds of `gate-base` and `gate-fact` (connector_reviewer/gate.py,
+    # VENV_SECONDS and the rest) with room for the other steps, so the fact is
+    # written, if only to say the check was not made, before the job is killed.
+    # test_connector_reviewer_workflow.py ties the two.
+    timeout-minutes: 10
+    steps:
+      # The reviewer's code, at this workflow's own commit, as in `review`.
+      - name: Check out the reviewer (application-sdk, this workflow's commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts/connector_reviewer
+            .github/scripts/_gha.py
+          sparse-checkout-cone-mode: false
+          path: sdk
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      # `ref=refs/pull/<n>/head` from the event, the number an int, in tested
+      # Python (connector_reviewer/gate.py, `head_ref_output`); empty when the
+      # event names no pull request. Exits 1 only when $GITHUB_OUTPUT cannot
+      # be written: the steps after it are then skipped, and no fact is made.
+      - name: Resolve the pull request's head ref
+        id: gate-ref
+        working-directory: sdk/.github/scripts
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: >-
+          python -m connector_reviewer gate-ref
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+
+      # The pull request head, sparse, read as data only: the CI directories
+      # the gate files live in, and renovate.json (C002 reads conformance.yaml's
+      # enforcement fallback from it).
+      - name: Check out the pull request head's CI files and uv.lock (read as data)
+        if: steps.gate-ref.outputs.ref != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.gate-ref.outputs.ref }}
+          sparse-checkout: |
+            /.github/workflows/
+            /.github/actions/
+            /.github/scripts/
+            /renovate.json
+          sparse-checkout-cone-mode: false
+          path: gate-head
+          persist-credentials: false
+
+      # The base the pull request merges into: the first parent of GitHub's
+      # test merge (`refs/pull/<n>/merge`). Commit objects only are needed
+      # (the sparse checkout holds just `uv.lock`, and depth 2 brings the
+      # parents); tested Python reads the parent and writes `base=` as 40 hex
+      # (connector_reviewer/gate.py, `base_of_merge`). A pull request with
+      # conflicts has no merge ref: no base, and the fact says so.
+      - name: Check out the pull request's test merge (read as data)
+        if: steps.gate-ref.outputs.merge != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.gate-ref.outputs.merge }}
+          fetch-depth: 2
+          sparse-checkout: |
+            /uv.lock
+          sparse-checkout-cone-mode: false
+          path: gate-merge
+          persist-credentials: false
+
+      # Exits 1 only when $GITHUB_OUTPUT cannot be written, as `gate-ref`.
+      - name: Resolve the pull request's base commit
+        id: gate-base
+        working-directory: sdk/.github/scripts
+        run: >-
+          python -m connector_reviewer gate-base
+          --merge-checkout "$GITHUB_WORKSPACE/gate-merge"
+
+      # The base's uv.lock alone: the conformance version it pins is the one
+      # rendered (the head's pin is never read). The review uses the fact only
+      # when the pull request's base, as the API reports it, pins the same.
+      - name: Check out the base's uv.lock (read as data)
+        if: steps.gate-base.outputs.base != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.gate-base.outputs.base }}
+          sparse-checkout: |
+            /uv.lock
+          sparse-checkout-cone-mode: false
+          path: gate-base
+          persist-credentials: false
+
+      # Installs the pinned conformance version into a fresh venv and runs its
+      # C002 check over the checkout (connector_reviewer/gate.py, `make_fact`).
+      # A check that cannot be made is a fact with `status: unavailable` and
+      # the reason, never a finding. Exits 1 only when the fact file cannot be
+      # written: nothing is uploaded, and the review says the check did not run.
+      - name: Compare the gate files with the pinned conformance version's render
+        working-directory: sdk/.github/scripts
+        run: >-
+          python -m connector_reviewer gate-fact
+          --checkout "$GITHUB_WORKSPACE/gate-head"
+          --venv "$RUNNER_TEMP/gate-venv"
+          --base-checkout "$GITHUB_WORKSPACE/gate-base"
+          --out "$RUNNER_TEMP/gate-fact/connector-reviewer-gate.json"
+
+      # Non-fatal: the review downloads it by pattern and reports a missing fact.
+      - name: Upload the gate fact
+        continue-on-error: true
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+        with:
+          name: connector-reviewer-gate
+          path: ${{ runner.temp }}/gate-fact/connector-reviewer-gate.json
+          retention-days: 1
+          if-no-files-found: ignore
+
   review:
     name: Connector reviewer
+    # After the gate-file check, whatever its outcome: a failed or skipped
+    # check is a note in the review, never a reason not to review.
+    needs: gate
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Must equal JOB_TIMEOUT in connector_reviewer/lock.py: the lock treats an
     # older review of the same pull request as still running for this long.
@@ -107,6 +269,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts/connector_reviewer
+            .github/scripts/_gha.py
             .github/connector-reviewer
           sparse-checkout-cone-mode: false
           path: sdk
@@ -146,7 +309,8 @@ jobs:
       # request changes which SDK its code calls. Reading the pull request needs
       # the App token (the job's own token has no pull-requests scope). Writes
       # `ref` (empty when there is none), `label` and the `head` it read as
-      # step outputs. Always exits 0.
+      # step outputs. Exits 1 only when $GITHUB_OUTPUT cannot be written; the
+      # step continues on error, and the review runs without the SDK source.
       - name: Resolve the application-sdk version the pull request pins
         id: sdk-ref
         continue-on-error: true
@@ -165,8 +329,10 @@ jobs:
       # The pull request's base commit, read through the REST API (the event of
       # a `/review` comment does not carry it; reading the pull request needs
       # the App token). Writes `base` (40 hex, or empty) as a step output, in
-      # tested Python (connector_reviewer/review.py, `base_ref_output`). Always
-      # exits 0.
+      # tested Python (connector_reviewer/review.py, `base_ref_output`). Exits 1
+      # only when $GITHUB_OUTPUT cannot be written; the step continues on
+      # error, and the checkout below takes the default ref (the review says
+      # it is off the base).
       - name: Resolve the pull request's base commit
         id: base-ref
         continue-on-error: true
@@ -216,6 +382,15 @@ jobs:
           path: sdk-src
           persist-credentials: false
 
+      # The gate job's fact file. Absent (the job failed, or both uploads did):
+      # the review says the gate-file check did not run.
+      - name: Download the gate fact
+        continue-on-error: true
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+        with:
+          pattern: connector-reviewer-gate*
+          path: ${{ runner.temp }}/gate-fact
+
       - name: Review
         id: review
         # Below the job's 45 minutes, so the finalize step below still runs when
@@ -244,6 +419,11 @@ jobs:
           # it is at the ref that lock pins; this names both heads when a push
           # in between moved the pin (FND-5316).
           CONNECTOR_REVIEWER_SDK_HEAD: ${{ steps.sdk-ref.outputs.head }}
+          # The gate job's fact (FND-5325, connector_reviewer/gate.py). Always
+          # set: an absent file is a note, "the gate check did not run". Used
+          # only for the head this review reads and the conformance version
+          # that head pins.
+          CONNECTOR_REVIEWER_GATE_FACT: ${{ runner.temp }}/gate-fact/connector-reviewer-gate.json
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           # Run report (every model request, bundle, timing; no prompts, code or

@@ -985,7 +985,7 @@ Short fleet jobs that stay on `ubuntu-latest`:
 | build-and-publish-app `prepare` | Runs `parse_atlan_yaml.py` / `validate_atlan_yaml.py` on the system `python3`, which import PyYAML and `packaging` from the full image. |
 | build-and-publish-app `leak-scan`, `certify`; `generated-freshness` | `sudo` (gitleaks / `install-pkl`), not yet verified on slim. |
 | tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
-| tests-reusable `wake-` / `pause-dataforge-source` | GlobalProtect VPN needs a tun device, which an unprivileged container cannot create. |
+| tests-reusable `wake-` / `pause-dataforge-source` | The Twingate client needs a tun device, which an unprivileged container cannot create. |
 | `checks-reusable` pre-commit, tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
 | Image build, merge, scan and e2e jobs | Docker. |
 
