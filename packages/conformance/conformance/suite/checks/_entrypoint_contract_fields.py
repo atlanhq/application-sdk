@@ -102,16 +102,43 @@ _TYPING_LOWER: dict[str, str] = {
 }
 
 
+#: Module names whose qualifier is dropped: ``typing.Any`` → ``Any``.
+_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+
+
+def _rename_typing_name(node: ast.expr) -> ast.Name | None:
+    """The canonical bare name for a typing-module name node, or None if it is not one.
+
+    Lowercases typing aliases (``List``/``typing.List`` → ``list``) and drops a
+    ``typing.`` / ``typing_extensions.`` qualifier (``typing.Literal`` →
+    ``Literal``), as the runtime canonicaliser renders them.
+    """
+    if isinstance(node, ast.Attribute) and node.attr in _TYPING_LOWER:
+        return ast.Name(id=_TYPING_LOWER[node.attr], ctx=ast.Load())
+    if isinstance(node, ast.Name) and node.id in _TYPING_LOWER:
+        return ast.Name(id=_TYPING_LOWER[node.id], ctx=ast.Load())
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in _TYPING_MODULES
+    ):
+        return ast.Name(id=node.attr, ctx=ast.Load())
+    return None
+
+
 def _normalize_type_node(node: ast.expr) -> ast.expr:
     """Recursively normalize an annotation AST node to canonical form.
 
     Rules:
     - ``Annotated[X, ...]`` → normalize(X)
     - ``Optional[X]`` → normalize(X) | None
-    - ``Union[X, Y, ...]`` → normalize(X) | normalize(Y) | ... (None on right)
-    - ``None | X`` → normalize(X) | None  (canonical: non-None on left)
+    - ``Union[X, Y, ...]`` / ``X | Y | ...`` → one ``|`` chain whose arms are
+      normalized, flattened, deduplicated and sorted, with ``None`` last — a
+      union is a set, so ``Union[str, int]`` and ``int | str`` are one type.
     - Recurse into subscript slices and union arms.
     - Lowercase typing aliases (List→list, Dict→dict, …) via AST rewrite.
+    - Drop a ``typing.`` / ``typing_extensions.`` qualifier (``typing.Literal``
+      → ``Literal``), as the runtime canonicaliser renders it.
     Handles both ``ast.Name`` and ``ast.Attribute`` forms (e.g. ``typing.Optional``).
     """
     # Strip Annotated[X, ...] → X (ast.Name form handled by _unwrap_annotated)
@@ -126,32 +153,26 @@ def _normalize_type_node(node: ast.expr) -> ast.expr:
 
     # Optional[X] → normalize(X) | None (handles ast.Name and ast.Attribute)
     if isinstance(node, ast.Subscript) and _is_named(node.value, "Optional"):
-        inner = _normalize_type_node(node.slice)
-        return ast.BinOp(left=inner, op=ast.BitOr(), right=ast.Constant(value=None))
+        return _sorted_union(
+            [_normalize_type_node(node.slice), ast.Constant(value=None)]
+        )
 
     # Union[X, Y, ...] → X | Y | ... with None moved to the right
     if isinstance(node, ast.Subscript) and _is_named(node.value, "Union"):
         slice_ = node.slice
         elts = slice_.elts if isinstance(slice_, ast.Tuple) else [slice_]
-        arms = [_normalize_type_node(e) for e in elts]
-        result: ast.expr = arms[0]
-        for arm in arms[1:]:
-            result = ast.BinOp(left=result, op=ast.BitOr(), right=arm)
-        return _normalize_type_node(result)  # re-normalize to canonicalize None
+        return _sorted_union([_normalize_type_node(e) for e in elts])
 
-    # BinOp X | Y — recurse into arms; canonicalize None to the right
+    # BinOp X | Y — one sorted, deduplicated chain with None last
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        left = _normalize_type_node(node.left)
-        right = _normalize_type_node(node.right)
-        if _is_none_node(left):
-            return ast.BinOp(left=right, op=ast.BitOr(), right=left)
-        return ast.BinOp(left=left, op=ast.BitOr(), right=right)
+        return _sorted_union(
+            [_normalize_type_node(arm) for arm in _flatten_union(node)]
+        )
 
-    # Lowercase typing aliases — rewrite AST node before unparsing
-    if isinstance(node, ast.Attribute) and node.attr in _TYPING_LOWER:
-        return ast.Name(id=_TYPING_LOWER[node.attr], ctx=ast.Load())
-    if isinstance(node, ast.Name) and node.id in _TYPING_LOWER:
-        return ast.Name(id=_TYPING_LOWER[node.id], ctx=ast.Load())
+    # typing.X → X, List → list, …
+    renamed = _rename_typing_name(node)
+    if renamed is not None:
+        return renamed
 
     # Subscript — recurse into value and slice
     if isinstance(node, ast.Subscript):
@@ -177,26 +198,50 @@ def _flatten_union(node: ast.expr) -> list[ast.expr]:
     return [node]
 
 
+def _sorted_union(arms: list[ast.expr]) -> ast.expr:
+    """One left-nested ``|`` chain of *arms*: flattened, deduplicated, sorted, ``None`` last.
+
+    Arms must already be normalized. Sorting is by each arm's unparsed text —
+    the same rule ``application_sdk.contracts.base.canonical_type_str`` applies
+    to live types, so the AST ledger and the runtime checker agree on every
+    union (``tests/test_contract_compat.py`` pins the parity).
+    """
+    by_text: dict[str, ast.expr] = {}
+    has_none = False
+    for arm in (flat for a in arms for flat in _flatten_union(a)):
+        if _is_none_node(arm):
+            has_none = True
+        else:
+            by_text.setdefault(ast.unparse(arm), arm)
+    ordered: list[ast.expr] = [by_text[text] for text in sorted(by_text)]
+    if has_none:
+        ordered.append(ast.Constant(value=None))
+    result = ordered[0]
+    for arm in ordered[1:]:
+        result = ast.BinOp(left=result, op=ast.BitOr(), right=arm)
+    return result
+
+
 def _canonical_type(node: ast.expr) -> str:
     """Return a normalized type string for stable ledger comparison."""
-    normalized = _normalize_type_node(node)
-    # Dedupe duplicate None arms (e.g. Optional[Optional[X]] → X | None not X | None | None)
-    arms = _flatten_union(normalized)
-    seen_none = False
-    deduped: list[ast.expr] = []
-    for arm in arms:
-        if _is_none_node(arm):
-            if not seen_none:
-                seen_none = True
-                deduped.append(arm)
-        else:
-            deduped.append(arm)
-    if len(deduped) == 1:
-        return ast.unparse(deduped[0])
-    result: ast.expr = deduped[0]
-    for arm in deduped[1:]:
-        result = ast.BinOp(left=result, op=ast.BitOr(), right=arm)
-    return ast.unparse(result)
+    return ast.unparse(_normalize_type_node(node))
+
+
+def recanonicalize(canonical: str) -> str:
+    """Bring a stored canonical type string to today's canonical form.
+
+    A contract ledger freezes each field's type string when it first records
+    it. A string recorded before union arms were sorted keeps its old arm
+    order (``str | int``); comparing it verbatim against a live
+    ``int | str`` would report a type change that is not one. Comparisons
+    against a ledger run the stored string through this first. A string that
+    does not parse is returned unchanged.
+    """
+    try:
+        tree = ast.parse(canonical, mode="eval")
+    except SyntaxError:
+        return canonical
+    return _canonical_type(tree.body)
 
 
 # ── Field extraction ──────────────────────────────────────────────────────────

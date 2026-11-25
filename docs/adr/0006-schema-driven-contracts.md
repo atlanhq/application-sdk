@@ -111,4 +111,4 @@ async def extract(self, url: str, max_records: int = 1000) -> list[dict]:
 | Change field types | ❌ No |
 | Change method signatures | ❌ No |
 
-Backward compatibility can be checked programmatically via `is_backwards_compatible(old_cls, new_cls)` in `application_sdk.contracts.base`.
+Backward compatibility can be checked programmatically via `check_backwards_compatible(old_cls, new_cls)` (or `assert_backwards_compatible` in tests) in `application_sdk.contracts.compat`. It compares canonical type strings — union arms sorted, typing aliases lowered, `Annotated` metadata stripped — the same canonical form the conformance suite's B005/B006 contract ledger records. `is_backwards_compatible` in `application_sdk.contracts.base` is deprecated and delegates to it.

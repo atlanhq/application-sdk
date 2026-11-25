@@ -892,6 +892,15 @@
       "symbol": "PAYLOAD_SAFETY"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "is_backwards_compatible is deprecated; use application_sdk.contracts.compat.check_backwards_compatible, which returns structured Incompatibility records, or assert_backwards_compatible in tests. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.base",
+      "removal_version": "4.0.0",
+      "symbol": "is_backwards_compatible"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.contracts.events.Consumes is deprecated; use application_sdk.handler.contracts.EventTriggerConfig instead \u2014 will be removed in v4.0.",
