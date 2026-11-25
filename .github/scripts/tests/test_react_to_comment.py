@@ -451,7 +451,6 @@ def test_every_caller_can_actually_reach_the_script() -> None:
 # supposed to require editing this list.
 EXPECTED_CALLERS = {
     ("sdk-review.yml", "redirect-to-lens", "React to disabled trigger"),
-    ("sdk-resolve.yml", "redirect-to-lens", "React to disabled trigger"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),
     ("test-commands.yml", "command", "Acknowledge the comment"),
     ("test-commands-reusable.yaml", "command", "Acknowledge the comment"),

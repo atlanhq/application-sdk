@@ -37,7 +37,6 @@ max_bundles = 8
 concurrency = 4
 max_changed_files = 60
 exclude = [
-  ".mothership/**",
   "conformance/**/fixtures/**",
   "tests/**/fixtures/**",
   "tests/**/golden/**",
