@@ -39,8 +39,6 @@ from application_sdk.observability.lineage.reader import (
 )
 from application_sdk.observability.lineage.recorder import Recorded
 from application_sdk.observability.lineage.taxonomy import (
-    GenericConnectionType,
-    NonSqlSource,
     ReasonRegistry,
     UninstrumentedPath,
     Verdict,
@@ -92,14 +90,17 @@ def classify(
     if asset.processes and asset.refs:
         if not asset.resolvable_refs:
             if asset.ref_connectors & spec.generic_connectors:
-                return assess(LineageStatus.MISSING_LINEAGE, GenericConnectionType)
-            return Assessment(Verdict.VALID_NONE, NonSqlSource, basis="refs_not_sql")
+                return assess(LineageStatus.MISSING_LINEAGE, spec.generic_reason)
+            return Assessment(
+                Verdict.VALID_NONE, spec.non_sql_reason, basis="refs_not_sql"
+            )
         return assess(LineageStatus.PENDING, partial)
     if asset.has_lineage:
         if partial is not None:
             return assess(LineageStatus.PARTIAL_LINEAGE, partial)
         return assess(LineageStatus.HAS_LINEAGE)
-    code = recorded.missing[-1] if recorded is not None and recorded.missing else None
+    # The first reason recorded stands: later paths are fallbacks of the first.
+    code = recorded.missing[0] if recorded is not None and recorded.missing else None
     return assess(
         LineageStatus.MISSING_LINEAGE,
         registry.resolve(code) if code else UninstrumentedPath,
@@ -132,7 +133,7 @@ def _row(
         if assessment.verdict is Verdict.MISSING:
             codes = recorded.unusable or recorded.missing
             if codes and assessment.reason is UninstrumentedPath:
-                row["recordedCode"] = codes[0] if recorded.unusable else codes[-1]
+                row["recordedCode"] = codes[0]
         if recorded.missing:
             row["failedAttempts"] = list(recorded.missing)
         if recorded.partial:
