@@ -30,7 +30,7 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
 | `ATLAN_DOMAIN_NAME` | `atlan.com` | Tenant domain name. |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Path for intermediate files during processing. |
-| `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` | `true` | End-of-run cleanup. When `false`, the default `on_complete()` skips `cleanup_files()` and `cleanup_storage()`, and a worker that releases a closed run's app state keeps the local files that run's tasks tracked. The run's app-state slot is still released and its cached clients closed. |
+| `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` | `true` | End-of-run cleanup. Read once at worker start and pinned on each run, which keeps the value it started with on any pod. When `false`, the default `on_complete()` skips `cleanup_files()` and `cleanup_storage()`, and a worker that releases a closed run's app state keeps the local files that run's tasks tracked. The run's app-state slot is still released and its cached clients closed. |
 | `ATLAN_CLEANUP_BASE_PATHS` | _(empty)_ | Comma-separated object-store prefixes cleaned up by `cleanup_files()`. Defaults to the workflow-scoped run path when unset. |
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |
@@ -81,7 +81,7 @@ before changing either value.
 |----------|---------|-------------|
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
-| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. See [Task-queue naming](#task-queue-naming). |
+| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. The override is for local and CLI runs: **do not pin it in a deployed app's deploy or pool env** (`contract/app.pkl` or `atlan.yaml`) — the on-demand (`-od`) worker then polls the base queue and its retries hang (conformance rule K031). See [Task-queue naming](#task-queue-naming). |
 | `APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR` | `true` | Collect `get_outputs()` metrics and artifacts and merge them into the workflow result. Each activity carries its outputs back on its own result (`metrics` / `artifacts` on an `Output`, or a reserved `_atlan_outputs` key on a dict result, which the workflow strips from its own dict result), so they arrive whichever worker runs the activity. An activity returning anything else (e.g. `None`) cannot carry them: they are dropped with a warning. Set it on workflow **and** activity workers alike. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 
@@ -103,6 +103,8 @@ Two consequences worth internalising when writing or rewriting an AE DAG outside
 
 - **Pass the bare app name.** `derive_task_queue` adds the `atlan-` prefix. Prefixing a value that is already prefixed produces `atlan-atlan-dbt-production`, a queue nothing polls.
 - **Never invent a name for the unset case.** `atlan-default-prod` reads as a legitimate queue and reproduces the original silent hang; a literal `{app_name}` in the DAG is greppable and diagnosable in one step. That is why `ATLAN_APPLICATION_NAME`'s `default` fallback is scoped to identity uses and excluded here.
+
+**Do not pin `ATLAN_TASK_QUEUE` in a deployed app.** The chart runs an on-demand variant of the worker with `-od` appended to `ATLAN_DEPLOYMENT_NAME`, so the derivation gives it its own queue, `atlan-{app}-{deployment}-od`. An explicit `ATLAN_TASK_QUEUE` in the contract's deploy or pool `env` (or in `atlan.yaml`) overrides the derivation for both variants, so the `-od` worker polls the base queue. When a worker pod is lost, the activity rerouter moves the retry to the `-od` queue, nothing polls it, and the run hangs until its workflow timeout. Conformance rule K031 flags the pin. Setting it for a local or CLI run (`--task-queue`) is fine.
 
 Nodes that dispatch to a *different* app's queue (`atlan-publish-{deployment_name}` and friends) are legitimately not this app's queue: their `{deployment_name}` token is filled and the value is otherwise left alone.
 
@@ -383,6 +385,7 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `OTEL_SEMCONV_STABILITY_OPT_IN` | `http` | Read by OTel instrumentation, once per process. The handler service sets it to `http` when unset, so HTTP metrics use the stable names (`http_server_request_duration_seconds`, in seconds). An explicit value replaces that default: keep `http` in it (or `http/dup` to emit both stable and legacy names), or the legacy `http_server_duration_milliseconds` comes back. |
 
 | `OTEL_WF_NODE_NAME` | _(empty)_ | Kubernetes node name for workflow telemetry. |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | `30` | Timeout for OTLP export operations. |

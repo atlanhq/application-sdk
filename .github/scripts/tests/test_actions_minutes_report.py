@@ -9,15 +9,10 @@ from __future__ import annotations
 
 import inspect
 import json
-import sys
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import actions_minutes_report as amr
+import pytest
 
 UTC = timezone.utc
 

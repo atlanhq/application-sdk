@@ -21,17 +21,13 @@ would wave through — hence behavioural cases, not a regex.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/renovate.yaml"

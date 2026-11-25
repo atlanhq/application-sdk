@@ -259,6 +259,20 @@ rather than as "unknown". Renaming a `SkipReason` value or a metric breaks
 fleet-wide aggregation across SDK versions, so add new members rather than
 renaming existing ones.
 
+## The fetch-failures artifact, layout and metrics
+
+| | |
+|---|---|
+| **Produced by** | `record_fetch_failure` and `persist_activity_fetch_failures` in `application_sdk/outputs/fetch_failures.py`, merged by `merge_run_log`; scheduled by `App.merge_fetch_failures` ([ADR-0022](../adr/0022-skipped-record-capture.md)) |
+| **Layout** | `{run prefix}/fetch-failures.ndjson` (merged, one per run) and `{run prefix}/fetch-failures/parts/{activity_id}.ndjson`, where the run prefix is `WORKFLOW_OUTPUT_PATH_TEMPLATE` |
+| **Line shape** | `{"record_id", "entity_type", "reason", "endpoint", "http_status", "detail"}`; `reason` is a `FetchFailureReason` value (`source_unavailable`, `not_found`, `forbidden`, `rate_limited`) |
+| **Run outputs** | artifact `fetch-failures`; metrics `fetch-failures`, `fetch-failures-<reason>` (kebab-case), `fetch-failures-truncated`, `fetch-failures-unpersisted`; status `partial_success` |
+| **Read by** | Run-output consumers (the Automation Engine UI) and anyone aggregating extraction gaps across the fleet |
+| **Pinned by** | `tests/unit/outputs/test_fetch_failures.py`, `TestFetchFailuresThroughInterceptors` in `tests/unit/execution/_temporal/interceptors/test_output_interceptor.py`, `tests/unit/app/test_merge_fetch_failures.py` |
+
+**Absence means zero**, as for skipped records: a run that recorded no fetch failure has no
+artifact, metric or file. Add `FetchFailureReason` members rather than renaming existing ones.
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |

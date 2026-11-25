@@ -84,7 +84,9 @@ def main() -> int:
 
         # 2. Valid date format
         try:
-            exp_date = datetime.strptime(expires_str, "%Y-%m-%d").date()
+            exp_date = (
+                datetime.strptime(expires_str, "%Y-%m-%d").replace(tzinfo=UTC).date()
+            )
         except ValueError:
             errors.append(
                 f"{cve_id}: invalid expires format '{expires_str}' — use YYYY-MM-DD"
@@ -126,7 +128,7 @@ def main() -> int:
         fad = entry.get("fix_available_date")
         if fad:  # None / empty string allowed during migration
             try:
-                datetime.strptime(fad, "%Y-%m-%d")
+                datetime.strptime(fad, "%Y-%m-%d").replace(tzinfo=UTC)
             except ValueError:
                 errors.append(
                     f"{cve_id}: fix_available_date '{fad}' must be YYYY-MM-DD"

@@ -14,17 +14,13 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import Sequence
 
+import check_uv_lock
 import pytest
+import renovate_uv_lock_bounded as bounded
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_uv_lock  # noqa: E402
-import renovate_uv_lock_bounded as bounded  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 UV = shutil.which("uv")

@@ -12,15 +12,11 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import renovate_approval_conditions as gate  # noqa: E402
-import resync_approval_conditions as resync  # noqa: E402
+import renovate_approval_conditions as gate
+import resync_approval_conditions as resync
 
 REPO = "atlanhq/atlan-example-app"
 HEAD = "h" * 40

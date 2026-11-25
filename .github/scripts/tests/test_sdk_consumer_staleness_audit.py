@@ -9,15 +9,11 @@ import base64
 import dataclasses
 import json
 import re
-import sys
 from datetime import date
 from pathlib import Path
 from typing import NoReturn, Optional
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import sdk_consumer_staleness_audit as audit
 
 JsonObj = audit.JsonObj

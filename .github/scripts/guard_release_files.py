@@ -45,10 +45,11 @@ the ``violation`` output in a separate step, mirroring pr_title_convention.py.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 from dataclasses import dataclass, field
+
+from _gha import set_output
 
 # `diff --git a/<path> b/<path>` -- group 2 is the post-image path, which is
 # the file's name for edits and renames alike. For a deletion the b-side is
@@ -179,16 +180,6 @@ _ERROR_MESSAGE = (
 )
 
 
-def _write_output(key: str, value: str) -> None:
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    line = f"{key}={value}"
-    if github_output:
-        with open(github_output, "a") as fh:
-            fh.write(line + "\n")
-    else:
-        print(line)
-
-
 def run(diff_path: str, head_ref: str, comment_out_path: str):
     """Core decision logic, returned as (violation, violations) for testing."""
     with open(diff_path) as fh:
@@ -225,8 +216,8 @@ def main() -> int:
     print(f"Head branch: {args.head_ref}")
     violation, violations = run(args.diff, args.head_ref, args.comment_out)
 
-    _write_output("violation", "true" if violation else "false")
-    _write_output(
+    set_output("violation", "true" if violation else "false")
+    set_output(
         "error_message",
         _ERROR_MESSAGE.format(paths=", ".join(p for p, _ in violations))
         if violation

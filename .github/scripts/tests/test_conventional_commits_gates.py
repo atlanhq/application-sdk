@@ -27,20 +27,22 @@ right precedence.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+from _gha_expr import evaluate
+from _workflows import (
+    REPO_ROOT,
+    WORKFLOWS,
+    job,
+    load_workflow,
+    step_named,
+    steps,
+    triggers,
+)
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _gha_expr import evaluate  # noqa: E402
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_REUSABLE = _REPO_ROOT / ".github/workflows/commits.yaml"
-_SHIM = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates/commits.yaml"
+_REUSABLE = WORKFLOWS / "commits.yaml"
+_SHIM = REPO_ROOT / "packages/conformance/conformance/bootstrap/templates/commits.yaml"
 
 #: Steps that run on every pull_request the job runs for.
 _UNGATED_STEPS = ("Checkout SDK helper scripts", "Validate PR title")
@@ -55,25 +57,14 @@ _VERDICT_STEPS_WITH_VERDICT = (
 _FAIL_STEP = "Fail on invalid PR title"
 
 
-def _load(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _job() -> dict[str, Any]:
-    return _load(_REUSABLE)["jobs"]["conventional-commits"]
-
-
-def _steps() -> list[dict[str, Any]]:
-    return _job()["steps"]
+#: The reusable's one job.
+_JOB = "conventional-commits"
 
 
 def _gate(name: str) -> str:
-    for step in _steps():
-        if step.get("name") == name:
-            gate = step.get("if")
-            assert gate, f"step {name!r} lost its `if:` gate"
-            return str(gate)
-    raise AssertionError(f"{_REUSABLE.name} has no step named {name!r}")
+    gate = step_named(job(load_workflow(_REUSABLE), _JOB), name).get("if")
+    assert gate, f"step {name!r} lost its `if:` gate"
+    return str(gate)
 
 
 def _contexts(*, event: str, violation: str, fork: bool = False) -> dict[str, Any]:
@@ -97,19 +88,12 @@ def _contexts(*, event: str, violation: str, fork: bool = False) -> dict[str, An
 def test_shim_declares_merge_group() -> None:
     """Without this the check is never dispatched for a queue entry, and a
     required check with no conclusion wedges the queue instead of failing it."""
-    # `on` is parsed by PyYAML 1.1 rules, where a bare `on:` key is the boolean
-    # True — hence the fallback rather than a plain ["on"].
-    shim = _load(_SHIM)
-    triggers = shim.get("on", shim.get(True))
-    assert triggers is not None, "shim lost its `on:` block"
-    assert "merge_group" in triggers
+    assert "merge_group" in triggers(load_workflow(_SHIM))
 
 
 def test_shim_still_dispatches_on_edited() -> None:
     """Re-titling a flagged PR has to re-run the check and clear its comment."""
-    shim = _load(_SHIM)
-    triggers = shim.get("on", shim.get(True))
-    assert "edited" in triggers["pull_request"]["types"]
+    assert "edited" in triggers(load_workflow(_SHIM))["pull_request"]["types"]
 
 
 # ── 2. The reusable is skipped, at job level, on merge_group ────────────────
@@ -120,12 +104,12 @@ def test_job_is_skipped_off_the_pull_request_event(event: str) -> None:
     """A job-level skip files a `skipped` check run — a pass for a required
     check — and bills nothing. A started job that skipped every step billed a
     full runner minute on every queue entry."""
-    gate = str(_job()["if"])
+    gate = str(job(load_workflow(_REUSABLE), _JOB)["if"])
     assert evaluate(gate, _contexts(event=event, violation="")) is False
 
 
 def test_job_runs_on_a_pull_request() -> None:
-    gate = str(_job()["if"])
+    gate = str(job(load_workflow(_REUSABLE), _JOB)["if"])
     assert evaluate(gate, _contexts(event="pull_request", violation="")) is True
 
 
@@ -133,14 +117,14 @@ def test_job_name_is_static() -> None:
     """The check-run name is the required context. An expression in it would
     file the skipped run under a different name than the PR run, and the
     required context would sit at "Expected" on the queue entry."""
-    assert "${{" not in str(_job()["name"])
+    assert "${{" not in str(job(load_workflow(_REUSABLE), _JOB)["name"])
 
 
 @pytest.mark.parametrize("name", _UNGATED_STEPS)
 def test_validation_steps_run_on_every_pull_request(name: str) -> None:
     """The job gate already selects the event; a step gate here could only
     narrow which PRs get a verdict."""
-    step = next(step for step in _steps() if step.get("name") == name)
+    step = step_named(job(load_workflow(_REUSABLE), _JOB), name)
     assert not step.get("if"), f"step {name!r} regained a step-level gate"
 
 
@@ -158,7 +142,7 @@ def test_verdict_steps_run_on_a_non_fork_pull_request(
 def test_every_step_is_named() -> None:
     """An unnamed step is invisible to every check below, which look steps up by
     name — so the coverage assertion would silently stop covering it."""
-    for index, step in enumerate(_steps()):
+    for index, step in enumerate(steps(job(load_workflow(_REUSABLE), _JOB))):
         assert step.get("name"), f"step {index} in {_REUSABLE.name} has no `name:`"
 
 
@@ -170,7 +154,7 @@ def test_every_step_is_classified() -> None:
     classification would pass every test in this file while breaking the
     merge_group or fork design it was never checked against.
     """
-    named = {str(step["name"]) for step in _steps()}
+    named = {str(step["name"]) for step in steps(job(load_workflow(_REUSABLE), _JOB))}
     classified = (
         set(_UNGATED_STEPS)
         | {name for name, _ in _VERDICT_STEPS_WITH_VERDICT}
@@ -190,7 +174,7 @@ def test_reusable_serialises_runs_per_pr() -> None:
     """Both comment paths mutate one sticky comment, so an older run's POST
     landing after a newer run's CLEAR would leave an obsolete failure comment on
     a passing check. A per-PR concurrency group is what prevents it."""
-    concurrency = _load(_REUSABLE)["concurrency"]
+    concurrency = load_workflow(_REUSABLE)["concurrency"]
     assert "github.event.pull_request.number" in concurrency["group"]
 
 
@@ -209,7 +193,7 @@ def test_reusable_queues_rather_than_cancelling() -> None:
     Queuing keeps the ordering property the test above asserts, at the cost of a
     few seconds of runner time on a ~10s job.
     """
-    assert _load(_REUSABLE)["concurrency"]["cancel-in-progress"] is False
+    assert load_workflow(_REUSABLE)["concurrency"]["cancel-in-progress"] is False
 
 
 def test_fail_step_is_skipped_on_a_clean_title() -> None:
@@ -257,8 +241,8 @@ def test_fail_step_still_fires_on_a_fork_pr() -> None:
 # safe while the title itself is still gated, so both halves of that trade are
 # pinned here rather than left to a comment.
 
-_PR_CHECKS = _REPO_ROOT / ".github/workflows/pull_request.yaml"
-_TITLE_GUARD = _REPO_ROOT / ".github/workflows/pr-title-convention.yaml"
+_PR_CHECKS = WORKFLOWS / "pull_request.yaml"
+_TITLE_GUARD = WORKFLOWS / "pr-title-convention.yaml"
 
 
 def test_pr_checks_does_not_gate_individual_commit_subjects() -> None:
@@ -272,14 +256,14 @@ def test_pr_checks_does_not_gate_individual_commit_subjects() -> None:
         "a PR whose merged history would have been fine. Gate the PR title "
         "instead — pr-title-convention.yaml already does."
     )
-    for job_id, job in _load(_PR_CHECKS)["jobs"].items():
+    for job_id, body in load_workflow(_PR_CHECKS)["jobs"].items():
         assert "conventional-commit" not in job_id.lower(), (
             f"PR Checks job {job_id!r} reintroduces a per-commit convention "
             "gate. Branch commit subjects are dropped by the squash merge — "
             "gate the PR title instead (pr-title-convention.yaml already does)."
         )
-        assert "conventional-commit" not in str(job.get("name", "")).lower(), (
-            f"PR Checks job {job_id!r} is named {job['name']!r}, reintroducing "
+        assert "conventional-commit" not in str(body.get("name", "")).lower(), (
+            f"PR Checks job {job_id!r} is named {body['name']!r}, reintroducing "
             "a per-commit convention gate. Gate the PR title instead."
         )
 
@@ -288,7 +272,7 @@ def test_the_pr_title_is_still_gated() -> None:
     """The removal above is conditional on this check existing — and actually
     running: a workflow that kept the job name while losing its trigger or its
     validation steps would leave nothing policing the squash subject."""
-    guard = _load(_TITLE_GUARD)
+    guard = load_workflow(_TITLE_GUARD)
     jobs = guard["jobs"]
     names = {job.get("name") for job in jobs.values()}
     assert "Validate PR title" in names, (
@@ -297,8 +281,7 @@ def test_the_pr_title_is_still_gated() -> None:
         "that becomes the squash subject — which drives both the changelog "
         "and the release version bump."
     )
-    triggers = guard.get("on", guard.get(True))
-    assert triggers is not None and "pull_request" in triggers, (
+    assert "pull_request" in triggers(guard), (
         "pr-title-convention.yaml no longer triggers on pull_request, so the "
         "'Validate PR title' job above would never run for a PR."
     )

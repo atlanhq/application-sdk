@@ -100,6 +100,7 @@ NAMED_ABSENT: Mapping[tuple[str, str], Absent] = {
     ("D012", "uv.toml"): Absent("the index is declared in pyproject.toml instead"),
     ("K001", "NativeApp.pkl"): Absent("no app contract uses it", REFERENCE_APPS),
     ("K001", "NativeAppBundle.pkl"): Absent("no app contract uses it", REFERENCE_APPS),
+    ("K031", "ATLAN_TASK_QUEUE"): Absent("the reference's env never pins it"),
     ("L015", "logging"): Absent("run_dev.py imports no logging"),
     ("P055", "metabase_questions"): Absent("the mapper never populates it"),
     ("P059", "json.dumps"): Absent("no field holds a json.dumps string"),

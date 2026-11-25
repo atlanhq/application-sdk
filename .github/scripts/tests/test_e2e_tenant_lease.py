@@ -27,12 +27,10 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 # The transport is shared with the DataForge refcount and lives in one module
 # (FND-2674); the lease imports it rather than carrying a copy, so the seam these
 # tests stub — and the names they exercise it through — are _gh_refs'.
-from _gh_refs import (  # noqa: E402
+from _gh_refs import (
     Holder,
     RateLimited,
     _denied,
@@ -43,7 +41,7 @@ from _gh_refs import (  # noqa: E402
     slug,
     try_create_ref,
 )
-from e2e_tenant_lease import (  # noqa: E402
+from e2e_tenant_lease import (
     acquire,
     acquire_ordered,
     create_identity_blob,

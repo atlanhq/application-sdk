@@ -26,21 +26,17 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
 
+import bump_pr_opt_in
+import pr_test_command as ptc
 import pytest
+import test_command_comment as sticky
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import bump_pr_opt_in  # noqa: E402
-import pr_test_command as ptc  # noqa: E402
-import test_command_comment as sticky  # noqa: E402
-from conformance.bootstrap import render as bootstrap_render  # noqa: E402
+from conformance.bootstrap import render as bootstrap_render
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github/workflows"

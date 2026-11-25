@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
+import _gh
+import _gh_refs
+import poll_check_runs_gate as mod
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import _gh_refs  # noqa: E402
-import poll_check_runs_gate as mod  # noqa: E402
 
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"
@@ -30,9 +27,9 @@ def _stub(monkeypatch, fake_run) -> None:
 
     Two seams, one fake: HTTP goes through the shared transport
     (``_gh_refs.run``, FND-4899) and the ``gh api --paginate`` fallback through
-    the gate's own ``run``. Tests that answer both route on ``cmd`` themselves.
+    ``_gh.run``. Tests that answer both route on ``cmd`` themselves.
     """
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     monkeypatch.setattr(_gh_refs, "run", fake_run)
 
 
@@ -51,11 +48,15 @@ def _check_runs_body(runs: list[dict]) -> dict:
     return {"total_count": len(runs), "check_runs": runs}
 
 
-def _ndjson(runs: list[dict]) -> subprocess.CompletedProcess:
-    """What `gh api --paginate --jq '.check_runs[] | tojson'` produces: one
-    compact JSON object per line, across however many pages it took."""
-    text = "\n".join(json.dumps(r) for r in runs) + ("\n" if runs else "")
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout=text, stderr="")
+def _slurped(runs: list[dict]) -> subprocess.CompletedProcess:
+    """What `gh api --paginate --slurp .../check-runs` prints: a JSON array
+    holding every page; one page is enough for these tests."""
+    return subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stderr="",
+        stdout=json.dumps([{"total_count": len(runs), "check_runs": runs}]),
+    )
 
 
 def _completed_raw(status: int, body_text: str) -> subprocess.CompletedProcess:
@@ -269,12 +270,12 @@ def test_wait_for_checks_uses_304_cache_without_losing_state(monkeypatch):
     assert calls["n"] == 1  # loop breaks right after the first (complete) poll
 
 
-def test_list_all_check_runs_uses_paginate_and_parses_ndjson(monkeypatch):
+def test_list_all_check_runs_uses_paginate_and_parses_slurped(monkeypatch):
     captured = {}
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return _ndjson([{"id": 1, "name": NAMES[0]}, {"id": 2, "name": NAMES[1]}])
+        return _slurped([{"id": 1, "name": NAMES[0]}, {"id": 2, "name": NAMES[1]}])
 
     _stub(monkeypatch, fake_run)
 
@@ -323,7 +324,7 @@ def test_wait_for_checks_falls_back_to_full_pagination_when_truncated(monkeypatc
         runs = [
             {"name": n, "status": "completed", "conclusion": "success"} for n in NAMES
         ]
-        return _ndjson(runs)
+        return _slurped(runs)
 
     _stub(monkeypatch, fake_run)
 
@@ -353,7 +354,7 @@ def test_wait_for_checks_stays_in_full_pagination_mode_across_attempts(monkeypat
                 {"name": n, "status": "completed", "conclusion": "success"}
                 for n in NAMES
             ]
-        return _ndjson(runs)
+        return _slurped(runs)
 
     _stub(monkeypatch, fake_run)
 

@@ -606,7 +606,7 @@ class BaseIntegrationTest:
             )
             pytest.skip(scenario.skip_reason or "Scenario marked as skip")
 
-        start_time = time.time()
+        start_time = time.monotonic()
         result = ScenarioResult(scenario=scenario, success=False)
 
         try:
@@ -715,7 +715,7 @@ class BaseIntegrationTest:
             raise
 
         finally:
-            result.duration_ms = (time.time() - start_time) * 1000
+            result.duration_ms = (time.monotonic() - start_time) * 1000
             self._results.append(result)
 
             # Call after_scenario hook if defined

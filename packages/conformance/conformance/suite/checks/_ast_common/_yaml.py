@@ -22,6 +22,14 @@ The rules followed are YAML's own:
 
 from __future__ import annotations
 
+import re
+
+#: One YAML ``key: value`` line: ``indent``, ``key`` and ``value`` groups. The
+#: value still carries any trailing comment; pass it to :func:`strip_yaml_comment`.
+YAML_KV_RE = re.compile(
+    r"^(?P<indent>[ ]*)(?P<key>[A-Za-z_][\w-]*)[ \t]*:(?P<value>.*)$"
+)
+
 _BLANK = frozenset(" \t")
 _ENDS_TOKEN = frozenset(("", " ", "\t"))
 _FLOW_INDICATORS = frozenset(",[]{}")

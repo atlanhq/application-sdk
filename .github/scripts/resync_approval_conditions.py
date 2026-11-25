@@ -151,7 +151,7 @@ def resync_command(suite: str, resolved_at: str) -> list[str]:
     """The one ``bootstrap --resync`` invocation the lane and this gate run.
     Third-party packages resolve as of ``resolved_at`` minus the org release-age
     window; first-party packages as of ``resolved_at`` itself."""
-    at = datetime.strptime(resolved_at, _RESOLVED_AT_FMT)
+    at = datetime.strptime(resolved_at, _RESOLVED_AT_FMT).replace(tzinfo=UTC)
     cutoff = (at - RELEASE_AGE).strftime(_RESOLVED_AT_FMT)
     first_party = [
         arg

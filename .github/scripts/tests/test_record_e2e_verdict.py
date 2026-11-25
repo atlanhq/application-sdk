@@ -8,15 +8,10 @@ and a write that races a newer attempt's `pending` must be repaired.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import record_e2e_verdict  # noqa: E402
-from record_e2e_verdict import main, reconcile, record  # noqa: E402
+import record_e2e_verdict
+from record_e2e_verdict import main, reconcile, record
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "a96a27b0000000000000000000000000000000aa"

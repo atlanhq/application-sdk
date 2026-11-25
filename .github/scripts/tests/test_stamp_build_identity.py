@@ -10,14 +10,10 @@ that silence, not about string formatting.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import stamp_build_identity as stamp  # noqa: E402
+import stamp_build_identity as stamp
 
 _SINGLE_STAGE = """\
 # syntax=docker/dockerfile:1

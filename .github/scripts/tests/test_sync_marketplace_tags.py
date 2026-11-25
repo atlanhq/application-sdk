@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import http.server
-import sys
 import threading
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import sync_marketplace_tags  # noqa: E402
+import sync_marketplace_tags
 
 BODY = '{"app_id":"019c","name":"gcs","display_name":"GCS","app_type":"connector","tags":["google"]}'
 

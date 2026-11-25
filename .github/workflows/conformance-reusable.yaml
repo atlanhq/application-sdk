@@ -502,9 +502,11 @@ jobs:
             # K-series is APP-scoped and no-ops on the SDK itself.  Watches the
             # contract source (K001-K003) AND the generated artifacts
             # (K004/K005): a hand-edit to atlan.yaml or app/generated/** with no
-            # contract/ change must still trigger K.
+            # contract/ change must still trigger K.  It also watches Python:
+            # K032 reads `@task(pool=)` from app source, so a PR that only
+            # misspells a pool name must still trigger K.
             contract-toolkit:
-              - "{contract/**,atlan.yaml,app.yaml,app/generated/**}"
+              - "{contract/**,atlan.yaml,app.yaml,app/generated/**,**/*.py}"
             # S-series (secret hygiene): S001 is 'both'; S002 is APP-scoped.
             security:
               - "**/*.py"

@@ -11,28 +11,20 @@ runner, so these are deliberately YAML-shape assertions.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
-import yaml
+from _bump_skip import without_bump_skip
+from _workflows import ACTIONS, WORKFLOWS, load_workflow, triggers
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-
-_WORKFLOW = (
-    Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
-)
-_TWINGATE_ACTION = (
-    Path(__file__).resolve().parents[3] / ".github/actions/twingate-connect/action.yml"
-)
+_WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
+_TWINGATE_ACTION = ACTIONS / "twingate-connect" / "action.yml"
 
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+    return load_workflow(_WORKFLOW)
 
 
 @pytest.fixture(scope="module")
@@ -42,9 +34,7 @@ def jobs(workflow: dict) -> dict:
 
 @pytest.fixture(scope="module")
 def inputs(workflow: dict) -> dict:
-    # `on:` round-trips as the YAML 1.1 boolean True under PyYAML.
-    on = workflow.get("on") or workflow.get(True)
-    return on["workflow_call"]["inputs"]
+    return triggers(workflow)["workflow_call"]["inputs"]
 
 
 def test_both_jobs_exist(jobs: dict) -> None:
@@ -355,7 +345,7 @@ def test_test_jobs_connect_over_twingate(jobs: dict) -> None:
 
 
 def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
-    action = yaml.safe_load(_TWINGATE_ACTION.read_text(encoding="utf-8"))
+    action = load_workflow(_TWINGATE_ACTION)
     script = next(s for s in action["runs"]["steps"] if s.get("id") == "connect")["run"]
     bounded = sum(
         int(n) + int(k or 0)
@@ -407,10 +397,10 @@ def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> 
 
 def test_both_vpn_actions_resubnet_docker_identically() -> None:
     def resubnet(path: Path) -> dict:
-        steps = yaml.safe_load(path.read_text(encoding="utf-8"))["runs"]["steps"]
+        steps = load_workflow(path)["runs"]["steps"]
         step = next(s for s in steps if "default-address-pools" in s.get("run", ""))
         assert steps.index(step) == 0, path
         return step
 
-    gp = _WORKFLOW.parents[1] / "actions/globalprotect-connect/action.yml"
+    gp = ACTIONS / "globalprotect-connect" / "action.yml"
     assert resubnet(_TWINGATE_ACTION) == resubnet(gp)

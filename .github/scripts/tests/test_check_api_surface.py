@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import check_api_surface as surface
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import check_api_surface as surface  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 

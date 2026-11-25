@@ -38,14 +38,10 @@ gate, because they are about the world the gate assumes:
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
+import renovate_approval_conditions as gate
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import renovate_approval_conditions as gate  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/renovate-auto-approve-reusable.yml"

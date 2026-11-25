@@ -25,18 +25,25 @@ from application_sdk.execution._temporal.interceptors.outputs import (
 from application_sdk.outputs import (
     Artifact,
     BlankIdentity,
+    FetchFailureReason,
     Metric,
     OutputCollector,
     RecordSkipped,
     SkipReason,
     current_outputs,
     get_outputs,
+    record_fetch_failure,
     skip_record,
+)
+from application_sdk.outputs.fetch_failures import (
+    FETCH_FAILURES_LAYOUT,
+    FETCH_FAILURES_METRIC,
 )
 from application_sdk.outputs.skipped import (
     SKIPPED_RECORDS_METRIC,
     SkippableRecord,
     SkippedRecordSink,
+    merge_run_log,
     merge_run_skips,
 )
 
@@ -914,6 +921,134 @@ class TestSkippedRecordsThroughInterceptors:
         with pytest.raises(ValueError, match="creator rejects"):
             await self._run_activity(transform)
         assert uploads == {}
+
+
+class TestFetchFailuresThroughInterceptors:
+    """FND-5294: fetch failures reach the workflow output as metric, artifact and status."""
+
+    _run_activity = staticmethod(TestSkippedRecordsThroughInterceptors._run_activity)
+    _run_workflow = staticmethod(TestSkippedRecordsThroughInterceptors._run_workflow)
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state(self):
+        current_outputs.set(None)
+        yield
+        current_outputs.set(None)
+
+    @pytest.fixture
+    def uploads(self, tmp_path):
+        store: dict[str, bytes] = {}
+
+        async def upload_file(key, local_path):
+            store[key] = Path(local_path).read_bytes()
+
+        async def list_data_keys(prefix):
+            return sorted(k for k in store if k.startswith(prefix))
+
+        async def download_file(key, local_path):
+            Path(local_path).write_bytes(store[key])
+
+        parts = iter(range(1000))
+        with (
+            mock.patch.multiple(
+                "application_sdk.storage",
+                upload_file=upload_file,
+                list_data_keys=list_data_keys,
+                download_file=download_file,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.build_output_path",
+                return_value=_RUN_PREFIX,
+            ),
+            mock.patch(
+                "application_sdk.outputs.fetch_failures._part_location",
+                side_effect=lambda: (
+                    tmp_path / "scratch" / f"{(n := next(parts))}.ndjson",
+                    f"act-{n}.ndjson",
+                ),
+            ),
+        ):
+            yield store
+
+    async def test_failures_from_gather_reach_workflow_output(self, uploads, tmp_path):
+        async def fetch(report_id: str) -> str | None:
+            if report_id.endswith("x"):
+                record_fetch_failure(
+                    FetchFailureReason.NOT_FOUND,
+                    entity_type="Report",
+                    record_id=report_id,
+                    http_status=404,
+                )
+                return None
+            return report_id
+
+        async def extract(input):
+            got = await asyncio.gather(*(fetch(r) for r in ["a", "bx", "c", "dx"]))
+            return _TaskOutput(rows=len([g for g in got if g]))
+
+        extracted = await self._run_activity(extract)
+        (part_key,) = uploads
+        assert part_key.startswith(f"{_RUN_PREFIX}/fetch-failures/parts/")
+
+        async def merge(input):
+            await merge_run_log(_RUN_PREFIX, str(tmp_path), FETCH_FAILURES_LAYOUT)
+            return Output()
+
+        merged = await self._run_activity(merge)
+        result = await self._run_workflow([extracted, merged], Output())
+
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics[FETCH_FAILURES_METRIC] == 2
+        assert result.metrics["fetch-failures-not-found"] == 2
+        merged_key = f"{_RUN_PREFIX}/fetch-failures.ndjson"
+        assert result.artifacts == {
+            "fetch-failures": {"path": merged_key, "display_name": "Fetch failures"}
+        }
+        ids = sorted(
+            orjson.loads(x)["record_id"] for x in uploads[merged_key].splitlines()
+        )
+        assert ids == ["bx", "dx"]
+
+    async def test_no_failures_means_no_artifact_metric_or_status_change(self, uploads):
+        async def extract(input):
+            get_outputs().add_metric(Metric(name="reports", value=3))
+            return _TaskOutput(rows=3)
+
+        extracted = await self._run_activity(extract)
+        result = await self._run_workflow([extracted], Output())
+
+        assert uploads == {}
+        assert result.status == OutputStatus.SUCCESS
+        assert result.artifacts is None
+        assert result.metrics == {"reports": 3}
+
+    async def test_failed_activity_records_nothing(self, uploads):
+        async def extract(input):
+            record_fetch_failure(
+                FetchFailureReason.SOURCE_UNAVAILABLE,
+                entity_type="Report",
+                record_id="r",
+            )
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await self._run_activity(extract)
+        assert uploads == {}
+
+    async def test_failure_status_is_never_downgraded(self, uploads):
+        async def extract(input):
+            record_fetch_failure(
+                FetchFailureReason.FORBIDDEN, entity_type="Report", record_id="r"
+            )
+            return _TaskOutput()
+
+        extracted = await self._run_activity(extract)
+        result = await self._run_workflow(
+            [extracted], Output(status=OutputStatus.FAILURE)
+        )
+
+        assert result.status == OutputStatus.FAILURE
+        assert result.metrics[FETCH_FAILURES_METRIC] == 1
 
 
 class TestSkippedPartsUseTheRunningApp:

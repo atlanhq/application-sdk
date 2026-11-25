@@ -11,14 +11,11 @@ These tests fail when a caller grows its own again.
 from __future__ import annotations
 
 import ast
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import check_generated_freshness  # noqa: E402
-import regenerate_contract  # noqa: E402
-import renovate_pkl_sync  # noqa: E402
+import check_generated_freshness
+import regenerate_contract
+import renovate_pkl_sync
 
 SCRIPTS = Path(__file__).parent.parent
 

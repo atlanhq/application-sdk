@@ -40,6 +40,7 @@ from application_sdk._context_errors import (  # re-exported; defined in the api
     AppContextError,
 )
 from application_sdk._runtime.offload import run_best_effort, run_in_thread
+from application_sdk.app._app_config_validation import validate_app_config
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
     _build_entry_points,
@@ -80,6 +81,10 @@ from application_sdk.contracts.cleanup import (
     CleanupOutput,
     StorageCleanupInput,
     StorageCleanupOutput,
+)
+from application_sdk.contracts.fetch_failures import (
+    MergeFetchFailuresInput,
+    MergeFetchFailuresOutput,
 )
 from application_sdk.contracts.skipped_records import (
     MergeSkippedRecordsInput,
@@ -1525,6 +1530,12 @@ class App(ABC):
         - No valid entry points or run() with proper types found
         """
         super().__init_subclass__(**kwargs)
+
+        # Before the registered-skip: a template or abstract base reports its
+        # own bad declarations too. Warn-only until v4.0.0. Not in the
+        # workflow sandbox, which re-imports app modules on every run.
+        if not workflow.unsafe.in_sandbox():
+            validate_app_config(cls)
 
         # Skip if already registered (check own __dict__ only, not inherited)
         if cls.__dict__.get("_app_registered", False):
@@ -3047,12 +3058,57 @@ class App(ABC):
             key=merged.key, kept=merged.kept, truncated=truncated
         )
 
+    # A bounded merge of at most MAX_SKIPPED_RECORDS lines, as above.
+    @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
+    async def merge_fetch_failures(
+        self, input: MergeFetchFailuresInput
+    ) -> MergeFetchFailuresOutput:
+        """Framework task: merge the run's fetch-failure parts into one artifact.
+
+        Scheduled by the workflow after ``run()`` returns, and only when the
+        run's ``fetch-failures`` metric is above zero. Concatenates the
+        per-activity parts under ``{run prefix}/fetch-failures/parts/`` into
+        ``{run prefix}/fetch-failures.ndjson`` (capped at
+        ``MAX_SKIPPED_RECORDS`` lines), adds it as the run artifact
+        ``fetch-failures``, and records ``fetch-failures-truncated`` for every
+        failure that was counted but neither kept nor lost to a storage
+        failure. See ``application_sdk.outputs.fetch_failures``.
+        """
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
+        from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: as above
+            run_temp_dir,
+        )
+        from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+        from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
+            FETCH_FAILURES_LAYOUT,
+            FETCH_FAILURES_TRUNCATED_METRIC,
+        )
+        from application_sdk.outputs.skipped import merge_run_log  # noqa: PLC0415
+
+        merged = await merge_run_log(
+            build_output_path(), run_temp_dir(), FETCH_FAILURES_LAYOUT
+        )
+        truncated = max(0, input.failure_count - input.unpersisted_count - merged.kept)
+        if truncated:
+            get_outputs().add_metric(
+                Metric(name=FETCH_FAILURES_TRUNCATED_METRIC, value=truncated)
+            )
+        return MergeFetchFailuresOutput(
+            key=merged.key, kept=merged.kept, truncated=truncated
+        )
+
     async def on_complete(self) -> None:
         """Lifecycle hook called after ``run()`` finishes (success or failure).
 
         The default implementation deletes local files produced during the run
         when cleanup is enabled (``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``
-        not set to a falsy value).
+        not set to a falsy value). Inside a workflow the worker reads that
+        variable once at start and pins its value on each run at the run's
+        first workflow task, so a run replays with the cleanup it started
+        with whatever the replaying pod's value is. Called outside a
+        workflow, it reads the variable.
 
         Override this method to add custom post-run logic.  Call
         ``await super().on_complete()`` to preserve the default file cleanup::
@@ -3061,8 +3117,14 @@ class App(ABC):
                 await self.send_notification()
                 await super().on_complete()
         """
-        cleanup_enabled = env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True)
-        if cleanup_enabled:
+        # Passed through so the sandbox sees the module the worker's
+        # RunFlagsInterceptor set the run's flags in, not a fresh copy.
+        with workflow.unsafe.imports_passed_through():
+            from application_sdk.execution._temporal.run_flags import (  # noqa: PLC0415 — circular: execution imports app.base
+                cleanup_enabled,
+            )
+
+        if cleanup_enabled():
 
             async def _local_cleanup() -> None:
                 try:
@@ -3120,6 +3182,11 @@ class App(ABC):
 # calls (e.g. tests or worker re-creation) and never registers the same Temporal
 # workflow twice.
 _workflow_class_cache: dict[tuple[type, str, str], type] = {}
+
+_EARLY_RUN_BINDING_PATCH = "atlan-sdk/early-run-binding"
+"""``workflow.patched`` marker recorded by every run whose generated
+``__init__`` binds the App instance to the run (FND-5219). A history without it
+was written before that change and binds in ``_run``, as it did then."""
 
 
 def _validate_interaction_signature(
@@ -3387,6 +3454,53 @@ async def _merge_skipped_records(app_instance: "App") -> None:
         if lost > 0:
             outputs.add_metric(
                 Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lost)
+            )
+
+
+async def _merge_fetch_failures(app_instance: "App") -> None:
+    """Schedule ``merge_fetch_failures`` when the run recorded any (FND-5294).
+
+    Workflow code, the sibling of :func:`_merge_skipped_records`. A run with
+    no fetch failures schedules nothing, and ``workflow.patched`` keeps any
+    run started before this path existed replaying unchanged, even one whose
+    app emitted a ``fetch-failures`` metric of its own. Fails open: a
+    merge failure is logged and every failure not already counted as
+    unpersisted is recorded as ``fetch-failures-unpersisted``.
+    """
+    from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+    from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
+        FETCH_FAILURES_METRIC,
+        FETCH_FAILURES_UNPERSISTED_METRIC,
+    )
+
+    outputs = get_outputs()
+    failures = int(outputs.numeric_metric(FETCH_FAILURES_METRIC))
+    if failures <= 0:
+        return
+    # An app on an older SDK may have emitted its own ``fetch-failures``
+    # metric. Replaying that history must not gain the new activity, so the
+    # command is versioned rather than relying on the name being unused.
+    if not workflow.patched("fetch-failures-merge"):
+        return
+    unpersisted = int(outputs.numeric_metric(FETCH_FAILURES_UNPERSISTED_METRIC))
+    try:
+        await app_instance.merge_fetch_failures(
+            MergeFetchFailuresInput(
+                failure_count=failures, unpersisted_count=unpersisted
+            )
+        )
+    except Exception:  # noqa: BLE001 — fail-open by design (FND-5294): logged via _safe_log with exc_info=True and counted in fetch-failures-unpersisted
+        _safe_log(
+            "error",
+            "Failed to merge fetch-failure parts; the run has no "
+            "fetch-failures artifact (parts remain under the run prefix)",
+            fetch_failure_count=failures,
+            exc_info=True,
+        )
+        lost = failures - unpersisted
+        if lost > 0:
+            outputs.add_metric(
+                Metric(name=FETCH_FAILURES_UNPERSISTED_METRIC, value=lost)
             )
 
 
@@ -4205,6 +4319,23 @@ def generate_workflow_class(
             )
             correlation_id = run_id
 
+        # wf_cls.__init__ builds the App instance and binds it to the run
+        # (context, stored refs, @task wrapping) before Temporal applies any
+        # @signal / @update delivered in the run's first activation, which
+        # runs before this coroutine starts. See _bind_app_instance_to_run.
+        # The correlation id needs the start input, so __init__ binds a
+        # provisional one; set the resolved one here, in the same dict the
+        # task wrappers hold. Fall back to binding here when ``self`` is a
+        # stand-in (e.g. MagicMock from unit tests) where ``__init__`` didn't run.
+        existing = getattr(self, "_app_instance", None)
+        context_data = getattr(self, "_run_context_data", None)
+        if isinstance(existing, app_cls) and isinstance(context_data, dict):
+            app_instance = existing
+        else:
+            app_instance = existing if isinstance(existing, app_cls) else app_cls()
+            self._app_instance = app_instance
+            context_data = _bind_app_instance_to_run(app_instance, start_time)
+        context_data["correlation_id"] = correlation_id
         context = AppContext(
             app_name=app_name,
             app_version=app_version,
@@ -4214,29 +4345,7 @@ def generate_workflow_class(
             correlation_id=correlation_id,
             started_at=start_time,
         )
-        # The wf_cls.__init__ constructs the App instance up-front so that any
-        # @signal / @query / @update runtime interactions
-        # (which may fire as early as immediately after workflow start, before
-        # _run's first await) can delegate to the same instance _run uses.
-        # Fall back to constructing one here when ``self`` is a stand-in (e.g.
-        # MagicMock from unit tests) where ``__init__`` didn't run.
-        existing = getattr(self, "_app_instance", None)
-        if isinstance(existing, app_cls):
-            app_instance = existing
-        else:
-            app_instance = app_cls()
-            self._app_instance = app_instance
         app_instance._context = context
-
-        app_instance._run_stored_refs = _RunStoredRefs()
-        context_data = {
-            "run_id": run_id,
-            "workflow_id": workflow_id,
-            "correlation_id": context.correlation_id,
-        }
-        # BLDX-878: inter-app calls deactivated pending review.
-        # app_instance._client = WorkflowAppClient(context_data)
-        _wrap_instance_tasks(app_instance, context_data)
 
         _safe_log(
             "info",
@@ -4279,6 +4388,7 @@ def generate_workflow_class(
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             await _merge_skipped_records(app_instance)
+            await _merge_fetch_failures(app_instance)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
@@ -4414,12 +4524,58 @@ def generate_workflow_class(
     # — sharing state with _run.
     interaction_relays = _collect_interaction_relays(app_cls, cls_name)
 
+    def _bind_app_instance_to_run(
+        app_instance: "App", started_at: datetime
+    ) -> dict[str, Any]:
+        """Give ``app_instance`` this run's context, stored refs and task wrappers.
+
+        Returns the context dict the task wrappers hold. Its ``correlation_id``
+        starts as the run id; ``_run`` sets the resolved one, which needs the
+        start input.
+        """
+        info = workflow.info()
+        context_data: dict[str, Any] = {
+            "run_id": info.run_id,
+            "workflow_id": info.workflow_id,
+            "correlation_id": info.run_id,
+        }
+        app_instance._context = AppContext(
+            app_name=app_name,
+            app_version=app_version,
+            build_id=app_build_id,
+            run_id=info.run_id,
+            workflow_id=info.workflow_id,
+            correlation_id=info.run_id,
+            started_at=started_at,
+        )
+        app_instance._run_stored_refs = _RunStoredRefs()
+        # BLDX-878: inter-app calls deactivated pending review.
+        # app_instance._client = WorkflowAppClient(context_data)
+        _wrap_instance_tasks(app_instance, context_data)
+        return context_data
+
     def _wf_init(self: Any) -> None:
-        # Construct the per-run App instance eagerly so interactions that fire
-        # before _run's first await still hit a live instance. _run later
-        # finishes context setup (correlation id, _wrap_instance_tasks, etc.)
-        # on this same instance.
+        # Build the per-run App instance and bind it to the run here, not in
+        # _run. Temporal applies the @signal / @update jobs of the run's first
+        # activation (signal-with-start, update-with-start) after __init__ but
+        # before the run coroutine starts, so a handler there must already see
+        # @task methods wrapped as activities. Unwrapped, the task body would
+        # run inline on the workflow thread: no retries, no timeouts, and
+        # re-run on every replay.
         self._app_instance = app_cls()
+        # Outside a workflow (unit tests constructing wf_cls directly) there
+        # is no run to bind to; _run binds on its fallback path instead.
+        #
+        # The patch marker keeps runs started before this change replaying
+        # their own history: there a first-activation handler ran its task
+        # inline and recorded no activity, so binding here would schedule one
+        # on replay and fail the run with a nondeterminism error. Live,
+        # ``patched`` is True and records the marker; on replay it is True only
+        # when the history has it, so such runs keep binding in _run.
+        if workflow.in_workflow() and workflow.patched(_EARLY_RUN_BINDING_PATCH):
+            self._run_context_data = _bind_app_instance_to_run(
+                self._app_instance, _safe_now()
+            )
 
     _wf_init.__name__ = "__init__"
     _wf_init.__qualname__ = f"{cls_name}.__init__"

@@ -328,6 +328,18 @@ def test_redacts_keyword_repr_entries(text: str, expected: str) -> None:
         "signature",
         "sharedaccesskey",
         "accountkey",
+        "access_key",
+        "accesskey",
+        "secret_key",
+        "account_key",
+        "sas_token",
+        "sastoken",
+        "sas_key",
+        "session_token",
+        "sessiontoken",
+        "security_token",
+        "bearer_token",
+        "encryption_key",
         "sig",
         "token",
         "auth",
@@ -372,6 +384,88 @@ def test_redaction_is_idempotent(text: str) -> None:
     once = redact_secrets(text)
     assert "FAKE" not in once
     assert redact_secrets(once) == once
+
+
+# Credential key names the object-store clients use (obstore's S3 / Azure / GCS
+# config, boto, minio, Azure SDKs). Each is suffix-matched, so a prefixed form
+# of a listed name is covered by that name.
+_OBJECT_STORE_SECRET_KEYS = [
+    "secret_access_key",
+    "aws_secret_access_key",
+    "SecretAccessKey",
+    "AWS_SECRET_ACCESS_KEY",
+    "access_key",
+    "azure_storage_access_key",
+    "secret_key",
+    "account_key",
+    "AccountKey",
+    "azure_storage_account_key",
+    "service_account_key",
+    "sas_token",
+    "SasToken",
+    "sas_key",
+    "session_token",
+    "aws_session_token",
+    "SessionToken",
+    "fabric_session_token",
+    "security_token",
+    "bearer_token",
+    "encryption_key",
+]
+
+
+@pytest.mark.parametrize("name", _OBJECT_STORE_SECRET_KEYS)
+def test_redacts_object_store_secret_as_a_bare_pair(name: str) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(f"upload failed: {name}=FAKEOS bucket=b")
+        == f"upload failed: {name}=*** bucket=b"
+    )
+
+
+@pytest.mark.parametrize("name", _OBJECT_STORE_SECRET_KEYS)
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_redacts_object_store_secret_as_a_quoted_key(name: str, quote: str) -> None:
+    """A dict repr (single quotes) and a JSON object (double quotes)."""
+    from application_sdk.errors import redact_secrets
+
+    q = quote
+    text = f"{{{q}{name}{q}: {q}FAKE OS,1{q}, {q}bucket{q}: {q}b{q}}}"
+    expected = f"{{{q}{name}{q}: {q}***{q}, {q}bucket{q}: {q}b{q}}}"
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize("name", _OBJECT_STORE_SECRET_KEYS)
+def test_redacts_object_store_secret_in_a_keyword_repr(name: str) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(f"S3Config(region='r', {name}='FAKE OS;1', bucket='b')")
+        == f"S3Config(region='r', {name}='***', bucket='b')"
+    )
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        # Pagination cursors and correlation ids.
+        "next_token=abc123 page_token=xyz continuation_token=c1",
+        "key_count=12 run_guid=0f1e2d",
+        # The AWS access-key *id* is an identifier: it stays visible so a
+        # wrong-key error is still diagnosable. Only ``access_key`` exactly
+        # (obstore's Azure account key) and longer names ending in it are masked.
+        "access_key_id=AKIAFAKEID aws_access_key_id=AKIAFAKEID",
+        "{'AWSAccessKeyId': 'AKIAFAKEID', 'sse_kms_key_id': 'k1'}",
+        # GCS service-account identifiers are not secrets.
+        "{'private_key_id': 'pk1', 'client_email': 'sa@example.com'}",
+        "S3Config(access_key_id='AKIAFAKEID', token_type='Bearer')",
+    ],
+)
+def test_object_store_identifiers_and_cursors_survive(diagnostic: str) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(diagnostic) == diagnostic
 
 
 def test_quoted_pass_keeps_pagination_cursors() -> None:

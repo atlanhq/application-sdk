@@ -13,15 +13,11 @@ The guards below pin the two consumers to one driver and one input set.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import build_callback_summary as mod
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import build_callback_summary as mod
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REUSABLE = _REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"

@@ -20,18 +20,14 @@ the base image those paths build FROM.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import harbor_release_tags
 import pytest
 import yaml
+from _workflows import WORKFLOWS, job, load_workflow
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import harbor_release_tags  # noqa: E402
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_HARBOR = _REPO_ROOT / ".github/workflows/harbor-release.yaml"
+_HARBOR = WORKFLOWS / "harbor-release.yaml"
 
 #: (workflow path, build job, merge job) for each base-image publisher.
 #: One entry today — build-image.yaml, which pushed an unconsumed
@@ -40,16 +36,6 @@ _HARBOR = _REPO_ROOT / ".github/workflows/harbor-release.yaml"
 #: publisher is added here rather than going unchecked; the coverage test
 #: below fails until it is.
 _PUBLISHERS = (pytest.param(_HARBOR, "build", "merge", id="harbor-release"),)
-
-
-def _load(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _job(path: Path, name: str) -> dict:
-    jobs = _load(path)["jobs"]
-    assert name in jobs, f"{path.name} has no job {name!r}; jobs are {sorted(jobs)}"
-    return jobs[name]
 
 
 def _legs(job: dict) -> dict:
@@ -72,13 +58,13 @@ def _step_with(job: dict, needle: str) -> dict:
 def test_each_architecture_builds_on_a_runner_native_to_it(
     path: Path, build: str, _merge: str
 ) -> None:
-    job = _job(path, build)
-    assert job["runs-on"] == "${{ matrix.runner }}", (
+    build_job = job(load_workflow(path), build)
+    assert build_job["runs-on"] == "${{ matrix.runner }}", (
         f"{path.name}:{build} pins a single runner, so one architecture is "
         "emulated. The runner must come from the matrix."
     )
 
-    legs = _legs(job)
+    legs = _legs(build_job)
     assert set(legs) == {"amd64", "arm64"}, (
         f"{path.name} publishes {sorted(legs)}. The base image needs BOTH: "
         "arm64 for tenant nodes, amd64 for CI and local development. Dropping "
@@ -104,7 +90,7 @@ def test_a_failing_architecture_does_not_cancel_the_other(
     path: Path, build: str, _merge: str
 ) -> None:
     """Whether ONE arch or BOTH broke is the entire diagnosis."""
-    assert _job(path, build)["strategy"]["fail-fast"] is False
+    assert job(load_workflow(path), build)["strategy"]["fail-fast"] is False
 
 
 # ── The legs do not collide ──────────────────────────────────────────────────
@@ -115,7 +101,7 @@ def test_the_legs_do_not_share_a_build_cache_scope(
     path: Path, build: str, _merge: str
 ) -> None:
     """secure-build-push-apps defaults to an unscoped `type=gha`."""
-    build_step = _step_with(_job(path, build), "secure-build-push-apps")
+    build_step = _step_with(job(load_workflow(path), build), "secure-build-push-apps")
     for key in ("cache-from", "cache-to"):
         value = build_step["with"].get(key, "")
         assert "scope=" in value, (
@@ -133,8 +119,7 @@ def test_the_legs_do_not_share_a_build_cache_scope(
 def test_the_legs_do_not_share_a_concurrency_group(
     path: Path, build: str, _merge: str
 ) -> None:
-    job = _job(path, build)
-    group = job.get("concurrency", {}).get("group")
+    group = job(load_workflow(path), build).get("concurrency", {}).get("group")
     if group is None:
         pytest.skip("job declares no concurrency group")
     assert "matrix.arch" in group or "matrix.platform" in group, (
@@ -148,7 +133,7 @@ def test_the_legs_do_not_share_a_concurrency_group(
 def test_the_legs_do_not_share_a_tag(path: Path, build: str, _merge: str) -> None:
     """Both legs pushing one tag means whichever finishes last wins and the
     published image is single-arch — with no error anywhere."""
-    build_step = _step_with(_job(path, build), "secure-build-push-apps")
+    build_step = _step_with(job(load_workflow(path), build), "secure-build-push-apps")
     tags = str(build_step["with"]["tags"])
     assert "matrix.arch" in tags or "matrix.platform" in tags, (
         f"{path.name}:{build} pushes both architectures to the same tag."
@@ -164,7 +149,7 @@ def test_a_merge_job_waits_for_every_build_leg(
 ) -> None:
     """Without this the per-arch tags are all that is ever published, and every
     consumer's `FROM` fails on `no match for platform in manifest`."""
-    needs = _job(path, merge)["needs"]
+    needs = job(load_workflow(path), merge)["needs"]
     needs = [needs] if isinstance(needs, str) else needs
     assert build in needs, f"{path.name}:{merge} does not wait for {build!r}"
 
@@ -173,7 +158,7 @@ def test_a_merge_job_waits_for_every_build_leg(
 def test_the_merge_job_combines_both_architectures(
     path: Path, build: str, merge: str
 ) -> None:
-    body = yaml.dump(_job(path, merge))
+    body = yaml.dump(job(load_workflow(path), merge))
     assert "amd64" in body and "arm64" in body, (
         f"{path.name}:{merge} does not reference both per-arch images, so the "
         "manifest it publishes cannot be multi-arch."
@@ -190,14 +175,12 @@ def test_harbor_release_publishes_to_ghcr_only() -> None:
     assert registries == {"ghcr.io"}
 
 
-@pytest.mark.parametrize(
-    "workflow", [_HARBOR, _REPO_ROOT / ".github/workflows/pull_request.yaml"]
-)
+@pytest.mark.parametrize("workflow", [_HARBOR, WORKFLOWS / "pull_request.yaml"])
 def test_no_job_logs_in_to_registry_atlan_com(workflow: Path) -> None:
     """Harbor is retired behind the registry gateway, which rejects the old
     HARBOR_* credentials. A login step to it fails the job before any build
     runs — the e2e base-image legs failed exactly this way."""
-    body = yaml.dump(_load(workflow))
+    body = yaml.dump(load_workflow(workflow))
     assert "HARBOR_PASSWORD" not in body
     assert "registry: registry.atlan.com" not in body
 
@@ -205,7 +188,7 @@ def test_no_job_logs_in_to_registry_atlan_com(workflow: Path) -> None:
 def test_the_staging_tags_the_merge_reads_are_the_ones_the_build_wrote() -> None:
     """These are two separate expressions in two jobs; if they drift, the merge
     fails on a missing manifest at release time and nowhere earlier."""
-    workflow = _load(_HARBOR)
+    workflow = load_workflow(_HARBOR)
     prepare_outputs = workflow["jobs"]["prepare"]["outputs"]
     assert "staging_base" in prepare_outputs, (
         "the staging repository is no longer a shared output, so the build and "
@@ -213,9 +196,9 @@ def test_the_staging_tags_the_merge_reads_are_the_ones_the_build_wrote() -> None
     )
 
     build_tags = str(
-        _step_with(_job(_HARBOR, "build"), "secure-build-push-apps")["with"]["tags"]
+        _step_with(job(workflow, "build"), "secure-build-push-apps")["with"]["tags"]
     )
-    merge_body = yaml.dump(_job(_HARBOR, "merge"))
+    merge_body = yaml.dump(job(workflow, "merge"))
     for fragment in ("staging_base", "outputs.sha"):
         assert fragment in build_tags, f"build tag lost {fragment!r}"
         assert fragment in merge_body, f"merge source lost {fragment!r}"
@@ -247,7 +230,7 @@ def test_every_base_image_publisher_is_covered() -> None:
     freely. Anchors the parametrisation to the tree rather than to itself."""
     referencing = {
         path.name
-        for path in (_REPO_ROOT / ".github/workflows").glob("*.y*ml")
+        for path in WORKFLOWS.glob("*.y*ml")
         if "app-runtime-base" in path.read_text(encoding="utf-8")
     }
 

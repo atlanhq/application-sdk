@@ -5,16 +5,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import sys
 import urllib.error
 from pathlib import Path
 from typing import Optional
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import release_candidate as rc  # noqa: E402
+import release_candidate as rc
 
 REPO = "atlan-example-app"
 BASE = f"ghcr.io/atlanhq/{REPO}"

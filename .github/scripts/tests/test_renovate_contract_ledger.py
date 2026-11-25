@@ -10,10 +10,7 @@ ledger in a repo that has none hands a dependency bump ownership of a file
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 import renovate_contract_ledger as driver
