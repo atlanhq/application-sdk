@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 444,
-    "warning": 5493
+    "warning": 5487
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -452,7 +452,7 @@
     },
     ".github/scripts/tests/test_docker_registry_mirror.py": {
       "error:reportAttributeAccessIssue": 4,
-      "warning:reportUnknownMemberType": 24
+      "warning:reportUnknownMemberType": 18
     },
     ".github/scripts/tests/test_e2e_branch_recheck.py": {
       "warning:reportUnknownMemberType": 9
