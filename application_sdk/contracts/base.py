@@ -1247,8 +1247,8 @@ def _incompatibilities(old_cls: type, new_cls: type) -> list[tuple[str, str]]:
     """Every ``(field, reason)`` that makes *new_cls* break *old_cls* payloads.
 
     The one implementation behind
-    :func:`application_sdk.contracts.compat.check_backwards_compatible` and the
-    deprecated :func:`is_backwards_compatible`. Types compare by
+    :func:`application_sdk.contracts.compat.check_backwards_compatible` and
+    :func:`is_backwards_compatible` (itself on its way out). Types compare by
     :func:`canonical_type_str`, so spelling changes that accept the same
     payloads (``Optional[str]`` → ``str | None``, ``Union[int, str]`` →
     ``Union[str, int]``, ``Annotated[List[int], ...]`` → ``list[int]``) are not
