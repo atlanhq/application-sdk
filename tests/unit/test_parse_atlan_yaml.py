@@ -20,25 +20,21 @@ import yaml
 # Load the script as a module without forcing a package layout under .github.
 # Not registered in sys.modules: nothing looks the script up by name, and a
 # registration would outlive this file for the rest of the xdist worker.
-_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[2] / ".github" / "scripts" / "parse_atlan_yaml.py"
-)
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".github" / "scripts"
+_SCRIPT_PATH = _SCRIPTS_DIR / "parse_atlan_yaml.py"
 _spec = importlib.util.spec_from_file_location("parse_atlan_yaml", _SCRIPT_PATH)
 assert _spec and _spec.loader
 parse_atlan_yaml = importlib.util.module_from_spec(_spec)
-# The script imports its sibling helper (``from _gha import ...``), which
-# resolves from ``.github/scripts`` the way it does when CI runs the script.
-# Only for the import: neither the directory nor a newly imported helper stays
-# behind on the worker, for the reason above.
-_modules_before = set(sys.modules)
-sys.path.insert(0, str(_SCRIPT_PATH.parent))
+# The script imports its sibling helper ``_gha``, which the scripts' own suite
+# finds through ``.github/scripts/pytest.ini``'s pythonpath. Make the directory
+# importable for the load only, and drop the helper afterwards for the same
+# reason the script itself stays unregistered.
+sys.path.insert(0, str(_SCRIPTS_DIR))
 try:
     _spec.loader.exec_module(parse_atlan_yaml)
 finally:
-    sys.path.remove(str(_SCRIPT_PATH.parent))
-    for _name in set(sys.modules) - _modules_before:
-        if _name.startswith("_gh"):
-            del sys.modules[_name]
+    sys.path.remove(str(_SCRIPTS_DIR))
+    sys.modules.pop("_gha", None)
 
 AtlanYamlError = parse_atlan_yaml.AtlanYamlError
 
