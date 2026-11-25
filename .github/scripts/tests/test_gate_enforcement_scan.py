@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+import discover_org_consumers as discover
 import gate_enforcement_scan
 import pytest
 from gate_enforcement_scan import (
@@ -1282,6 +1283,30 @@ def test_list_fleet_repos_filters_by_name_pattern():
         "atlanhq/atlan-mysql-app",
         "atlanhq/atlan-openapi-app",
     ]
+
+
+def test_list_fleet_repos_uses_the_discover_fleet_definition():
+    """One definition of "which repos are the fleet": the gate dashboard must
+    not drift from the Renovate roster when the pattern changes."""
+    assert DEFAULT_NAME_PATTERN is discover.DEFAULT_NAME_PATTERN
+
+
+def test_list_fleet_repos_raises_gh_error_on_an_unreadable_listing():
+    # A non-list payload must not read as an empty fleet.
+    def run(args: list) -> str:
+        return json.dumps({"not": "a list"})
+
+    with pytest.raises(GhError, match="non-list"):
+        list_fleet_repos("atlanhq", DEFAULT_NAME_PATTERN, run=run)
+
+
+def test_list_fleet_repos_propagates_a_failed_listing():
+    def run(args: list) -> str:
+        raise GhError("gh repo list failed: HTTP 401", status=401)
+
+    with pytest.raises(GhError) as excinfo:
+        list_fleet_repos("atlanhq", DEFAULT_NAME_PATTERN, run=run)
+    assert excinfo.value.status == 401
 
 
 def test_build_fleet_counts_the_headline_binary():
