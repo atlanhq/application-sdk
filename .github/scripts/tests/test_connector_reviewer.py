@@ -23,9 +23,6 @@ from typing import Any, cast
 from urllib.error import URLError
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from connector_reviewer import (
     advisory,
     holistic,

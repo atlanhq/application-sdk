@@ -182,6 +182,16 @@ def test_by_id_directive_keeps_the_series_comment_syntax(tmp_path) -> None:
     assert "# conformance: ignore[E010]" in (tmp_path / "by-id" / "E010.md").read_text()
 
 
+def test_python_anchored_k_rule_prints_a_python_directive(tmp_path) -> None:
+    """K032 anchors on ``@task(pool=)`` in Python, where ``//`` is a SyntaxError."""
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    text = (tmp_path / "by-id" / "K032.md").read_text()
+    assert "\n# conformance: ignore[K032]" in text
+    assert "// conformance: ignore[K032]" not in text
+
+
 def test_check_mode_catches_an_orphaned_by_id_file(tmp_path) -> None:
     """A by-id file whose rule id has left the catalog is invisible to the
     expected-file loop; only an orphan sweep can fail it."""

@@ -14,15 +14,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
 
+import gate_enforcement_scan
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import gate_enforcement_scan  # noqa: E402
-from gate_enforcement_scan import (  # noqa: E402
+from gate_enforcement_scan import (
     ARRIVAL_INTERMITTENT,
     ARRIVAL_NEVER,
     ARRIVAL_NO_DATA,

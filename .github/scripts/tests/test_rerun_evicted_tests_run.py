@@ -18,17 +18,15 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+import rerun_evicted_tests_run
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import rerun_evicted_tests_run  # noqa: E402
-from rerun_evicted_tests_run import (  # noqa: E402
+from _bump_skip import without_bump_skip
+from _gha_expr import evaluate
+from rerun_evicted_tests_run import (
     is_repairable_eviction,
     newer_runs,
     repair,
@@ -36,11 +34,6 @@ from rerun_evicted_tests_run import (  # noqa: E402
     run_duration_seconds,
     select_candidate,
 )
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-from _gha_expr import evaluate  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "c55c9281dd792bda9601a3b1bcd936276ff7baa6"

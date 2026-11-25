@@ -574,6 +574,11 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
 # "# conformance: ignore[E012] intentional: stdlib interop".
 _SUPPRESSION_ID_RE = re.compile(r"^(.*?ignore\s*\[)[^\]]*\]")
 
+# Rules of a ``//``-directive series (K) whose findings anchor only on Python
+# source, where a ``//`` directive is a SyntaxError: their by-id example uses
+# ``#``.  A rule that anchors on both pkl and Python keeps the series form.
+_PYTHON_ANCHORED_RULES: frozenset[str] = frozenset({"K032"})
+
 
 def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
     """The series' suppression directive, re-pointed at exactly ``rule``.
@@ -592,7 +597,10 @@ def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
             f"series {meta.prefix} suppression_example has no ignore[...] id: "
             f"{meta.suppression_example!r}"
         )
-    return f"{m.group(1)}{rule.id}] intentional: <why this is deliberate here>"
+    prefix = m.group(1)
+    if rule.id in _PYTHON_ANCHORED_RULES:
+        prefix = re.sub(r"^//", "#", prefix)
+    return f"{prefix}{rule.id}] intentional: <why this is deliberate here>"
 
 
 def _render_rule_file(meta: SeriesMeta, rule: RuleDefinition) -> str:

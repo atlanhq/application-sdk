@@ -455,7 +455,9 @@ response merges all in-process metric sources:
 
 - Custom metrics from `record_metric()` and direct OTel meter use
 - HTTP server instrumentation (FastAPIInstrumentor, stable OTel HTTP
-  semantic conventions: `http.request.method`, `http.route`, etc.)
+  semantic conventions: `http.request.method`, `http.route`, etc.;
+  duration as `http_server_request_duration_seconds`. The service sets
+  `OTEL_SEMCONV_STABILITY_OPT_IN=http` when it is unset)
 - Temporal SDK Rust-core families when enabled and reachable (proxied
   in-process from `127.0.0.1:9464` in combined mode). The proxied body is
   capped at `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES`; an oversize body is

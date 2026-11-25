@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import container_python_version as cpv
+import pytest
 
 
 def _dockerfile(tmp_path: Path, contents: str) -> Path:

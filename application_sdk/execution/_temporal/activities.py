@@ -369,8 +369,31 @@ def _current_workflow_type() -> str:
         return ""  # conformance: ignore[E007] activity-context probe; an empty metric attribute is the answer on the local path, not an error worth a log line
 
 
-def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
-    """Add FileReference objects to the per-workflow tracking set in _app_state.
+def _state_run_key(context: TaskContext) -> tuple[str, str]:
+    """``(workflow_id, run_id)`` of the run this activity belongs to.
+
+    Read off ``activity.info()``, as ``TaskStateAccessor`` reads it, so the
+    tracked refs land in the slot ``cleanup_files`` / ``cleanup_storage`` read.
+    Falls back to the task context outside an activity.
+    """
+    try:
+        info = activity.info()
+    except RuntimeError:  # not inside an activity context
+        return (
+            context.workflow_id,
+            context.run_id,
+        )  # conformance: ignore[E007] activity-context probe; the task context names the same run on the local path
+    return (
+        info.workflow_id or context.workflow_id,
+        info.workflow_run_id or context.run_id,
+    )
+
+
+def _track_file_refs(run: tuple[str, str], *refs: FileReference) -> None:
+    """Add FileReference objects to the run's tracking set in _app_state.
+
+    The slot is keyed by ``(workflow_id, run_id)`` and released by the
+    worker's run-state sweeper once the run has closed.
 
     Thread-safe: acquires _app_state_lock for the full read-modify-write so
     concurrent activities cannot clobber each other's additions.
@@ -383,7 +406,7 @@ def _track_file_refs(workflow_id: str, *refs: FileReference) -> None:
     )
 
     with _app_state_lock:
-        state = _app_state.setdefault(workflow_id, {})
+        state = _app_state.setdefault(run, {})
         tracked: set[FileReference] = state.setdefault(TRACKED_FILE_REFS_KEY, set())
         tracked.update(refs)
 
@@ -738,7 +761,7 @@ def create_activity_from_task(
 
                 all_refs = _find_file_refs(input_data) + _find_file_refs(result)
                 if all_refs:
-                    _track_file_refs(context.workflow_id, *all_refs)
+                    _track_file_refs(_state_run_key(context), *all_refs)
 
                 return cast("Output", result)
 

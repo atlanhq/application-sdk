@@ -15,7 +15,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -262,7 +262,7 @@ def format_changelog_section(
     Returns:
         str: Formatted changelog section
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     date_str = now.strftime("%B %d, %Y")
 
     changelog = f"## v{new_version} ({date_str})\n\n"

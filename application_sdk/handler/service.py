@@ -2144,7 +2144,17 @@ def create_app_handler_service(
         LogMiddleware,
     )
 
-    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # The SDK owns the HTTP metric contract: the documented series is the
+    # stable-semconv http.server.request.duration (seconds), exported as
+    # http_server_request_duration_seconds. Without this opt-in the
+    # instrumentor emits the legacy http.server.duration (milliseconds), so
+    # the documented PromQL returns nothing on any runtime whose environment
+    # does not set it. setdefault keeps an operator's explicit value. The
+    # instrumentation library reads the variable once per process, on the
+    # first instrument call, so it must be set before instrument_app.
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
+
+    # Auto-instrument HTTP server with OTel: emits http.server.request.duration,
     # http.server.active_requests, etc. with route-templated http.route labels
     # (no raw-path cardinality blowup). Metrics flow through the global
     # MeterProvider configured in observability/metrics_adaptor.py and land in

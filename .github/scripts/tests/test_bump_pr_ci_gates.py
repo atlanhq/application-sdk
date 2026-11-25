@@ -33,22 +33,17 @@ bootstrap templates against synthetic payloads, so a gate wired one paren out
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import bump_pr_opt_in
+import pr_test_command
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import bump_pr_opt_in  # noqa: E402
-import pr_test_command  # noqa: E402
-from _bump_skip import BUMP_SKIP_TERM  # noqa: E402
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
-from conformance.bootstrap import render as bootstrap_render  # noqa: E402
+from _bump_skip import BUMP_SKIP_TERM
+from _gha_expr import evaluate, evaluate_operand
+from conformance.bootstrap import render as bootstrap_render
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github/workflows"

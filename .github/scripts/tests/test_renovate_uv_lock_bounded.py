@@ -12,13 +12,9 @@ from __future__ import annotations
 import datetime
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import renovate_uv_lock_bounded as bounded
 
 # A lock in the shape uv writes it, including the [options] block that broke the

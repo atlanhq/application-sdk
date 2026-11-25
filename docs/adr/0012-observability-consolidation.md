@@ -35,7 +35,8 @@ seven-interceptor stack on the Temporal worker:
   HTTP metrics now use the **stable** OTel HTTP semantic conventions
   (`http.request.method`, `http.route`, `server.address`,
   `network.protocol.version`, `http.response.status_code`) — opt-in via
-  `OTEL_SEMCONV_STABILITY_OPT_IN=http`. The metric `http_server_duration_milliseconds`
+  `OTEL_SEMCONV_STABILITY_OPT_IN=http`, which the SDK sets as a process
+  default before instrumenting (an explicit value wins). The metric `http_server_duration_milliseconds`
   is renamed to `http_server_request_duration_seconds` (unit corrected
   from ms → seconds; matches the upstream-recommended base unit). Route
   templating eliminates the path-cardinality blow-up.

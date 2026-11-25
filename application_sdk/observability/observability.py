@@ -9,8 +9,8 @@ import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from time import monotonic, time
+from datetime import UTC, datetime
+from time import monotonic
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 if TYPE_CHECKING:
@@ -226,7 +226,7 @@ def _partition_filename(seq: int) -> str:
     safe there. *seq* is the writer's monotonic tie-breaker for when the clock
     has too coarse a resolution (~15 ms on Windows) to tell two files apart.
     """
-    ts_ns = int(datetime.now().timestamp() * 1e9)
+    ts_ns = int(datetime.now(UTC).timestamp() * 1e9)
     return f"{ts_ns}_{seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
 
 
@@ -392,7 +392,7 @@ def _write_and_upload_batch(
     Once the observability loop has shut down (interpreter exit) the upload
     runs on the calling thread instead, so a final export is not lost.
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     filename = _partition_filename(seq)
     local_dir = _local_partition_dir(data_dir, signal, now)
     local_path = os.path.join(local_dir, filename)
@@ -551,7 +551,7 @@ class AtlanObservability(Generic[T], ABC):
         # Initialize instance variables
         self._buffer: list[dict[str, object]] = []
         self._buffer_lock = threading.Lock()
-        self._last_flush_time = time()
+        self._last_flush_time = monotonic()
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self.data_dir = data_dir
@@ -1029,7 +1029,7 @@ class AtlanObservability(Generic[T], ABC):
         try:
             for record in records:
                 try:
-                    record_time = datetime.fromtimestamp(record["timestamp"])
+                    record_time = datetime.fromtimestamp(record["timestamp"], UTC)
                     partition_path = self._get_partition_path(record_time)
 
                     if (
@@ -1130,7 +1130,7 @@ class AtlanObservability(Generic[T], ABC):
             can_flush_here = not in_workflow and _has_running_loop()
             with self._buffer_lock:
                 self._buffer.append(processed_record)
-                now = time()
+                now = monotonic()
                 if (
                     can_flush_here
                     and len(self._flush_tasks) < _MAX_INFLIGHT_FLUSHES

@@ -9,14 +9,9 @@ history, which is unrecoverable — hence the emphasis on the merge cases.
 from __future__ import annotations
 
 import json
-import os
-import sys
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__))))
-
-import renovate_dashboard_stage as stage  # noqa: E402
+import renovate_dashboard_stage as stage
 
 
 def _scanner_output(tmp_path, repos=(), histories=None, fleet=True):

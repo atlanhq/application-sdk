@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import flag_job_timeouts as mod
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 START = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)

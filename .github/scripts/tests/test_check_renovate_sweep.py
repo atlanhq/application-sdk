@@ -13,11 +13,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import check_renovate_sweep as guard
+import pytest
 
 # Verbatim from the sweep, one PR's worth.
 AUTOMERGE_FAIL_BLOCK = (

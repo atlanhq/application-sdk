@@ -17,7 +17,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 def missing_results_reason(build_result: str, scan_result: str) -> str:
@@ -80,7 +80,7 @@ def main() -> None:
         print(f"Error: base allowlist has invalid JSON: {e}")
         sys.exit(1)
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     all_vulns: dict = {}
 
     # Parse Trivy results

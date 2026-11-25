@@ -13,14 +13,9 @@ Covers the conditional logic that used to be inlined in the
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import mirror_tags_dockerhub as mod
+import pytest
 
 DOCKERHUB_IMAGE = "docker.io/atlanhq/atlan-mysql-app:main-abc1234"
 GHCR_BASE = "ghcr.io/atlanhq/atlan-mysql-app"

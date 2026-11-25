@@ -12,16 +12,12 @@ not answer.
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Callable
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import queue_tree_diff  # noqa: E402
-from queue_tree_diff import decide, is_image_input, main, parse_pr_number  # noqa: E402
+import queue_tree_diff
+from queue_tree_diff import decide, is_image_input, main, parse_pr_number
 
 PR_SHA = "a" * 40
 PR_NUMBER = 42

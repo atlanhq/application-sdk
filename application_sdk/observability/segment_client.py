@@ -4,7 +4,7 @@ import logging
 import threading
 import weakref
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -558,7 +558,7 @@ class SegmentClient:
             userId=user_id,
             event=metric_record.name,
             properties=event_properties,
-            timestamp=datetime.fromtimestamp(metric_record.timestamp).isoformat(),
+            timestamp=datetime.fromtimestamp(metric_record.timestamp, UTC).isoformat(),
         )
 
     async def _send_batch_to_segment(

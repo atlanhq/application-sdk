@@ -25,6 +25,8 @@ class MyConnector(App):
 
 Under the hood, `@task` applies the Temporal `@activity.defn` decorator, registers the method in the `TaskRegistry`, and wires heartbeating. You never import from `temporalio` directly.
 
+When a run is created, the SDK replaces each `@task` method on that run's `App` instance with a dispatcher that schedules the task as an activity. This happens before `run()` and before any `@signal` or `@update` handler, so a task awaited from either always runs as an activity, never inline in workflow code.
+
 ## Typed Input/Output Contracts
 
 Every task boundary is a typed contract. The SDK validates contract fields at class definition time -- forbidden types raise `PayloadSafetyError` before your app starts.
@@ -262,7 +264,9 @@ the app without touching a decorator. Two caveats worth stating:
 - The ceiling bounds one *dispatch*, which is what the retry policy spends.
   Worker-eviction re-dispatches (pod SIGTERM: KEDA scale-down, spot reclaim,
   rolling deploy) each get a fresh window by design, and are bounded separately
-  by `ATLAN_WORKER_EVICTION_MAX_RETRIES`.
+  by `ATLAN_WORKER_EVICTION_MAX_RETRIES`. When that cap stops a re-dispatch, the
+  run records it in history, and a replay follows the record rather than the
+  replaying pod's cap, so pods with different caps replay the same run alike.
 
 ### The run-length SLA alert
 

@@ -17,15 +17,10 @@ test instead.
 from __future__ import annotations
 
 import json
-import os
-import sys
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__))))
-
-import renovate_refusal_alarm as alarm  # noqa: E402
-import renovate_uv_lock_bounded as bounded  # noqa: E402
+import renovate_refusal_alarm as alarm
+import renovate_uv_lock_bounded as bounded
 
 try:  # The vocabulary pin's other half — see _classifier() below.
     from conformance.renovate import classify as _conformance_classify

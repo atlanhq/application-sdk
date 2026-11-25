@@ -10,13 +10,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 
+import create_multiarch_manifest as mod
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import create_multiarch_manifest as mod  # noqa: E402
 
 OTHER = "registry.example.com/public/app-runtime-base"
 GHCR = "ghcr.io/atlanhq/app-runtime-base"

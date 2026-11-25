@@ -16,17 +16,13 @@ bootstrap template, in both directions:
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+from _bump_skip import without_bump_skip
+from _gha_expr import evaluate, evaluate_operand
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"

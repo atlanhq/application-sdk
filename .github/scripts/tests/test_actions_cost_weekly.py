@@ -9,16 +9,12 @@ from __future__ import annotations
 
 import inspect
 import json
-import sys
 from datetime import date
 from pathlib import Path
 
+import actions_cost_weekly as acw
+import actions_minutes_report as amr
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import actions_cost_weekly as acw  # noqa: E402
-import actions_minutes_report as amr  # noqa: E402
 
 # Monday 2026-10-12: the current week is 10-05..10-11, the previous 09-28..10-04.
 TODAY = date(2026, 10, 12)

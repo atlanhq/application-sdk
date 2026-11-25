@@ -25,16 +25,12 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+import renovate_approval_conditions as gate
+import test_command_comment as sticky
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import renovate_approval_conditions as gate  # noqa: E402
-import test_command_comment as sticky  # noqa: E402
 
 SHA = "abc123"
 REPO = "owner/repo"
