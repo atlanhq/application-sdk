@@ -246,8 +246,9 @@ class MetadataSource:
             no entry point is named.
         log: The logger the routes report through.
         normalize_body: Converts a v2 credential shape in a ``/validate`` body
-            to the v3 list before the credentials are stripped. The worker
-            passes its own, which honours connector-extended credential keys.
+            to the v3 list before the credentials are stripped. Both surfaces
+            pass the handler's request normalization, which honours its
+            ``extra_credential_keys`` and ``prepare_request_body``.
         max_fe_inputs_bytes: The GET ``fe_inputs`` cap.
         from_process_env: Whether this process's own ``ATLAN_APPLICATION_NAME``
             / ``ATLAN_DEPLOYMENT_NAME`` describe this app. ``False`` on the

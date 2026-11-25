@@ -515,6 +515,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "B007",
         "B008",
         "B009",
+        "B010",
         "D010",
         "P040",
         "P042",
@@ -995,6 +996,7 @@ def test_catalog_b_series_present() -> None:
         "B007",
         "B008",
         "B009",
+        "B010",
     }
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"

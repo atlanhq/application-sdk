@@ -56,6 +56,7 @@ from application_sdk.handler.object_routes import (
 )
 from application_sdk.handler.routes import (
     LoggingPreflightObserver,
+    _request_normalizer,
     include_app_routers_on,
     register_handler_routes,
 )
@@ -232,6 +233,9 @@ def build_asgi_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    # One request normalization for every route that reads a body, so the
+    # handler's extra credential keys and prepare_request_body apply alike.
+    normalize = _request_normalizer(handler)
     register_handler_routes(
         app,
         handler,
@@ -239,6 +243,7 @@ def build_asgi_app(
         app_package=app_package,
         observer=LoggingPreflightObserver(app_name),
         include_app_routers=False,
+        normalize=normalize,
     )
     generated = (
         generated_dir
@@ -259,6 +264,7 @@ def build_asgi_app(
                 task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
                 compute_manifest=handler_compute_manifest(handler, lambda: app_name),
+                normalize_body=normalize,
                 from_process_env=False,
             ),
         )

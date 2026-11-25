@@ -26,7 +26,7 @@ on contracts.  In **strict** mode the fingerprint-set includes unsuppressed
 WARNING results, which is where the rest of B-series remediation runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007/B008/B009 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008/B009/B010 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 
@@ -392,6 +392,25 @@ human audit):
   directory already covers it before porting.  Target shape: every SDK import
   in `atlan-openapi-app` `tests/integration/conftest.py` names a module that
   exists today.
+
+- **B010 SdkGlobalRebind** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app rebinds or deletes an attribute of
+  something it imported from `application_sdk` (a module global or a class
+  attribute), so its behaviour depends on the SDK reading that exact name in
+  every process that serves the app.  The finding names the rebound path and,
+  where one exists, its public replacement.  The two known cases: a rebind of
+  `application_sdk.handler.service._CREDENTIAL_KEYS` becomes
+  `extra_credential_keys = frozenset({...})` on the app's `Handler` subclass
+  (only the app's extra keys, not the SDK's), and a wrapper bound to
+  `service._normalize_credentials` becomes an override of
+  `Handler.prepare_request_body(self, body)`.  That hook runs *before*
+  credential normalization, so a wrapper that read the original body keeps its
+  logic and drops the call to the original; a wrapper that read the
+  normalized `credentials` pairs must read the v2 `credentials` dict or flat
+  keys instead.  Delete the patch, its `try/except` guard and the module
+  import together.  Target shape: `atlan-openapi-app` `app/handler.py`
+  customises behaviour only on its handler subclass.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when

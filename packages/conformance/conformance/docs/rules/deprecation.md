@@ -5,7 +5,7 @@
 
 # Backwards-Compatibility / Deprecation Rules (B-series)
 
-**9 rules** · Checker: `suite.checks.deprecation` (AST-based)
+**10 rules** · Checker: `suite.checks.deprecation` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -32,6 +32,7 @@ reassigned.
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
 | [B008](#b008) | `PrivateModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
 | [B009](#b009) | `RemovedSdkImport` | `warn` | `app` | `sdk-removed-surface` | — | 0.57.0 |
+| [B010](#b010) | `SdkGlobalRebind` | `warn` | `app` | `sdk-private-surface` | — | 0.62.0 |
 
 ---
 
@@ -563,5 +564,58 @@ while the deprecation lasts.
 replacement module.  Port the file to the replacement (`application_sdk.testing.e2e` for
 the old e2e base), or delete it: it has not run since the module was removed, so check
 whether a newer file already covers it before porting.
+
+---
+
+## B010 — `SdkGlobalRebind` {#b010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdk-private-surface` · **Autofixable:** — · **Since:** 0.62.0
+
+> Rebinds or deletes an attribute of something imported from application_sdk — a runtime monkeypatch the SDK does not know about
+
+**Rationale:** The SDK reads its own module globals and class attributes on the assumption that it set
+them. An app that rebinds one at import time depends on the SDK continuing to read that
+exact name, at that exact moment, in every process that serves the app, and none of that
+is a promise. Two connector apps changed request normalization this way: one extended
+application_sdk.handler.service._CREDENTIAL_KEYS with kerberos, the other replaced
+service._normalize_credentials with a wrapper. The SDK kept extra indirection layers
+only so both patches kept working, and a refactor that stopped reading either name would
+have broken the app with no error, because assigning a name nothing reads raises
+nothing. The patches also never reached the consolidated API host, which does not import
+that module, so the app already behaved differently there (FND-4688). B008 does not
+cover this: it reports private names only in some import shapes (not from
+application_sdk.handler import service), and a rebind of a public name is the same
+hazard. WARN rather than BLOCK because the fix is app-side and each known patch has a
+public replacement (Handler.extra_credential_keys, Handler.prepare_request_body).
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/handler.py — the app changes handler behaviour by subclassing
+  DefaultHandler, never by assigning to the SDK; no module under the three reference
+  apps' app/ or tests/ directories rebinds an attribute of anything imported from
+  application_sdk.
+- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
+
+Flags a statement that rebinds or deletes an attribute of anything the file imported
+from `application_sdk`: a module, a class or any other object.  Matched shapes:
+
+* `svc._CREDENTIAL_KEYS = ...` after `import application_sdk.handler.service as svc`;
+* `service._normalize_credentials = wrapper` after `from application_sdk.handler import
+  service`;
+* `Handler.hook = patched` after `from application_sdk.handler.base import Handler`;
+* augmented and annotated assignment, `del`, and the `setattr` / `delattr` builtins on
+  any of these.
+
+**Not matched.**  An attribute of an object the app built itself; `monkeypatch.setattr`
+and `unittest.mock.patch` in tests, which undo the change when the test ends; relative
+imports and imports of the app's own packages.
+
+**Remediation.**  Use the SDK's public extension point.  For the two known patches:
+declare extra v2 credential keys as `extra_credential_keys` on the app's `Handler`
+subclass instead of rebinding `service._CREDENTIAL_KEYS`, and override
+`Handler.prepare_request_body` instead of wrapping `service._normalize_credentials`.
+Both reach the worker and the consolidated API host.  Where no extension point exists,
+raise the gap with the SDK and say so in the suppression: `# conformance: ignore[B010]
+no public hook — tracked in <id>`.
 
 ---

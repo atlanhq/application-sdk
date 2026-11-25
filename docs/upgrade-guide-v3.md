@@ -491,6 +491,23 @@ class MyHandler(Handler):
 
 The `load()` method is removed — handler context (secrets, state) is injected automatically via `self.context`. Access credentials in handler methods with `await self.context.get_secret(name)`.
 
+### Extra credential keys and legacy request shapes
+
+Do not patch `application_sdk.handler.service` to change how requests are normalized. Rebinding `service._CREDENTIAL_KEYS` or `service._normalize_credentials` is deprecated (removal in v4.0.0), reaches only the worker, and is flagged by conformance rules B001 and B010. Declare the change on your `Handler` instead; the worker and the consolidated API host both read it:
+
+```python
+class HiveHandler(Handler):
+    # v2 flat top-level keys, beyond the SDK's own, that are credential material.
+    extra_credential_keys = frozenset({"kerberos"})
+
+    def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        # Runs on /auth, /check, /metadata, /validate and /start, before the
+        # body's credentials become [{key, value}] pairs.
+        if "metadataTemplateKey" in body and not body.get("object_filter"):
+            return {**body, "object_filter": body["metadataTemplateKey"]}
+        return body
+```
+
 ---
 
 ## Step 5: Upgrade the Application Entry Point

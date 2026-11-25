@@ -1621,6 +1621,24 @@
       "symbol": "S3ObjectStore"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_CREDENTIAL_KEYS is deprecated; use application_sdk.handler.base.Handler.extra_credential_keys \u2014 declare the extra keys on the app's Handler subclass, which every surface reads; rebinding this module global reaches only the worker. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_CREDENTIAL_KEYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_normalize_credentials is deprecated; use application_sdk.handler.base.Handler.prepare_request_body \u2014 override it on the app's Handler subclass to rewrite the request body before credential normalization; rebinding this module global reaches only the worker. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_normalize_credentials"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your own uvicorn.run instead \u2014 the consolidated host owns the run loop. Will be removed in v4.0.0.",

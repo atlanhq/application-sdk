@@ -290,10 +290,8 @@ def normalize_credentials(
     body (including format 3's flat keys) is kept as sent.
 
     ``keys`` is the set of v2 flat top-level keys treated as credential
-    material; ``None`` means :data:`_CREDENTIAL_KEYS`. The worker passes
-    ``application_sdk.handler.service._CREDENTIAL_KEYS`` (read per call)
-    because connector apps extend that module attribute at import time
-    (e.g. adding ``kerberos``), and that rebinding must keep taking effect.
+    material; ``None`` means :data:`_CREDENTIAL_KEYS`. The handler routes pass
+    those plus the app's ``Handler.extra_credential_keys`` (e.g. ``kerberos``).
 
     Returns the body with credentials normalized to v3 array format.
     """
