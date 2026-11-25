@@ -61,13 +61,17 @@ def _is_task_call(node: ast.expr) -> bool:
     )
 
 
-def _is_numeric_literal(node: ast.expr) -> bool:
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        node = node.operand
-    return (
-        isinstance(node, ast.Constant)
-        and isinstance(node.value, (int, float))
-        and not isinstance(node.value, bool)
+def _contains_numeric_literal(node: ast.expr) -> bool:
+    """True if any number appears anywhere in the keyword's expression.
+
+    Walks the whole subtree, so ``60 * 60``, ``-1`` and ``BUDGET * 2`` all
+    count: each is still a hand-picked number in the decorator.
+    """
+    return any(
+        isinstance(sub, ast.Constant)
+        and isinstance(sub.value, (int, float))
+        and not isinstance(sub.value, bool)
+        for sub in ast.walk(node)
     )
 
 
@@ -82,7 +86,7 @@ def _numeric_task_keywords(source: str) -> list[tuple[str, str, int]]:
                 continue
             assert isinstance(deco, ast.Call)
             for kw in deco.keywords:
-                if kw.arg is not None and _is_numeric_literal(kw.value):
+                if kw.arg is not None and _contains_numeric_literal(kw.value):
                     found.append((node.name, kw.arg, kw.value.lineno))
     return found
 
@@ -136,6 +140,18 @@ def test_deprecated_exclusions_still_exist(name: str) -> None:
         (
             "@task(auto_heartbeat_seconds=-1)\ndef f(): ...",
             [("f", "auto_heartbeat_seconds")],
+        ),
+        (
+            "@task(timeout_seconds=60 * 60)\ndef f(): ...",
+            [("f", "timeout_seconds")],
+        ),
+        (
+            "@task(timeout_seconds=BUDGET * 2)\ndef f(): ...",
+            [("f", "timeout_seconds")],
+        ),
+        (
+            "@task(timeout_seconds=int(1800.0))\ndef f(): ...",
+            [("f", "timeout_seconds")],
         ),
         ("@task()\ndef f(): ...", []),
         ("@task(timeout_seconds=BUDGET)\ndef f(): ...", []),
