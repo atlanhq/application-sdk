@@ -3,8 +3,6 @@
 import asyncio
 import base64
 import json
-import threading
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +10,6 @@ import pytest
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import GCSStore, LocalStore, MemoryStore
 
-from application_sdk._runtime.offload import run_in_thread
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -23,6 +20,7 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
     StoragePermissionError,
 )
+from tests.unit._doubles import SiblingProbe
 
 
 def _async_return(value):
@@ -1400,62 +1398,13 @@ class TestAuthenticationRejected:
 # First failure: no sibling transfer outlives the raise (FND-4277)
 # ---------------------------------------------------------------------------
 
-_SIBLING_THREAD_SECONDS = 0.3
-
-#: Bound on a sibling thread's wait for the failure to be raised. Generous:
-#: a passing test never hits it, and it covers thread-pool spin-up.
-_FAILURE_WAIT_SECONDS = 30.0
-
-
-class _SiblingProbe:
-    """Siblings that block in ``run_in_thread``; one transfer fails once every
-    sibling's thread is running. With ``asyncio.gather`` the siblings finished
-    -- wrote into the output dir or the bucket -- after the caller had seen the
-    failure."""
-
-    def __init__(self, siblings: int) -> None:
-        self.started = [threading.Event() for _ in range(siblings)]
-        self.finished = [threading.Event() for _ in range(siblings)]
-        # Set as the failure is raised. A sibling thread holds its
-        # _SIBLING_THREAD_SECONDS until then, so a slow loop (the hops in
-        # ``fail``) cannot let a sibling finish before the raise.
-        self.failing = threading.Event()
-        self.completed: list[int] = []
-
-    async def sibling(self, index: int) -> None:
-        def _block() -> None:
-            self.started[index].set()
-            self.failing.wait(_FAILURE_WAIT_SECONDS)
-            time.sleep(_SIBLING_THREAD_SECONDS)
-            self.finished[index].set()
-
-        await run_in_thread(_block)
-        self.completed.append(index)
-
-    async def fail(self, exc: Exception) -> None:
-        try:
-            for event in self.started:
-                if not await asyncio.to_thread(event.wait, 5.0):
-                    raise AssertionError("sibling thread did not start")
-        finally:
-            # Release the sibling threads however ``fail`` exits.
-            self.failing.set()
-        raise exc
-
-    async def assert_no_sibling_outlived_the_raise(self) -> None:
-        assert all(e.is_set() for e in self.finished), (
-            "a sibling's thread was still running when the failure propagated"
-        )
-        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
-        assert self.completed == [], "a sibling completed after the raise"
-
 
 class TestFirstFailureStopsSiblings:
     async def test_download_prefix_failure_cancels_and_drains_siblings(self, tmp_path):
         store = CloudStore(MemoryStore(), provider="memory")
         for name in ("a", "bad", "c"):
             await store.upload_bytes(f"p/{name}.txt", b"x")
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"p/a.txt": 0, "p/c.txt": 1}
 
         async def _download(key, local_path, **kwargs):
@@ -1477,7 +1426,7 @@ class TestFirstFailureStopsSiblings:
         src.mkdir()
         for name in ("a", "bad", "c"):
             (src / f"{name}.txt").write_bytes(b"x")
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"a.txt": 0, "c.txt": 1}
 
         async def _upload(self, path, key):

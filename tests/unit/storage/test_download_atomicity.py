@@ -36,11 +36,6 @@ from application_sdk.storage.reference import _materialize_lock
 from tests.unit.private_stdlib import private_stdlib
 
 
-@pytest.fixture
-def store():
-    return create_memory_store()
-
-
 class TestDownloadAtomicPublish:
     """Downloads must publish atomically at the destination (CONNECT-1126).
 

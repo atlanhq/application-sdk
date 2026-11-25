@@ -41,22 +41,10 @@ from application_sdk.execution.run_length import (
     _load_sla_seconds,
     build_run_length_watch,
 )
+from tests.unit._doubles import FakeClock
 
 _RUN_STARTED = 1_000_000.0
 _SLA = 3600.0
-
-
-@dataclass
-class FakeClock:
-    """A clock the test advances explicitly."""
-
-    now: float
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 @dataclass

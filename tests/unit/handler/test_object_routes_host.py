@@ -27,30 +27,11 @@ from obstore.store import LocalStore, MemoryStore
 
 from application_sdk import _obstore_config
 from application_sdk.handler import (
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
-    Handler,
-    MetadataInput,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataOutput,
     object_routes,
 )
 from application_sdk.handler.asgi import build_asgi_app, default_object_store
 from application_sdk.handler.object_routes import HostObjectStore
-
-
-class _Handler(Handler):
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS)
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
-        return SqlMetadataOutput(objects=[])
+from tests.unit._doubles import StaticHandler
 
 
 def _stored(store: MemoryStore) -> dict[str, bytes]:
@@ -68,7 +49,7 @@ def memory() -> MemoryStore:
 def host(memory: MemoryStore) -> TestClient:
     store = HostObjectStore(memory, kind="memory")
     return TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=store),
         raise_server_exceptions=False,
     )
 
@@ -110,7 +91,7 @@ class _FailingStore:
 def test_a_failed_store_read_is_503_not_404() -> None:
     """IAM, network or 5xx: the store is unavailable; the config is not missing."""
     client = TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=_FailingStore()),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=_FailingStore()),
         raise_server_exceptions=False,
     )
     response = client.get("/workflows/v1/config/guid-1?type=credentials")
@@ -141,7 +122,9 @@ def test_an_unreadable_object_raises_rather_than_reads_as_missing(
 
 
 def test_without_a_store_the_routes_answer_503() -> None:
-    bare = TestClient(build_asgi_app(_Handler(), app_name="mysql", object_store=None))
+    bare = TestClient(
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=None)
+    )
     assert bare.get("/workflows/v1/config/guid-1").status_code == 503
     assert bare.post("/workflows/v1/config/guid-1", json={}).status_code == 503
     upload = bare.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
@@ -673,7 +656,7 @@ def test_without_a_store_the_host_answers_503(
 ) -> None:
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    host = TestClient(build_asgi_app(_Handler(), app_name="mysql"))
+    host = TestClient(build_asgi_app(StaticHandler(), app_name="mysql"))
     assert host.get("/workflows/v1/config/g1?type=credentials").status_code == 503
     assert (
         host.post("/workflows/v1/config/g1?type=credentials", json={}).status_code
