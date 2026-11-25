@@ -559,21 +559,31 @@ CI reaches private sources over Twingate. GlobalProtect is retired for CI: it
 signs CI in as a person against a VPN address pool shared with every engineer,
 and runs fail when that pool is full (FND-4169, FND-4676).
 
+`twingate-connect` proves the tunnel by requesting `<mothership-url>/health`
+and requiring HTTP 200. So `mothership-url` must be an HTTP(S) service behind
+the tunnel that answers `/health`, **not** the database host: a ClickHouse,
+Oracle or on-prem database listens on its own protocol and port, and pointing
+the probe at it fails the step before any test runs. For a DataForge-provisioned
+source use the DataForge API, as the SDK's own tests workflows do. Check the
+database itself in the next step, over TCP on its own port.
+
 ```yaml
       # Requires: TWINGATE_SHARED_KEY (org secret, shared with the repo)
       - name: Connect to VPN (Twingate)
         uses: atlanhq/application-sdk/.github/actions/twingate-connect@main
         with:
           service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
-          # The host the tunnel must reach; the action probes {URL}/health.
-          mothership-url: https://{YOUR_SOURCE_HOST}
+          # An HTTP(S) service behind the tunnel whose /health returns 200,
+          # never the database host itself.
+          mothership-url: https://api.dataforge.atlan.dev
 
-      - name: Verify VPN connectivity
-        run: |
-          echo "Testing source connectivity through VPN..."
-          curl -sk --connect-timeout 10 https://{YOUR_SOURCE_HOST}:{PORT} \
-            && echo "Source reachable!" \
-            || echo "Warning: source not reachable — tests may fail"
+      # A plain TCP connect to the database's own port. Fails the step, so an
+      # unreachable source is reported here rather than as a test failure.
+      - name: Verify the source is reachable through the VPN
+        env:
+          SOURCE_HOST: "{YOUR_SOURCE_HOST}"
+          SOURCE_PORT: "{PORT}"
+        run: timeout 10 bash -c "exec 3<>/dev/tcp/${SOURCE_HOST}/${SOURCE_PORT}"
 ```
 
 ### Template 3: REST/PAT Auth Connector (Tableau, Salesforce)

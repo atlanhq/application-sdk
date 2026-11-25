@@ -172,3 +172,23 @@ def test_tier_jobs_reach_no_entry_point_job(tier: str) -> None:
     text = (WORKFLOWS / tier).read_text(encoding="utf-8")
     for name in entry_only:
         assert f"needs.{name}." not in text, (tier, name)
+
+
+_EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.S)
+
+
+@pytest.mark.parametrize("workflow", [TESTS_REUSABLE, *TIER_WORKFLOWS])
+def test_no_run_script_interpolates_an_expression(workflow: str) -> None:
+    """`${{ }}` in a `run:` is spliced into the script before bash parses it,
+    so a caller-supplied input (`distinct-id`, `application-sdk-ref`, ...)
+    carrying a quote and `;` runs as code on a runner holding tenant
+    credentials. Values reach a script through `env:` and a quoted variable
+    (docs/standards/ci.md)."""
+    jobs: dict[str, dict[str, Any]] = load_workflow(workflow)["jobs"]
+    offenders: list[str] = []
+    for name, job in jobs.items():
+        job_steps: list[dict[str, Any]] = job.get("steps") or []
+        for step in job_steps:
+            for found in _EXPRESSION.findall(str(step.get("run", ""))):
+                offenders.append(f"{name} / {step.get('name')}: {found}")
+    assert not offenders, offenders

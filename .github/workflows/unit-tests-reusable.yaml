@@ -99,7 +99,11 @@ jobs:
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
-        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+        # Through env, never interpolated: both inputs are caller-supplied, and
+        # `${{ }}` is spliced into the script before bash parses it.
+        env:
+          APPLICATION_SDK_REF: ${{ inputs.application-sdk-ref }}
+        run: echo "Dispatched; SDK ref=$APPLICATION_SDK_REF"
 
       # Must precede the deps action's `uv sync`: a native sdist build (hive's
       # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.

@@ -1081,7 +1081,11 @@ jobs:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         shell: bash
-        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+        # Through env, never interpolated: a caller-supplied value spliced into
+        # the script before bash parses it would run as code.
+        env:
+          DISTINCT_ID: ${{ inputs.distinct-id }}
+        run: echo "Dispatched with distinct-id=$DISTINCT_ID"
 
       # ── The install path's precondition, checked before it costs anything ───
       # A caller on `install-app-to-tenant: true` without the tenant matrix shared
@@ -1262,8 +1266,11 @@ jobs:
       - name: Warn that the cross-CSP matrix is unavailable
         if: inputs.e2e-clouds != 'none' && env.HAS_TENANT_MATRIX == ''
         shell: bash
+        # Caller-supplied values reach the script through env, never `${{ }}`.
+        env:
+          E2E_CLOUDS: ${{ inputs.e2e-clouds }}
         run: |
-          echo "::warning::This run asked for the cross-CSP e2e matrix (e2e-clouds='${{ inputs.e2e-clouds }}'; empty means the SDK default list) but E2E_TENANT_MATRIX_JSON is not available to this repository, so it falls back to a single run against SDR_TEST_TENANT. Cross-CSP coverage for this run is NOT what the workflow asked for. Share the org secret with this repo to enable it."
+          echo "::warning::This run asked for the cross-CSP e2e matrix (e2e-clouds='${E2E_CLOUDS}'; empty means the SDK default list) but E2E_TENANT_MATRIX_JSON is not available to this repository, so it falls back to a single run against SDR_TEST_TENANT. Cross-CSP coverage for this run is NOT what the workflow asked for. Share the org secret with this repo to enable it."
 
       # This job only runs when e2e was explicitly requested (label / run-e2e),
       # so zero discovered suites means "requested but nothing found" — a
@@ -1272,9 +1279,11 @@ jobs:
       - name: Require at least one discovered suite
         if: steps.discover.outputs.count == '0'
         shell: bash
+        env:
+          E2E_TEST_PATH: ${{ inputs.e2e-test-path }}
         run: |
           set -euo pipefail
-          echo "::error::e2e was requested but no suites were discovered under '${{ inputs.e2e-test-path }}' (expected test_*.py). Failing so this is not a silent pass."
+          echo "::error::e2e was requested but no suites were discovered under '${E2E_TEST_PATH}' (expected test_*.py). Failing so this is not a silent pass."
           exit 1
 
       # ── Show the `/e2e` request as running (FND-3839) ──────────────────────
@@ -1795,13 +1804,15 @@ jobs:
           SHA: ${{ inputs.application-sdk-ref }}
           REPO_SHORT: ${{ github.event.repository.name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CONCLUSION: ${{ steps.gate.outputs.conclusion }}
+          SUMMARY_FILE: ${{ steps.report.outputs.summary_file }}
         run: |
           python3 application-sdk-scripts/.github/scripts/complete_check_run.py \
             --repo atlanhq/application-sdk \
             --sha "$SHA" \
             --name "Connector E2E run / ${REPO_SHORT}" \
-            --conclusion "${{ steps.gate.outputs.conclusion }}" \
-            --summary-file "${{ steps.report.outputs.summary_file }}" \
+            --conclusion "$CONCLUSION" \
+            --summary-file "$SUMMARY_FILE" \
             --details-url "$RUN_URL"
 
   # ── Test-readiness scorecard (per-tier aggregation) ──────────────────────

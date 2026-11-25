@@ -1089,7 +1089,11 @@ jobs:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         shell: bash
-        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+        # Through env, never interpolated: a caller-supplied value spliced into
+        # the script before bash parses it would run as code.
+        env:
+          DISTINCT_ID: ${{ inputs.distinct-id }}
+        run: echo "Dispatched with distinct-id=$DISTINCT_ID"
 
       # See the unit job: the sdr-e2e action runs `uv sync` on the RUNNER as
       # well as in the image, so a native sdist build needs its headers here

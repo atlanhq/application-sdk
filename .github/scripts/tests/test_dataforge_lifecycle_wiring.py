@@ -220,6 +220,11 @@ def test_legs_need_wake_for_ordering_only(workflow: dict) -> None:
     # hermetic-fallback connector can still fall back.
     assert "wake-dataforge-source" not in _job_if(callers, "integration")
     assert "wake-dataforge-source" not in _job_if(callers, "e2e")
+    # And the wake is SKIPPED on every connector that has not opted in. Without
+    # a status function GitHub's implicit success() over `needs` would then
+    # skip both callers before their `if:` is read, so each must carry one.
+    for name in ("integration", "e2e"):
+        assert "always()" in _job_if(callers, name), name
 
 
 def test_pause_runs_on_any_outcome_after_all_consumers(jobs: dict) -> None:

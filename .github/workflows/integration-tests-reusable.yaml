@@ -177,7 +177,11 @@ jobs:
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
-        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+        # Through env, never interpolated: both inputs are caller-supplied, and
+        # `${{ }}` is spliced into the script before bash parses it.
+        env:
+          APPLICATION_SDK_REF: ${{ inputs.application-sdk-ref }}
+        run: echo "Dispatched; SDK ref=$APPLICATION_SDK_REF"
 
       # See the unit job: must precede the deps action's `uv sync`.
       - name: Fetch install_apt_packages.py from SDK

@@ -218,12 +218,17 @@ def test_the_callback_reports_the_gates_verdict_not_its_own(reusable) -> None:
     complete = next(
         s for s in job["steps"] if "complete_check_run.py" in str(s.get("run", ""))
     )
-    assert f"steps.{gate_id}.outputs.conclusion" in complete["run"], (
+    # Read through env (never `${{ }}` in the script), so check both: the env
+    # var carries the gate's output and the script passes that var.
+    assert complete["env"]["CONCLUSION"] == (
+        f"${{{{ steps.{gate_id}.outputs.conclusion }}}}"
+    )
+    assert '--conclusion "$CONCLUSION"' in complete["run"], (
         "the check run on application-sdk must be completed with the Tests Gate "
         "driver's conclusion. Any other source is a second implementation of "
         "'did the connector tests pass', and the two will drift."
     )
-    assert "steps.report.outputs.conclusion" not in complete["run"], (
+    assert "steps.report.outputs.conclusion" not in str(complete), (
         "build_callback_summary.py emits no conclusion — it builds the body "
         "only. Reading one back from it means someone reintroduced the second "
         "verdict; see that script's module docstring."
