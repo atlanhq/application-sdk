@@ -40,13 +40,19 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Callable, Optional, cast
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+# The --limit cap is shared with the fleet listing; this audit lists archived
+# repos and forks too, so it issues its own `gh repo list` and fails outright at
+# the cap instead of warning.
+from discover_org_consumers import REPO_LIST_LIMIT
 
 # (args) -> (returncode, stdout, stderr). Same seam as discover_org_consumers.py
 # so tests stub `gh` without patching subprocess.
 RunFn = Callable[[list[str]], tuple[int, str, str]]
-
-REPO_LIST_LIMIT = 5000
 
 # Per-call deadline for `gh`. Generous: the slowest call is `gh repo list` over
 # the whole org, which takes seconds, not minutes.

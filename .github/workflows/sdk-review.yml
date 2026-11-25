@@ -1,13 +1,15 @@
-# SDK Review (mothership) — RETIRED.
+# SDK Review / SDK Resolve (mothership) — RETIRED.
 #
-# `@sdk-review` no longer starts a review from any trigger: not a human comment, not
-# a bot comment (atlan-ci, mothership-ai[bot]), not workflow_dispatch. PR
-# reviews are asked for with `/lens` (lens.yml). The mothership reviewer jobs
-# that used to live here, and the .github/scripts/ helpers they ran, were
-# removed; see git history for them.
+# `@sdk-review` and `@sdk-resolve` no longer start a run from any trigger: not a
+# human comment, not a bot comment (atlan-ci, mothership-ai[bot]), not
+# workflow_dispatch. PR reviews are asked for with `/lens` (lens.yml). The
+# mothership reviewer and resolver jobs that used to live here and in
+# sdk-resolve.yml, the .github/scripts/ helpers they ran, and their
+# .mothership/ prompts were removed; see git history for them.
 #
 # The only job left is `redirect-to-lens`, which answers a human `@sdk-review`
-# comment with a 😕 reaction and a pointer to `/lens`.
+# or `@sdk-resolve` comment with a 😕 reaction and a pointer to `/lens`. One
+# workflow serves both triggers so a PR comment starts one retired stub, not two.
 
 name: SDK Review (mothership)
 
@@ -30,7 +32,10 @@ jobs:
     if: >-
       github.event_name == 'issue_comment'
       && github.event.issue.pull_request
-      && startsWith(github.event.comment.body, '@sdk-review')
+      && (
+        startsWith(github.event.comment.body, '@sdk-review')
+        || startsWith(github.event.comment.body, '@sdk-resolve')
+      )
       && github.event.comment.user.type != 'Bot'
       && github.event.comment.user.login != 'atlan-ci'
       && github.event.comment.user.login != 'mothership-ai[bot]'
@@ -58,11 +63,13 @@ jobs:
 
       - name: Point to /lens
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TRIGGER: ${{ startsWith(github.event.comment.body, '@sdk-resolve') && '@sdk-resolve' || '@sdk-review' }}
         with:
           script: |
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: `Hi @${context.payload.comment.user.login} — \`@sdk-review\` can no longer be triggered from a PR comment. Pls use \`/lens\` instead.`,
+              body: `Hi @${context.payload.comment.user.login} — \`${process.env.TRIGGER}\` can no longer be triggered from a PR comment. Pls use \`/lens\` instead.`,
             });
