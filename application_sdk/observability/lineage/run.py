@@ -122,11 +122,14 @@ def _row(
         "hasLineage": asset.has_lineage,
         "processCount": asset.processes,
         "processQualifiedName": asset.process_qualified_name,
+        "inputCount": asset.inputs,
         "refCount": asset.refs,
         "resolvableRefCount": asset.resolvable_refs,
         "fieldsTotal": asset.fields_total,
         "fieldsWithLineage": asset.fields_with_lineage,
         "fieldsPending": asset.fields_pending,
+        "columnRefCount": asset.column_refs,
+        "resolvableColumnRefCount": asset.resolvable_column_refs,
     }
     if asset.attributes:
         row["entityAttributes"] = asset.attributes
@@ -166,7 +169,7 @@ def write_coverage(
     stats = ReadStats()
     counts = CoverageCounts()
     by_type: dict[str, Counter[str]] = {}
-    rows = 0
+    rows = with_lineage = resolvable_refs = 0
     assets_path = os.path.join(output_dir, ASSETS_FILE)
     refs_path = os.path.join(output_dir, REFS_FILE)
     with open(refs_path, "wb") as refs_out, open(assets_path, "wb") as assets_out:
@@ -177,6 +180,8 @@ def write_coverage(
             if refine is not None:
                 assessment = refine(asset, recorded, assessment) or assessment
             counts.add(assessment)
+            with_lineage += asset.has_lineage
+            resolvable_refs += asset.resolvable_refs
             by_type.setdefault(asset.type_name, Counter())[
                 assessment.verdict.value
             ] += 1
@@ -194,7 +199,9 @@ def write_coverage(
         "run": run or {},
         "totals": {
             "assets": rows,
+            "withLineage": with_lineage,
             "refs": stats.refs,
+            "resolvableRefs": resolvable_refs,
             "coverageRate": counts.coverage_rate,
         },
         "verdicts": {v.value: n for v, n in sorted(counts.verdicts.items())},
