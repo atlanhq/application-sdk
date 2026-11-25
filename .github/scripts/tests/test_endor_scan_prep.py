@@ -1,7 +1,7 @@
 """Tests for endor_scan_prep.py, the Endor scan's credential gate and tarball prep.
 
 Both decisions used to live inline in the Endor jobs' ``run:`` blocks
-(build-and-scan.yaml and daily-security-scan.yml), where docs/standards/ci.md
+(build-and-scan.yaml and hourly-security-scan.yml), where docs/standards/ci.md
 forbids branching. The behavioural tests pin every branch; the cross-file guards
 at the bottom pin the workflow wiring the review asked for: Endor reading the
 tarball its own job built (no image artifact), caller input travelling through
@@ -24,7 +24,7 @@ import endor_scan_prep as prep  # noqa: E402
 
 GITHUB_DIR = _SCRIPTS_DIR.parent
 BUILD_AND_SCAN = GITHUB_DIR / "workflows" / "build-and-scan.yaml"
-HOURLY_SCAN = GITHUB_DIR / "workflows" / "daily-security-scan.yml"
+HOURLY_SCAN = GITHUB_DIR / "workflows" / "hourly-security-scan.yml"
 ACTIONLINT = GITHUB_DIR / "actionlint.yaml"
 SCRIPT_NAME = "endor_scan_prep.py"
 

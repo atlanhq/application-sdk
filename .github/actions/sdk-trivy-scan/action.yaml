@@ -2,7 +2,7 @@
 # trivy-image-results.json + trivy-fs-results.json in the working directory.
 #
 # Single source of truth for the scan recipe, shared by:
-#   - daily-security-scan.yml  (hourly detection + ticketing)
+#   - hourly-security-scan.yml  (hourly detection + ticketing)
 #   - vuln-reconcile-on-release.yml  (fresh scan of the released state, then reconcile)
 #
 # Report-only by design: NO --ignore-unfixed, so no-fix CVEs are surfaced too.
