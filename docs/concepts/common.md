@@ -485,6 +485,36 @@ redacted where they are built. `message` and `suggested_action` **are** — a `f
 idempotently, so a handler gains nothing by redacting them first. `cause_repr` is redacted where the
 cause is captured, by `sanitize_cause_repr`.
 
+#### Rebuilding a typed error from the envelope
+
+On the far side of an activity boundary only `FailureDetails` survives. `error_from_failure_details`
+turns it back into a typed error, picking the leaf by `code`:
+
+```python
+from application_sdk.errors import error_from_failure_details, register_wire_leaf
+
+# Register the leaves your activities emit, once, next to their definition.
+@register_wire_leaf
+@dataclass(kw_only=True)
+class WidgetMissingError(NotFoundError):
+    code: ClassVar[str] = "NOT_FOUND_WIDGET"
+    widget: str | None = None
+
+err = error_from_failure_details(output.failure)
+```
+
+A registered code rebuilds as its leaf with the evidence fields that leaf declares; extra keys are
+dropped, so a newer producer cannot crash an older consumer. An unregistered code still rebuilds,
+keeping the envelope's own `category`, `audience`, `code`, `retryable` and evidence, so routing is
+never lost. The SDK registers `AuthError`, `AppTimeoutError`, `SourceUnavailableError` and
+`InternalError`. One code maps to one class: registering a code already bound to another class
+raises `TypeError`.
+
+If `to_failure_details()` raises because a leaf carries a secret-named evidence field,
+`degraded_failure_details(err)` builds the envelope without those keys (or without evidence at all)
+and keeps the routing. Log its `ValidationError` with `redacted_validation_reason`, never `str()` or
+`exc_info`: both include the rejected input.
+
 ### Legacy error-code namespaces (backward-compat only)
 
 - **`application_sdk.common.error_codes`** — `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` HTTP-style codes. Do not use in new code.

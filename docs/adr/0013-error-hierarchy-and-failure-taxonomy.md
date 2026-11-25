@@ -210,6 +210,27 @@ denylist (`auth_header`, `authorization`, `cookie`, `token`, `password`,
 is decided** — domain classes promote their context as dataclass fields
 without duplicating the policy.
 
+**Reverse lookup: envelope → typed error.** Only the envelope crosses an
+activity boundary, so a workflow that needs the typed error back calls
+`error_from_failure_details(details)` in `application_sdk/errors/wire.py`. It
+keys on `code` through an explicit leaf registry (`register_wire_leaf`), not
+through `AppError.__subclasses__()`: several classes share a code today (a
+subclass inheriting its parent's, or two packages naming the same failure), so
+an implicit map would rebuild whichever class imported last. Registering a code
+already bound to a different class raises `TypeError`. The registry is seeded
+with `AuthError`, `AppTimeoutError`, `SourceUnavailableError` and
+`InternalError`; a template registers the leaves it emits (`SqlApp` registers
+`SqlProbeTimeoutError`). An unregistered code rebuilds on a private
+reconstruction leaf (`_EnvelopeError`) whose `category` / `audience` / `code`
+come from the envelope, so a newer producer's verdict keeps its routing on an
+older consumer instead of degrading to `INTERNAL` / `APP_OWNER`. That leaf is
+the one sanctioned exception to per-class identity (§2;
+`tests/unit/errors/test_identity_classvars.py` allowlists it):
+it stands in for a class this consumer does not have, and is never raised by
+the SDK. When a verdict cannot serialise — in practice a connector leaf with a
+secret-named evidence field — `degraded_failure_details(err)` drops evidence,
+never routing.
+
 ---
 
 ### 4. Domain umbrellas via leaf-first multi-inheritance
