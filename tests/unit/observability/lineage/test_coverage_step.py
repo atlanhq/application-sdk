@@ -35,6 +35,7 @@ SPEC = CoverageSpec(
     assets=(
         AssetRule("BiDataset"),
         AssetRule("BiReport", relationship_attributes=("dataset",)),
+        AssetRule("BiBook", inbound_from=(("BiDataset", "book"),)),
     ),
     fields=(
         FieldRule("BiField"),
@@ -96,7 +97,9 @@ def write(path: Path, records: list) -> str:
 def run_files(tmp_path: Path) -> list[str]:
     assets = [
         entity("BiDataset", "pending"),
-        entity("BiDataset", "internal"),
+        entity("BiDataset", "internal", book=link("book")),
+        entity("BiBook", "book"),
+        entity("BiBook", "empty-book"),
         entity("BiDataset", "nothing"),
         entity("BiDataset", "why"),
         entity("BiDataset", "generic"),
@@ -168,6 +171,8 @@ def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
         "sparse": ("PENDING", "UPSTREAM_IDENTITY_TOO_SPARSE"),
         "report": ("MISSING", "UNINSTRUMENTED_PATH"),
         "linked": ("VALID", None),
+        "book": ("VALID", None),
+        "empty-book": ("MISSING", "UNINSTRUMENTED_PATH"),
     }
     pending = got["pending"]
     assert (pending["refCount"], pending["resolvableRefCount"]) == (2, 2)
@@ -186,12 +191,12 @@ def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
     assert summary["read"]["unreadableLines"] == 1
     assert summary["read"]["processOutputsWithoutAnAsset"] == 1
     assert summary["verdicts"] == {
-        "MISSING": 5,
+        "MISSING": 6,
         "PENDING": 2,
-        "VALID": 2,
+        "VALID": 3,
         "VALID_NONE": 2,
     }
-    assert summary["outcome"]["lineage_assets_total"] == 11
+    assert summary["outcome"]["lineage_assets_total"] == 13
 
     refs = [json.loads(x) for x in (out / REFS_FILE).read_text().splitlines()]
     mine = [r for r in refs if r["qualifiedName"] == f"{CONN}/pending"]
@@ -288,7 +293,7 @@ def test_a_stopped_recorder_degrades_the_run(run_files, tmp_path):
     )
     assert summary["coverageStatus"] == "DEGRADED"
     assert summary["recorderError"] == "AttributeError"
-    assert len(rows(tmp_path / "cov")) == 11
+    assert len(rows(tmp_path / "cov")) == 13
 
 
 class BrokenRecorder:
