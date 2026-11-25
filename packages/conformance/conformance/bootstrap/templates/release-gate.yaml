@@ -116,7 +116,8 @@ jobs:
     steps:
       # The gate itself, and the connector reviewer's classifier, state reader
       # and config it imports, from application-sdk. The pull request cannot
-      # change any of it.
+      # change any of it. All of it is stdlib-only, so it runs on the runner's
+      # system python3 (ubuntu-slim has no setup-python, docs/standards/ci.md).
       - name: Check out the gate (application-sdk)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,10 +132,6 @@ jobs:
           path: sdk
           persist-credentials: false
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.14"
-
       - name: Verify the pull request may merge
         working-directory: sdk/.github/scripts
         env:
@@ -148,7 +145,7 @@ jobs:
           CONFIG_DIR: ${{ github.workspace }}/sdk/.github/connector-reviewer
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: >-
-          python release_gate.py gate
+          python3 release_gate.py gate
           --repo "$REPO"
           --pr "$PR"
           --head-sha "$HEAD_SHA"
@@ -182,10 +179,6 @@ jobs:
           path: sdk
           persist-credentials: false
 
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.14"
-
       - name: Re-run Release Gate on the commit
         working-directory: sdk/.github/scripts
         env:
@@ -196,7 +189,7 @@ jobs:
           CREATOR: ${{ github.event.sender.login }}
           UPDATED_AT: ${{ github.event.updated_at }}
         run: >-
-          python release_gate.py rerun
+          python3 release_gate.py rerun
           --repo "$REPO"
           --sha "$SHA"
           --context "$CONTEXT"

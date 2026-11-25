@@ -684,7 +684,7 @@ def test_the_gate_runs_from_application_sdk_main(shim: Any, job: str) -> None:
     assert checkout["persist-credentials"] is False
     runs = [s for s in _steps(shim, job) if "run" in s]
     assert runs and all(s["working-directory"] == "sdk/.github/scripts" for s in runs)
-    assert all(s["run"].startswith("python release_gate.py ") for s in runs)
+    assert all(s["run"].startswith("python3 release_gate.py ") for s in runs)
 
 
 @pytest.mark.parametrize("job", ["release-gate", "rerun-on-review"])

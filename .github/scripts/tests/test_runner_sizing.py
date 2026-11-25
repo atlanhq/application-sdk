@@ -153,8 +153,22 @@ def _third_party_imports(path: Path, seen: set[Path]) -> set[str]:
             if _SCRIPTS_ROOT in path.parents:
                 candidates.append(_SCRIPTS_ROOT / f"{top}.py")
             first_party = next((c for c in candidates if c.exists()), None)
+            # A first-party package next to the script (release_gate.py →
+            # connector_reviewer/): every module in it is followed, since its
+            # own relative imports are not walked one by one.
+            package = next(
+                (
+                    d / top
+                    for d in (path.parent, _SCRIPTS_ROOT)
+                    if (d / top / "__init__.py").is_file()
+                ),
+                None,
+            )
             if first_party is not None:
                 out |= _third_party_imports(first_party, seen)
+            elif package is not None:
+                for module in sorted(package.rglob("*.py")):
+                    out |= _third_party_imports(module, seen)
             else:
                 out.add(top)
     return out
