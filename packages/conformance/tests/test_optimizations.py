@@ -36,6 +36,29 @@ def test_o001_fires_on_json_dumps_and_loads() -> None:
     assert _ids(src) == ["O001", "O001"]
 
 
+def test_o001_silent_in_contract_template_build_hook() -> None:
+    src = (
+        "import json\n\n"
+        "def build(source):\n"
+        "    config = json.loads(source)\n"
+        "    return json.dumps(config, indent=2)\n"
+    )
+    assert scan_text(src, "contract/templates/build_config.py") == []
+
+
+@pytest.mark.parametrize(
+    "file", ["scripts/build_config.py", "app/worker/build_config.py"]
+)
+def test_o001_fires_outside_contract_template_build_hook(file: str) -> None:
+    src = (
+        "import json\n\n"
+        "def build(source):\n"
+        "    config = json.loads(source)\n"
+        "    return json.dumps(config, indent=2)\n"
+    )
+    assert [finding.rule_id for finding in scan_text(src, file)] == ["O001", "O001"]
+
+
 def test_o001_fires_on_aliased_import() -> None:
     src = "import json as j\n\ndef f():\n    return j.dumps({})\n"
     assert _ids(src) == ["O001"]

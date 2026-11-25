@@ -99,10 +99,6 @@ GH_TIMEOUT_SECONDS = 120
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
-# Events the headline groups call out by name; anything else is still counted,
-# under its own event name.
-HEADLINE_EVENTS = ("pull_request", "merge_group", "schedule", "workflow_run", "push")
-
 
 class Lane(str, Enum):
     """Who caused a run, at the granularity a CI-cost decision needs."""

@@ -84,14 +84,6 @@ def test_only_a_404_reads_as_a_missing_file():
     assert doc._is_not_found("dial tcp: lookup api.github.com: no such host") is False
 
 
-def test_parse_repos_valid_and_malformed():
-    assert doc.parse_repos('["a", "b"]') == ["a", "b"]
-    assert doc.parse_repos("[]") == []
-    assert doc.parse_repos("not json") == []
-    assert doc.parse_repos('{"not": "a list"}') == []
-    assert doc.parse_repos("") == []
-
-
 def test_list_candidate_repos_filters_to_app_pattern():
     run = _fake_gh(
         [
@@ -157,6 +149,22 @@ def test_list_candidate_repos_raises_when_the_listing_fails():
         doc.list_candidate_repos(
             "atlanhq", doc.DEFAULT_NAME_PATTERN, run=_fake_gh(None, {})
         )
+
+
+@pytest.mark.parametrize("stdout", ["", "not json", '{"not": "a list"}'])
+def test_list_candidate_repos_raises_on_an_unreadable_listing(stdout):
+    """Exit 0 with output that is not a JSON array is still no answer.
+
+    Reading it as an empty org would hand every caller an empty fleet; the gate
+    scanner's dashboard would publish zero repos, and the unlisted sweep would
+    read every repo as "does not belong".
+    """
+
+    def run(args: list) -> tuple:
+        return 0, stdout, ""
+
+    with pytest.raises(doc.DiscoveryError):
+        doc.list_candidate_repos("atlanhq", doc.DEFAULT_NAME_PATTERN, run=run)
 
 
 def test_discover_fleet_aborts_rather_than_returning_a_partial_fleet():
