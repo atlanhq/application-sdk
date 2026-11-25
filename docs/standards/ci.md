@@ -1908,8 +1908,8 @@ step re-installs a list the reusable has already checked, or never reaches it
 because D is skipped after a rejected one.
 
 `.github/scripts/tests/test_install_apt_packages.py` tests the script and
-fails on any `apt-get install` in `.github/workflows`, `.github/actions`,
-`.github/workflow-templates` or the bootstrap templates that bypasses it. It
+fails on any `apt-get install` in `.github/workflows`, `.github/actions`
+or the bootstrap templates that bypasses it. It
 reads whole shell commands, joining backslash-continued lines, so splitting
 `apt-get \` from `install "$LIST"` does not hide an install. The only
 exceptions are fixed packages this repo names itself (`twingate`,
