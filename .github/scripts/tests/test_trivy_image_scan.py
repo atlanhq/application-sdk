@@ -48,7 +48,7 @@ COMPOSITE_CALLERS = ("sdk-trivy-scan", "secure-build-push-apps")
 
 def _ci_files() -> list[Path]:
     files: list[Path] = []
-    for sub in ("actions", "workflows", "workflow-templates"):
+    for sub in ("actions", "workflows"):
         files.extend(
             p
             for p in sorted((GITHUB / sub).rglob("*"))
@@ -130,7 +130,7 @@ def test_every_setup_trivy_matches_the_composite_pin() -> None:
                 mismatched.append(f"{_rel(path)}: {step['uses']} version={got_version}")
     # Guards the guard: the inline copies exist, so a parse change that found
     # none would pass vacuously.
-    assert seen >= 3, f"expected the inline setup-trivy copies, found {seen}"
+    assert seen >= 2, f"expected the inline setup-trivy copies, found {seen}"
     assert not mismatched, (
         f"setup-trivy must be {uses} at {version}, the trivy-image-scan "
         "composite's pin. Bump them together:\n  " + "\n  ".join(mismatched)

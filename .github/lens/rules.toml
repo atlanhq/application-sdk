@@ -93,10 +93,6 @@ glob = ".github/workflows/**"
 cards = ["github-actions", "security"]
 
 [[path]]
-glob = ".github/workflow-templates/**"
-cards = ["github-actions", "security"]
-
-[[path]]
 glob = ".github/actions/**"
 cards = ["github-actions", "security"]
 
