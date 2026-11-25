@@ -2057,6 +2057,8 @@ class _OrderedAE(FakeAE):
     ``order`` is shared with the teardown stubs so a test can assert the
     terminate happens *before* the connection delete. Appended before the
     recorded call, so a scripted terminate failure still shows the attempt.
+    ``terminated`` holds only the terminates that returned: an attempt is in
+    ``order`` and in ``calls``, but a failed one is not a terminated run.
     """
 
     def __init__(
@@ -2064,14 +2066,13 @@ class _OrderedAE(FakeAE):
     ) -> None:
         super().__init__(*polls, **kwargs)
         self.order = order
+        self.terminated: list[str] = []
 
     async def terminate_run(self, run_id: str) -> bool | None:
         self.order.append(f"terminate:{run_id}")
-        return await super().terminate_run(run_id)
-
-    @property
-    def terminated(self) -> list[str]:
-        return self.args("terminate_run", "run_id")
+        stopped = await super().terminate_run(run_id)
+        self.terminated.append(run_id)
+        return stopped
 
 
 class _AmbiguousSubmitAE(_OrderedAE):
@@ -2284,3 +2285,4 @@ class TestTeardownTerminatesUnsettledRuns:
         harness.teardown_method(None)
 
         assert order == ["terminate:run-1", "delete_connections"]
+        assert ae.terminated == []

@@ -330,7 +330,15 @@ def run_result(
 
 
 def succeeded(*names: str, run_id: str = "r", workflow_slug: str = "s") -> DAGRunResult:
-    """A succeeded run whose every named node succeeded."""
+    """A succeeded run whose every named node succeeded.
+
+    At least one name is required: AE's verdict is ``all_nodes_succeeded``,
+    which is false for an empty node list, so a nameless "success" would fail
+    the harness's own gate. A test that means "AE reported no nodes" says so
+    with ``run_result(DAGRunStatus.SUCCEEDED)``.
+    """
+    if not names:
+        raise ValueError("succeeded() needs at least one node name")
     return run_result(
         DAGRunStatus.SUCCEEDED,
         *(node(name) for name in names),

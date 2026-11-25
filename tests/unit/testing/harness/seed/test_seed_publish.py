@@ -27,7 +27,10 @@ from typing import Any
 
 import pytest
 
-from application_sdk.testing.harness.automation_engine import PublishedVersion
+from application_sdk.testing.harness.automation_engine import (
+    DAGRunStatus,
+    PublishedVersion,
+)
 from application_sdk.testing.harness.seed import (
     SEED_PUBLISH_NODE_ID,
     TRANSFORMED_FILE_NAME,
@@ -47,7 +50,7 @@ from application_sdk.testing.harness.seed import (
     seed_prefix_root,
 )
 from application_sdk.validation.assets import AssetValidationReport, ReferentialFailure
-from tests.unit.testing._ae_fakes import FakeAE, failed, succeeded
+from tests.unit.testing._ae_fakes import FakeAE, failed, run_result, succeeded
 
 _CONNECTION_QN = "default/snowflake/1787587123106596"
 _PREFIX_ROOT = "artifacts/apps/coalesce/e2e-seed/default%2Fsnowflake%2F1787587123106596"
@@ -310,7 +313,13 @@ def _wire(
     # ``submit_published_version`` rather than ``submit_workflow`` is asserted
     # by the tests below: the seed's submit takes no payload at all, because
     # there is no envelope to name an app with (FND-1766).
-    reading = succeeded(*ran_nodes) if all_succeeded else failed(*ran_nodes)
+    if not all_succeeded:
+        reading = failed(*ran_nodes)
+    elif ran_nodes:
+        reading = succeeded(*ran_nodes)
+    else:
+        # AE said Succeeded and listed no nodes — the unanswered-read shape.
+        reading = run_result(DAGRunStatus.SUCCEEDED)
     fake = FakeAE(reading, published=published)
     return fake, uploaded
 

@@ -79,3 +79,10 @@ async def test_a_scripted_error_is_raised_after_the_call_is_recorded() -> None:
     with pytest.raises(RuntimeError):
         await ae.terminate_run("run-9")
     assert ae.args("terminate_run", "run_id") == ["run-9"]
+
+
+def test_a_nameless_success_is_refused() -> None:
+    """An empty node list is never ``all_nodes_succeeded``, so a nameless
+    ``succeeded()`` would model a run the harness grades as failed."""
+    with pytest.raises(ValueError):
+        succeeded()
