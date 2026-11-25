@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import os
 import ssl
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,6 +24,7 @@ from application_sdk.storage.errors import (
     StoragePermissionError,
 )
 from tests.unit._doubles import SiblingProbe
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _async_return(value):
@@ -1891,7 +1893,7 @@ class TestCloudStoreDelegatesToBatch:
         src = tmp_path / "src"
         src.mkdir()
         (src / "gone.txt").write_bytes(b"x")
-        real_walk = batch_module.os.walk
+        real_walk = os.walk
 
         def _walk_then_delete(*args, **kwargs):
             entries = list(real_walk(*args, **kwargs))
@@ -1899,7 +1901,8 @@ class TestCloudStoreDelegatesToBatch:
             return iter(entries)
 
         with (
-            patch.object(batch_module.os, "walk", _walk_then_delete),
+            private_stdlib(batch_module, "os") as local_os,
+            patch.object(local_os, "walk", _walk_then_delete),
             pytest.raises(StorageError) as ei,
         ):
             await store.upload_dir(src, "out")
