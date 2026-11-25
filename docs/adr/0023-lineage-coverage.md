@@ -154,6 +154,43 @@ each row `verdict`, `reasonCode`, `reasonCategory`, `gapCategory`, `expectedBasi
 a customer would use (the first consumer couldn't find assets without it). The run totals event and
 two ClickHouse queries are in `docs/concepts/monitoring.md`.
 
+### Shared machinery: what the SDK runs and what an app adds
+
+The first version of this spike left the tracker, the writer and the error handling in each app.
+Three apps then had three trackers (Tableau 3,300 lines of coverage code, Looker 1,600), which
+does not scale to the long tail. The SDK now owns all of it:
+
+| Piece | What it does |
+| --- | --- |
+| `CoverageRecorder` | The only coverage code that runs inside an app's lineage step. `missing(key, reason)`: this path built nothing, and why (ignored for the verdict if the output shows lineage after all). `partial(...)`: lineage was built but is incomplete or may be wrong. `unusable(...)`: a Process was written that the app knows can't resolve. `note(...)` and `field_missing(...)` for dimensions and per-parent field counts. `save` / `load` carry it to a later step. |
+| `guarded`, `CoverageGuard` | Every recorder method is guarded: the first error stops recording, warns once and is swallowed. Only `Exception` is caught. |
+| `read_run_output` | Reads the NDJSON the app already wrote for publish: entities (`typeName`, `attributes.qualifiedName`) and `Process` / `ColumnProcess` with `arsIdentity` inputs. Gives the asset list, which assets have lineage, the lookup refs with their hash, and field counts per parent. Two streaming passes. |
+| `run_coverage_step` | Output plus recorder in, asset rows, ref rows and a summary out. Never raises: the summary's `coverageStatus` is `OK`, `DEGRADED` (the recorder stopped early; rows still come from the output) or `FAILED`. |
+
+An app declares a `CoverageSpec` as data: which asset types should have lineage and how it shows
+(a Process output, a relationship attribute, or another entity naming the asset), which types are
+fields and how a field names its parent, which connector types the lookup can resolve, and the key
+its recorder calls use. It writes recorder calls where its lineage code skips or fails, and its own
+reason subclasses. Nothing registers assets: the asset list is never built inside lineage code.
+
+Why read the output instead of tracking inline (the #2204 tracker):
+
+* The asset pass can't fail or change lineage, because it runs after the lineage step and only
+  reads files. An inline tracker puts a call in every asset path of every app, and each of those
+  calls then has to be proven harmless.
+* An app with no recorder calls still gets a row per asset: has lineage, waits on the lookup, or
+  has none (`UNINSTRUMENTED_PATH`). That is the baseline for a fleet rollout.
+* Memory grows with failures, not assets.
+
+What it costs: coverage runs after the app's transform, in its own step; the app's output must be
+readable by that step; a relationship that only exists in the app's memory needs a declared
+attribute; and what only the lineage code knows (why a path was skipped) still needs a recorder
+call.
+
+Where an app already has a tracker of its own with call sites in lineage code, as Tableau does, a
+small adapter gives the recorder that tracker's method names, and the lineage file changes by one
+line.
+
 ## Changes from #2204
 
 | #2204 | Here | Why |
@@ -164,7 +201,9 @@ two ClickHouse queries are in `docs/concepts/monitoring.md`.
 | ARS-dependent assets left out of the denominator | `PENDING` is its own verdict, outside the rate until settled | It's visible, and doesn't drag the rate either way |
 | Identity hash v1 | v2, adding `name` | Table refs hashed the same within a schema |
 
-The tracker, the output writer and the interceptor/context from #2204 aren't in this spike yet.
+#2204's inline tracker is replaced by the recorder and the output reader above; its writer by
+`run_coverage_step`. Its interceptor and context aren't needed: the recorder is passed in by the
+app, and the coverage step runs on its own.
 
 ## What the spike tested
 
@@ -183,6 +222,10 @@ runs, all read-only.
 | A ticket with an engineer-confirmed cause | The pre-fix rows flagged every datasource the fix later recovered (27 of 27, nothing else), including 7 failures that logged no warning; publish's lookup then matched the 2 of 4 tables the engineer predicted |
 | Outcome row | Lands in ClickHouse once per run, with the allowlisted keys; 3 days of scheduled runs |
 | Time and memory at 1M assets | Within run-to-run noise of the in-app build |
+| Tableau on the shared machinery | The released lineage file plus one line. On three fixtures, a stored internal run and a replayed 1M-asset run (65 files, 634,759 records), lineage is byte-identical across the unmodified build, coverage off and coverage on. Every hook the lineage step calls was called with bad arguments and with failing internals: none raises |
+| The same build live on an internal tenant | Three runs, the largest reading 19,386 entities. Rows appended to the tenant's lakehouse and read back. Against the unmodified release replayed on the same extract: the same 25,390 records with equal attributes; record order and one Process's input order differ, and the unmodified build shows the same variation with the hash seed and the listing order of the extract's files |
+| Reader cost at 1M assets | 16 s and 231 MiB in its own process, against 100 s and about 430 MiB for the lineage step it follows |
+| Looker and Power BI through the shared machinery | Looker: 48 of 48 fixture rows equal the app-side build on verdict and reason. Power BI: no change to its lineage code; its existing outcome records are read after the run (1,917 of 1,917 recorded keys land on a row over its corpus) |
 
 A second app was mapped the same way (atlan-powerbi-app branch `owen/lineage-coverage-sdk`, tag
 `lineage-coverage/pbi-spike-1`). Power BI's 26 outcome codes became subclasses of the SDK's
@@ -257,8 +300,9 @@ can restate an SDK reason under its code to keep its own wording (5 Tableau code
 
 ## Not in this spike
 
-The generic tracker, the artifact writer, and the lookup-side outcome export (proven feasible by
-the local replay, not built). The Tableau, Power BI and Looker ports live on app branches, not here;
-Looker records the BI-internal sub-reasons. The rollout skill, `adopt-lineage-coverage` (modelled on
-`typed-failures`), ships here as a draft: it is how those ports were built, and its rule is that an
-app's lineage output stays byte-identical to its unmodified build.
+The lookup-side outcome export (proven feasible by the local replay, not built), and an SDK
+lakehouse writer (Tableau's stays in the app). The Tableau port onto the shared machinery lives on
+an app branch; Looker and Power BI were run through it by script and are not ported yet. The rollout
+skill, `adopt-lineage-coverage` (modelled on `typed-failures`), ships here as a draft written for
+the first version: its rule that an app's lineage output stays byte-identical to its unmodified
+build stands, its steps predate the recorder and reader.
