@@ -114,6 +114,7 @@ class Unreadable:
 #: One per-type count, or the fact that it could not be read.
 CountRead: TypeAlias = Union[int, Unreadable]
 
+
 @dataclass(frozen=True, slots=True)
 class LocatedName:
     """One sampled qualified name, with the qualified names of its ancestors.
@@ -129,10 +130,16 @@ class LocatedName:
         qualified_name: The sampled asset's qualified name.
         ancestors: Its ancestors' qualified names, outermost first. Empty when
             none were read, which leaves the plain ``/`` count as the verdict.
+        name: The asset's own ``name``, or ``None`` when it was not read. Only
+            consulted when the last step below the nearest ancestor holds a
+            ``/``: that step is accepted when it is the asset's name, so a table
+            named ``a/b`` passes and a qualified name with a duplicated segment
+            (``.../SALES/SALES/ORDERS`` for ``ORDERS``) does not.
     """
 
     qualified_name: str
     ancestors: tuple[str, ...] = ()
+    name: str | None = None
 
 
 #: One per-type sample of qualified names, or the fact that it could not be
@@ -887,7 +894,11 @@ def _evaluate_one_location(
     tail = qualified_name[len(prefix) :].rstrip("/")
     below = tail.split("/") if tail else []
     if len(below) > depth and ancestors:
-        if _ancestor_depth(qualified_name, ancestors, prefix=prefix) == depth:
+        name = sample.name if isinstance(sample, LocatedName) else None
+        if (
+            _ancestor_depth(qualified_name, ancestors, prefix=prefix, name=name)
+            == depth
+        ):
             return ()
     if len(below) != depth:
         return (
@@ -904,7 +915,11 @@ def _evaluate_one_location(
 
 
 def _ancestor_depth(
-    qualified_name: str, ancestors: Sequence[str], *, prefix: str
+    qualified_name: str,
+    ancestors: Sequence[str],
+    *,
+    prefix: str,
+    name: str | None = None,
 ) -> int | None:
     """Levels below the connection, counted along the ancestor boundaries.
 
@@ -914,10 +929,18 @@ def _ancestor_depth(
     ancestor equal to the asset's own name (a view may carry its own
     ``viewQualifiedName``) is not a level and is passed over.
 
+    The last step is the one the ancestors cannot vouch for: a ``/`` in it is
+    either the asset's own name (``a/b``) or a segment the qualified name should
+    not carry (``SALES/ORDERS`` for a table named ``ORDERS``). So when it holds a
+    ``/``, it must equal the asset's ``name``; a step without a ``/`` is never
+    compared, so a name normalised differently from its segment still passes.
+
     Args:
         qualified_name: The sampled asset's qualified name.
         ancestors: Its ancestors' qualified names, outermost first.
         prefix: Connection qualified name with its trailing separator.
+        name: The asset's own name, or ``None`` when it was not read; then a
+            last step holding a ``/`` cannot be confirmed and does not line up.
 
     Returns:
         The number of steps, or ``None`` when a boundary does not line up, so
@@ -926,9 +949,16 @@ def _ancestor_depth(
     previous = prefix.rstrip("/")
     levels = [a for a in ancestors if a and a != qualified_name]
     for boundary in (*levels, qualified_name):
-        if not boundary.startswith(previous + "/") or len(boundary) == len(previous) + 1:
+        if (
+            not boundary.startswith(previous + "/")
+            or len(boundary) == len(previous) + 1
+        ):
             return None
         previous = boundary
+    parent = levels[-1] if levels else prefix.rstrip("/")
+    last_step = qualified_name[len(parent) + 1 :]
+    if "/" in last_step and last_step != name:
+        return None
     return len(levels) + 1
 
 

@@ -698,8 +698,8 @@ async def sample_located_names(
 ) -> Reading[Mapping[str, Sequence[LocatedName]]]:
     """Sample up to *per_type* qualified names per type, with their ancestors'.
 
-    :func:`sample_qualified_names` with the ancestor qualified names read in the
-    same search, one request per type. The location check counts depth by
+    :func:`sample_qualified_names` with the asset's ``name`` and its ancestor
+    qualified names read in the same search, one request per type. The location check counts depth by
     splitting a name on ``/``; when that reads too deep, these are the real
     segment boundaries (see
     :class:`~application_sdk.testing.harness.expectations.LocatedName`).
@@ -742,6 +742,7 @@ async def sample_located_names(
             .where(Asset.TYPE_NAME.eq(type_name))
             .include_on_results(Asset.QUALIFIED_NAME)
             .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+            .include_on_results(Asset.NAME)
         )
         for attribute in attributes:
             builder = builder.include_on_results(attribute)
@@ -760,7 +761,7 @@ async def sample_located_names(
                 if (found := next((v for a in level if (v := values.get(a))), None))
                 and isinstance(found, str)
             )
-            sampled.append(LocatedName(qualified_name, ancestors))
+            sampled.append(LocatedName(qualified_name, ancestors, asset.name))
             if len(sampled) >= per_type:
                 break
         return sampled

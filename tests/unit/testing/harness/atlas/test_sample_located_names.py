@@ -42,12 +42,13 @@ async def test_a_table_carries_its_database_and_schema_in_order() -> None:
         _hit(
             "Table",
             f"{_SCH}/a/b",
+            name="a/b",
             databaseQualifiedName=_DB,
             schemaQualifiedName=_SCH,
         )
     )
     assert isinstance(outcome, Settled)
-    assert outcome.value["Table"] == [LocatedName(f"{_SCH}/a/b", (_DB, _SCH))]
+    assert outcome.value["Table"] == [LocatedName(f"{_SCH}/a/b", (_DB, _SCH), "a/b")]
 
 
 async def test_a_view_column_takes_its_parent_from_view_qualified_name() -> None:
@@ -78,7 +79,7 @@ async def test_the_ancestor_attributes_are_requested_in_the_same_search() -> Non
     await atlas.sample_located_names(client, _QN, ("Table",), per_type=3)
     assert client.searches == 1
     request = repr(client.asset.requests[0])
-    for attribute in ("databaseQualifiedName", "schemaQualifiedName"):
+    for attribute in ("name", "databaseQualifiedName", "schemaQualifiedName"):
         assert attribute in request
 
 
