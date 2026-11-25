@@ -37,6 +37,7 @@ from e2e_dispatch_guard import (
     checks_state,
     claim_is_settled,
     claim_ref,
+    list_claims,
     main,
     open_pr_heads,
     prune,
@@ -846,6 +847,54 @@ def test_a_transport_failure_in_the_prune_keeps_the_claim(
 
     assert main(_argv()) == 0
     assert _read(out)["state"] == "claimed"
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        lambda *_a, **_k: _completed("", returncode=60, stderr="SSL problem"),
+        lambda *_a, **_k: _completed("<html>proxy error</html>"),
+    ],
+    ids=["curl-exhausted", "unparseable"],
+)
+def test_a_transport_failure_in_the_stale_head_check_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, transport
+) -> None:
+    """The PR-head read runs before the claim, outside main's fail-open
+    handler. A TransportError there must still read as "unknown head", not
+    abort the step before the dispatch."""
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr("_gh_refs.run", transport)
+    out = _outputs(tmp_path, monkeypatch)
+
+    assert main(_argv(**{"--pr-number": "42"})) == 0
+    assert _read(out)["claimed"] == "true"
+
+
+def test_a_missing_token_with_a_pr_number_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    out = _outputs(tmp_path, monkeypatch)
+
+    assert main(_argv(**{"--pr-number": "42"})) == 0
+    assert _read(out)["claimed"] == "true"
+
+
+def test_claims_are_listed_under_the_component_they_are_written_under(
+    http: FakeHTTP,
+) -> None:
+    """An app name that slugs to nothing is written under the guard's "app"
+    fallback; the prune must list that same prefix or never find the claim."""
+    http.route("GET", "/matching-refs/", (200, []))
+
+    list_claims(REPO, "///")
+
+    written = claim_ref("///", SHA)
+    listed = http.calls[0][1].split("/git/matching-refs/", 1)[1].split("?", 1)[0]
+    assert written.startswith(f"refs/{listed}/")
 
 
 def test_a_missing_token_still_dispatches(

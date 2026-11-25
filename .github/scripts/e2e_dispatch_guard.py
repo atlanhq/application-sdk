@@ -229,7 +229,17 @@ def claim_ref(app: str, sha: str) -> str:
     ``test_e2e_dispatch_recheck`` holds that over the fleet, because the
     connector-side recheck rebuilds this ref without the slug.
     """
-    return f"refs/{REF_NAMESPACE}/{slug(app, default='app')}/{sha}"
+    return f"refs/{REF_NAMESPACE}/{_app_component(app)}/{sha}"
+
+
+def _app_component(app: str) -> str:
+    """The app's path component, for writing a claim AND for listing them.
+
+    One function so the two cannot disagree: ``_gh_refs.slug`` falls back to
+    ``"default"``, the guard spells its fallback ``"app"``, and a claim written
+    under one and listed under the other would never be pruned.
+    """
+    return slug(app, default="app")
 
 
 def sha_of(ref: str) -> str:
@@ -572,7 +582,16 @@ def pr_head_sha(repo: str, number: int) -> str | None:
     as "not superseded" and dispatches, because the only thing worse than paying
     for a stale e2e run is a PR head whose e2e silently never ran.
     """
-    response = gh_request("GET", f"repos/{repo}/pulls/{number}")
+    try:
+        response = gh_request("GET", f"repos/{repo}/pulls/{number}")
+    except TransportError as unreadable:
+        # Runs before the claim, outside main's fail-open handler, so the
+        # transport's SystemExit would otherwise abort the step undispatched.
+        print(
+            f"::warning::could not read pull request #{number} ({unreadable}); "
+            "dispatching without the stale-head check."
+        )
+        return None
     if response.status >= 400 or not isinstance(response.body, dict):
         print(
             f"::warning::could not read pull request #{number} "
@@ -618,7 +637,7 @@ def open_pr_heads(repo: str) -> set[str] | None:
 
 def list_claims(repo: str, app: str) -> list[str] | None:
     """Every claim ref for one app, or None if the listing failed."""
-    prefix = f"{REF_NAMESPACE}/{slug(app)}"
+    prefix = f"{REF_NAMESPACE}/{_app_component(app)}"
     refs: list[str] = []
     seen: set[str] = set()
     for page in range(1, _PRUNE_MAX_PAGES + 1):
