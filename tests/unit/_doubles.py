@@ -178,7 +178,6 @@ def record_connect_params(engine: Any) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-@functools.cache
 def loaded_after_running(
     code: str, *, without_env: tuple[str, ...] = ()
 ) -> frozenset[str]:
@@ -188,18 +187,29 @@ def loaded_after_running(
     SDK, which hides an import that should not happen. ``.env`` loading is off
     (``application_sdk.constants`` would load the checkout's), and each name in
     *without_env* is cleared, so the host running the suite cannot decide what
-    gets imported. Cached: each probe is an interpreter importing the SDK,
-    1-4s on Windows.
+    gets imported.
     """
     env = {k: v for k, v in os.environ.items() if k not in without_env}
     env["PYTHON_DOTENV_DISABLED"] = "1"
+    return _probe(code, tuple(sorted(env.items())))
+
+
+@functools.cache
+def _probe(code: str, env: tuple[tuple[str, str], ...]) -> frozenset[str]:
+    """The probe itself, cached on *code* and the child's whole environment.
+
+    Each probe is an interpreter importing the SDK, 1-4s on Windows, and several
+    tests ask for the same one. The environment is part of the key: a variable
+    that changes what gets imported (an OTLP switch, say) must start a new probe,
+    not return one taken before it changed.
+    """
     result = subprocess.run(
         [sys.executable, "-c", f"import sys\n{code}\nprint('\\n'.join(sys.modules))"],
         capture_output=True,
         text=True,
         check=False,
         timeout=120,
-        env=env,
+        env=dict(env),
     )
     assert result.returncode == 0, (
         f"running {code!r} in a fresh interpreter failed:\n{result.stderr}"
