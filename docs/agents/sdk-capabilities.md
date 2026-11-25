@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    002732cfd27b95af0222c0c049aa985ca70aa52d
-source-date:   2026-11-25T19:57:36Z
+source-sha:    c63db83d3600704d23cf61f3227ad1d679054c89
+source-date:   2026-11-25T20:31:19Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 461 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 465 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 87 |
 
 ## Subpackage Details
@@ -4559,6 +4559,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How many lineage processes connect each requested type pair.
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
 
+#### `LocatedName`
+
+- **Import:** `from application_sdk.testing.harness.atlas import LocatedName`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class LocatedName(qualified_name: str, ancestors: tuple[str, ...] = (), name: str | None = None)`
+- **Summary:** One sampled qualified name, with the qualified names of its ancestors.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `LogCollector`
 
 - **Import:** `from application_sdk.testing.e2e import LogCollector`
@@ -5441,7 +5449,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `as_samples`
 
 - **Import:** `from application_sdk.testing.harness.outcome import as_samples`
-- **Signature:** `as_samples(reading: Outcome[Mapping[str, Sequence[str]]], type_names: Sequence[str]) -> Mapping[str, SampleRead]`
+- **Signature:** `as_samples(reading: Outcome[Mapping[str, ...)`
 - **Summary:** Project a qualified-name sample read the same way :func:`as_counts` does.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
@@ -6555,12 +6563,26 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Sample up to *per_type* assets per type, reading the named attributes.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `sample_located_names`
+
+- **Import:** `from application_sdk.testing.harness.atlas import sample_located_names`
+- **Signature:** `sample_located_names(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Sample up to *per_type* qualified names per type, with their ancestors'.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `sample_qualified_names`
 
 - **Import:** `from application_sdk.testing.harness.atlas import sample_qualified_names`
 - **Signature:** `sample_qualified_names(client: AsyncAtlanClient, *, ...)`
 - **Summary:** Sample up to *per_type* qualified names per type under the connection.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `sampled_qualified_names`
+
+- **Import:** `from application_sdk.testing.harness.expectations import sampled_qualified_names`
+- **Signature:** `sampled_qualified_names(sample: Sequence[str | LocatedName]) -> list[str]`
+- **Summary:** The bare qualified names of a depth sample, whichever shape it holds.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `secrets_from_environment`
 
@@ -7031,6 +7053,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SEED_PUBLISH_NODE_ID`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `SQL_QN_ANCESTOR_ATTRIBUTES`
+
+- **Import:** `from application_sdk.testing.harness.atlas import SQL_QN_ANCESTOR_ATTRIBUTES`
+- **Signature:** `SQL_QN_ANCESTOR_ATTRIBUTES: tuple[tuple[str, ...], ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
 #### `STORE_ASSERT_NODE_ID`
 
