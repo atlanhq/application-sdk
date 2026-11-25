@@ -1108,13 +1108,15 @@ class TestS3RegionLookup:
 
         from application_sdk.clients import ssl_utils
 
-        for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
-            monkeypatch.delenv(var, raising=False)
+        # Unset every spelling first: Windows env names are case-insensitive,
+        # so deleting NO_PROXY after setting no_proxy would delete both.
+        for scheme in ("HTTPS", "HTTP", "ALL", "NO"):
+            monkeypatch.delenv(f"{scheme}_PROXY", raising=False)
+            monkeypatch.delenv(f"{scheme.lower()}_proxy", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
         monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
         monkeypatch.setenv("no_proxy", "amazonaws.com.cn")
-        monkeypatch.delenv("NO_PROXY", raising=False)
         sentinel = ssl.create_default_context()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
         clients: list[dict] = []
