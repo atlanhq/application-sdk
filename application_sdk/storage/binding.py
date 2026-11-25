@@ -423,6 +423,9 @@ def _build_s3_config(
             base_access_key=access_key or None,
             base_secret_key=secret_key or None,
             base_session_token=session_token or None,
+            # Required when the role's trust policy has an sts:ExternalId
+            # condition; the provider drops a blank one.
+            external_id=_nonempty(meta, "externalId") or None,
         )
     elif access_key and secret_key:
         pass
@@ -680,6 +683,31 @@ def _adc_is_external_account() -> bool:
         return False
 
 
+def _with_gcs_adc_provider(settings: GCSStoreSettings) -> GCSStoreSettings:
+    """*settings* with a google-auth credential provider when ADC needs one.
+
+    Only Workload Identity Federation (``external_account``) ADC needs it:
+    obstore's built-in GCS credential-file decoder rejects ``external_account``
+    (GitHub OIDC → GCP) but handles every other ADC subtype (service-account
+    key file, authorized_user, GKE metadata server) on its own via
+    ``config=None``. Gating on this keeps the common ADC path zero-network, so
+    hermetic unit/emulator tests don't resolve credentials. A service-account
+    key or an explicit provider is left untouched. Shared by
+    the Dapr binding and ``CloudStore`` so both resolve keyless GCS the same way.
+    """
+    if (
+        settings.service_account_key
+        or settings.credential_provider is not None
+        or not _adc_is_external_account()
+    ):
+        return settings
+    from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+        make_gcs_adc_provider,
+    )
+
+    return dataclasses.replace(settings, credential_provider=make_gcs_adc_provider())
+
+
 def create_store_from_binding_with_put_attrs(
     name: str,
     *,
@@ -806,22 +834,7 @@ def _create_store_core(
 
     if store_kind == "gcs":
         gcs_settings, put_attrs = _build_gcs_config(meta)
-        # Only Workload Identity Federation (`external_account`) ADC needs the
-        # google-auth provider: obstore's built-in GCS credential-file decoder
-        # rejects `external_account` (GitHub OIDC → GCP) but handles every other
-        # ADC subtype (service-account key file, authorized_user, GKE metadata
-        # server) on its own via ``config=None``. Gating on this keeps the common
-        # ADC path zero-network (so hermetic unit/emulator tests don't resolve
-        # credentials), and only reaches for google-auth when obstore can't cope.
-        if not gcs_settings.service_account_key and _adc_is_external_account():
-            from application_sdk.storage._credential_providers import (  # noqa: PLC0415
-                make_gcs_adc_provider,
-            )
-
-            gcs_settings = dataclasses.replace(
-                gcs_settings, credential_provider=make_gcs_adc_provider()
-            )
-        return build_gcs_store(gcs_settings), put_attrs
+        return build_gcs_store(_with_gcs_adc_provider(gcs_settings)), put_attrs
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
 

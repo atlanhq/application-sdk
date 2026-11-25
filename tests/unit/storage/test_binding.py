@@ -669,6 +669,41 @@ class TestS3AssumeRole:
         assert "aws_access_key_id" not in config
         assert "aws_secret_access_key" not in config
 
+    @pytest.mark.parametrize(
+        ("external_id", "expected"),
+        [("ext-id-123", "ext-id-123"), ("", None), (None, None)],
+    )
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_external_id_reaches_the_sts_call(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+        tmp_path: Path,
+        external_id: str | None,
+        expected: str | None,
+    ) -> None:
+        """``externalId`` reaches AssumeRole as ``ExternalId``, as CloudStore's
+        ``extra.aws_external_id`` does; a blank one is dropped."""
+        meta = {"bucket": "b", "assumeRoleArn": "arn:aws:iam::123:role/MyRole"}
+        if external_id is not None:
+            meta["externalId"] = external_id
+        components_dir = _write_component(
+            tmp_path, "objectstore", "bindings.aws.s3", meta
+        )
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        sts_kwargs = mock_sts_cls.call_args.kwargs
+        if expected is None:
+            assert "ExternalId" not in sts_kwargs
+        else:
+            assert sts_kwargs["ExternalId"] == expected
+        assert "aws_external_id" not in (mock_s3_cls.call_args.kwargs["config"] or {})
+
     def test_trust_anchor_arn_raises_config_error(self, tmp_path: Path) -> None:
         components_dir = _write_component(
             tmp_path,

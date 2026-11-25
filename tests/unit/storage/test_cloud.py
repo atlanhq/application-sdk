@@ -447,6 +447,86 @@ class TestSharedStoreSettings:
         assert "aws_session_token" not in config
         assert "only one was set" in mock_log.return_value.warning.call_args.args[0]
 
+    def test_remaining_s3_knobs_pass_through(self):
+        with patch.object(_cloud_module, "_log") as mock_log:
+            kwargs = self._s3_kwargs(
+                {
+                    "authType": "s3",
+                    "extra": {
+                        "s3_bucket": "b",
+                        "region": "us-east-1",
+                        "endpoint": "https://minio.example.com",
+                        "allow_http": "true",
+                        "allow_invalid_certificates": True,
+                        "conditional_put": "etag",
+                        "copy_if_not_exists": "header:x-copy:true",
+                        "checksum_algorithm": "SHA256",
+                    },
+                }
+            )
+        config = kwargs["config"]
+        assert config["aws_conditional_put"] == "etag"
+        assert config["aws_copy_if_not_exists"] == "header:x-copy:true"
+        assert config["aws_checksum_algorithm"] == "SHA256"
+        assert kwargs["client_options"]["allow_http"] is True
+        assert kwargs["client_options"]["allow_invalid_certificates"] is True
+        warning = mock_log.return_value.warning.call_args.args[0]
+        assert "allow_invalid_certificates" in warning
+
+    def test_knobs_default_off(self):
+        kwargs = self._s3_kwargs(
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}}
+        )
+        assert "allow_http" not in kwargs["client_options"]
+        assert "allow_invalid_certificates" not in kwargs["client_options"]
+        config = kwargs["config"] or {}
+        for key in (
+            "aws_conditional_put",
+            "aws_copy_if_not_exists",
+            "aws_checksum_algorithm",
+        ):
+            assert key not in config
+
+    @staticmethod
+    def _gcs_kwargs(credentials: dict) -> dict:
+        with (
+            patch("obstore.store.GCSStore") as mock_gcs_cls,
+            patch(
+                "application_sdk.storage._credential_providers.make_gcs_adc_provider"
+            ) as mock_adc,
+        ):
+            mock_gcs_cls.return_value = MemoryStore()
+            mock_adc.return_value = "adc-provider"
+            CloudStore.from_credentials(credentials)
+        return mock_gcs_cls.call_args.kwargs
+
+    def test_gcs_without_key_uses_the_wif_provider(self, monkeypatch, tmp_path):
+        """Keyless GCS on a Workload Identity Federation ADC file gets the
+        google-auth provider, as the binding does; obstore can't parse it."""
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "external_account"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        kwargs = self._gcs_kwargs({"authType": "gcs", "extra": {"gcs_bucket": "b"}})
+        assert kwargs["config"] is None
+        assert kwargs["credential_provider"] == "adc-provider"
+
+    def test_gcs_with_key_or_plain_adc_gets_no_provider(self, monkeypatch, tmp_path):
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "external_account"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        keyed = self._gcs_kwargs(
+            {
+                "authType": "gcs",
+                "password": '{"type":"service_account"}',
+                "extra": {"gcs_bucket": "b"},
+            }
+        )
+        assert "credential_provider" not in keyed
+
+        adc.write_text(json.dumps({"type": "service_account"}))
+        plain = self._gcs_kwargs({"authType": "gcs", "extra": {"gcs_bucket": "b"}})
+        assert "credential_provider" not in plain
+
     def test_adls_endpoint_reaches_the_store(self):
         fake_key = base64.b64encode(b"0" * 32).decode()
         with patch("obstore.store.AzureStore") as mock_az_cls:

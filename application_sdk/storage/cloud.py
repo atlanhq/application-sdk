@@ -34,7 +34,9 @@ Credential format (standard ``csa-connectors-objectstore``)::
     S3:   authType="s3",   username=access_key, password=secret_key,
           token?=session_token (temporary STS credentials),
           extra={s3_bucket, region?, aws_role_arn?, aws_external_id?,
-                 endpoint?, force_path_style?, disable_tagging?,
+                 endpoint?, allow_http?, allow_invalid_certificates?,
+                 force_path_style?, disable_tagging?, conditional_put?,
+                 copy_if_not_exists?, checksum_algorithm?,
                  server_side_encryption?, sse_kms_key_id?}
           (a blank region is looked up from the bucket before the first
           call, unless a custom endpoint is set; an http:// endpoint allows
@@ -42,6 +44,8 @@ Credential format (standard ``csa-connectors-objectstore``)::
           disable_tagging says otherwise)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
+          (no password: Application Default Credentials, including a
+          Workload Identity Federation file)
     ADLS: authType="adls", username=client_id,   password=client_secret,
           extra={storage_account_name, adls_container, azure_tenant_id,
                  endpoint?}
@@ -827,6 +831,11 @@ def _extra_bool(extra: dict[str, Any], key: str) -> bool | None:
     return str(value).strip().lower() in {"true", "1", "yes"}
 
 
+def _extra_str(extra: dict[str, Any], key: str) -> str:
+    """``extra[key]`` as a stripped string, ``""`` when absent or blank."""
+    return str(extra.get(key) or "").strip()
+
+
 def _create_s3_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
@@ -888,17 +897,28 @@ def _create_s3_store(
         )
         _log().debug("S3 cross-account assume-role auth configured")
 
+    insecure = bool(_extra_bool(extra, "allow_invalid_certificates"))
+    if insecure:
+        _log().warning(
+            "S3: allow_invalid_certificates=true disables certificate verification"
+        )
+
     settings = S3StoreSettings(
         bucket=bucket,
         region=extra.get("region") or "",
-        endpoint=(extra.get("endpoint") or "").strip(),
+        endpoint=_extra_str(extra, "endpoint"),
+        allow_http=bool(_extra_bool(extra, "allow_http")),
+        allow_invalid_certificates=insecure,
         force_path_style=bool(_extra_bool(extra, "force_path_style")),
         disable_tagging=_extra_bool(extra, "disable_tagging"),
         access_key_id=access_key,
         secret_access_key=secret_key,
         session_token=session_token,
-        server_side_encryption=(extra.get("server_side_encryption") or "").strip(),
-        sse_kms_key_id=(extra.get("sse_kms_key_id") or "").strip(),
+        conditional_put=_extra_str(extra, "conditional_put"),
+        copy_if_not_exists=_extra_str(extra, "copy_if_not_exists"),
+        checksum_algorithm=_extra_str(extra, "checksum_algorithm"),
+        server_side_encryption=_extra_str(extra, "server_side_encryption"),
+        sse_kms_key_id=_extra_str(extra, "sse_kms_key_id"),
         credential_provider=credential_provider,
     )
 
@@ -928,8 +948,14 @@ def _create_gcs_store(
         {"X-Goog-Storage-Class": storage_class} if storage_class else None
     )
 
-    settings = GCSStoreSettings(
-        bucket=bucket, service_account_key=creds.get("password") or ""
+    from application_sdk.storage.binding import (  # noqa: PLC0415
+        _with_gcs_adc_provider,
+    )
+
+    # No key: Application Default Credentials, with the google-auth provider
+    # for a Workload Identity Federation file, exactly as the binding does.
+    settings = _with_gcs_adc_provider(
+        GCSStoreSettings(bucket=bucket, service_account_key=creds.get("password") or "")
     )
     return build_gcs_store(settings, label="cloud-gcs"), put_attrs
 
@@ -961,7 +987,7 @@ def _create_azure_store(
     settings = AzureStoreSettings(
         container=container,
         account_name=storage_account,
-        endpoint=(extra.get("endpoint") or "").strip(),
+        endpoint=_extra_str(extra, "endpoint"),
         account_key=account_key,
         tenant_id=tenant_id if service_principal else "",
         client_id=client_id if service_principal else "",
