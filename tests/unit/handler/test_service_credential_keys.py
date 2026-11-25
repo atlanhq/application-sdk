@@ -26,6 +26,7 @@ not.
 from __future__ import annotations
 
 import shutil
+import sys
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
@@ -275,6 +276,76 @@ class TestCredentialFormKeys:
         # input declares still validates into it.
         assert input_data.name == "x"
         assert "credentials" not in input_data.model_dump()
+
+
+_VALIDATE_PACKAGE = "fnd4688_validate_app"
+_WIF_EXTRA = {
+    "project_id": "example-project",
+    "service_account_email": "sa@example.invalid",
+    "wif_pool_provider_id": "example-pool",
+    "atlan_oauth_id": "example-client-id",
+    "atlan_oauth_secret": "example-client-secret",
+}
+
+
+@pytest.fixture
+def validate_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[TestClient]:
+    """The API host serving the bigquery tree as an importable app package."""
+    package = tmp_path / _VALIDATE_PACKAGE
+    generated = package / "generated"
+    shutil.copytree(_BIGQUERY_GENERATED, generated)
+    for init in (package, generated, generated / "crawler"):
+        (init / "__init__.py").write_text("")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        yield TestClient(
+            build_asgi_app(
+                _CapturingHandler(),
+                app_name="validate-host",
+                app_package=_VALIDATE_PACKAGE,
+                generated_dir=generated,
+                object_store=None,
+            ),
+            raise_server_exceptions=False,
+        )
+    finally:
+        for name in [m for m in sys.modules if m.startswith(_VALIDATE_PACKAGE)]:
+            del sys.modules[name]
+
+
+class TestValidateWithAFormField:
+    """A form field lifted as one pair is still checked field by field."""
+
+    def _post(self, client: TestClient, extra: dict[str, str]) -> Any:
+        return client.post(
+            "/workflows/v1/validate?entrypoint=crawler",
+            json={
+                "credential_guid": "guid-1",
+                "authType": "gcp-wif",
+                "connectorType": "rest",
+                "gcp-wif": {"extra": extra},
+            },
+        )
+
+    def test_a_complete_auth_type_object_is_accepted(
+        self, validate_host: TestClient
+    ) -> None:
+        response = self._post(validate_host, _WIF_EXTRA)
+        assert response.status_code == 200, response.text
+
+    def test_a_missing_field_inside_it_is_named(
+        self, validate_host: TestClient
+    ) -> None:
+        extra = {k: v for k, v in _WIF_EXTRA.items() if k != "project_id"}
+        response = self._post(validate_host, extra)
+        assert response.status_code == 422, response.text
+        assert [d["field"] for d in response.json()["detail"]] == [
+            "credentials.extra.project_id"
+        ]
+        for value in extra.values():
+            assert value not in response.text
 
 
 # ---------------------------------------------------------------------------
