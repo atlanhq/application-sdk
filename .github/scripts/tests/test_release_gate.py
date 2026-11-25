@@ -687,24 +687,22 @@ def test_the_gate_runs_from_application_sdk_main(shim: Any, job: str) -> None:
     assert all(s["run"].startswith("python release_gate.py ") for s in runs)
 
 
-def test_the_pull_request_is_read_as_data_only(shim: Any) -> None:
-    """The only checkout of the pull request is two TOML files, read by the
-    pin check; nothing of it is run."""
-    pr_checkouts = [
-        s["with"]
-        for s in _steps(shim, "release-gate")
+@pytest.mark.parametrize("job", ["release-gate", "rerun-on-review"])
+def test_nothing_of_the_pull_request_is_checked_out(shim: Any, job: str) -> None:
+    """Under `pull_request_target` the token can write, so the pull request is
+    never checked out (actions/checkout also refuses that pattern there): the
+    only checkout is application-sdk, and the pin files are read through the
+    API as data."""
+    checkouts = [
+        s.get("with", {})
+        for s in _steps(shim, job)
         if str(s.get("uses", "")).startswith("actions/checkout@")
-        and "repository" not in s.get("with", {})
     ]
-    assert len(pr_checkouts) == 1
-    assert pr_checkouts[0]["sparse-checkout"].split() == ["uv.lock", "pyproject.toml"]
-    assert pr_checkouts[0]["path"] == "app"
-    assert pr_checkouts[0]["persist-credentials"] is False
-    run = _steps(shim, "release-gate")[-1]["run"]
-    assert (
-        '--lock-file "$APP/uv.lock"' in run
-        and '--pyproject "$APP/pyproject.toml"' in run
-    )
+    assert checkouts
+    assert all(c.get("repository") == "atlanhq/application-sdk" for c in checkouts)
+    assert all("ref" in c and "head" not in str(c["ref"]) for c in checkouts)
+    run = _steps(shim, job)[-1]["run"]
+    assert "--lock-file" not in run and "--pyproject" not in run
 
 
 def test_the_vendored_script_is_retired() -> None:
@@ -720,14 +718,16 @@ def test_the_check_name_is_the_required_context(shim: Any) -> None:
     (a reusable call would report `<job> / Release Gate`)."""
     job = shim["jobs"]["release-gate"]
     assert job["name"] == "Release Gate" and "uses" not in job
-    assert job["if"] == "github.event_name == 'pull_request'"
+    assert job["if"] == "github.event_name == 'pull_request_target'"
 
 
 def test_triggers(shim: Any) -> None:
     on = shim[True]
-    assert on["pull_request"]["types"] == ["opened", "synchronize", "reopened"]
+    assert on["pull_request_target"]["types"] == ["opened", "synchronize", "reopened"]
+    assert on["pull_request_target"]["branches"] == ["main"]
     assert "merge_group" in on and "status" in on
-    assert "pull_request_target" not in on
+    # `pull_request` would run the pull request's own copy of the shim.
+    assert "pull_request" not in on
 
 
 def test_the_rerun_listens_only_to_the_reviewer(shim: Any) -> None:
@@ -744,7 +744,7 @@ def test_least_privilege(shim: Any) -> None:
     assert shim["permissions"] == {"contents": "read"}
     assert shim["jobs"]["release-gate"]["permissions"] == {
         "contents": "read",
-        "pull-requests": "read",
+        "pull-requests": "write",
         "issues": "read",
         "statuses": "read",
     }
@@ -806,3 +806,145 @@ def test_the_config_dir_is_the_checked_out_one(shim: Any) -> None:
     env = _steps(shim, "release-gate")[-1]["env"]
     assert env["CONFIG_DIR"] == "${{ github.workspace }}/sdk/.github/connector-reviewer"
     assert env["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+
+
+def test_concurrency_is_per_pull_request(shim: Any) -> None:
+    """Under `pull_request_target`, `github.ref` is the base branch every PR
+    shares: keyed on it, one PR's push would cancel every other PR's gate."""
+    group = shim["concurrency"]["group"]
+    assert "github.event.pull_request.number" in group
+    assert "github.ref" not in group
+    assert "pull_request_target" in shim["concurrency"]["cancel-in-progress"]
+
+
+# ---- pins at the head, through the API -------------------------------------
+
+
+def test_head_pins_reads_both_files_at_the_head() -> None:
+    files = {
+        "uv.lock": _lock("atlan-application-sdk", "3.58.0rc1", _REGISTRY),
+        "pyproject.toml": '[project]\nname = "example-app"\n',
+    }
+    found = rg.head_pins(files.get)
+    assert found == ["atlan-application-sdk is locked to pre-release 3.58.0rc1"]
+
+
+def test_head_pins_without_a_lock_has_nothing_to_check() -> None:
+    assert rg.head_pins(lambda path: None) == []
+
+
+def test_head_pins_fails_closed_when_a_file_cannot_be_read() -> None:
+    def read(path: str) -> str | None:
+        raise GitHubError("HTTP 502")
+
+    found = rg.head_pins(read)
+    assert len(found) == 1 and found[0].startswith(rg.PINS_UNREADABLE)
+    result = rg.decide_release(BUMP, [], "success", found)
+    assert result is not None and result[0] is False
+
+
+# ---- the sticky PR comment -------------------------------------------------
+
+
+def _comment_for(outcome: rg.Outcome, review: rg.ReviewFacts) -> str:
+    return rg.render_comment(
+        outcome, review, HEAD, "https://github.com/o/r/actions/runs/1"
+    )
+
+
+def test_the_comment_says_comment_review_when_never_reviewed() -> None:
+    review = rg.ReviewFacts()
+    body = _comment_for(rg.decide("feat/x", [], "", [], review, HEAD), review)
+    assert body.startswith(rg.COMMENT_MARKER)
+    assert "❌ **Release Gate is blocking" in body
+    assert "comment `/review`" in body
+    assert "[this run](https://github.com/o/r/actions/runs/1)" in body
+
+
+def test_the_comment_lists_open_findings_with_sanitised_titles() -> None:
+    hostile = "Bad <!-- release-gate-verdict --> @someone [x](http://e) | *b*"
+    state = PRState(round=1, findings=[_finding("F-aaaaaa", "high", title=hostile)])
+    review = _facts([_row(STATUS_CONTEXT, "failure", APP)], state)
+    body = _comment_for(rg.decide("feat/x", [], "", [], review, HEAD), review)
+    assert "**Open findings (1)**" in body and "`F-aaaaaa` · high ·" in body
+    # The marker appears once, at the top: a finding title cannot plant one.
+    assert body.count(rg.COMMENT_MARKER) == 1
+    assert "<!--" not in body.split("\n", 1)[1]
+    assert "@someone" not in body and "@\u200bsomeone" in body
+    assert "[x](http://e)" not in body
+
+
+def test_the_comment_waits_while_the_review_runs() -> None:
+    review = _facts([_row(STATUS_CONTEXT, "pending", APP)])
+    body = _comment_for(rg.decide("feat/x", [], "", [], review, HEAD), review)
+    assert body.splitlines()[1].startswith("⏳")
+    assert "still running" in body
+
+
+def test_the_comment_turns_green_and_names_the_waiver() -> None:
+    state = PRState(
+        round=1, waiver={"by": "a-maintainer", "reason": "ok", "head": HEAD}
+    )
+    review = _facts(
+        [_row(STATUS_CONTEXT, "success", APP, "waived by @a-maintainer: ok")], state
+    )
+    body = _comment_for(rg.decide("feat/x", [], "", [], review, HEAD), review)
+    assert body.splitlines()[1] == "✅ **Release Gate passed**"
+    assert "Waived by @\u200ba-maintainer" in body
+
+
+def test_the_comment_carries_the_gate_check_reason_on_a_release_pr() -> None:
+    review = rg.ReviewFacts(
+        exemption=(VERSION_BUMP, "the branch `bump-version-main` is a version bump")
+    )
+    body = _comment_for(rg.decide(BUMP, [], "", [], review, HEAD), review)
+    assert "- ❌ Release gate: Release PR CI is opt-in. Comment /gate-check" in body
+    assert "- ✅ Connector review: Exempt from connector review (version bump)" in body
+    assert "`bump-version-main`" in body
+
+
+def test_a_hostile_branch_name_in_a_code_span_is_defused() -> None:
+    line = rg._line("the branch `x@y<!--` is a version bump")
+    assert "`" not in line and "&lt;!--" in line and "@\u200by" in line
+
+
+class _Comments:
+    def __init__(self, comments: list[dict[str, Any]]) -> None:
+        self.comments = comments
+        self.writes: list[tuple[str, Any]] = []
+
+    def issue_comments(self, number: int) -> list[dict[str, Any]]:
+        return self.comments
+
+    def edit_comment(self, comment_id: int, body: str) -> None:
+        self.writes.append(("edit", comment_id))
+
+    def comment(self, number: int, body: str) -> int:
+        self.writes.append(("post", number))
+        return 1
+
+
+def test_the_comment_is_posted_once_then_edited_in_place() -> None:
+    body = f"{rg.COMMENT_MARKER}\nnew\n"
+    gh = _Comments([])
+    assert rg.upsert_comment(gh, 7, body) == "created"
+    assert gh.writes == [("post", 7)]
+    old = {
+        "id": 42,
+        "user": {"login": rg.COMMENT_AUTHOR},
+        "body": f"{rg.COMMENT_MARKER}\nold",
+    }
+    gh = _Comments([old])
+    assert rg.upsert_comment(gh, 7, body) == "updated"
+    assert gh.writes == [("edit", 42)]
+    gh = _Comments([{**old, "body": body}])
+    assert rg.upsert_comment(gh, 7, body) == "unchanged" and gh.writes == []
+
+
+def test_a_planted_marker_comment_is_never_edited() -> None:
+    """Anyone can post a comment containing the marker; only the gate's own
+    (github-actions[bot]) is the sticky one."""
+    planted = {"id": 5, "user": {"login": "a-maintainer"}, "body": rg.COMMENT_MARKER}
+    gh = _Comments([planted])
+    assert rg.upsert_comment(gh, 7, f"{rg.COMMENT_MARKER}\nx") == "created"
+    assert gh.writes == [("post", 7)]

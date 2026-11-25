@@ -786,6 +786,22 @@ class TestRerunReleaseGate:
         assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT) is False
         assert api.writes == []
 
+    def test_a_pull_request_target_gate_is_rerun(self) -> None:
+        """FND-5321 moved the shim to `pull_request_target`; its run is the
+        gate, while a `status` run on the same workflow only skips it."""
+        target = _gate(9)
+        target["event"] = "pull_request_target"
+        api = FakeApi(
+            status=None,
+            runs={
+                gcv.RELEASE_GATE_WORKFLOW: [
+                    [target, _run(10, event="status"), _run(11, event="merge_group")]
+                ]
+            },
+        )
+        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT)
+        assert [p for p, _ in api.writes] == [f"repos/{REPO}/actions/runs/9/rerun"]
+
 
 class TestMain:
     def test_github_error_fails(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:

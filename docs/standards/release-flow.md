@@ -126,7 +126,7 @@ it too. Read the green `gate-check` on an SDK bump PR as "opted in", never as "p
 
 **Release Gate passes a release PR only on a `success` `gate-check` status on its head**
 (`.github/scripts/release_gate.py` in application-sdk, which the scaffolded `release-gate.yaml`
-checks out at `main` and runs; bootstrap vendored it into each app until FND-5321). A release PR
+checks out at `main` and runs on `pull_request_target`, so a release PR cannot edit its gate; bootstrap vendored it into each app until FND-5321). A release PR
 the connector reviewer has never reviewed needs no review: a version bump is one of the
 reviewer's exempt classes, so the other half of Release Gate, the `connector-reviewer` verdict
 every other pull request needs (see [ci.md](ci.md)), passes it. Once a bump PR has been reviewed
@@ -145,8 +145,8 @@ subscribes to `labeled`/`unlabeled`.
 **Release Gate also refuses a release PR that is pinned to an unreleased SDK**, whatever its
 `gate-check` status says. Pinning an SDK branch is how an SDK change is tried on one app before
 the SDK releases it; that is fine on a feature branch, but a release built on it ships SDK code
-no SDK release contains. The gate reads the checked-out `uv.lock` and `pyproject.toml` (no
-network) and fails when an `atlan-application-sdk*` package is locked from anything but a
+no SDK release contains. The gate reads `uv.lock` and `pyproject.toml` at the head commit
+through the contents API, as data (never a checkout of the PR; a read error fails the gate), and fails when an `atlan-application-sdk*` package is locked from anything but a
 package index (a git ref, a path, a URL), is locked to a pre-release (`rc`, `a`, `b`, `.dev`),
 or is redirected by `[tool.uv.sources]` to anything but a named index. It is scoped to the SDK's
 own distributions: another dependency pinned to a git tag is not this gate's business. The check

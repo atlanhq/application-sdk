@@ -3,14 +3,17 @@
 Run by the bootstrap-managed ``release-gate.yaml`` in every connector repo,
 from a checkout of THIS repository at ``main`` (FND-5321). Bootstrap used to
 vendor this file into each app, so the pull request's own copy ran and a pull
-request could edit the gate it was judged by. Now the app keeps only the shim;
-the decision is made here. The shim passes everything it knows straight
-through (per docs/standards/ci.md: no branching shell in ``run:``)::
+request could edit the gate it was judged by. Now the app keeps only the shim,
+and the shim runs on ``pull_request_target``, so GitHub always takes it from
+the default branch: a pull request can edit neither the script nor the shim
+that judges it. Nothing of the pull request is checked out or run; the two
+files the pin check needs are read at the head through the API, as data. The
+shim passes everything it knows straight through (per docs/standards/ci.md:
+no branching shell in ``run:``)::
 
     python release_gate.py gate --repo "$REPO" --pr "$PR" \
       --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --labels "$LABELS" \
-      --lock-file app/uv.lock --pyproject app/pyproject.toml \
-      --config-dir .github/connector-reviewer
+      --config-dir .github/connector-reviewer --run-url "$RUN_URL"
 
 and, on a ``status`` event for the reviewer's context::
 
@@ -49,7 +52,12 @@ one of those classes, so a release PR needs its ``gate-check`` but no review.
 
 On a failure the gate lists the reviewer's open findings and suggestions,
 read from the state block in the reviewer's own summary comment (only the
-App's comment is trusted), in the job summary.
+App's comment is trusted), in the job summary. It also keeps ONE sticky PR
+comment (found by ``COMMENT_MARKER`` and its author, ``github-actions[bot]``)
+that says why the check passed or failed and what to do, edited in place on
+every run and never deleted. Writing it is best-effort: it never changes the
+check's result. Everything in it is the gate's own text or sanitised
+(``_safe``): no PR-controlled text reaches it unescaped.
 
 Anything that cannot be read fails the gate: a release that skips its gate
 is worse than a re-run of a two-minute check.
@@ -92,6 +100,12 @@ SDK_PREFIX = "atlan-application-sdk"
 RELEASED_VERSION = re.compile(r"\d+(\.\d+)*(\.post\d+)?")
 PIN_HINT = "Pin a released SDK version, re-lock, then /gate-check."
 LOCK_UNREADABLE = "uv.lock could not be parsed, so the SDK pin is unknown."
+PINS_UNREADABLE = "uv.lock or pyproject.toml could not be read at the head"
+
+# The sticky PR comment: found by this marker AND its author, so a comment
+# anyone else plants with the marker is never edited or trusted.
+COMMENT_MARKER = "<!-- release-gate-verdict -->"
+COMMENT_AUTHOR = "github-actions[bot]"
 
 MISSING_HINT = "Release PR CI is opt-in. Comment /gate-check to run it."
 PENDING_HINT = "The release gate is still running on this commit."
@@ -143,15 +157,25 @@ def _array(value: object) -> list[Any]:
     return cast("list[Any]", value) if isinstance(value, list) else []
 
 
-def _read_toml(path: str) -> dict[str, Any] | None:
-    """Return the parsed TOML file, ``{}`` if absent, ``None`` if unreadable."""
-    file = pathlib.Path(path)
-    if not path or not file.is_file():
+def _loads(text: str | None) -> dict[str, Any] | None:
+    """Return parsed TOML, ``{}`` for an absent file (None), ``None`` if unparseable."""
+    if text is None:
         return {}
     try:
-        return tomllib.loads(file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
         return None
+
+
+def _read_file(path: str) -> str | None:
+    """A local file's text, or None when there is no such file."""
+    file = pathlib.Path(path)
+    if not path or not file.is_file():
+        return None
+    try:
+        return file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "\x00 unreadable"  # not TOML: reads as unparseable
 
 
 def _is_sdk(name: object) -> bool:
@@ -197,19 +221,39 @@ def _source_pins(pyproject: dict[str, Any]) -> list[str]:
     return found
 
 
-def unreleased_sdk_pins(lock_path: str, pyproject_path: str) -> list[str]:
-    """Return why this checkout is pinned to an unreleased SDK, else ``[]``.
+def pins_from_text(lock_text: str | None, pyproject_text: str | None) -> list[str]:
+    """Return why the head is pinned to an unreleased SDK, else ``[]``.
 
-    The SDK repo itself (a project named ``atlan-application-sdk*``) locks
-    its own packages from the workspace, so it is never a finding.
+    ``None`` is a file the head does not have. The SDK repo itself (a project
+    named ``atlan-application-sdk*``) locks its own packages from the
+    workspace, so it is never a finding.
     """
-    pyproject = _read_toml(pyproject_path) or {}
+    pyproject = _loads(pyproject_text) or {}
     if _is_sdk(_table(pyproject.get("project")).get("name")):
         return []
-    lock = _read_toml(lock_path)
+    lock = _loads(lock_text)
     if lock is None:
         return [LOCK_UNREADABLE]
     return _locked_pins(lock) + _source_pins(pyproject)
+
+
+def unreleased_sdk_pins(lock_path: str, pyproject_path: str) -> list[str]:
+    """``pins_from_text`` for two local files (absent reads as absent)."""
+    return pins_from_text(_read_file(lock_path), _read_file(pyproject_path))
+
+
+def head_pins(read: Callable[[str], str | None]) -> list[str]:
+    """``pins_from_text`` for the head's ``uv.lock`` and ``pyproject.toml``.
+
+    ``read(path)`` returns the file's text at the head, None when the head
+    has no such file, and raises when it cannot be read: that fails the gate,
+    never passes it.
+    """
+    try:
+        lock, pyproject = read("uv.lock"), read("pyproject.toml")
+    except Exception as error:  # noqa: BLE001 - any read failure fails closed
+        return [f"{PINS_UNREADABLE} ({type(error).__name__}: {error})"[:300]]
+    return pins_from_text(lock, pyproject)
 
 
 def newest_status(
@@ -408,6 +452,112 @@ def render_summary(outcome: Outcome, review: ReviewFacts) -> str:
     return "\n".join(out) + "\n"
 
 
+# ---- the sticky PR comment -------------------------------------------------
+
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]|#~])")
+# A code span the gate keeps as code: its own commands (`/review`) and names
+# (a branch, a class) made of these characters only. Anything else in a span
+# is sanitised like the rest of the line.
+_PLAIN_CODE = re.compile(r"[A-Za-z0-9_./ -]{1,80}")
+
+
+def _safe(text: str, keep: int = 300) -> str:
+    """Untrusted text made inert in a comment: one line, no HTML (so no
+    ``<!--`` marker), no markdown, no @-mention, no link syntax, capped.
+    Spaces at either end are kept, so it can sit inside a sentence."""
+    flat = re.sub(r"\s+", " ", str(text))
+    if len(flat) > keep:
+        flat = flat[: keep - 3] + "..."
+    flat = flat.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    flat = _MD_SPECIAL.sub(r"\\\1", flat)
+    return flat.replace("@", "@\u200b")
+
+
+def _line(text: str) -> str:
+    """A verdict line: the gate's own text, with the only PR-reachable parts
+    (a branch name, a waiver reason, a status description) defused. A code
+    span is kept as code only when it is plain (``_PLAIN_CODE``); a span a
+    branch name or reason could have shaped is sanitised instead."""
+    parts = text.split("`")
+    if len(parts) % 2 == 0:  # an unpaired backtick: treat the whole line as text
+        return _safe(text, 600)
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i % 2 and _PLAIN_CODE.fullmatch(part):
+            out.append(f"`{part}`")
+        else:
+            out.append(_safe(part, 600))
+    return "".join(out)
+
+
+def render_comment(
+    outcome: Outcome, review: ReviewFacts, head_sha: str, run_url: str = ""
+) -> str:
+    """The sticky comment: why the check passed or failed, and what to do."""
+    review_pending = review.state == "pending" and any(
+        line.startswith("Connector review") for line in outcome.failed
+    )
+    only_pending = review_pending and len(outcome.failed) == 1
+    if outcome.passes:
+        head = "✅ **Release Gate passed**"
+    elif only_pending:
+        head = "⏳ **Release Gate is waiting**: the connector review is still running"
+    else:
+        head = "❌ **Release Gate is blocking this pull request**"
+    out = [COMMENT_MARKER, head, ""]
+    for line in outcome.lines:
+        if line not in outcome.failed:
+            icon = "✅"
+        elif review_pending and line.startswith("Connector review"):
+            icon = "⏳"
+        else:
+            icon = "❌"
+        out.append(f"- {icon} {_line(line)}")
+    blocked_on_findings = review.state == "failure" and any(
+        line.startswith("Connector review") for line in outcome.failed
+    )
+    if blocked_on_findings and review.findings:
+        out += ["", f"**Open findings ({len(review.findings)})**", ""]
+        out += [
+            f"- `{f.id}` · {_safe(f.severity, 20)} · {_safe(f.title, 160)}"
+            for f in review.findings[:20]
+        ]
+        if len(review.findings) > 20:
+            out.append(f"- … and {len(review.findings) - 20} more")
+        out += [
+            "",
+            "Fix a finding and comment `/review`, close a medium or low one with "
+            "`/review dismiss <id> <reason>`, or set the verdict aside for this "
+            "commit with `/review waive <reason>`.",
+        ]
+    sha = head_sha[:7] if re.fullmatch(r"[0-9a-f]{40}", head_sha) else "?"
+    run = (
+        f" · [this run]({run_url})"
+        if re.fullmatch(r"https://github\.com/[\w./-]+", run_url)
+        else ""
+    )
+    out += [
+        "",
+        f"<sub>For commit `{sha}`{run}. This comment is updated on every Release "
+        "Gate run; a push re-checks the new commit.</sub>",
+    ]
+    return "\n".join(out) + "\n"
+
+
+def upsert_comment(gh: Any, number: int, body: str) -> str:
+    """Edit the gate's sticky comment in place, or post it once. Returns
+    "created", "updated" or "unchanged"."""
+    for c in gh.issue_comments(number):
+        login = _table(c.get("user")).get("login")
+        if login == COMMENT_AUTHOR and COMMENT_MARKER in str(c.get("body") or ""):
+            if c.get("body") == body:
+                return "unchanged"
+            gh.edit_comment(int(c["id"]), body)
+            return "updated"
+    gh.comment(number, body)
+    return "created"
+
+
 # ---- reading GitHub (the only I/O) -----------------------------------------
 
 
@@ -509,9 +659,12 @@ def gather(
 
 
 def run_gate(args: argparse.Namespace) -> int:  # pragma: no cover - CLI glue
+    from connector_reviewer.github import GitHub as ReviewerGitHub  # noqa: PLC0415
+
     labels = parse_labels(args.labels)
+    gh = ReviewerGitHub(args.repo)
     pins = (
-        unreleased_sdk_pins(args.lock_file, args.pyproject)
+        head_pins(lambda path: read_at(gh, path, args.head_sha))
         if is_release_pr(args.head_ref, labels)
         else []
     )
@@ -525,7 +678,31 @@ def run_gate(args: argparse.Namespace) -> int:  # pragma: no cover - CLI glue
         review,
         args.head_sha,
     )
+    try:
+        body = render_comment(outcome, review, args.head_sha, args.run_url)
+        print(f"PR comment {upsert_comment(gh, args.pr, body)}")
+    except Exception as error:  # noqa: BLE001 - the comment never decides the check
+        print(f"::warning::the Release Gate PR comment was not written: {error}"[:300])
     return emit(outcome, review, args.summary_file)
+
+
+def read_at(gh: Any, path: str, sha: str) -> str | None:  # pragma: no cover - glue
+    """A file's text at ``sha`` through the contents API (raw, so a ``uv.lock``
+    over 1 MB reads too); None when the head has no such file. Any other
+    failure raises, so the pin check fails closed."""
+    from connector_reviewer.github import GitHubError  # noqa: PLC0415
+
+    try:
+        text = gh._call(
+            "GET",
+            f"/repos/{gh.repo}/contents/{path}?ref={sha}",
+            accept="application/vnd.github.raw",
+        )
+    except GitHubError as error:
+        if "HTTP 404" in str(error):
+            return None
+        raise
+    return text if isinstance(text, str) else None
 
 
 def emit(outcome: Outcome, review: ReviewFacts, summary_file: str) -> int:
@@ -541,6 +718,60 @@ def emit(outcome: Outcome, review: ReviewFacts, summary_file: str) -> int:
         except OSError:
             pass
     return 0 if outcome.passes else 1
+
+
+def run_explain(args: argparse.Namespace) -> int:  # pragma: no cover - CLI glue
+    """Read-only: what the gate decides for one real pull request, and the
+    reviewer's exemption classifier's answer whatever the status says. Posts
+    nothing, writes nothing; one JSON line on stdout."""
+    from connector_reviewer import review as reviewer  # noqa: PLC0415
+    from connector_reviewer.config import load_config  # noqa: PLC0415
+    from connector_reviewer.github import GitHub as ReviewerGitHub  # noqa: PLC0415
+
+    gh = ReviewerGitHub(args.repo)
+    pr = gh.pr(args.pr)
+    head, head_ref = pr["head"]["sha"], pr["head"]["ref"]
+    labels = [str(_table(x).get("name")) for x in _array(pr.get("labels"))]
+    from connector_reviewer.advisory import changed_paths  # noqa: PLC0415
+    from connector_reviewer.diff import parse_unified_diff  # noqa: PLC0415
+
+    diff = gh.diff(pr["base"]["sha"], head)
+    found = reviewer.exemption(
+        gh, args.pr, pr, diff, load_config(pathlib.Path(args.config_dir))
+    )
+    paths = changed_paths(parse_unified_diff(diff))
+    pins = (
+        head_pins(lambda path: read_at(gh, path, head))
+        if is_release_pr(head_ref, labels)
+        else []
+    )
+    rows, review = gather(args.repo, args.pr, head, args.config_dir)
+    gate_row = newest_status(rows, GATE_CHECK_CONTEXT, VERDICT_CREATOR)
+    outcome = decide(
+        head_ref,
+        labels,
+        str(_table(gate_row).get("state") or ""),
+        pins,
+        review,
+        head,
+    )
+    print(
+        json.dumps(
+            {
+                "pr": f"{args.repo}#{args.pr}",
+                "author": _table(pr.get("user")).get("login"),
+                "branch": head_ref,
+                "files": sorted(paths)[:8] + (["..."] if len(paths) > 8 else []),
+                "classifier": found.kind if found else "reviewed",
+                "why": found.why if found else "",
+                "reviewer_status": review.state or "none",
+                "reviewed_before": review.reviewed,
+                "gate": "pass" if outcome.passes else "block",
+                "gate_lines": list(outcome.lines),
+            }
+        )
+    )
+    return 0
 
 
 def _ts(raw: str) -> datetime | None:
@@ -580,8 +811,7 @@ def _build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--head-sha", required=True)
     gate.add_argument("--head-ref", default="")
     gate.add_argument("--labels", default="[]", help="label names as a JSON array")
-    gate.add_argument("--lock-file", default="", help="the app's uv.lock")
-    gate.add_argument("--pyproject", default="", help="the app's pyproject.toml")
+    gate.add_argument("--run-url", default="", help="this run, linked from the comment")
     gate.add_argument("--config-dir", default="", help="the reviewer's config dir")
     gate.add_argument(
         "--summary-file",
@@ -589,6 +819,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="where the job summary goes",
     )
     gate.set_defaults(func=run_gate)
+    explain = sub.add_parser(
+        "explain", help="read-only: the gate's decision for one real pull request"
+    )
+    explain.add_argument("--repo", required=True)
+    explain.add_argument("--pr", type=int, required=True)
+    explain.add_argument(
+        "--config-dir", required=True, help="the reviewer's config dir"
+    )
+    explain.set_defaults(func=run_explain)
     rerun = sub.add_parser("rerun", help="re-run Release Gate on a new verdict")
     rerun.add_argument("--repo", required=True)
     rerun.add_argument("--sha", required=True)

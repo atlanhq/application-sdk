@@ -511,12 +511,31 @@ with its App token, which fires a `status` event; `release-gate.yaml`'s
 context) re-runs the newest Release Gate run on that commit through
 `gate_check_verdict.rerun_release_gate`, the same re-run a `gate-check` verdict
 uses. The decision is `.github/scripts/release_gate.py` in this repository,
-checked out at `main` by the shim; bootstrap no longer vendors it, so a pull
-request cannot edit the script it is judged by. It can still edit the shim
-itself (a `pull_request` workflow runs the PR's copy), as it can add any
-workflow with a job named `Release Gate`: under an Actions-only required check
-that is the remaining exposure, and only an org ruleset "required workflow"
-closes it.
+checked out at `main` by the shim; bootstrap no longer vendors it. The gate job
+runs on `pull_request_target`, so GitHub always runs the default branch's copy
+of `release-gate.yaml`: a pull request can edit neither the script nor the shim
+that judges it. Because that token can write, nothing of the pull request is
+checked out or run (the pin check reads `uv.lock` and `pyproject.toml` at the
+head through the API), and a fork pull request is safe for the same reason.
+`pull_request_target` has two operational costs. GitHub blocks it by default in
+public repositories from 2026-12-02 unless an org or repository Actions event
+policy allows it, and the resync pull request that installs the shim gets no
+Release Gate run from either copy, so it needs a one-time bypass merge. A pull
+request can still add its own workflow with a job named `Release Gate`: under
+an Actions-only required check that is the remaining exposure, and only an org
+ruleset "required workflow" closes it.
+
+The gate also keeps one sticky PR comment, found by its hidden marker and its
+author (`github-actions[bot]`) and edited in place on every run, that says why
+the check passed or failed and what to do: "comment `/review`", the open
+findings, "still running", "re-run `/review`", the `/gate-check` reason on a
+release PR, or ✅ with who waived it or why the PR is exempt. Every
+PR-reachable part of it (finding titles, branch names, waiver reasons) is
+escaped, so it cannot mention anyone or forge the marker. Writing it needs
+`pull-requests: write` and is best-effort: it never changes the check.
+`python release_gate.py explain --repo <owner/name> --pr <n> --config-dir
+.github/connector-reviewer` prints, read-only, what the gate and the reviewer's
+classifier decide for any real pull request.
 
 ## Bot-opened PRs are never labelled
 
