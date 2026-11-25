@@ -1243,6 +1243,28 @@ def canonical_type_str(tp: object) -> str:
 # ── Backwards compatibility ───────────────────────────────────────────────────
 
 
+def _named_classes(tp: object) -> frozenset[str]:
+    """The fully qualified name of every class *tp* names, at any depth.
+
+    :func:`canonical_type_str` renders a class by its bare ``__name__`` (the
+    form the AST ledger can see), so ``old.Status`` and ``new.Status`` — two
+    enums with different values — render alike. The compatibility check
+    compares these identities as well, so a same-named replacement class is
+    still a type change. Typing aliases and ``Literal`` values carry no class.
+    """
+    origin = get_origin(tp)
+    if origin is Annotated:
+        return _named_classes(get_args(tp)[0])
+    if origin is typing.Literal:
+        return frozenset()
+    if isinstance(tp, type) and origin is None and tp is not type(None):
+        return frozenset({f"{tp.__module__}.{tp.__qualname__}"})
+    named: frozenset[str] = frozenset()
+    for arg in get_args(tp):
+        named |= _named_classes(arg)
+    return named
+
+
 def _incompatibilities(old_cls: type, new_cls: type) -> list[tuple[str, str]]:
     """Every ``(field, reason)`` that makes *new_cls* break *old_cls* payloads.
 
@@ -1268,10 +1290,22 @@ def _incompatibilities(old_cls: type, new_cls: type) -> list[tuple[str, str]]:
         if name not in new_fields:
             issues.append((name, "field was removed"))
             continue
+        new_tp = new_fields[name]
         old_canon = canonical_type_str(old_tp)
-        new_canon = canonical_type_str(new_fields[name])
+        new_canon = canonical_type_str(new_tp)
         if old_canon != new_canon:
             issues.append((name, f"type changed from '{old_canon}' to '{new_canon}'"))
+            continue
+        old_classes, new_classes = _named_classes(old_tp), _named_classes(new_tp)
+        if old_classes != new_classes:
+            issues.append(
+                (
+                    name,
+                    f"type '{old_canon}' now names a different class: "
+                    f"{', '.join(sorted(old_classes - new_classes))} -> "
+                    f"{', '.join(sorted(new_classes - old_classes))}",
+                )
+            )
 
     for name in new_fields:
         if name not in old_fields and not has_default(new_cls, name):

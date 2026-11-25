@@ -544,10 +544,10 @@ class TestIsBackwardsCompatible:
     def test_annotated_typing_alias_to_builtin_is_compatible(self) -> None:
         # FND-4685: raw equality reported this as a break.
         class V1(Input):
-            ids: Annotated[List[int], MaxItems(3)] = []
+            ids: Annotated[List[int], MaxItems(3)] = Field(default_factory=list)
 
         class V2(Input):
-            ids: Annotated[list[int], MaxItems(5)] = []
+            ids: Annotated[list[int], MaxItems(5)] = Field(default_factory=list)
 
         assert _is_backwards_compatible(V1, V2) == (True, [])
 

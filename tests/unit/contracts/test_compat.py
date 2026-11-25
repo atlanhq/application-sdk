@@ -7,9 +7,11 @@ directly; ``check_backwards_compatible`` is tested on the cases where the old
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
 
 import pytest
+from pydantic import Field
 
 from application_sdk.contracts.base import ContractDeclarationError, Input, MaxItems
 from application_sdk.contracts.compat import (
@@ -19,6 +21,12 @@ from application_sdk.contracts.compat import (
     canonical_type_str,
     check_backwards_compatible,
 )
+
+#: Two distinct enums that both render as ``Status`` — as ``old.Status`` and
+#: ``new.Status`` would after a module move that also changed the values.
+OldStatus = Enum("Status", {"A": "a"}, module="old")
+NewStatus = Enum("Status", {"B": "b"}, module="new")
+
 
 # =============================================================================
 # canonical_type_str
@@ -76,10 +84,10 @@ class TestCheckBackwardsCompatible:
 
     def test_annotated_typing_alias_to_builtin_is_compatible(self) -> None:
         class V1(Input):
-            ids: Annotated[List[int], MaxItems(3)] = []
+            ids: Annotated[List[int], MaxItems(3)] = Field(default_factory=list)
 
         class V2(Input):
-            ids: Annotated[list[int], MaxItems(5)] = []
+            ids: Annotated[list[int], MaxItems(5)] = Field(default_factory=list)
 
         assert check_backwards_compatible(V1, V2) == (True, [])
 
@@ -139,6 +147,28 @@ class TestCheckBackwardsCompatible:
         class V2(Input):
             name: str = ""
             added: int = 0
+
+        assert check_backwards_compatible(V1, V2) == (True, [])
+
+    def test_same_named_distinct_class_is_incompatible(self) -> None:
+        # Both render as 'Status'; the values a payload may carry differ.
+        class V1(Input):
+            status: OldStatus | None = None
+
+        class V2(Input):
+            status: NewStatus | None = None
+
+        ok, issues = check_backwards_compatible(V1, V2)
+        assert ok is False
+        assert [i.field for i in issues] == ["status"]
+        assert "different class" in issues[0].reason
+
+    def test_same_class_in_reordered_union_is_compatible(self) -> None:
+        class V1(Input):
+            status: OldStatus | int | None = None
+
+        class V2(Input):
+            status: int | OldStatus | None = None
 
         assert check_backwards_compatible(V1, V2) == (True, [])
 

@@ -102,6 +102,30 @@ _TYPING_LOWER: dict[str, str] = {
 }
 
 
+#: Module names whose qualifier is dropped: ``typing.Any`` → ``Any``.
+_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+
+
+def _rename_typing_name(node: ast.expr) -> ast.Name | None:
+    """The canonical bare name for a typing-module name node, or None if it is not one.
+
+    Lowercases typing aliases (``List``/``typing.List`` → ``list``) and drops a
+    ``typing.`` / ``typing_extensions.`` qualifier (``typing.Literal`` →
+    ``Literal``), as the runtime canonicaliser renders them.
+    """
+    if isinstance(node, ast.Attribute) and node.attr in _TYPING_LOWER:
+        return ast.Name(id=_TYPING_LOWER[node.attr], ctx=ast.Load())
+    if isinstance(node, ast.Name) and node.id in _TYPING_LOWER:
+        return ast.Name(id=_TYPING_LOWER[node.id], ctx=ast.Load())
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in _TYPING_MODULES
+    ):
+        return ast.Name(id=node.attr, ctx=ast.Load())
+    return None
+
+
 def _normalize_type_node(node: ast.expr) -> ast.expr:
     """Recursively normalize an annotation AST node to canonical form.
 
@@ -113,6 +137,8 @@ def _normalize_type_node(node: ast.expr) -> ast.expr:
       union is a set, so ``Union[str, int]`` and ``int | str`` are one type.
     - Recurse into subscript slices and union arms.
     - Lowercase typing aliases (List→list, Dict→dict, …) via AST rewrite.
+    - Drop a ``typing.`` / ``typing_extensions.`` qualifier (``typing.Literal``
+      → ``Literal``), as the runtime canonicaliser renders it.
     Handles both ``ast.Name`` and ``ast.Attribute`` forms (e.g. ``typing.Optional``).
     """
     # Strip Annotated[X, ...] → X (ast.Name form handled by _unwrap_annotated)
@@ -143,11 +169,10 @@ def _normalize_type_node(node: ast.expr) -> ast.expr:
             [_normalize_type_node(arm) for arm in _flatten_union(node)]
         )
 
-    # Lowercase typing aliases — rewrite AST node before unparsing
-    if isinstance(node, ast.Attribute) and node.attr in _TYPING_LOWER:
-        return ast.Name(id=_TYPING_LOWER[node.attr], ctx=ast.Load())
-    if isinstance(node, ast.Name) and node.id in _TYPING_LOWER:
-        return ast.Name(id=_TYPING_LOWER[node.id], ctx=ast.Load())
+    # typing.X → X, List → list, …
+    renamed = _rename_typing_name(node)
+    if renamed is not None:
+        return renamed
 
     # Subscript — recurse into value and slice
     if isinstance(node, ast.Subscript):

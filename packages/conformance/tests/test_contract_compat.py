@@ -353,14 +353,22 @@ _PARITY_CORPUS = [
     "Type[int]",
     "Literal['a', 'b']",
     "Union[Literal['a'], int]",
+    "typing.Literal['x'] | int",
+    "typing.Optional[typing.List[int]]",
+    "typing.Any",
+    "typing_extensions.Literal['b'] | str",
 ]
 
 
 @pytest.mark.parametrize("annotation", _PARITY_CORPUS)
 def test_ast_and_runtime_canonical_forms_agree(annotation: str) -> None:
+    import typing_extensions
     from application_sdk.contracts.compat import canonical_type_str
 
-    namespace = {name: getattr(typing, name) for name in typing.__all__}
+    namespace: dict[str, object] = {
+        name: getattr(typing, name) for name in typing.__all__
+    }
+    namespace.update(typing=typing, typing_extensions=typing_extensions)
     runtime = canonical_type_str(eval(annotation, namespace))  # noqa: S307
     static = _canonical_type(ast.parse(annotation, mode="eval").body)
     assert static == runtime
@@ -373,6 +381,7 @@ def test_ast_and_runtime_canonical_forms_agree(annotation: str) -> None:
         ("None | str | int", "int | str | None"),
         ("Union[str, Optional[str]]", "str | None"),
         ("dict[str, str | int | None]", "dict[str, int | str | None]"),
+        ("typing.Literal['x'] | int", "Literal['x'] | int"),
     ],
 )
 def test_canonical_union_is_sorted_deduplicated_none_last(
