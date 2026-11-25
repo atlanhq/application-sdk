@@ -2691,7 +2691,7 @@ def test_a_gateway_without_responses_falls_back_to_chat_once_with_reasoning_off(
 def test_shipped_config_uses_luna_list_prices_on_the_responses_api():
     cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
     assert cfg.api == "responses"
-    assert cfg.model == "atlan-bedrock-dev/global.openai.gpt-6-luna"
+    assert cfg.model == "openai/gpt-6-luna"
     assert (
         cfg.price.input_per_mtok,
         cfg.price.cached_input_per_mtok,
