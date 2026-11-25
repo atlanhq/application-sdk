@@ -664,8 +664,10 @@ async def _download_listed(
             sidecar_present=obj.has_sidecar,
         )
 
+    # Generator: the bounded pool pulls lazily, so a 100k-object prefix holds
+    # max_concurrency coroutines, not one per object (FND-4082).
     await _run_bounded(
-        [_download_one(obj, d) for obj, d in todo],
+        (_download_one(obj, d) for obj, d in todo),
         max_concurrency,
         unwrap_lone_failure=unwrap_lone_failure,
     )

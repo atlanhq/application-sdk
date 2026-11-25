@@ -397,38 +397,91 @@ class TestUploadBytes:
 
     async def test_object_absent_after_put_raises(self, store) -> None:
         """A store that drops the object is caught by the readback HEAD."""
-        with patch.object(obstore, "put_async", AsyncMock(return_value=None)):
+        with patch.object(obstore, "open_writer_async", _DiscardingWriter):
             with pytest.raises(StorageError, match="absent from the store"):
                 await upload_bytes("out/dropped.bin", b"data", store, verify=True)
         assert await _get_bytes("out/dropped.bin.sha256", store) is None
 
-    async def test_bound_store_put_attributes_reach_the_put(self, store) -> None:
+    async def test_bound_store_put_attributes_reach_the_writer(self, store) -> None:
         from application_sdk.storage.ops import BoundStore
 
-        real_put = obstore.put_async
+        real_open = obstore.open_writer_async
         seen: list[object] = []
 
-        async def _put_spy(st, key, data, **kwargs):
+        def _open_spy(st, key, **kwargs):
             seen.append(kwargs.get("attributes"))
-            return await real_put(st, key, data)
+            kwargs.pop("attributes", None)  # MemoryStore keeps no attributes
+            return real_open(st, key, **kwargs)
 
         attrs = {"Storage-Class": "STANDARD_IA"}
-        with patch.object(obstore, "put_async", _put_spy):
+        with patch.object(obstore, "open_writer_async", _open_spy):
             await upload_bytes(
                 "k.bin", b"v", BoundStore(store, attrs), compute_hash=False
             )
         assert seen == [attrs]
 
-    async def test_large_payload_hash_is_offloaded(self, store) -> None:
+    async def test_large_payload_streams_like_a_file(self, store, monkeypatch) -> None:
+        """Same transport as upload_file: deployment part size, budget, marks.
+
+        The old temp-file path got these from upload_file; a bare put_async
+        would skip all three.
+        """
+        from application_sdk.storage import ops as ops_module
+        from application_sdk.storage._budget import transfer_budget
+
+        part = 1024 * 1024
+        monkeypatch.setattr(constants, "STORAGE_UPLOAD_PART_SIZE_BYTES", part)
+        monkeypatch.setattr(constants, "STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", True)
+        marks: list[str] = []
+        tracker = MagicMock()
+        tracker.mark_progress.side_effect = marks.append
+        monkeypatch.setattr(ops_module, "current_progress_tracker", lambda: tracker)
+        real_open = obstore.open_writer_async
+        buffer_sizes: list[int] = []
+
+        def _open_spy(st, key, **kwargs):
+            buffer_sizes.append(kwargs["buffer_size"])
+            return real_open(st, key, **kwargs)
+
+        data = os.urandom(3 * part + 17)
+        with patch.object(obstore, "open_writer_async", _open_spy):
+            sha = await upload_bytes("big.bin", data, store)
+
+        assert sha == hashlib.sha256(data).hexdigest()
+        assert await _get_bytes("big.bin", store) == data
+        assert buffer_sizes == [part]
+        assert marks == ["storage.upload_part"] * 4
+        assert transfer_budget().peak > 0
+
+    async def test_upload_failure_emits_storage_telemetry(self, store) -> None:
         from application_sdk.storage import ops as ops_module
 
-        data = b"z" * (ops_module._INLINE_HASH_MAX_BYTES + 1)
-        with patch.object(
-            ops_module, "run_in_thread", wraps=ops_module.run_in_thread
-        ) as offload:
-            sha = await upload_bytes("big.bin", data, store)
-        assert sha == hashlib.sha256(data).hexdigest()
-        assert any(c.args[0] is ops_module._sha256_hex for c in offload.call_args_list)
+        def _boom(*_a, **_k):
+            raise RuntimeError("store unavailable")
+
+        with (
+            patch.object(obstore, "open_writer_async", _boom),
+            patch.object(ops_module, "_log_storage_event") as event,
+            pytest.raises(StorageError),
+        ):
+            await upload_bytes("k.bin", b"v", store)
+        assert event.call_args.kwargs["outcome"] == "failure"
+
+
+class _DiscardingWriter:
+    """An ``open_writer_async`` stand-in that accepts every byte and stores none."""
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+    async def __aenter__(self) -> _DiscardingWriter:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def write(self, buffer: bytes | memoryview) -> int:
+        return len(buffer)
 
 
 class TestPutJson:

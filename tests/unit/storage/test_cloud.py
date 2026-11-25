@@ -1062,14 +1062,29 @@ class TestCloudStorePutAttributes:
     async def test_from_credentials_s3_storage_class_passed_to_upload_bytes(
         self,
     ) -> None:
-        """from_credentials with storageClass → upload_bytes() calls put_async with attributes."""
+        """from_credentials with storageClass → upload_bytes() writes with the attributes."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.storage.cloud import CloudStore
 
+        seen: list[dict[str, object]] = []
+
+        class _Writer:
+            def __init__(self, *_a, **kwargs):
+                seen.append(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_e):
+                return None
+
+            async def write(self, buffer):
+                return len(buffer)
+
         with (
             patch("application_sdk.storage.cloud._create_s3_store") as mock_create,
-            patch("obstore.put_async", new_callable=AsyncMock) as mock_put,
+            patch("obstore.open_writer_async", _Writer),
             # The post-write readback HEAD the shared primitive runs.
             patch(
                 "obstore.head_async",
@@ -1091,9 +1106,8 @@ class TestCloudStorePutAttributes:
             )
             await cs.upload_bytes("out/f.bin", b"hello")
 
-        mock_put.assert_awaited_once()
-        _, call_kwargs = mock_put.call_args[0], mock_put.call_args
-        assert call_kwargs.kwargs.get("attributes") == put_attrs
+        assert len(seen) == 1
+        assert seen[0].get("attributes") == put_attrs
 
     def test_from_credentials_s3_no_storage_class_gives_none_put_attrs(self) -> None:
         """When storageClass is absent, _put_attributes is None."""
@@ -1636,10 +1650,10 @@ class TestReadWritePermissionDenied:
         assert ei.value.effective_retryable is False
 
     async def test_upload_bytes_403(self, monkeypatch):
-        async def _boom(*_a, **_k):
+        def _boom_open(*_a, **_k):
             raise RuntimeError(_S3_ACCESS_DENIED_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "put_async", _boom)
+        monkeypatch.setattr(_cloud_module.obs, "open_writer_async", _boom_open)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().upload_bytes("out/a.json", b"x")
         assert ei.value.provider_code == "AccessDenied"
@@ -1874,11 +1888,23 @@ class TestCloudStoreDelegatesToBatch:
         assert ei.value.key == "p/a.json"
 
     async def test_upload_bytes_readback_catches_a_dropped_object(self):
-        from unittest.mock import AsyncMock
+
+        class _Discarding:
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_e):
+                return None
+
+            async def write(self, buffer):
+                return len(buffer)
 
         store = CloudStore(MemoryStore(), provider="memory")
         with (
-            patch("obstore.put_async", AsyncMock(return_value=None)),
+            patch("obstore.open_writer_async", _Discarding),
             pytest.raises(StorageError, match="absent from the store"),
         ):
             await store.upload_bytes("out/x.bin", b"data")

@@ -71,7 +71,7 @@ await download_file(
 
 `key` is the object-store path. Leading slashes and `./local/tmp/...` workflow prefixes are stripped automatically by `normalize_key`. `local_path` is the local filesystem path.
 
-Bytes already in memory go through `upload_bytes(key, data)`, the one byte-put primitive. It runs the same post-write size check and writes the same `.sha256` sidecar as `upload_file`, without staging the bytes on disk. `upload_file_from_bytes` is a deprecated alias for it, to be removed in v4.0.0.
+Bytes already in memory go through `upload_bytes(key, data)`, the one byte-put primitive. It runs on the same streaming transport as `upload_file` (part size, transfer budget, progress marks, telemetry), with the same post-write size check and `.sha256` sidecar, without staging the bytes on disk. A small payload is still a single PUT. `upload_file_from_bytes` is a deprecated alias for it, to be removed in v4.0.0.
 
 ### Which entry point to use
 
@@ -157,9 +157,10 @@ budget bounds it. Every range GET, streaming download and multipart upload
 behind the file transfers (`download_file`, `upload_file`, the prefix
 operations, FileReference hand-offs) reserves the buffer bytes it will hold
 before it holds them, `CloudStore`'s file and prefix transfers included.
-Whole-object byte reads and writes are outside it: `upload_bytes`,
-`put_json`, `CloudStore.get_bytes()` and `CloudStore.upload_bytes()` hold each
-object in memory without reserving. A transfer that does not
+`upload_bytes` (and so `CloudStore.upload_bytes()`) streams through the same
+writer and reserves its part buffers too; the payload itself is the caller's
+memory. Whole-object reads and small writes are outside it: `put_json` and
+`CloudStore.get_bytes()` hold each object in memory without reserving. A transfer that does not
 fit waits, and keeps marking progress while it waits, so the stall watchdog
 does not kill it. A single transfer larger than the whole budget runs on its
 own. The budget defaults to a quarter of the container memory limit; set
@@ -301,7 +302,7 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 | `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
-| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; whole-object byte APIs (`upload_bytes`, `CloudStore.get_bytes` / `upload_bytes`) are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
+| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `put_json` and `CloudStore.get_bytes` are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
 

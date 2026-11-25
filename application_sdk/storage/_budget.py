@@ -17,10 +17,11 @@ reserves the bytes it will hold in memory before it holds them:
 * a multipart upload in ``ops._upload_once``, for its part buffers, while its
   writer is open.
 
-Whole-object byte reads and writes do not reserve — ``ops.upload_bytes``,
-``CloudStore.get_bytes`` / ``upload_bytes``, and the small-object
-``_get_bytes`` / ``_put`` helpers hold what they move outside the budget.
-``CloudStore``'s file and prefix transfers run on the primitives above and
+``ops.upload_bytes`` streams through ``_upload_once`` too, so it reserves like
+a file upload. Whole-object reads and small writes do not reserve —
+``CloudStore.get_bytes`` and the small-object ``_get_bytes`` / ``_put``
+helpers (under ``put_json`` and the sidecar writes) hold what they move outside
+the budget. ``CloudStore``'s other transfers run on the primitives above and
 reserve like any other.
 
 No holder ever asks for a second reservation, so the budget cannot deadlock
