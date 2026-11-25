@@ -60,6 +60,7 @@ import hashlib
 import posixpath
 import re
 import sys
+import types
 import typing
 import warnings
 from collections.abc import Iterable
@@ -1147,11 +1148,158 @@ def has_default(cls: type, field_name: str) -> bool:
     return not field_info.is_required()
 
 
+# ── Canonical type strings ────────────────────────────────────────────────────
+
+#: Typing aliases rendered as their builtin generic.
+_ALIAS_MAP: dict[str, str] = {
+    "List": "list",
+    "Dict": "dict",
+    "Tuple": "tuple",
+    "Set": "set",
+    "FrozenSet": "frozenset",
+    "Type": "type",
+}
+
+
+def _canonical_union(arms: Iterable[object]) -> str:
+    """Render union *arms* as one ``|`` chain: arms sorted, deduplicated, ``None`` last.
+
+    A union is a set: ``Union[int, str]`` and ``Union[str, int]`` accept the
+    same payloads, so arm order must not reach the canonical string. The
+    conformance suite's AST canonicaliser (``_normalize_type_node`` behind
+    B005/B006) applies the same rule; a parity test pins the two together.
+    """
+    rendered = {canonical_type_str(arm) for arm in arms}
+    has_none = "None" in rendered
+    parts = sorted(rendered - {"None"})
+    if has_none:
+        parts.append("None")
+    return " | ".join(parts)
+
+
+def canonical_type_str(tp: object) -> str:
+    """Return a normalized string representation of a type annotation.
+
+    Normalizations applied:
+    - ``Optional[X]`` / ``X | None`` → ``X | None``
+    - ``Union[Y, X]`` / ``Y | X`` → ``X | Y`` (arms sorted, deduplicated,
+      ``None`` last)
+    - ``List[X]`` → ``list[X]``, ``Dict[K, V]`` → ``dict[K, V]``, etc.
+    - ``Annotated[X, ...]`` → ``X`` (metadata stripped)
+    - ``typing.Any`` → ``Any``
+
+    Two annotations that accept the same payloads produce the same string, so
+    comparing these strings is a backwards-compatibility check. It matches the
+    conformance suite's B005/B006 canonical form for the same annotation.
+    """
+    origin = get_origin(tp)
+    args = get_args(tp)
+
+    # Annotated[X, ...] — strip metadata, recurse on X
+    if origin is Annotated:
+        return canonical_type_str(args[0])
+
+    # Union / Optional / PEP 604 union
+    if origin is typing.Union or isinstance(tp, types.UnionType):
+        return _canonical_union(args)
+
+    # Literal['a', 1] — the arguments are values, not types
+    if origin is typing.Literal:
+        return f"Literal[{', '.join(repr(a) for a in args)}]"
+
+    # Generic aliases: list[X], dict[K, V], etc.
+    if origin is not None:
+        origin_name = getattr(origin, "__name__", None) or str(origin)
+        origin_name = _ALIAS_MAP.get(origin_name, origin_name)
+        if args:
+            return f"{origin_name}[{', '.join(canonical_type_str(a) for a in args)}]"
+        return origin_name
+
+    # Plain type
+    if isinstance(tp, type):
+        if tp is type(None):
+            return "None"
+        return tp.__name__
+
+    if tp is None:
+        return "None"
+
+    # tuple[X, ...] — the source spelling, as the AST canonicaliser renders it
+    if tp is Ellipsis:
+        return "..."
+
+    # typing.Any and similar singletons
+    if tp is Any:
+        return "Any"
+
+    # Fallback: string representation
+    raw = str(tp)
+    # Replace legacy typing aliases in the raw string
+    for old, new in _ALIAS_MAP.items():
+        raw = raw.replace(f"typing.{old}[", f"{new}[")
+    return raw
+
+
+# ── Backwards compatibility ───────────────────────────────────────────────────
+
+
+def _incompatibilities(old_cls: type, new_cls: type) -> list[tuple[str, str]]:
+    """Every ``(field, reason)`` that makes *new_cls* break *old_cls* payloads.
+
+    The one implementation behind
+    :func:`application_sdk.contracts.compat.check_backwards_compatible` and the
+    deprecated :func:`is_backwards_compatible`. Types compare by
+    :func:`canonical_type_str`, so spelling changes that accept the same
+    payloads (``Optional[str]`` → ``str | None``, ``Union[int, str]`` →
+    ``Union[str, int]``, ``Annotated[List[int], ...]`` → ``list[int]``) are not
+    reported.
+
+    Raises:
+        ContractDeclarationError: If either class is not a contract class.
+    """
+    validate_is_contract(old_cls, "old contract")
+    validate_is_contract(new_cls, "new contract")
+
+    old_fields = get_contract_fields(old_cls)
+    new_fields = get_contract_fields(new_cls)
+    issues: list[tuple[str, str]] = []
+
+    for name, old_tp in old_fields.items():
+        if name not in new_fields:
+            issues.append((name, "field was removed"))
+            continue
+        old_canon = canonical_type_str(old_tp)
+        new_canon = canonical_type_str(new_fields[name])
+        if old_canon != new_canon:
+            issues.append((name, f"type changed from '{old_canon}' to '{new_canon}'"))
+
+    for name in new_fields:
+        if name not in old_fields and not has_default(new_cls, name):
+            issues.append(
+                (
+                    name,
+                    "new required field (no default value) would break old callers",
+                )
+            )
+
+    return issues
+
+
+@_deprecation.deprecated(
+    "is_backwards_compatible is deprecated; use "
+    "application_sdk.contracts.compat.check_backwards_compatible, which returns "
+    "structured Incompatibility records, or assert_backwards_compatible in "
+    "tests. Will be removed in v4.0.0."
+)
 def is_backwards_compatible(old_cls: type, new_cls: type) -> tuple[bool, list[str]]:
     """Check if a new contract version is backwards compatible with the old.
 
+    .. deprecated:: 3.60
+        Use :func:`application_sdk.contracts.compat.check_backwards_compatible`.
+        Will be removed in v4.0.0.
+
     Backwards compatibility rules:
-    - All fields from old must exist in new with same types
+    - All fields from old must exist in new with the same canonical type
     - New fields must have default values
 
     Args:
@@ -1161,27 +1309,10 @@ def is_backwards_compatible(old_cls: type, new_cls: type) -> tuple[bool, list[st
     Returns:
         Tuple of (is_compatible, list of incompatibility reasons).
     """
-    validate_is_contract(old_cls, "old contract")
-    validate_is_contract(new_cls, "new contract")
-
-    old_fields = get_contract_fields(old_cls)
-    new_fields = get_contract_fields(new_cls)
-    issues: list[str] = []
-
-    # Check all old fields exist in new with compatible types
-    for name, old_type in old_fields.items():
-        if name not in new_fields:
-            issues.append(f"Field '{name}' was removed")
-        elif new_fields[name] != old_type:
-            issues.append(
-                f"Field '{name}' type changed from {old_type} to {new_fields[name]}"
-            )
-
-    # Check new fields have defaults
-    for name in new_fields:
-        if name not in old_fields and not has_default(new_cls, name):
-            issues.append(f"New field '{name}' does not have a default value")
-
+    issues = [
+        f"Field '{name}': {reason}"
+        for name, reason in _incompatibilities(old_cls, new_cls)
+    ]
     return len(issues) == 0, issues
 
 

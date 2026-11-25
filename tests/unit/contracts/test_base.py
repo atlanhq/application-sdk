@@ -11,7 +11,7 @@ from collections.abc import (
     Sequence,
 )
 from collections.abc import Set as AbstractSet
-from typing import Annotated, Any, ClassVar, List, Literal, Optional, Tuple
+from typing import Annotated, Any, ClassVar, List, Literal, Optional, Tuple, Union
 from unittest.mock import patch
 
 import pytest
@@ -521,7 +521,36 @@ class TestValidatePayloadSafety:
 # =============================================================================
 
 
+def _is_backwards_compatible(old: type, new: type) -> tuple[bool, list[str]]:
+    """Call the deprecated checker, asserting it warns."""
+    with pytest.warns(DeprecationWarning, match=r"check_backwards_compatible"):
+        return is_backwards_compatible(old, new)
+
+
 class TestIsBackwardsCompatible:
+    """The deprecated checker: it delegates to compat's canonical comparison."""
+
+    def test_union_reorder_is_compatible(self) -> None:
+        # typing compares unions as sets, so raw equality got this right; the
+        # canonical form it now delegates to must keep it (FND-4685).
+        class V1(Input):
+            value: Union[int, str] = 0
+
+        class V2(Input):
+            value: Union[str, int] = 0
+
+        assert _is_backwards_compatible(V1, V2) == (True, [])
+
+    def test_annotated_typing_alias_to_builtin_is_compatible(self) -> None:
+        # FND-4685: raw equality reported this as a break.
+        class V1(Input):
+            ids: Annotated[List[int], MaxItems(3)] = []
+
+        class V2(Input):
+            ids: Annotated[list[int], MaxItems(5)] = []
+
+        assert _is_backwards_compatible(V1, V2) == (True, [])
+
     def test_identical_contracts_are_compatible(self) -> None:
         class V1(Input):
             name: str
@@ -531,7 +560,7 @@ class TestIsBackwardsCompatible:
             name: str
             count: int = 0
 
-        ok, issues = is_backwards_compatible(V1, V2)
+        ok, issues = _is_backwards_compatible(V1, V2)
         assert ok is True
         assert issues == []
 
@@ -543,7 +572,7 @@ class TestIsBackwardsCompatible:
             name: str
             extra: str = "default"
 
-        ok, issues = is_backwards_compatible(V1, V2)
+        ok, issues = _is_backwards_compatible(V1, V2)
         assert ok is True
         assert issues == []
 
@@ -555,7 +584,7 @@ class TestIsBackwardsCompatible:
             name: str
             required_new: str = ""  # empty string is a valid default
 
-        ok, issues = is_backwards_compatible(V1, V2)
+        ok, issues = _is_backwards_compatible(V1, V2)
         assert ok is True
 
     def test_added_required_field_is_incompatible(self) -> None:
@@ -580,7 +609,7 @@ class TestIsBackwardsCompatible:
             name: str
             # old_field removed
 
-        ok, issues = is_backwards_compatible(V1, V2)
+        ok, issues = _is_backwards_compatible(V1, V2)
         assert ok is False
         assert any("old_field" in issue for issue in issues)
 
@@ -591,7 +620,7 @@ class TestIsBackwardsCompatible:
         class V2(Input):
             count: str = ""  # changed from int to str
 
-        ok, issues = is_backwards_compatible(V1, V2)
+        ok, issues = _is_backwards_compatible(V1, V2)
         assert ok is False
         assert any("count" in issue for issue in issues)
 
@@ -603,7 +632,7 @@ class TestIsBackwardsCompatible:
             name: str
 
         with pytest.raises(ContractDeclarationError):
-            is_backwards_compatible(NotAContract, V1)
+            _is_backwards_compatible(NotAContract, V1)
 
 
 # =============================================================================

@@ -1,9 +1,12 @@
 """Runtime contract backwards-compatibility helpers.
 
 Provides type normalization and field comparison utilities for use in tests
-and application startup validation.  The conformance suite (B005/B006) uses
-an AST-based variant of the same logic; this module operates on live Pydantic
-classes and is suitable for runtime assertions and integration tests.
+and application startup validation.  The conformance suite (B005/B006) applies
+the same canonical form to source ASTs — union arms sorted and deduplicated
+with ``None`` last, typing aliases lowered, ``Annotated`` metadata stripped —
+and a parity test pins the two to identical strings; this module operates on
+live Pydantic classes and is suitable for runtime assertions and integration
+tests.
 
 Typical usage (in app tests)::
 
@@ -15,12 +18,14 @@ Typical usage (in app tests)::
 
 from __future__ import annotations
 
-import types
-import typing
 from dataclasses import dataclass
-from typing import Any, ClassVar, get_type_hints
+from typing import ClassVar
 
-from application_sdk.contracts.base import has_default, validate_is_contract
+from application_sdk.contracts.base import (
+    _incompatibilities,
+    canonical_type_str,
+    validate_is_contract,
+)
 from application_sdk.errors.leaves import InternalError
 
 __all__ = [
@@ -31,92 +36,6 @@ __all__ = [
     "check_backwards_compatible",
     "field_lifecycle",
 ]
-
-# ── Type normalization ────────────────────────────────────────────────────────
-
-# Typing aliases that should be lowercased when normalizing.
-_ALIAS_MAP: dict[str, str] = {
-    "List": "list",
-    "Dict": "dict",
-    "Tuple": "tuple",
-    "Set": "set",
-    "FrozenSet": "frozenset",
-    "Type": "type",
-}
-
-
-def _normalize_args(args: tuple[Any, ...]) -> str:
-    """Render type arguments as a comma-separated string."""
-    return ", ".join(canonical_type_str(a) for a in args)
-
-
-def canonical_type_str(tp: object) -> str:
-    """Return a normalized string representation of a type annotation.
-
-    Normalizations applied:
-    - ``Optional[X]`` / ``X | None`` → ``X | None``
-    - ``Union[X, Y]`` → ``X | Y``
-    - ``List[X]`` → ``list[X]``, ``Dict[K, V]`` → ``dict[K, V]``, etc.
-    - ``Annotated[X, ...]`` → ``X`` (metadata stripped)
-    - ``typing.Any`` → ``Any``
-
-    This produces a stable string suitable for ledger comparison across Python
-    versions that may use different internal type representations.
-    """
-    origin = typing.get_origin(tp)
-    args = typing.get_args(tp)
-
-    # Annotated[X, ...] — strip metadata, recurse on X
-    if origin is typing.Annotated:
-        return canonical_type_str(args[0])
-
-    # Union / Optional
-    if origin is typing.Union:
-        non_none = [a for a in args if a is not type(None)]
-        has_none = type(None) in args
-        if not non_none:
-            return "None"
-        parts = [canonical_type_str(a) for a in non_none]
-        result = " | ".join(parts)
-        if has_none:
-            result = f"{result} | None"
-        return result
-
-    # PEP 604 union (Python 3.10+): types.UnionType
-    if hasattr(types, "UnionType") and isinstance(tp, types.UnionType):
-        args = typing.get_args(tp)
-        non_none = [a for a in args if a is not type(None)]
-        has_none = type(None) in args
-        parts = [canonical_type_str(a) for a in non_none]
-        result = " | ".join(parts)
-        if has_none:
-            result = f"{result} | None"
-        return result
-
-    # Generic aliases: list[X], dict[K, V], etc.
-    if origin is not None:
-        origin_name = getattr(origin, "__name__", None) or str(origin)
-        origin_name = _ALIAS_MAP.get(origin_name, origin_name)
-        if args:
-            return f"{origin_name}[{_normalize_args(args)}]"
-        return origin_name
-
-    # Plain type
-    if isinstance(tp, type):
-        if tp is type(None):
-            return "None"
-        return tp.__name__
-
-    # typing.Any and similar singletons
-    if tp is Any:
-        return "Any"
-
-    # Fallback: string representation
-    raw = str(tp)
-    # Replace legacy typing aliases in the raw string
-    for old, new in _ALIAS_MAP.items():
-        raw = raw.replace(f"typing.{old}[", f"{new}[")
-    return raw
 
 
 # ── Field lifecycle ───────────────────────────────────────────────────────────
@@ -185,45 +104,21 @@ def check_backwards_compatible(
     - Every field in *old_cls* must exist in *new_cls* with the same canonical type.
     - New fields in *new_cls* must have a default value.
 
-    Unlike :func:`~application_sdk.contracts.base.is_backwards_compatible`, this
-    function uses :func:`canonical_type_str` for type comparison so that
-    ``Optional[str]`` and ``str | None`` are treated as equivalent.
+    Types compare by :func:`canonical_type_str`, the same canonical form the
+    conformance suite's B005/B006 contract ledger uses, so annotations that
+    accept the same payloads are equal: ``Optional[str]`` and ``str | None``,
+    ``Union[int, str]`` and ``Union[str, int]``, ``Annotated[List[int], ...]``
+    and ``list[int]``.
 
     Returns a ``(compatible, issues)`` tuple.
+
+    Raises:
+        ContractDeclarationError: If either class is not a contract class.
     """
-    validate_is_contract(old_cls, "old contract")
-    validate_is_contract(new_cls, "new contract")
-
-    old_hints = get_type_hints(old_cls)
-    new_hints = get_type_hints(new_cls)
-    old_fields = {name: old_hints.get(name, Any) for name in old_cls.model_fields}
-    new_fields = {name: new_hints.get(name, Any) for name in new_cls.model_fields}
-
-    issues: list[Incompatibility] = []
-
-    for name, old_tp in old_fields.items():
-        if name not in new_fields:
-            issues.append(Incompatibility(field=name, reason="field was removed"))
-        else:
-            old_canon = canonical_type_str(old_tp)
-            new_canon = canonical_type_str(new_fields[name])
-            if old_canon != new_canon:
-                issues.append(
-                    Incompatibility(
-                        field=name,
-                        reason=f"type changed from '{old_canon}' to '{new_canon}'",
-                    )
-                )
-
-    for name in new_fields:
-        if name not in old_fields and not has_default(new_cls, name):
-            issues.append(
-                Incompatibility(
-                    field=name,
-                    reason="new required field (no default value) would break old callers",
-                )
-            )
-
+    issues = [
+        Incompatibility(field=name, reason=reason)
+        for name, reason in _incompatibilities(old_cls, new_cls)
+    ]
     return len(issues) == 0, issues
 
 

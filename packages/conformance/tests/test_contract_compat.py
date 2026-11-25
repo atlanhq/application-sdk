@@ -14,10 +14,16 @@ integrate end-to-end.
 
 from __future__ import annotations
 
+import ast
+import typing
 from pathlib import Path
 
 import pytest
 
+from conformance.suite.checks._entrypoint_contract_fields import (
+    _canonical_type,
+    recanonicalize,
+)
 from conformance.suite.checks.deprecation._contract_compat import scan_contract_compat
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -270,6 +276,114 @@ def test_b005_union_three_way(tmp_path: Path) -> None:
     assert "B005" not in active_ids(findings), (
         "Union[str, int, None] should match str | int | None"
     )
+
+
+# ── B005: union arm order is not a type change (FND-4685) ─────────────────────
+
+_EP_UNION_REORDERED = """\
+from application_sdk.app import App
+from typing import Union
+
+class MyInput:
+    value: Union[int, str]
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+@pytest.mark.parametrize(
+    "recorded",
+    [
+        # The ledger froze an arm order written before arms were sorted.
+        "str | int",
+        "int | str",
+        # None recorded mid-chain by the pre-FND-4685 canonicaliser.
+        "str | None | int",
+    ],
+)
+def test_b005_union_arm_order_is_not_a_type_change(
+    tmp_path: Path, recorded: str
+) -> None:
+    """A ledger's frozen arm order is compared as the set it is."""
+    source = _EP_UNION_REORDERED
+    if "None" in recorded:
+        source = source.replace("Union[int, str]", "None | str | int")
+    ledger = _make_ledger(ContractField("MyInput", "value", recorded, "active"))
+    findings = _scan(tmp_path, {"app.py": source}, ledger)
+    assert "B005" not in active_ids(findings)
+
+
+def test_b005_union_arm_change_still_fires(tmp_path: Path) -> None:
+    """Sorting arms does not hide a real change of arms."""
+    ledger = _make_ledger(ContractField("MyInput", "value", "str | bytes", "active"))
+    findings = _scan(tmp_path, {"app.py": _EP_UNION_REORDERED}, ledger)
+    assert "B005" in active_ids(findings)
+
+
+# ── Parity: the AST canonicaliser and the runtime one agree (FND-4685) ────────
+
+#: Annotations both canonicalisers must render identically. The AST side backs
+#: B005/B006 and the contract ledger; the runtime side backs
+#: ``application_sdk.contracts.compat.check_backwards_compatible``. They live in
+#: two distributions and cannot share code, so this corpus is what keeps them
+#: one rule.
+_PARITY_CORPUS = [
+    "int",
+    "str | None",
+    "Optional[str]",
+    "None | str",
+    "Union[int, str]",
+    "Union[str, int]",
+    "Union[str, int, None]",
+    "None | str | int",
+    "Optional[Union[str, int]]",
+    "Union[int, Optional[str]]",
+    "List[int]",
+    "list[int]",
+    "Dict[str, Any]",
+    "dict[str, Union[str, int, float, bool, None]]",
+    "Annotated[List[int], 'meta']",
+    "Annotated[Optional[Union[str, int]], 'meta']",
+    "list[str | None]",
+    "Tuple[int, ...]",
+    "Set[str]",
+    "FrozenSet[str]",
+    "Type[int]",
+    "Literal['a', 'b']",
+    "Union[Literal['a'], int]",
+]
+
+
+@pytest.mark.parametrize("annotation", _PARITY_CORPUS)
+def test_ast_and_runtime_canonical_forms_agree(annotation: str) -> None:
+    from application_sdk.contracts.compat import canonical_type_str
+
+    namespace = {name: getattr(typing, name) for name in typing.__all__}
+    runtime = canonical_type_str(eval(annotation, namespace))  # noqa: S307
+    static = _canonical_type(ast.parse(annotation, mode="eval").body)
+    assert static == runtime
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        ("Union[str, int]", "int | str"),
+        ("None | str | int", "int | str | None"),
+        ("Union[str, Optional[str]]", "str | None"),
+        ("dict[str, str | int | None]", "dict[str, int | str | None]"),
+    ],
+)
+def test_canonical_union_is_sorted_deduplicated_none_last(
+    annotation: str, expected: str
+) -> None:
+    assert _canonical_type(ast.parse(annotation, mode="eval").body) == expected
+
+
+def test_recanonicalize_sorts_a_frozen_ledger_string() -> None:
+    assert recanonicalize("str | None | int") == "int | str | None"
+    assert recanonicalize("not a ( type") == "not a ( type"
 
 
 # ── B005: @entrypoint decorator variant ───────────────────────────────────────
