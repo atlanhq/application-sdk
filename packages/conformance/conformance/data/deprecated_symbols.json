@@ -2460,11 +2460,38 @@
     {
       "kind": "method",
       "marker_via": "decorator",
+      "message": "SqlApp._extract_entity is deprecated; use the public SqlApp.extract_entity instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_extract_entity"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
       "message": "SqlApp._resolve_credential_ref is deprecated; use the public SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_app",
       "removal_version": "4.0.0",
       "symbol": "_resolve_credential_ref"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._resolve_output_path is deprecated; use the public SqlApp.resolve_output_path instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_resolve_output_path"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._transform_entity is deprecated; use the public SqlApp.transform_entity instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_transform_entity"
     },
     {
       "kind": "constant",

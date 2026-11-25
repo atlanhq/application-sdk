@@ -481,6 +481,67 @@ class PostgresApp(SqlMetadataExtractor):
         return result
 ```
 
+On `SqlApp` (SDK ≥ 3.60.0), a custom entity is an `extract_*` /
+`transform_*` task pair whose bodies call `extract_entity` and
+`transform_entity`. Those two own the
+streaming, the event-loop offload and the canonical `FileReference` keys
+publish reads, so call them rather than writing the files yourself. A
+`run()` that drives the extra pair folds its output in with
+`finalize_extraction`, which verifies the whole transformed tree:
+
+```python
+from application_sdk.app import task
+from application_sdk.templates import SqlApp
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionOutput,
+    ExtractionTaskInput,
+    ExtractionTaskOutput,
+    TransformInput,
+    TransformOutput,
+)
+
+
+class PostgresApp(SqlApp):
+    fetch_function_sql = "SELECT ..."
+
+    def map_function(self, record, connection_qn):
+        ...  # build and return a pyatlan_v9 Function asset
+
+    @task()
+    async def extract_functions(
+        self, input: ExtractionTaskInput
+    ) -> ExtractionTaskOutput:
+        return await self.extract_entity(
+            entity_type="function",
+            sql_template=self.fetch_function_sql,
+            input=input,
+        )
+
+    @task()
+    async def transform_functions(self, input: TransformInput) -> TransformOutput:
+        return await self.transform_entity(
+            entity_type="function", mapper_fn=self.map_function, input=input
+        )
+
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        base = await super().run(input)
+        task_input = self.build_task_input(
+            ExtractionTaskInput, input, cred_ref=self.resolve_credential_ref(input)
+        )
+        raw = await self.extract_functions(task_input)
+        out = await self.transform_functions(
+            self.build_transform_input(task_input, raw.raw_file)
+        )
+        return await self.finalize_extraction(base, [out])
+```
+
+A `run()` that replaces `SqlApp.run()` instead of calling `super().run()` must
+still end in `finalize_extraction`; conformance rule P068 flags one that does
+not. `_extract_entity`, `_transform_entity` and `_resolve_output_path` are the
+names these methods had before 3.60.0; they are deprecated and removed in
+v4.0.0.
+
 ## Typed Contracts
 
 v3 replaces `Dict[str, Any]` with Pydantic models for all task inputs and outputs. This provides:

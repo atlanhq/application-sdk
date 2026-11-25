@@ -158,7 +158,8 @@ _SERIES_META: list[SeriesMeta] = [
         ),
         output_filename="prescriptions.md",
         checker=(
-            "`suite.checks.prescriptions` (P001–P003, P008–P015, P059), "
+            "`suite.checks.prescriptions` (P001–P003, P008–P015, P059; "
+            "P068 gated on the app's locked SDK), "
             "`suite.checks.orchestration` (P004–P007, scans test files too), "
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "

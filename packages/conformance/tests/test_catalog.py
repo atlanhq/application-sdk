@@ -510,6 +510,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # consumer apps.
     # P067: tempfile's system temp dir in app code — App.run_scratch_dir is the
     # consumer-facing replacement; the SDK composes its own run scratch dir.
+    # P068: a SqlApp.run() replacement that never verifies — only consumer apps
+    # subclass SqlApp, and the version gate reads a consumed SDK version.
     assert app_scoped == {
         "B001",
         "B007",
@@ -536,6 +538,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P065",
         "P066",
         "P067",
+        "P068",
         "C002",
         "D001",
         "D002",
@@ -852,6 +855,8 @@ def test_catalog_p_series_present() -> None:
     ``proxy=``, so its client ignores HTTPS_PROXY / NO_PROXY.
     P067 is TempDirOutsideRunScratch — tempfile.gettempdir() (or mkdtemp /
     mkstemp with no dir=) in app code instead of App.run_scratch_dir.
+    P068 is SqlAppRunOverrideUnverified — a SqlApp subclass's run() that calls
+    neither super().run() nor finalize_extraction (FND-4686).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -916,6 +921,7 @@ def test_catalog_p_series_present() -> None:
         "P065",
         "P066",
         "P067",
+        "P068",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
