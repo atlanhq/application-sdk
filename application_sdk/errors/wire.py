@@ -10,8 +10,10 @@ activity boundary, where only the envelope survives. The reverse lookup keys on
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
-from typing import Any, TypeVar
+import inspect
+import threading
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -159,6 +161,33 @@ _BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
 #: subclass that inherits its parent's, or two leaves in different packages
 #: naming the same failure), so an implicit map would pick one at random.
 _WIRE_LEAVES: dict[str, type[AppError]] = {}
+#: Guards the check-then-write in :func:`register_wire_leaf`, so two threads
+#: claiming one code cannot both pass the conflict check.
+_WIRE_LEAVES_LOCK = threading.Lock()
+
+#: Keywords :func:`error_from_failure_details` passes to every registered leaf.
+_REBUILD_KEYWORDS: frozenset[str] = frozenset(
+    {"message", "retryable", "suggested_action", "app_name", "run_id"}
+)
+
+
+def _missing_rebuild_keywords(leaf: type[AppError]) -> frozenset[str]:
+    """The rebuild keywords ``leaf``'s constructor cannot take.
+
+    A leaf with a hand-written ``__init__`` (``init=False`` dataclass) may not
+    accept the base fields the rebuild passes, and would raise ``TypeError`` on
+    the far side of the wire instead of at registration.
+    """
+    params = inspect.signature(leaf).parameters.values()
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
+        return frozenset()
+    accepted = {
+        p.name
+        for p in params
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    return _REBUILD_KEYWORDS - accepted
 
 
 def register_wire_leaf(leaf: _LeafT) -> _LeafT:
@@ -179,9 +208,11 @@ def register_wire_leaf(leaf: _LeafT) -> _LeafT:
         ``leaf``, unchanged.
 
     Raises:
-        TypeError: ``code`` is already registered to a different class. One
+        TypeError: ``code`` is already registered to a different class (one
             code rebuilds as one class; two would make the rebuilt type depend
-            on import order.
+            on import order), or ``leaf``'s constructor does not take the
+            base fields the rebuild passes (``message``, ``retryable``,
+            ``suggested_action``, ``app_name``, ``run_id``).
 
     Example:
         >>> @register_wire_leaf
@@ -189,11 +220,17 @@ def register_wire_leaf(leaf: _LeafT) -> _LeafT:
         ... class WidgetMissingError(NotFoundError):
         ...     code: ClassVar[str] = "NOT_FOUND_WIDGET"
     """
-    existing = _WIRE_LEAVES.get(leaf.code)
-    if existing is not None and existing is not leaf:
+    missing = _missing_rebuild_keywords(leaf)
+    if missing:
+        raise TypeError(  # stdlib-interop: programming error at import, before any AppError context exists
+            "%s.%s cannot be a wire leaf: its constructor does not take %s"
+            % (leaf.__module__, leaf.__qualname__, sorted(missing))
+        )
+    with _WIRE_LEAVES_LOCK:
+        existing = _WIRE_LEAVES.get(leaf.code)
         # Same qualified name means the same class re-created by a sandbox
         # re-import, not a second claim on the code.
-        if (existing.__module__, existing.__qualname__) != (
+        if existing is not None and (existing.__module__, existing.__qualname__) != (
             leaf.__module__,
             leaf.__qualname__,
         ):
@@ -201,7 +238,7 @@ def register_wire_leaf(leaf: _LeafT) -> _LeafT:
                 "wire code %r is already registered to %s.%s"
                 % (leaf.code, existing.__module__, existing.__qualname__)
             )
-    _WIRE_LEAVES[leaf.code] = leaf
+        _WIRE_LEAVES[leaf.code] = leaf
     return leaf
 
 
@@ -261,7 +298,9 @@ class _EnvelopeError(AppError):
 
     @property
     def code(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.code_override or super().code
+        # ``is not None``, not truthiness: an envelope's ``code`` may be ``""``
+        # and must re-serialise as itself, not as ``INTERNAL``.
+        return self.code_override if self.code_override is not None else super().code
 
     def to_failure_details(self) -> FailureDetails:
         # Routing overrides and ``cause_repr`` are not evidence; the
@@ -286,14 +325,58 @@ class _EnvelopeError(AppError):
         )
 
 
-def _redact_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
-    """Redact every string reachable inside an evidence mapping's values.
+#: What a value under a nested secret-named key is replaced with.
+_MASKED = "***"
 
-    Keys are left alone — a secret-*named* key is the wire denylist's job
-    (:func:`secret_named_evidence_keys`); this handles secret-*carrying*
-    values under any key.
+
+def _mask_secret_named(value: object) -> object:
+    """Replace the value under every nested secret-named key with ``***``.
+
+    Runs on :func:`redact_wire_value`'s output, which is acyclic and
+    depth-bounded, so this walk needs no guards of its own.
     """
-    return {k: redact_wire_value(v) for k, v in evidence.items()}
+    if isinstance(value, dict):
+        bad = secret_named_evidence_keys({k: None for k in value if isinstance(k, str)})
+        return {
+            k: _MASKED if k in bad else _mask_secret_named(v) for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_secret_named(v) for v in value]
+    if isinstance(value, tuple):
+        items = [_mask_secret_named(v) for v in value]
+        if hasattr(type(value), "_fields"):
+            # A NamedTuple takes its fields positionally, not one iterable.
+            namedtuple_cls = cast("Callable[..., object]", type(value))
+            return namedtuple_cls(*items)
+        return tuple(items)
+    return value
+
+
+def redact_evidence_value(value: object) -> object:
+    """Redact one evidence value, including secrets under nested keys.
+
+    The :class:`FailureDetails` denylist judges top-level evidence keys only,
+    and :func:`redact_wire_value` redacts string *contents* only, so an opaque
+    credential under a nested secret-named key (``{"conn": {"api_key": "…"}}``)
+    passes both. This masks the value under any nested key the denylist would
+    reject, then redacts every remaining string.
+
+    Args:
+        value: The value of one evidence key.
+
+    Returns:
+        The same shape with secrets masked.
+
+    Example:
+        >>> redact_evidence_value({"conn": {"api_key": "opaque", "host": "db"}})
+        {'conn': {'api_key': '***', 'host': 'db'}}
+    """
+    return _mask_secret_named(redact_wire_value(value))
+
+
+def _redact_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Redact every evidence value; top-level keys are the denylist's job."""
+    return {k: redact_evidence_value(v) for k, v in evidence.items()}
 
 
 def degraded_failure_details(err: AppError) -> FailureDetails:
@@ -444,7 +527,10 @@ def error_from_failure_details(details: FailureDetails) -> AppError:
     # ``declared`` excludes the base fields: they are passed explicitly below,
     # so an evidence key shadowing one (``message``, ``retryable``, …) would
     # crash reconstruction with ``TypeError: got multiple values``.
-    declared = {f.name for f in dataclasses.fields(leaf)} - _BASE_ERROR_FIELD_NAMES
+    # ``init=False`` fields are not constructor arguments either.
+    declared = {
+        f.name for f in dataclasses.fields(leaf) if f.init
+    } - _BASE_ERROR_FIELD_NAMES
     evidence = _redact_evidence(
         {k: v for k, v in details.evidence.items() if k in declared}
     )

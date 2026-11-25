@@ -123,7 +123,6 @@ from application_sdk.credentials.ref import CredentialRef, _guid_credential_ref
 from application_sdk.errors import (
     AppError,
     redact_secrets,
-    redact_wire_value,
     safe_traceback,
 )
 
@@ -139,6 +138,7 @@ from application_sdk.errors.wire import (
     FailureDetails,
     degraded_failure_details,
     error_from_failure_details,
+    redact_evidence_value,
     redacted_validation_reason,
     register_wire_leaf,
 )
@@ -664,7 +664,7 @@ class SqlApp(App):
         for f in dataclasses.fields(err):
             if f.name in _BASE_ERROR_FIELD_NAMES:
                 continue
-            setattr(err, f.name, redact_wire_value(getattr(err, f.name)))
+            setattr(err, f.name, redact_evidence_value(getattr(err, f.name)))
         return err
 
     @staticmethod
@@ -2048,6 +2048,10 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     ),
     "FailureCategory": (
         "application_sdk.errors.categories.FailureCategory",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "redact_wire_value": (
+        "application_sdk.errors.base.redact_wire_value",
         "it was only ever re-exported here as a side effect of an import",
     ),
     "sanitize_cause_repr": (

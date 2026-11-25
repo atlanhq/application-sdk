@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -29,6 +31,7 @@ from application_sdk.errors.wire import (
     FailureDetails,
     degraded_failure_details,
     error_from_failure_details,
+    redact_evidence_value,
     redacted_validation_reason,
     register_wire_leaf,
 )
@@ -99,6 +102,77 @@ class TestRegistry:
         with pytest.raises(TypeError, match="AUTH"):
             register_wire_leaf(_OtherAuthError)
 
+    def test_concurrent_claims_on_one_code_leave_exactly_one_winner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The conflict check and the write are one step: of many threads
+        racing distinct classes onto one code, one wins and the rest raise.
+        The registry's read is slowed so an unguarded check-then-write would
+        let every thread see the code free."""
+
+        class _SlowReads(dict):
+            def get(self, key: Any, default: Any = None) -> Any:
+                found = super().get(key, default)
+                time.sleep(0.01)  # between the read and the caller's write
+                return found
+
+        monkeypatch.setattr(wire, "_WIRE_LEAVES", _SlowReads(wire._WIRE_LEAVES))
+        leaves = [
+            dataclass(kw_only=True)(
+                type(
+                    f"_Racer{i}",
+                    (NotFoundError,),
+                    {
+                        "__annotations__": {"code": "ClassVar[str]"},
+                        "code": "NOT_FOUND_RACE",
+                    },
+                )
+            )
+            for i in range(16)
+        ]
+        barrier = threading.Barrier(len(leaves))
+        errors: list[BaseException] = []
+
+        def _claim(leaf: type) -> None:
+            barrier.wait()
+            try:
+                register_wire_leaf(leaf)
+            except TypeError as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_claim, args=(leaf,)) for leaf in leaves]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == len(leaves) - 1
+
+    @pytest.mark.usefixtures("registry")
+    def test_rejects_a_leaf_whose_constructor_cannot_take_the_base_fields(
+        self,
+    ) -> None:
+        """An ``init=False`` leaf with its own ``__init__`` would otherwise
+        register fine and raise ``TypeError`` on the far side of the wire."""
+        from application_sdk.storage.errors import SdrStorageDiskFullError
+
+        with pytest.raises(TypeError, match="retryable"):
+            register_wire_leaf(SdrStorageDiskFullError)
+
+    @pytest.mark.usefixtures("registry")
+    def test_init_false_fields_are_not_passed_as_evidence(self) -> None:
+        import dataclasses
+
+        @dataclass(kw_only=True)
+        class _Derived(NotFoundError):
+            code: ClassVar[str] = "NOT_FOUND_TEST_DERIVED"
+            derived: str = dataclasses.field(init=False, default="x")
+
+        register_wire_leaf(_Derived)
+        details = _Derived(message="m").to_failure_details()
+
+        assert type(error_from_failure_details(details)) is _Derived
+
     def test_rebuild_does_not_need_the_sql_template(self) -> None:
         """Non-SQL apps reach the rebuild through ``errors`` alone."""
         code = (
@@ -138,6 +212,33 @@ class TestUnknownCode:
         details = self._envelope()
 
         assert error_from_failure_details(details).to_failure_details() == details
+
+    def test_empty_code_round_trips_as_itself(self) -> None:
+        details = self._envelope(code="")
+
+        err = error_from_failure_details(details)
+
+        assert err.code == ""
+        assert err.to_failure_details().code == ""
+
+    def test_masks_values_under_nested_secret_named_keys(self) -> None:
+        """The denylist judges top-level keys only and string redaction cannot
+        recognise an opaque credential, so a nested secret-named key is masked
+        by name on the way through."""
+        details = self._envelope(
+            evidence={
+                "connection": {"api_key": "opaque-value", "host": "db"},
+                "attempts": [{"client_secret": "opaque-2"}],
+            }
+        )
+
+        wire_json = (
+            error_from_failure_details(details).to_failure_details().model_dump_json()
+        )
+
+        assert "opaque-value" not in wire_json
+        assert "opaque-2" not in wire_json
+        assert '"host":"db"' in wire_json
 
     def test_redacts_nested_evidence_values(self) -> None:
         details = self._envelope(
@@ -223,6 +324,15 @@ class TestDegradedFailureDetails:
 
         with pytest.raises(ValidationError):
             degraded_failure_details(AuthError(message="m"))
+
+
+def test_redact_evidence_value_keeps_shape_and_masks_by_name() -> None:
+    value = {"conn": {"db_password": "opaque", "port": 5432}, "tags": ("a",)}
+
+    assert redact_evidence_value(value) == {
+        "conn": {"db_password": "***", "port": 5432},
+        "tags": ("a",),
+    }
 
 
 def test_redacted_validation_reason_omits_the_rejected_input() -> None:

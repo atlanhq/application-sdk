@@ -491,7 +491,14 @@ On the far side of an activity boundary only `FailureDetails` survives. `error_f
 turns it back into a typed error, picking the leaf by `code`:
 
 ```python
-from application_sdk.errors import error_from_failure_details, register_wire_leaf
+from dataclasses import dataclass
+from typing import ClassVar
+
+from application_sdk.errors import (
+    NotFoundError,
+    error_from_failure_details,
+    register_wire_leaf,
+)
 
 # Register the leaves your activities emit, once, next to their definition.
 @register_wire_leaf
@@ -508,7 +515,11 @@ dropped, so a newer producer cannot crash an older consumer. An unregistered cod
 keeping the envelope's own `category`, `audience`, `code`, `retryable` and evidence, so routing is
 never lost. The SDK registers `AuthError`, `AppTimeoutError`, `SourceUnavailableError` and
 `InternalError`. One code maps to one class: registering a code already bound to another class
-raises `TypeError`.
+raises `TypeError`, as does registering a leaf whose constructor does not take the base fields
+(`message`, `retryable`, `suggested_action`, `app_name`, `run_id`). Evidence values are redacted on
+the way in, and a value under a nested secret-named key (`{"conn": {"api_key": …}}`) is replaced
+with `***`; `redact_evidence_value` in `application_sdk.errors.wire` does the same for your own
+evidence before you attach it.
 
 If `to_failure_details()` raises because a leaf carries a secret-named evidence field,
 `degraded_failure_details(err)` builds the envelope without those keys (or without evidence at all)

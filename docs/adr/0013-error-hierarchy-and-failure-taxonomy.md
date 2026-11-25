@@ -226,8 +226,12 @@ come from the envelope, so a newer producer's verdict keeps its routing on an
 older consumer instead of degrading to `INTERNAL` / `APP_OWNER`. That leaf is
 the one sanctioned exception to per-class identity (§2;
 `tests/unit/errors/test_identity_classvars.py` allowlists it):
-it stands in for a class this consumer does not have, and is never raised by
-the SDK. When a verdict cannot serialise — in practice a connector leaf with a
+it stands in for a class this consumer does not have. No producer defines or
+raises it as its own verdict; it reaches a `raise` only as a rebuilt verdict
+(`SqlApp` re-raises a failed prime this way), and then serialises back with
+the envelope's routing, code and evidence unchanged. A registered leaf must
+take the base fields as constructor keywords; `register_wire_leaf` rejects an
+`init=False` leaf whose hand-written `__init__` does not. When a verdict cannot serialise — in practice a connector leaf with a
 secret-named evidence field — `degraded_failure_details(err)` drops evidence,
 never routing.
 

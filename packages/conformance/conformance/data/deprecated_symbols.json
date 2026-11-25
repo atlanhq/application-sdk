@@ -2541,6 +2541,15 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "redact_wire_value is deprecated; use application_sdk.errors.base.redact_wire_value \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "redact_wire_value"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "sanitize_cause_repr is deprecated; use application_sdk.errors.base.sanitize_cause_repr \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_app",
