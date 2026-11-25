@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    36959063abca55138720e47d37a91fa67aeec1c0
-source-date:   2026-11-25T15:32:47-08:00
+source-sha:    8419b7c9d5418c30f6c8fff23e026aeb240575ae
+source-date:   2026-11-25T15:49:43-08:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3017,7 +3017,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 - **Import:** `from application_sdk.observability.lineage import CoverageGuard`
 - **Also importable from:** `application_sdk.observability.lineage.guard`
-- **Signature:** `class CoverageGuard(owner: Any = None)`
+- **Signature:** `class CoverageGuard(owner: object | None = None)`
 - **Summary:** ``with CoverageGuard(recorder):`` around coverage-only statements.
 - **Defined in:** `application_sdk/observability/lineage/guard.py`
 
@@ -3498,7 +3498,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 - **Import:** `from application_sdk.observability.lineage import stop_recording`
 - **Also importable from:** `application_sdk.observability.lineage.guard`
-- **Signature:** `stop_recording(owner: Any, exc: BaseException)`
+- **Signature:** `stop_recording(owner: object | None, exc: BaseException)`
 - **Summary:** Turn recording off on ``owner`` after a coverage error. Never raises.
 - **Defined in:** `application_sdk/observability/lineage/guard.py`
 
