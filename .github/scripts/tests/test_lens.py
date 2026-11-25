@@ -1847,7 +1847,7 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
         )  # duplicate x3
         + _file_diff("real.py", ["    return a"], ["    return a / b"])  # real change
     )
-    t = triage(files, {}, {})
+    t = triage(files, _GET_X_OLD, _GET_X_NEW)
     assert [f.path for f in t.reviewed] == [
         "d0.yaml",
         "real.py",
@@ -1876,6 +1876,119 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
     assert len(fd.hunks) == 1 and "a / b" in fd.render()
 
 
+# Both names of a rename are defined here (FND-5316): the def site's base and
+# head copies are among the changed files.
+_GET_X_OLD = {"x_def.py": "def get_x(i):\n    return i\n"}
+_GET_X_NEW = {"x_def.py": "def fetch_x(i):\n    return i\n"}
+
+
+def test_a_library_name_swapped_across_files_is_line_reviewed_not_a_rename():
+    """FND-5316: a live review withheld nine files as "mechanical rename" whose
+    swaps were `logger.error` -> `logger.warning` and `json` -> `orjson`. Neither
+    name is defined in the repository, so neither is a rename: both change
+    what the code does, and every hunk goes to the line review. A local
+    variable called `error` does not make the method `error` a repo member."""
+    logger_swaps = "".join(
+        _file_diff(
+            f"application_sdk/m{i}.py",
+            [f'    logger.error("failed %s", e{i})'],
+            [f'    logger.warning("failed %s", e{i})'],
+        )
+        for i in range(3)
+    )
+    json_swaps = "".join(
+        _file_diff(
+            f"application_sdk/j{i}.py",
+            [f"    return json.dumps(v{i})"],
+            [f"    return orjson.dumps(v{i})"],
+        )
+        for i in range(3)
+    )
+    files = parse_unified_diff(logger_swaps + json_swaps)
+    # Each file binds `json`/`orjson` by import only, and `error`/`warning` as locals.
+    old = {
+        **{
+            f"application_sdk/m{i}.py": "import logging\nerror = warning = None\nlogger = logging.getLogger()\n"
+            f'def f(e{i}):\n    logger.error("failed %s", e{i})\n'
+            for i in range(3)
+        },
+        **{f"application_sdk/j{i}.py": "import json\n" for i in range(3)},
+    }
+    new = {
+        **{
+            f"application_sdk/m{i}.py": "import logging\nerror = warning = None\nlogger = logging.getLogger()\n"
+            f'def f(e{i}):\n    logger.warning("failed %s", e{i})\n'
+            for i in range(3)
+        },
+        **{f"application_sdk/j{i}.py": "import orjson\n" for i in range(3)},
+    }
+    t = triage(files, old, new)
+    assert sorted(f.path for f in t.reviewed) == sorted(fd.path for fd in files)
+    assert t.renames == [] and "mechanical rename" not in t.mechanical
+
+
+def test_a_swapped_import_module_is_not_imports_only():
+    """`import json` -> `import orjson` changes which code runs (FND-5316)."""
+    swapped = parse_unified_diff(
+        _file_diff("application_sdk/echo.py", ["import json"], ["import orjson"])
+    )
+    assert [f.path for f in triage(swapped, {}, {}).reviewed] == [
+        "application_sdk/echo.py"
+    ]
+    moved = parse_unified_diff(
+        _file_diff(
+            "application_sdk/a.py",
+            ["from application_sdk.util import f"],
+            ["from application_sdk.helpers import f"],
+        )
+    )
+    assert [f.path for f in triage(moved, {}, {}).reviewed] == ["application_sdk/a.py"]
+
+
+def test_an_import_of_a_module_this_pr_renames_stays_imports_only():
+    diff = (
+        "diff --git a/application_sdk/util.py b/application_sdk/helpers.py\nsimilarity index 100%\n"
+        "rename from application_sdk/util.py\nrename to application_sdk/helpers.py\n"
+        + _file_diff(
+            "application_sdk/a.py",
+            ["from application_sdk.util import f"],
+            ["from application_sdk.helpers import f"],
+        )
+    )
+    t = triage(parse_unified_diff(diff), {}, {})
+    assert t.reviewed == [] and t.mechanical == {
+        "imports only": ["application_sdk/a.py"]
+    }
+
+
+def test_a_rename_of_a_repo_function_or_method_stays_mechanical():
+    """True local renames keep being set aside: the old name is defined in a
+    base copy, the new one in a head copy, by a def or as a class member."""
+    calls = "".join(
+        _file_diff(f"r{i}.py", [f"x = get_x({i})"], [f"x = fetch_x({i})"])
+        for i in range(3)
+    )
+    t = triage(parse_unified_diff(calls), _GET_X_OLD, _GET_X_NEW)
+    assert t.renames == [("get_x", "fetch_x")]
+    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+    methods = "".join(
+        _file_diff(
+            f"c{i}.py",
+            [f"    y = self.client.read_all({i})"],
+            [f"    y = self.client.read_every({i})"],
+        )
+        for i in range(3)
+    )
+    old = {"client.py": "class Client:\n    def read_all(self, i):\n        return i\n"}
+    new = {
+        "client.py": "class Client:\n    def read_every(self, i):\n        return i\n"
+    }
+    t = triage(parse_unified_diff(methods), old, new)
+    assert t.renames == [("read_all", "read_every")] and t.reviewed == []
+    # The same swap with no definition on either side is an edit.
+    assert len(triage(parse_unified_diff(methods), {}, {}).reviewed) == 3
+
+
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
     gh = FakeGitHub()
     diff = "".join(
@@ -1883,6 +1996,13 @@ def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
             f"application_sdk/m{i}.py", [f"y = get_x({i})"], [f"y = fetch_x({i})"]
         )
         for i in range(100)
+    )
+    # The renamed function's own definition is in the PR: both names are defined here.
+    gh.files[("application_sdk/x_def.py", "b0")] = "def get_x(i):\n    return i\n"
+    gh.files[("application_sdk/x_def.py", "h1")] = "def fetch_x(i):\n    return i\n"
+    diff = (
+        _file_diff("application_sdk/x_def.py", ["def get_x(i):"], ["def fetch_x(i):"])
+        + diff
     )
     gh.diffs[("b0", "h1")] = diff
     script = Script()
@@ -1897,10 +2017,10 @@ def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
     assert (
         script.requests == []
     )  # no line review at all; only the (routed) approach check
-    assert len(res.triage.mechanical.get("mechanical rename") or []) == 100
+    assert len(res.triage.mechanical.get("mechanical rename") or []) == 101
     body = gh.comments[0]["body"]
     assert (
-        "100 file(s) with mechanical changes" in body and "`get_x` → `fetch_x`" in body
+        "101 file(s) with mechanical changes" in body and "`get_x` → `fetch_x`" in body
     )
     assert gh.statuses[-1]["state"] == "success"
 
@@ -8018,8 +8138,15 @@ def test_a_hunk_that_only_removes_imports_is_not_mechanical():
     t = triage(parse_unified_diff(removed), {}, {})
     assert [f.path for f in t.reviewed] == ["application_sdk/handlers/__init__.py"]
     assert t.mechanical == {}
+    # An import swapped for another module changes which code runs (FND-5316);
+    # the same imports regrouped are still proven mechanical.
     swapped = _one_hunk("application_sdk/x.py", ["-import os", "+import sys"])
     t = triage(parse_unified_diff(swapped), {}, {})
+    assert [f.path for f in t.reviewed] == ["application_sdk/x.py"]
+    regrouped = _one_hunk(
+        "application_sdk/x.py", ["-import os", "-import sys", "+import os, sys"]
+    )
+    t = triage(parse_unified_diff(regrouped), {}, {})
     assert t.reviewed == [] and t.mechanical == {
         "imports only": ["application_sdk/x.py"]
     }
@@ -9102,7 +9229,8 @@ def test_a_real_rename_across_files_is_still_mechanical():
         )
         for i in range(3)
     )
-    t = _triaged(diff)
+    # The function's definition, renamed in the PR, is defined on each side.
+    t = triage(parse_unified_diff(diff), _GET_X_OLD, _GET_X_NEW)
     assert t.reviewed == [] and t.renames == [("get_x", "fetch_x")]
 
 
@@ -9127,8 +9255,11 @@ def test_a_python_dedent_is_not_whitespace_only():
     [
         ("import os", "import os; dangerous()", False),
         ("import os", "import os as _os\nrun()", False),
-        ("import os", "import sys  # noqa: F401", True),
-        ("from a import (", "from b import (", True),
+        ("import os", "import os, sys  # noqa: F401", True),
+        ("from a import (", "from a import (  # grouped", True),
+        # A module swapped for another changes which code runs (FND-5316).
+        ("import os", "import sys  # noqa: F401", False),
+        ("from a import (", "from b import (", False),
         ("from a import x", "from a import x, y; x.boot()", False),
     ],
 )

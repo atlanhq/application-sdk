@@ -710,6 +710,32 @@ names.
   usage reply and starts nothing. Options come from the first line only, so a note
   on the lines below a bare `/review` or `/lens` still reviews.
 
+## Review depth (FND-5316)
+
+A live review of a 42-file connector pull request withheld 13 files as mechanical,
+9 of them wrongly, reported weakened test expectations for a file whose tests had
+only been re-wrapped, and forced the final turn of 3 of its 5 bundles at the
+context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
+
+- **Mechanical rename (both copies, `triage.py`).** A token swap counts as a rename
+  only when both names are defined in this repository: the old one in a base copy
+  of a changed Python file, the new one in a head copy (a def, class, variable,
+  parameter or exception name, never a name bound only by an import), or modules
+  of the changed paths (`triage.definitions`). A name after a dot must be a member
+  defined here: a method, class attribute, `self.x`/`cls.x`, or a module-level def
+  or class (`Definitions.renames(member=True)`). So `json` -> `orjson`,
+  `logger.error` -> `logger.warning` and `client.get` -> `client.post` go to the line
+  review however many files repeat them. A hunk whose imports swap one module for
+  another (`import json` -> `import orjson`, `from a import f` -> `from b import f`) is
+  not "imports only" (`hunk_imports_only`), unless the old module is a file the pull
+  request renames to the new one (`triage.renamed_modules`); imports added,
+  regrouped or reordered still are. `baseline.py`, `diff.py` and `index.py` are
+  unchanged and still byte-identical between the copies. Tests adapted: the
+  rename cases now hand triage the renamed function's definition on each side (the
+  100-file case adds its def site, so it counts 101 files), and the two
+  `test_import_only_means_nothing_but_import_statements` cases that swapped `os`
+  for `sys` and `a` for `b` now expect a line review, with same-module cases added.
+
 ## Not changed, and worth knowing before the next change
 
 Nothing listed at the moment. The three items that were here (the test-file
