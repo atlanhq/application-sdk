@@ -57,10 +57,14 @@ class AssetRule:
         relationship_attributes: Attributes whose non-empty value is lineage for
             this type (apps that link BI assets by relationship, not Process).
             An asset with a Process output also counts.
+        inbound_from: ``(typeName, attribute)`` pairs: an entity of that type
+            naming this asset in that attribute is lineage for this asset (an
+            embedded datasource naming its workbook, say).
     """
 
     type_name: str
     relationship_attributes: tuple[str, ...] = ()
+    inbound_from: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -266,6 +270,11 @@ def read_run_output(
                             + b"\n"
                         )
 
+    inbound: dict[str, list[str]] = {}  # source typeName -> attributes to read
+    for rule in spec.assets:
+        for source_type, attribute in rule.inbound_from:
+            inbound.setdefault(source_type, []).append(attribute)
+    named: set[str] = set()  # qualifiedNames some entity names as its target
     parents: dict[str, DerivedAsset] = {}
     field_counts: dict[str, list[int]] = {}  # parent qn -> [total, lineage, pending]
     for path in paths:
@@ -278,6 +287,12 @@ def read_run_output(
             if not qualified_name:
                 continue
             stats.entities += 1
+            for attribute in inbound.get(type_name, ()):
+                value = attributes.get(attribute)
+                for item in value if isinstance(value, list) else [value]:
+                    target = _ref_qn(item)
+                    if target:
+                        named.add(target)
             field_rule = field_rules.get(type_name)
             if field_rule is not None:
                 parent = None
@@ -311,6 +326,8 @@ def read_run_output(
             )
 
     for qualified_name, asset in parents.items():
+        if qualified_name in named and asset_rules[asset.type_name].inbound_from:
+            asset.has_relationship = True
         out = outputs.pop(qualified_name, None)
         if out is not None:
             asset.processes = out.processes
