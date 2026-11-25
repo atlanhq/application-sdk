@@ -15,27 +15,23 @@ shared org PAT (see docs/standards/ci.md and the e2e-apps action comments)
 with a single POST here plus a single PATCH from the connector — the actual
 wait no longer costs any API calls at all.
 
-Prints ``check_run_id=<id>`` to $GITHUB_OUTPUT (or stdout if unset), mirroring
-the convention in sdk_changes_non_md.py.
+Writes ``check_run_id=<id>`` to $GITHUB_OUTPUT (or stdout if unset) via
+``_gha.set_output``.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 from datetime import datetime, timezone
+
+from _gh import GhError, gh_json
+from _gha import set_output
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the `gh` CLI."""
-    return subprocess.run(cmd, **kwargs)
 
 
 def create_check_run(
@@ -58,19 +54,24 @@ def create_check_run(
     if details_url:
         payload["details_url"] = details_url
 
-    result = run(
-        ["gh", "api", "--method", "POST", f"repos/{repo}/check-runs", "--input", "-"],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(
-            f"::error::failed to create check run '{name}' on {repo}@{sha}: {result.stderr}"
+    try:
+        # Not idempotent: a POST that 5xx'd may still have created the run, and
+        # a second one would sit in_progress until the watchdog times it out.
+        body = gh_json(
+            ["api", "--method", "POST", f"repos/{repo}/check-runs", "--input", "-"],
+            input=json.dumps(payload),
+            idempotent=False,
         )
-    body = json.loads(result.stdout)
-    return body["id"]
+    except GhError as exc:
+        raise SystemExit(
+            f"::error::failed to create check run '{name}' on {repo}@{sha}: {exc.stderr}"
+        ) from exc
+    check_run_id = body.get("id") if isinstance(body, dict) else None
+    if not isinstance(check_run_id, int):
+        raise SystemExit(
+            f"::error::creating check run '{name}' on {repo}@{sha} returned no id"
+        )
+    return check_run_id
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,13 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         details_url=args.details_url,
     )
 
-    line = f"check_run_id={check_run_id}"
-    github_output = os.environ.get("GITHUB_OUTPUT", "")
-    if github_output:
-        with open(github_output, "a") as fh:
-            fh.write(line + "\n")
-    else:
-        print(line)
+    set_output("check_run_id", str(check_run_id))
     return 0
 
 

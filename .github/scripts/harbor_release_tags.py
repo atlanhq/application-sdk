@@ -37,10 +37,10 @@ to ``$GITHUB_OUTPUT`` (or stdout when unset).
 from __future__ import annotations
 
 import argparse
-import os
 import re
-import secrets
 import sys
+
+from _gha import set_outputs
 
 #: Repositories that receive the manifest for every tag below. GHCR only:
 #: ``registry.atlan.com`` is now the registry gateway in front of GHCR, so the
@@ -129,24 +129,6 @@ def read_version(pyproject_path: str) -> str:
     raise ValueError(f'no top-level `version = "..."` found in {pyproject_path}')
 
 
-def _write_outputs(pairs: dict) -> None:
-    """Emit ``key=value`` pairs to $GITHUB_OUTPUT, heredoc-quoting multi-line ones."""
-    target = os.environ.get("GITHUB_OUTPUT")
-    lines = []
-    for key, value in pairs.items():
-        if "\n" in value:
-            delim = f"EOF_{secrets.token_hex(8)}"
-            lines.append(f"{key}<<{delim}\n{value}\n{delim}")
-        else:
-            lines.append(f"{key}={value}")
-    body = "\n".join(lines) + "\n"
-    if target:
-        with open(target, "a", encoding="utf-8") as fh:
-            fh.write(body)
-    else:
-        sys.stdout.write(body)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event-name", required=True)
@@ -171,7 +153,7 @@ def main() -> int:
     for tag in tags:
         print(f"  {tag}")
 
-    _write_outputs(
+    set_outputs(
         {
             "tag_prefix": prefix,
             "version": version,

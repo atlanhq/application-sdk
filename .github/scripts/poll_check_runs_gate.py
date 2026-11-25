@@ -41,7 +41,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -51,6 +50,7 @@ from pathlib import Path
 # sys.path already; the insert makes `-m`/cwd invocations work too.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _gh import GhError, gh_paginated  # noqa: E402
 from _gh_refs import gh_request  # noqa: E402
 
 PASSING_CONCLUSIONS = {"success", "neutral", "skipped"}
@@ -111,12 +111,6 @@ def pr_head_sha(repo: str, number: int) -> str | None:
     if not isinstance(head, dict) or not isinstance(head.get("sha"), str):
         return None
     return head["sha"].strip().lower()
-
-
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the ``gh api --paginate`` fallback. HTTP
-    requests go through ``_gh_refs.run`` instead."""
-    return subprocess.run(cmd, **kwargs)
 
 
 def gh_api_conditional(path: str, *, etag: str | None = None):
@@ -221,24 +215,14 @@ def list_all_check_runs(repo: str, sha: str) -> list[dict]:
     today's matrix sizes) case — and it stays correct rather than failing
     the gate closed for a SHA that's otherwise perfectly resolvable.
     """
-    result = run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
-            "--jq",
-            ".check_runs[] | tojson",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(
-            f"::error::failed to list check runs for {repo}@{sha}: {result.stderr}"
+    try:
+        return gh_paginated(
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key="check_runs"
         )
-    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    except GhError as exc:
+        raise SystemExit(
+            f"::error::failed to list check runs for {repo}@{sha}: {exc.stderr}"
+        ) from exc
 
 
 def wait_for_checks(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 
+import _gh
 import complete_check_run as mod
 
 REPO = "atlanhq/application-sdk"
@@ -17,16 +18,16 @@ def _completed(stdout: str) -> subprocess.CompletedProcess:
 
 
 def _list_check_runs_call(cmd: list[str]) -> bool:
-    """True for the paginated 'gh api --paginate .../check-runs ... --jq' call."""
+    """True for the paginated 'gh api --paginate --slurp .../check-runs' call."""
     return "--paginate" in cmd and any(
         "check-runs?per_page=100" in part for part in cmd
     )
 
 
-def _ndjson(runs: list[dict]) -> subprocess.CompletedProcess:
-    """What `--jq '.check_runs[] | tojson'` produces: one compact JSON object
-    per line, regardless of how many pages it took to gather them."""
-    return _completed("\n".join(json.dumps(r) for r in runs) + ("\n" if runs else ""))
+def _slurped(runs: list[dict]) -> subprocess.CompletedProcess:
+    """What `gh api --paginate --slurp .../check-runs` prints: a JSON array
+    holding every page; one page is enough for these tests."""
+    return _completed(json.dumps([{"total_count": len(runs), "check_runs": runs}]))
 
 
 def test_find_check_run_picks_highest_id_on_duplicates():
@@ -54,24 +55,24 @@ def test_truncate_summary_long_gets_truncated():
     assert result.endswith("(truncated)")
 
 
-def test_list_check_runs_uses_paginate_and_parses_ndjson(monkeypatch):
+def test_list_check_runs_uses_paginate_and_parses_slurped(monkeypatch):
     captured = {}
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return _ndjson([{"id": 1, "name": NAME}, {"id": 2, "name": "other"}])
+        return _slurped([{"id": 1, "name": NAME}, {"id": 2, "name": "other"}])
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
 
     runs = mod.list_check_runs(REPO, SHA)
 
     assert "--paginate" in captured["cmd"]
-    assert "--jq" in captured["cmd"]
+    assert "--slurp" in captured["cmd"]
     assert runs == [{"id": 1, "name": NAME}, {"id": 2, "name": "other"}]
 
 
 def test_list_check_runs_handles_empty_result(monkeypatch):
-    monkeypatch.setattr(mod, "run", lambda cmd, **kw: _ndjson([]))
+    monkeypatch.setattr(_gh, "run", lambda cmd, **kw: _slurped([]))
     assert mod.list_check_runs(REPO, SHA) == []
 
 
@@ -81,7 +82,7 @@ def test_list_check_runs_raises_on_failure(monkeypatch):
             args=[], returncode=1, stdout="", stderr="rate limited"
         )
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
 
     try:
         mod.list_check_runs(REPO, SHA)
@@ -96,10 +97,10 @@ def test_complete_check_run_patches_existing(monkeypatch):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("input")))
         if _list_check_runs_call(cmd):
-            return _ndjson([{"id": 55, "name": NAME}])
+            return _slurped([{"id": 55, "name": NAME}])
         return _completed("{}")
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
 
     mod.complete_check_run(REPO, SHA, NAME, "success", "All good")
 
@@ -119,10 +120,10 @@ def test_complete_check_run_creates_when_missing(monkeypatch):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("input")))
         if _list_check_runs_call(cmd):
-            return _ndjson([])
+            return _slurped([])
         return _completed("{}")
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
 
     mod.complete_check_run(REPO, SHA, NAME, "failure", "Broke")
 
@@ -137,12 +138,12 @@ def test_complete_check_run_creates_when_missing(monkeypatch):
 def test_complete_check_run_raises_on_patch_failure(monkeypatch):
     def fake_run(cmd, **kwargs):
         if _list_check_runs_call(cmd):
-            return _ndjson([{"id": 1, "name": NAME}])
+            return _slurped([{"id": 1, "name": NAME}])
         return subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="nope"
         )
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
 
     try:
         mod.complete_check_run(REPO, SHA, NAME, "success", "x")
@@ -159,10 +160,10 @@ def test_main_reads_summary_file(monkeypatch, tmp_path):
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("input")))
         if _list_check_runs_call(cmd):
-            return _ndjson([{"id": 9, "name": NAME}])
+            return _slurped([{"id": 9, "name": NAME}])
         return _completed("{}")
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     rc = mod.main(
         [
             "--repo",
@@ -183,7 +184,7 @@ def test_main_reads_summary_file(monkeypatch, tmp_path):
 
 
 def test_main_missing_summary_file_errors(monkeypatch):
-    monkeypatch.setattr(mod, "run", lambda *a, **k: _completed("{}"))
+    monkeypatch.setattr(_gh, "run", lambda *a, **k: _completed("{}"))
     try:
         mod.main(
             [
