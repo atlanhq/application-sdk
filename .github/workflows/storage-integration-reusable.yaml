@@ -93,6 +93,7 @@ jobs:
           # Fail, don't skip, a cloud whose variables are unset.
           STORAGE_CLOUD_REQUIRED: "1"
         run: |
+          set -euo pipefail
           uv run pytest tests/integration/storage/ \
             -m "s3_integration or azure_integration or gcs_integration" \
             -v --timeout=60
