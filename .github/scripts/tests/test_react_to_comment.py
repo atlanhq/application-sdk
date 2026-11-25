@@ -512,3 +512,29 @@ def test_every_caller_workflow_grants_issues_write() -> None:
             f"{name}:{job_name} reacts to comments but grants "
             f"issues={permissions.get('issues')!r}"
         )
+
+
+def test_the_retired_stub_redirects_both_mothership_triggers() -> None:
+    """`sdk-review.yml` answers `@sdk-review` and `@sdk-resolve` alike.
+
+    The two retired stubs were merged into one (FND-4695). The caller tests
+    above only see the reaction step, so dropping the `@sdk-resolve` branch
+    from the job guard, or from the reply's trigger name, would leave them
+    green while `@sdk-resolve` commenters stopped getting the `/lens` pointer.
+    """
+    doc = yaml.safe_load((WORKFLOW_DIR / "sdk-review.yml").read_text("utf-8"))
+    job = doc["jobs"]["redirect-to-lens"]
+    guard = " ".join(str(job["if"]).split())
+    for trigger in ("@sdk-review", "@sdk-resolve"):
+        assert f"startsWith(github.event.comment.body, '{trigger}')" in guard, (
+            f"redirect-to-lens no longer fires for {trigger}"
+        )
+
+    reply = next(s for s in job["steps"] if s.get("name") == "Point to /lens")
+    assert reply["env"]["TRIGGER"] == (
+        "${{ startsWith(github.event.comment.body, '@sdk-resolve')"
+        " && '@sdk-resolve' || '@sdk-review' }}"
+    ), "the reply must name the trigger the commenter used"
+    assert "${process.env.TRIGGER}" in reply["with"]["script"], (
+        "the reply text must use TRIGGER, not a hard-coded trigger name"
+    )
