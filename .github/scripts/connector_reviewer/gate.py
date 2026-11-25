@@ -815,6 +815,31 @@ def evaluate(
     return out
 
 
+COVERED = "covered by the gate finding"  # the summary's reason for a held-out file
+
+
+def covered(state: PRState, ev: Evaluation) -> dict[str, str]:
+    """The files a gate finding covers this round, path -> finding id: each
+    of this round's gate findings, and an open one `reconcile` keeps open (no
+    usable fact, or its path not compared). Such a file is not line-reviewed
+    and not shown to the approach check: the gate finding already says what is
+    wrong with it and how to fix it, so a model finding on the same edit is a
+    second finding with the same fix. A gate finding a person dismissed covers
+    nothing: it stays dismissed (`reconcile`), so the line review judges the
+    file again."""
+    dismissed = {
+        f.id
+        for f in state.findings
+        if f.origin == ORIGIN and f.status != "open" and f.fixed_by != FIXED_BY
+    }
+    out = {f.path: f.id for f in ev.findings or [] if f.id not in dismissed}
+    for f in state.open_findings():
+        if f.origin == ORIGIN and f.path not in out:
+            if ev.findings is None or f.path in ev.unchecked:
+                out[f.path] = f.id
+    return out
+
+
 def reconcile(
     state: PRState,
     fresh: list[Finding] | None,
