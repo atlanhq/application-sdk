@@ -104,6 +104,7 @@ from typing import Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import discover_org_consumers as discover  # noqa: E402
 from detect_merge_queue import targets_branch  # noqa: E402
 
 RunFn = Callable[[list], str]
@@ -115,17 +116,13 @@ RunFn = Callable[[list], str]
 # real ruleset payload in the tests rather than trusted from documentation.
 DEFAULT_REQUIRED_CONTEXT = "tests / Tests Gate"
 
-# Fleet membership is the atlan-*-app naming convention, matching
-# discover_org_consumers.py. Deliberately not filtered by "extends the Renovate
-# preset" the way that script is: a repo being off Renovate has no bearing on
+# Fleet membership is discover_org_consumers.py's definition, imported rather
+# than restated so this dashboard cannot drift from the Renovate roster when the
+# pattern changes. Deliberately only the name filter, not that script's "extends
+# the Renovate preset" filter: a repo being off Renovate has no bearing on
 # whether its gate is enforced, and filtering on it would shrink the denominator
 # to flatter the headline number.
-DEFAULT_NAME_PATTERN = r"^atlan-[a-z0-9-]+-app$"
-
-# See discover_org_consumers.REPO_LIST_LIMIT — same cap, same loud warning when
-# the org grows into it, because a silently truncated fleet would understate the
-# ungated count.
-REPO_LIST_LIMIT = 5000
+DEFAULT_NAME_PATTERN = discover.DEFAULT_NAME_PATTERN
 
 _REQUIRED_STATUS_CHECKS_RULE = "required_status_checks"
 _PULL_REQUEST_RULE = "pull_request"
@@ -584,39 +581,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def list_fleet_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) -> list:
-    """Non-archived ``owner`` repos whose bare name matches ``name_pattern``.
+def list_fleet_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) -> list[str]:
+    """Non-archived ``owner`` repos whose bare name matches ``name_pattern``,
+    sorted.
 
-    ``gh repo list`` rather than ``gh search code``: code search is best-effort
-    and nondeterministic (see discover_org_consumers.py), and a dropped repo
-    here silently removes an ungated repo from the count.
+    Delegates to ``discover_org_consumers.list_candidate_repos``, which owns the
+    listing call, its ``--limit`` cap and the truncation warning. Only the seam
+    differs: this scanner's ``run`` returns stdout and raises ``GhError``, so it
+    is adapted to the ``(code, stdout, stderr)`` shape, and a ``DiscoveryError``
+    (an unreadable listing) surfaces as the ``GhError`` the rest of the scanner
+    raises.
     """
-    raw = run(
-        [
-            "repo",
-            "list",
-            owner,
-            "--no-archived",
-            "--limit",
-            str(REPO_LIST_LIMIT),
-            "--json",
-            "nameWithOwner",
-            "--jq",
-            "[.[].nameWithOwner]",
-        ]
-    )
-    repos = _load_json(raw) or []
-    if not isinstance(repos, list):
-        raise GhError(f"unexpected `gh repo list` payload for {owner}")
-    if len(repos) >= REPO_LIST_LIMIT:
-        print(
-            f"::warning::gh repo list returned {len(repos)} repos, hitting the "
-            f"--limit {REPO_LIST_LIMIT} cap; the fleet may be truncated and an "
-            "ungated repo silently dropped. Raise REPO_LIST_LIMIT.",
-            file=sys.stderr,
-        )
-    pattern = re.compile(name_pattern)
-    return sorted(r for r in repos if pattern.match(str(r).split("/", 1)[-1]))
+
+    def run_tuple(args: list[str]) -> tuple[int, str, str]:
+        return 0, run(args), ""
+
+    try:
+        repos = discover.list_candidate_repos(owner, name_pattern, run=run_tuple)
+    except discover.DiscoveryError as exc:
+        raise GhError(str(exc)) from exc
+    return sorted(repos)
 
 
 def fetch_default_branch(repo: str, run: RunFn = _run_gh) -> str:
