@@ -62,7 +62,7 @@ from .github import GitHub, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
-from .select import DEFAULT_EXCLUDE, model_visible, select_files
+from .select import DEFAULT_EXCLUDE, excluded, model_visible, select_files
 from .tools import Workspace, parse_args, secret_diff, secret_path
 from .triage import Triage, triage
 
@@ -358,6 +358,26 @@ def exclude_patterns(cfg: Config) -> tuple[str, ...]:
     return tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude)
 
 
+def _close_findings_in_excluded_files(
+    state: PRState, exclude: tuple[str, ...], round_no: int, res: RunResult
+) -> None:
+    """Close each open finding in a file the exclude patterns now name.
+
+    Every prompt that shows a diff drops an excluded file's, verify's included,
+    so a finding raised before its file was excluded could never be judged
+    fixed again and would block the PR for good. The patterns come from the
+    configuration on the base branch (lens runs from it), never from the PR, so
+    a PR cannot close its own findings this way."""
+    closed: list[str] = []
+    for f in state.open_findings():
+        if excluded(f.path, exclude):
+            f.status, f.fixed_round, f.fixed_by = "fixed", round_no, "excluded"
+            closed.append(f.id)
+    if closed:
+        res.resolved_free.extend(closed)
+        trace.line(f"closed (file now excluded from review): {', '.join(closed)}")
+
+
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     for c in gh.issue_comments(number):
         body = c.get("body") or ""
@@ -573,6 +593,7 @@ def run(
         trace.line(
             f"resolved for free (quoted code gone): {', '.join(res.resolved_free)}"
         )
+    _close_findings_in_excluded_files(state, exclude_patterns(cfg), round_no, res)
 
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
@@ -2355,6 +2376,7 @@ _SEV_LABEL = {
 _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
+    "excluded": "closed: its file is now excluded from review",
     "pr-history": "closed: needed history only this PR's own earlier commits could produce",
 }
 _CLOSE_HINT = (
