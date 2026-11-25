@@ -288,25 +288,28 @@ class TestPrepareRequestBody:
 
 
 _VALIDATE_PACKAGE = "fnd4688_validate_app"
-#: A real toolkit-generated tree: contract-toolkit's ``minimal`` example, whose
-#: ``AppInputContract`` declares ``target: str = ""``.
-_MINIMAL_GENERATED = (
-    Path(__file__).resolve().parents[3]
-    / "contract-toolkit"
-    / "examples"
-    / "minimal"
-    / "app"
-    / "generated"
+#: BigQuery's generated tree, regenerated from tests/unit/handler/fixtures/
+#: bigquery_contract by tests/regen_fixtures.py and used as generated: its
+#: credential form requires extra.project_id for gcp-wif.
+_BIGQUERY_GENERATED = (
+    Path(__file__).parent / "fixtures" / "generated_bigquery_credentials"
 )
+_WIF_EXTRA = {
+    "project_id": "example-project",
+    "service_account_email": "sa@example.invalid",
+    "wif_pool_provider_id": "example-pool",
+    "atlan_oauth_id": "example-client-id",
+    "atlan_oauth_secret": "example-client-secret",
+}
 
 
 @pytest.fixture
 def validate_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     package = tmp_path / _VALIDATE_PACKAGE
-    package.mkdir()
-    (package / "__init__.py").write_text("")
     generated = package / "generated"
-    shutil.copytree(_MINIMAL_GENERATED, generated)
+    shutil.copytree(_BIGQUERY_GENERATED, generated)
+    for init in (package, generated, generated / "crawler"):
+        (init / "__init__.py").write_text("")
     monkeypatch.syspath_prepend(str(tmp_path))
     try:
         yield generated
@@ -315,14 +318,15 @@ def validate_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[P
             del sys.modules[name]
 
 
-class _FlatteningHandler(DefaultHandler):
-    """Accepts a legacy ``{"target": {"name": ...}}`` shape."""
+class _LegacyProjectIdHandler(DefaultHandler):
+    """Accepts a legacy top-level ``projectId`` beside a v2 flat credential."""
 
     def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        target = body.get("target")
-        if isinstance(target, dict):
-            return {**body, "target": target.get("name", "")}
-        return body
+        if "projectId" not in body:
+            return body
+        rest = {k: v for k, v in body.items() if k != "projectId"}
+        extra = {**(body.get("extra") or {}), "project_id": body["projectId"]}
+        return {**rest, "extra": extra}
 
 
 def _validate(handler: Handler, generated: Path) -> int:
@@ -336,17 +340,24 @@ def _validate(handler: Handler, generated: Path) -> int:
         ),
         raise_server_exceptions=False,
     )
+    extra = {k: v for k, v in _WIF_EXTRA.items() if k != "project_id"}
     response = client.post(
-        "/workflows/v1/validate", json={"target": {"name": "orders"}}
+        "/workflows/v1/validate?entrypoint=crawler",
+        json={
+            "credential_guid": "guid-1",
+            "authType": "gcp-wif",
+            "extra": extra,
+            "projectId": _WIF_EXTRA["project_id"],
+        },
     )
     return response.status_code
 
 
 def test_validate_on_the_host_runs_prepare_request_body(validate_host: Path) -> None:
-    # The legacy shape does not fit the generated contract as sent...
+    # The legacy shape misses a field the generated credential form requires...
     assert _validate(DefaultHandler(), validate_host) == 422
-    # ...and fits once the handler's hook has rewritten it.
-    assert _validate(_FlatteningHandler(), validate_host) == 200
+    # ...and is complete once the handler's hook has moved it into place.
+    assert _validate(_LegacyProjectIdHandler(), validate_host) == 200
 
 
 # ---------------------------------------------------------------------------
