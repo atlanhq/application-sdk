@@ -54,7 +54,11 @@ class ConsoleWriter:
 
     def _init_state(self) -> None:
         self._pid = os.getpid()
-        self._cond = threading.Condition(threading.Lock())
+        # Re-entrant: a garbage-collector finalizer can run inside put()'s
+        # critical section, and asyncio reports a destroyed pending task through
+        # logging, which comes straight back into put() on the same thread. A
+        # plain Lock deadlocks that thread for good.
+        self._cond = threading.Condition(threading.RLock())
         self._queue: deque[tuple[TextIO, str]] = deque()
         # Counts a record popped off the queue but not yet written, so
         # flush() doesn't return while a write is still in progress.
