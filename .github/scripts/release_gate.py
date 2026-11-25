@@ -13,7 +13,7 @@ no branching shell in ``run:``)::
 
     python release_gate.py gate --repo "$REPO" --pr "$PR" \
       --head-sha "$HEAD_SHA" --head-ref "$HEAD_REF" --labels "$LABELS" \
-      --config-dir .github/connector-reviewer --run-url "$RUN_URL"
+      --config-dir .github/connector-reviewer
 
 and, on a ``status`` event for the reviewer's context::
 
@@ -52,12 +52,8 @@ one of those classes, so a release PR needs its ``gate-check`` but no review.
 
 On a failure the gate lists the reviewer's open findings and suggestions,
 read from the state block in the reviewer's own summary comment (only the
-App's comment is trusted), in the job summary. It also keeps ONE sticky PR
-comment (found by ``COMMENT_MARKER`` and its author, ``github-actions[bot]``)
-that says why the check passed or failed and what to do, edited in place on
-every run and never deleted. Writing it is best-effort: it never changes the
-check's result. Everything in it is the gate's own text or sanitised
-(``_safe``): no PR-controlled text reaches it unescaped.
+App's comment is trusted), in the job summary and as an error annotation on the run. The gate posts no
+PR comment: the reason is in the Release Gate check itself.
 
 Anything that cannot be read fails the gate: a release that skips its gate
 is worse than a re-run of a two-minute check.
@@ -101,11 +97,6 @@ RELEASED_VERSION = re.compile(r"\d+(\.\d+)*(\.post\d+)?")
 PIN_HINT = "Pin a released SDK version, re-lock, then /gate-check."
 LOCK_UNREADABLE = "uv.lock could not be parsed, so the SDK pin is unknown."
 PINS_UNREADABLE = "uv.lock or pyproject.toml could not be read at the head"
-
-# The sticky PR comment: found by this marker AND its author, so a comment
-# anyone else plants with the marker is never edited or trusted.
-COMMENT_MARKER = "<!-- release-gate-verdict -->"
-COMMENT_AUTHOR = "github-actions[bot]"
 
 MISSING_HINT = "Release PR CI is opt-in. Comment /gate-check to run it."
 PENDING_HINT = "The release gate is still running on this commit."
@@ -452,112 +443,6 @@ def render_summary(outcome: Outcome, review: ReviewFacts) -> str:
     return "\n".join(out) + "\n"
 
 
-# ---- the sticky PR comment -------------------------------------------------
-
-_MD_SPECIAL = re.compile(r"([\\`*_\[\]|#~])")
-# A code span the gate keeps as code: its own commands (`/review`) and names
-# (a branch, a class) made of these characters only. Anything else in a span
-# is sanitised like the rest of the line.
-_PLAIN_CODE = re.compile(r"[A-Za-z0-9_./ -]{1,80}")
-
-
-def _safe(text: str, keep: int = 300) -> str:
-    """Untrusted text made inert in a comment: one line, no HTML (so no
-    ``<!--`` marker), no markdown, no @-mention, no link syntax, capped.
-    Spaces at either end are kept, so it can sit inside a sentence."""
-    flat = re.sub(r"\s+", " ", str(text))
-    if len(flat) > keep:
-        flat = flat[: keep - 3] + "..."
-    flat = flat.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    flat = _MD_SPECIAL.sub(r"\\\1", flat)
-    return flat.replace("@", "@\u200b")
-
-
-def _line(text: str) -> str:
-    """A verdict line: the gate's own text, with the only PR-reachable parts
-    (a branch name, a waiver reason, a status description) defused. A code
-    span is kept as code only when it is plain (``_PLAIN_CODE``); a span a
-    branch name or reason could have shaped is sanitised instead."""
-    parts = text.split("`")
-    if len(parts) % 2 == 0:  # an unpaired backtick: treat the whole line as text
-        return _safe(text, 600)
-    out: list[str] = []
-    for i, part in enumerate(parts):
-        if i % 2 and _PLAIN_CODE.fullmatch(part):
-            out.append(f"`{part}`")
-        else:
-            out.append(_safe(part, 600))
-    return "".join(out)
-
-
-def render_comment(
-    outcome: Outcome, review: ReviewFacts, head_sha: str, run_url: str = ""
-) -> str:
-    """The sticky comment: why the check passed or failed, and what to do."""
-    review_pending = review.state == "pending" and any(
-        line.startswith("Connector review") for line in outcome.failed
-    )
-    only_pending = review_pending and len(outcome.failed) == 1
-    if outcome.passes:
-        head = "✅ **Release Gate passed**"
-    elif only_pending:
-        head = "⏳ **Release Gate is waiting**: the connector review is still running"
-    else:
-        head = "❌ **Release Gate is blocking this pull request**"
-    out = [COMMENT_MARKER, head, ""]
-    for line in outcome.lines:
-        if line not in outcome.failed:
-            icon = "✅"
-        elif review_pending and line.startswith("Connector review"):
-            icon = "⏳"
-        else:
-            icon = "❌"
-        out.append(f"- {icon} {_line(line)}")
-    blocked_on_findings = review.state == "failure" and any(
-        line.startswith("Connector review") for line in outcome.failed
-    )
-    if blocked_on_findings and review.findings:
-        out += ["", f"**Open findings ({len(review.findings)})**", ""]
-        out += [
-            f"- `{f.id}` · {_safe(f.severity, 20)} · {_safe(f.title, 160)}"
-            for f in review.findings[:20]
-        ]
-        if len(review.findings) > 20:
-            out.append(f"- … and {len(review.findings) - 20} more")
-        out += [
-            "",
-            "Fix a finding and comment `/review`, close a medium or low one with "
-            "`/review dismiss <id> <reason>`, or set the verdict aside for this "
-            "commit with `/review waive <reason>`.",
-        ]
-    sha = head_sha[:7] if re.fullmatch(r"[0-9a-f]{40}", head_sha) else "?"
-    run = (
-        f" · [this run]({run_url})"
-        if re.fullmatch(r"https://github\.com/[\w./-]+", run_url)
-        else ""
-    )
-    out += [
-        "",
-        f"<sub>For commit `{sha}`{run}. This comment is updated on every Release "
-        "Gate run; a push re-checks the new commit.</sub>",
-    ]
-    return "\n".join(out) + "\n"
-
-
-def upsert_comment(gh: Any, number: int, body: str) -> str:
-    """Edit the gate's sticky comment in place, or post it once. Returns
-    "created", "updated" or "unchanged"."""
-    for c in gh.issue_comments(number):
-        login = _table(c.get("user")).get("login")
-        if login == COMMENT_AUTHOR and COMMENT_MARKER in str(c.get("body") or ""):
-            if c.get("body") == body:
-                return "unchanged"
-            gh.edit_comment(int(c["id"]), body)
-            return "updated"
-    gh.comment(number, body)
-    return "created"
-
-
 # ---- reading GitHub (the only I/O) -----------------------------------------
 
 
@@ -678,11 +563,6 @@ def run_gate(args: argparse.Namespace) -> int:  # pragma: no cover - CLI glue
         review,
         args.head_sha,
     )
-    try:
-        body = render_comment(outcome, review, args.head_sha, args.run_url)
-        print(f"PR comment {upsert_comment(gh, args.pr, body)}")
-    except Exception as error:  # noqa: BLE001 - the comment never decides the check
-        print(f"::warning::the Release Gate PR comment was not written: {error}"[:300])
     return emit(outcome, review, args.summary_file)
 
 
@@ -815,7 +695,6 @@ def _build_parser() -> argparse.ArgumentParser:
     gate.add_argument(
         "--labels", required=True, help="the PR's label names as a JSON array"
     )
-    gate.add_argument("--run-url", default="", help="this run, linked from the comment")
     gate.add_argument("--config-dir", default="", help="the reviewer's config dir")
     gate.add_argument(
         "--summary-file",

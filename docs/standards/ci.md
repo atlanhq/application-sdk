@@ -525,14 +525,10 @@ request can still add its own workflow with a job named `Release Gate`: under
 an Actions-only required check that is the remaining exposure, and only an org
 ruleset "required workflow" closes it.
 
-The gate also keeps one sticky PR comment, found by its hidden marker and its
-author (`github-actions[bot]`) and edited in place on every run, that says why
-the check passed or failed and what to do: "comment `/review`", the open
-findings, "still running", "re-run `/review`", the `/gate-check` reason on a
-release PR, or ✅ with who waived it or why the PR is exempt. Every
-PR-reachable part of it (finding titles, branch names, waiver reasons) is
-escaped, so it cannot mention anyone or forge the marker. Writing it needs
-`pull-requests: write` and is best-effort: it never changes the check.
+The gate posts no PR comment. Why it failed and what to do ("comment
+`/review`", the open findings, "still running", "re-run `/review`", the
+`/gate-check` reason on a release PR) is in the Release Gate check: its error
+annotation and its job summary.
 `python release_gate.py explain --repo <owner/name> --pr <n> --config-dir
 .github/connector-reviewer` prints, read-only, what the gate and the reviewer's
 classifier decide for any real pull request.

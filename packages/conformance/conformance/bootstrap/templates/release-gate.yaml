@@ -26,8 +26,9 @@ name: Release Gate
 # new head is asked about again.
 #
 # The decision lives in application-sdk (.github/scripts/release_gate.py), and
-# this workflow checks it out from there at `main` and runs it. It also keeps
-# one sticky PR comment saying why the check passed or failed.
+# this workflow checks it out from there at `main` and runs it. The reason a
+# check failed is in the check itself (its annotation and job summary); the gate
+# posts no PR comment.
 #
 # Security shape (review this before changing it):
 #   * The gate runs on `pull_request_target`, so GitHub always runs THIS file
@@ -39,8 +40,7 @@ name: Release Gate
 #     pyproject.toml at the head through the API, as data; the reviewer's
 #     state is read from its comment, as data. Fork pull requests are safe for
 #     the same reason.
-#   * The job's token can write pull-request comments (the sticky comment) and
-#     read everything else; the re-run job can only re-run runs.
+#   * The job's token can only read; the re-run job can only re-run runs.
 #
 # Branch-protection target: "Release Gate"
 # Add this alongside "tests / Tests Gate" in branch protection so that:
@@ -110,7 +110,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read # uv.lock and pyproject.toml at the head, as data
-      pull-requests: write # read the pull request; write the one sticky comment
+      pull-requests: read # the pull request, its commits and its diff
       issues: read # the reviewer's summary comment (PR comments are Issues-scope)
       statuses: read # the head commit's `gate-check` and `connector-reviewer`
     steps:
@@ -143,7 +143,6 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
           CONFIG_DIR: ${{ github.workspace }}/sdk/.github/connector-reviewer
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: >-
           python3 release_gate.py gate
           --repo "$REPO"
@@ -152,7 +151,6 @@ jobs:
           --head-ref "$HEAD_REF"
           --labels "$LABELS"
           --config-dir "$CONFIG_DIR"
-          --run-url "$RUN_URL"
 
   rerun-on-review:
     name: Re-run Release Gate on the review verdict
