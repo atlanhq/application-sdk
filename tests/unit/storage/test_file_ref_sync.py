@@ -777,6 +777,10 @@ class TestBlockedPathPatternsAreSeparatorAgnostic:
 #: undrained fan-out raises well before it ends.
 _SIBLING_THREAD_SECONDS = 0.3
 
+#: Bound on a sibling thread's wait for the failure to be raised. Generous:
+#: a passing test never hits it, and it covers thread-pool spin-up.
+_FAILURE_WAIT_SECONDS = 30.0
+
 
 class _SiblingProbe:
     """Siblings that block in ``run_in_thread``, and one ref that fails once
@@ -790,11 +794,16 @@ class _SiblingProbe:
     def __init__(self, siblings: int) -> None:
         self.started = [threading.Event() for _ in range(siblings)]
         self.finished = [threading.Event() for _ in range(siblings)]
+        # Set as the failure is raised. A sibling thread holds its
+        # _SIBLING_THREAD_SECONDS until then, so a slow loop (the hops in
+        # ``fail``) cannot let a sibling finish before the raise.
+        self.failing = threading.Event()
         self.completed: list[int] = []
 
     async def sibling(self, index: int) -> None:
         def _block() -> None:
             self.started[index].set()
+            self.failing.wait(_FAILURE_WAIT_SECONDS)
             time.sleep(_SIBLING_THREAD_SECONDS)
             self.finished[index].set()
 
@@ -802,9 +811,13 @@ class _SiblingProbe:
         self.completed.append(index)
 
     async def fail(self, exc: Exception) -> None:
-        for event in self.started:
-            if not await asyncio.to_thread(event.wait, 5.0):
-                raise AssertionError("sibling thread did not start")
+        try:
+            for event in self.started:
+                if not await asyncio.to_thread(event.wait, 5.0):
+                    raise AssertionError("sibling thread did not start")
+        finally:
+            # Release the sibling threads however ``fail`` exits.
+            self.failing.set()
         raise exc
 
     async def assert_no_sibling_outlived_the_raise(self) -> None:
