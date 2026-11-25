@@ -752,7 +752,9 @@ base-sensitive or not:
 | `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
-runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
+runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. Its body is one
+nested reusable, `queue-diff-reusable.yaml`, which each of the three reusables
+calls with `./` (FND-4928); each keeps its own `if:`. It reads the PR
 number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and
 fetches the PR head from `refs/pull/<N>/head`. The SHA in the branch name is
 the commit the entry was built on, the queue commit's parent, not the PR head.
@@ -1677,6 +1679,18 @@ and "not yet" would otherwise read as "never".
 
 If you add another workflow that commits to a Renovate branch, it inherits this
 problem. Carry the status or accept that the PR needs a human.
+
+### One implementation for both fix-up lanes
+
+`renovate-lock-cooldown.yaml` and `renovate-conformance-lock-sync.yaml` both
+call `renovate-branch-fixup.yaml` (FND-4928). The caller owns the trigger, the
+concurrency group and the driver's arguments. The reusable owns the actor
+allowlist, the re-entrancy guard, the read-only `generate` job, the App-token
+`publish` job and the `renovate/artifacts` carry-forward. A new lane that rewrites
+files on a Renovate branch should call it too. Its driver must take
+`--no-commit --baseline-ref REF`, `--stage-to DIR` and `--apply-from DIR`, and
+write only its `OUTPUT_PATHS`. `test_renovate_branch_fixup.py` checks that
+contract for every caller.
 
 ### Repo-local `postUpgradeTasks` override
 
