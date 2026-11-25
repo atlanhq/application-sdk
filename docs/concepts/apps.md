@@ -479,7 +479,7 @@ either inline (``value:``) or via a ``secretKeyRef:`` that names a secret in the
 ``auth.secretStore``.  On the secure k8s SDR path the chart deliberately omits the matching
 environment variables and resolves credentials only through the secret store.
 
-At startup ``_create_infrastructure`` (in ``application_sdk.main``) reads each store's
+At startup ``_create_infrastructure`` (in ``application_sdk.infrastructure._bootstrap``) reads each store's
 ``secretKeyRef`` entries via ``read_binding_secret_refs``, fetches the referenced secrets from
 the Dapr sidecar (``_fetch_binding_secrets``), and hands them to the synchronous store
 factories (``create_store_from_binding*``) as the ``secrets=`` keyword.  The same secrets are

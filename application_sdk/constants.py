@@ -809,7 +809,7 @@ WORKER_LIVENESS_MAX_IDLE_SECONDS = _load_worker_liveness_max_idle_seconds()
 
 #: Explicit event-loop stall bound for a shutting-down worker, replacing the
 #: one derived from its tasks' heartbeat timeouts and the shutdown budget (see
-#: ``_loop_stall_bound`` in ``main.py``). ``0`` turns the stall watchdog off,
+#: ``_loop_stall_bound`` in ``_shutdown_policy.py``). ``0`` turns the stall watchdog off,
 #: which is what a local debugging session wants: a breakpoint during shutdown
 #: would otherwise end the process. Unset, malformed, negative or non-finite
 #: values mean no override.

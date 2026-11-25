@@ -733,4 +733,80 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/deprecation.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="B010",
+        canonical_reference=(
+            "atlan-openapi-app app/handler.py — the app changes handler behaviour "
+            "by subclassing DefaultHandler, never by assigning to the SDK; no module under "
+            "the three reference apps' app/ or tests/ directories rebinds an "
+            "attribute of anything imported from application_sdk."
+        ),
+        scope=RuleScope.APP,
+        name="SdkGlobalRebind",
+        tier=EnforcementTier.WARN,
+        category="sdk-private-surface",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.62.0",
+        rationale=(
+            "The SDK reads its own module globals and class attributes on the "
+            "assumption that it set them. An app that rebinds one at import time "
+            "depends on the SDK continuing to read that exact name, at that exact "
+            "moment, in every process that serves the app, and none of that is a "
+            "promise. Two connector apps changed request normalization this way: "
+            "one extended application_sdk.handler.service._CREDENTIAL_KEYS with "
+            "kerberos, the other replaced service._normalize_credentials with a "
+            "wrapper. The SDK kept extra indirection layers only so both patches "
+            "kept working, and a refactor that stopped reading either name would "
+            "have broken the app with no error, because assigning a name nothing "
+            "reads raises nothing. The patches also never reached the "
+            "consolidated API host, which does not import that module, so the "
+            "app already behaved differently there (FND-4688). B008 does not "
+            "cover this: it reports private names only in some import shapes "
+            "(not from application_sdk.handler import service), and a rebind of "
+            "a public name is the same hazard. WARN rather than BLOCK because the "
+            "fix is app-side: the SDK now reads an app's extra credential keys "
+            "from its generated credential form, so the key-set patch can simply "
+            "go, and the wrapper patch is a request shape to fix at its source."
+        ),
+        short_description=(
+            "Rebinds or deletes an attribute of something imported from "
+            "application_sdk — a runtime monkeypatch the SDK does not know about"
+        ),
+        full_description=(
+            "Flags a statement that rebinds or deletes an attribute of anything\n"
+            "the file imported from ``application_sdk``: a module, a class or any\n"
+            "other object.  Matched shapes:\n"
+            "\n"
+            "* ``svc._CREDENTIAL_KEYS = ...`` after\n"
+            "  ``import application_sdk.handler.service as svc``;\n"
+            "* ``service._normalize_credentials = wrapper`` after\n"
+            "  ``from application_sdk.handler import service``;\n"
+            "* ``Handler.hook = patched`` after\n"
+            "  ``from application_sdk.handler.base import Handler``;\n"
+            "* augmented and annotated assignment, ``del``, ``for`` and ``with``\n"
+            "  targets, and the ``setattr`` / ``delattr`` builtins on any of these.\n"
+            "\n"
+            "**Not matched.**  An attribute of an object the app built itself; a\n"
+            "name a scope binds to something else (a parameter, a local\n"
+            "assignment, a loop, ``with`` or comprehension variable), which\n"
+            "shadows the import there;\n"
+            "``monkeypatch.setattr`` and ``unittest.mock.patch`` in tests, which\n"
+            "undo the change when the test ends; relative imports and imports of\n"
+            "the app's own packages.\n"
+            "\n"
+            "**Remediation.**  For the two known patches: delete a rebind of\n"
+            "``service._CREDENTIAL_KEYS`` (the SDK lifts every top-level field of\n"
+            "the app's generated credential form into the credentials, on the\n"
+            "worker and the API host alike), and replace a wrapper bound to\n"
+            "``service._normalize_credentials`` by sending the fields the input\n"
+            "contract declares.  Where the SDK offers no supported way to get the\n"
+            "behaviour, raise the gap with the SDK and say so in the suppression:\n"
+            "``# conformance: ignore[B010] no public hook — tracked in <id>``.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/deprecation.prose.md",
+        ),
+    ),
 )

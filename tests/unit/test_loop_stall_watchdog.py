@@ -33,8 +33,8 @@ from application_sdk._loop_stall_watchdog import (
     largest_bound_within,
     timer_seconds,
 )
+from application_sdk._shutdown_policy import _PostDrainExitArm
 from application_sdk.constants import load_worker_loop_stall_timeout_override
-from application_sdk.main import _PostDrainExitArm
 from tests.unit.private_stdlib import private_stdlib
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -580,7 +580,9 @@ class TestHandoffToPostDrainDeadline:
             enabled=True, shutdown_event=event, stall_watchdog=watchdog
         )
 
-        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+        with patch(
+            "application_sdk._shutdown_policy._start_post_drain_exit_deadline"
+        ) as start:
             arm.on_worker_drained()
 
         watchdog.stop.assert_called_once_with()
@@ -593,7 +595,7 @@ class TestHandoffToPostDrainDeadline:
             enabled=True, shutdown_event=asyncio.Event(), stall_watchdog=watchdog
         )
 
-        with patch("application_sdk.main._start_post_drain_exit_deadline"):
+        with patch("application_sdk._shutdown_policy._start_post_drain_exit_deadline"):
             arm.on_worker_drained()
 
         watchdog.stop.assert_not_called()

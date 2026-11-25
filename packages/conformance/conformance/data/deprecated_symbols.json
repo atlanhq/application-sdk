@@ -1666,6 +1666,24 @@
       "symbol": "S3ObjectStore"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_CREDENTIAL_KEYS is deprecated; use the app's generated credential form (contract/app.pkl) \u2014 every top-level field the form declares is now a credential key on every surface, so drop the rebind. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_CREDENTIAL_KEYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_normalize_credentials is deprecated; use a field the entry point's input contract declares \u2014 send the field the input reads; a legacy request shape the contract cannot express is a gap to raise with the SDK, not a request to rewrite. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_normalize_credentials"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your own uvicorn.run instead \u2014 the consolidated host owns the run loop. Will be removed in v4.0.0.",
