@@ -28,7 +28,7 @@ import urllib.parse
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -110,6 +110,9 @@ class RunResult:
     # The round's gate-file check (gate.py): changed gate files compared, and of
     # those the ones that match the render. None when no check was made.
     gate: gate.Evaluation | None = None
+    # Files a gate finding covers, path -> finding id (gate.covered): held out
+    # of the line review and the approach check, and named in the summary.
+    gate_covered: dict[str, str] = field(default_factory=dict)
     # Open items (F-… and A…) sent to a verify call that spent its whole output
     # budget before answering: not re-judged this round, so not a verdict on them.
     verify_cut_off: list[str] = field(default_factory=list)
@@ -346,6 +349,12 @@ def author_files_in_range(
         for fd in incremental
         if fd.hunks and (fd.path in pr_paths or fd.path in finding_paths)
     }
+
+
+def _gate_cover(fd: FileDiff, covered: dict[str, str]) -> str:
+    """The gate finding that covers this file, by its path or a rename's old
+    path, or "" when none does (gate.covered)."""
+    return covered.get(fd.path) or covered.get(fd.old_path or "", "")
 
 
 def _model_findings(state: PRState) -> list[Finding]:
@@ -878,6 +887,15 @@ def run(
             f"{len(gate_eval.matching)} match the render, "
             f"{len(gate_eval.findings)} differ" + (f": {differ}" if differ else "")
         )
+    # A file with a gate finding is one finding, not two: the line review and
+    # the approach check are not shown it (FND-5325).
+    res.gate_covered = gate.covered(state, gate_eval)
+    if res.gate_covered:
+        trace.line(
+            "held out of the line review and the approach check (covered by a gate "
+            "finding): "
+            + ", ".join(f"{p} ({i})" for p, i in sorted(res.gate_covered.items()))
+        )
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
@@ -923,7 +941,19 @@ def run(
         )
 
     # ---- scope -----------------------------------------------------------
-    sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
+    # A file a gate finding covers is never selected: the summary names it,
+    # against its gate finding, and it is not unread source (the gate finding
+    # is its verdict).
+    covered_skips = [
+        (fd.path, f"{gate.COVERED} {fid}, which says how to fix it: not line-reviewed")
+        for fd in all_files
+        if (fid := _gate_cover(fd, res.gate_covered))
+    ]
+    sel = select_files(
+        [fd for fd in all_files if not _gate_cover(fd, res.gate_covered)],
+        exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude),
+    )
+    sel.skipped[:0] = covered_skips
     # The weakened-expectation facts are read from the round's test files before
     # selection, which skips a test file deleted outright.
     tests_changed = changed_tests(all_files, cfg)
@@ -1065,7 +1095,13 @@ def run(
             f"{sum(len(v) for v in added.symbols.values())} added symbol(s) in existing files"
         )
     pr_meta["paths_added"] = added.render_paths()
-    pr_meta["symbols_added"] = added.render_symbols()
+    # Not the symbols of a file a gate finding covers: no prompt is shown it.
+    pr_meta["symbols_added"] = replace(
+        added,
+        symbols={
+            p: names for p, names in added.symbols.items() if p not in res.gate_covered
+        },
+    ).render_symbols()
 
     # ---- regression and history facts (0 model calls) ----------------------
     # Computed in code and handed to every bundle's prompt (facts.py). The
@@ -1201,7 +1237,10 @@ def run(
             _approach,
             side,
             ws,
-            full_files if incremental else sel.reviewed,
+            # A file a gate finding covers is never shown to it (FND-5325).
+            [fd for fd in full_files if not _gate_cover(fd, res.gate_covered)]
+            if incremental
+            else sel.reviewed,
             dict(pr_meta),
             exclude_patterns(cfg),
         )
