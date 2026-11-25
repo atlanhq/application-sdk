@@ -114,9 +114,15 @@ UNMANAGED = "unmanaged"  # the kind of a fallback mismatch; never read from a fa
 MAX_FILES = 100  # gate paths read from a fact
 DIFF_KEEP = 2000  # characters of one file's diff read from a fact
 MAX_FACT_BYTES = 1_000_000
-VENV_SECONDS = 120
-PIP_SECONDS = 300
-RENDER_SECONDS = 120
+# The bounds of `make_fact`'s steps. With `gate-base`'s two git reads and room
+# for the gate job's other steps they fit in the job's `timeout-minutes`
+# (connector-reviewer-reusable.yaml; test_connector_reviewer_workflow.py ties
+# them), so a step that runs out writes an `unavailable` fact before the job
+# is killed and writes none. A cold install of the package and its few
+# dependencies, all wheels, takes well under a minute.
+VENV_SECONDS = 60
+PIP_SECONDS = 180
+RENDER_SECONDS = 60
 LATEST_SECONDS = 10.0  # the index's version list, read once per gate job
 LATEST_BYTES = 2_000_000
 

@@ -15690,6 +15690,13 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
         assert "PYTHONPATH" not in call["env"]
         assert not Path(call["cwd"]).resolve().is_relative_to(checkout.resolve())
         assert call["timeout"] > 0
+    # Exactly the bounds the workflow test sums against the gate job's timeout:
+    # a subprocess added here must be counted there too.
+    assert [c["timeout"] for c in runner.calls] == [
+        gate_mod.VENV_SECONDS,
+        gate_mod.PIP_SECONDS,
+        gate_mod.RENDER_SECONDS,
+    ]
 
 
 @pytest.mark.parametrize(

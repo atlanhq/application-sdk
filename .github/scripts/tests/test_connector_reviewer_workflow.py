@@ -400,6 +400,34 @@ def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     assert steps.index(setup) < steps.index(fact)
 
 
+#: What the gate job's steps other than `gate-base` and `gate-fact` may take,
+#: in seconds: the two checkouts before them and the two between them (all
+#: sparse), setup-python, and the fact's upload with its 20-second wait and
+#: retry. None of them has a bound of its own; this is room, not a guarantee.
+GATE_OTHER_STEPS_SECONDS = 180
+
+
+def test_the_gate_fact_is_written_before_the_gate_job_times_out(
+    gate_job: dict[str, Any],
+) -> None:
+    """F-7ed325: `gate-base` and `gate-fact` bound every subprocess they
+    start. Their worst case, with room for the other steps, must fit in the
+    job's timeout: a job killed first writes no fact at all, where a bound
+    that runs out writes one that says why the check was not made."""
+    from connector_reviewer import gate, sdk_source  # noqa: PLC0415
+
+    gate_base = 2 * gate.GIT_SECONDS  # `base_of_merge`: HEAD^1 and HEAD^2
+    gate_fact = (
+        2 * sdk_source.GIT_SECONDS  # `checkout_commit` of the head and the base
+        + gate.VENV_SECONDS
+        + gate.PIP_SECONDS
+        + gate.RENDER_SECONDS
+        + gate.LATEST_SECONDS
+    )
+    budget = gate_job["timeout-minutes"] * 60
+    assert gate_base + gate_fact + GATE_OTHER_STEPS_SECONDS <= budget
+
+
 def test_there_is_no_concurrency_block(
     workflow: dict[Any, Any], job: dict[str, Any]
 ) -> None:

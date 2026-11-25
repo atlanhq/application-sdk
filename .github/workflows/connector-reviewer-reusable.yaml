@@ -105,6 +105,10 @@ jobs:
   gate:
     name: Gate-file check
     runs-on: ubuntu-latest
+    # Above the bounds of `gate-base` and `gate-fact` (connector_reviewer/gate.py,
+    # VENV_SECONDS and the rest) with room for the other steps, so the fact is
+    # written, if only to say the check was not made, before the job is killed.
+    # test_connector_reviewer_workflow.py ties the two.
     timeout-minutes: 10
     steps:
       # The reviewer's code, at this workflow's own commit, as in `review`.
