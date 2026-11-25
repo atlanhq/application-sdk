@@ -99,14 +99,6 @@ class TestDiscoveryErrorStr:
 class TestLoadAppClass:
     """Tests for load_app_class()."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_loads_valid_app_class(self) -> None:
         # Create a temporary module with an App subclass
         mod_name = "_test_discovery_app_module"
@@ -163,14 +155,6 @@ class TestLoadAppClass:
 
 class TestLoadHandlerClass:
     """Tests for load_handler_class()."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _make_app_module(
         self,
@@ -362,14 +346,6 @@ class _ValidateOut(Output):
 
 class TestValidateAppClass:
     """Tests for validate_app_class()."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_valid_registered_app_passes(self) -> None:
         # Class defined inside test using module-level types so get_type_hints resolves them

@@ -45,7 +45,6 @@ from application_sdk.common.incremental.state.store import (
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
-    clear_infrastructure,
     set_infrastructure,
 )
 from application_sdk.storage.batch import upload_prefix
@@ -137,10 +136,7 @@ def store(tmp_path: Path) -> Iterator[LocalStore]:
     """A real LocalStore bound as the infrastructure store."""
     local = create_local_store(tmp_path / "store")
     set_infrastructure(InfrastructureContext(storage=local))
-    try:
-        yield local
-    finally:
-        clear_infrastructure()
+    yield local
 
 
 @pytest.fixture

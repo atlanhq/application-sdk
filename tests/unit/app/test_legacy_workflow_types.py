@@ -290,9 +290,7 @@ class TestAppMetadataIndex:
 
 
 class TestAppRegistration:
-    def test_registered_app_exposes_canonical_and_alias_types(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_registered_app_exposes_canonical_and_alias_types(self) -> None:
         class QueryIntelligenceApp(App):
             name = "query-intelligence"
             version = "1.0.0"
@@ -322,9 +320,7 @@ class TestAppRegistration:
         }
         assert meta.workflow_types["KeifuWorkflow"].name == "keifu"
 
-    def test_decorator_no_longer_accepts_workflow_type(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_decorator_no_longer_accepts_workflow_type(self) -> None:
         """The unreleased override parameter is gone, not deprecated."""
         with pytest.raises(TypeError):
 
@@ -337,9 +333,7 @@ class TestAppRegistration:
                 ) -> _KeifuOutput:  # pragma: no cover - not executed
                     return _KeifuOutput()
 
-    def test_bad_alias_fails_at_class_definition(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_bad_alias_fails_at_class_definition(self) -> None:
         with pytest.raises(EntryPointDeclarationError, match="canonical"):
 
             class CollidingApp(App):
@@ -358,9 +352,7 @@ class TestAppRegistration:
                 ) -> _QiOutput:  # pragma: no cover - not executed
                     return _QiOutput()
 
-    def test_worker_registers_one_class_per_type(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_worker_registers_one_class_per_type(self) -> None:
         """B1/B2: canonical and alias classes registered once, idempotently."""
         from application_sdk.execution._temporal.workflows import get_all_app_workflows
 
@@ -382,9 +374,7 @@ class TestAppRegistration:
         }
         assert first == get_all_app_workflows()
 
-    def test_subclass_does_not_inherit_parent_aliases(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_subclass_does_not_inherit_parent_aliases(self) -> None:
         """Aliases name one app's wire contract; the MRO must not propagate
         them into a subclass's registration."""
 
@@ -405,9 +395,7 @@ class TestAppRegistration:
         assert set(child_meta.workflow_types) == {"child:work"}
         assert dict(child_meta.legacy_workflow_types) == {}
 
-    def test_falsy_non_mapping_declaration_fails_at_class_definition(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_falsy_non_mapping_declaration_fails_at_class_definition(self) -> None:
         with pytest.raises(EntryPointDeclarationError, match="legacy_workflow_types"):
 
             class FalsyDeclarationApp(App):
@@ -420,9 +408,7 @@ class TestAppRegistration:
                 ) -> _QiOutput:  # pragma: no cover - not executed
                     return _QiOutput()
 
-    def test_expired_removal_version_fails_at_class_definition(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_expired_removal_version_fails_at_class_definition(self) -> None:
         """An opt-in expiry with teeth: once the SDK passes the declared
         removal version, keeping the aliases is a loud decision, not drift."""
         with pytest.raises(EntryPointDeclarationError, match="removal"):
@@ -438,9 +424,7 @@ class TestAppRegistration:
                 ) -> _QiOutput:  # pragma: no cover - not executed
                     return _QiOutput()
 
-    def test_future_removal_version_registers_normally(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_future_removal_version_registers_normally(self) -> None:
         class UnexpiredAliasApp(App):
             name = "unexpired-alias"
             legacy_workflow_types = {"OldWorkflow": "work"}
@@ -457,8 +441,6 @@ class TestAppRegistration:
 
     def test_prerelease_of_removal_version_is_not_expired(
         self,
-        clean_app_registry: object,
-        clean_task_registry: object,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A release candidate of the removal version is still pre-removal:
@@ -481,8 +463,6 @@ class TestAppRegistration:
 
     def test_prerelease_past_removal_version_is_expired(
         self,
-        clean_app_registry: object,
-        clean_task_registry: object,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr("application_sdk.version.__version__", "4.2.1rc1")
@@ -502,8 +482,6 @@ class TestAppRegistration:
     @pytest.mark.parametrize("installed", ["4.2.0a1", "4.2.0b2", "4.2.0.dev1"])
     def test_prerelease_segments_do_not_blame_the_removal_version(
         self,
-        clean_app_registry: object,
-        clean_task_registry: object,
         monkeypatch: pytest.MonkeyPatch,
         installed: str,
     ) -> None:
@@ -525,9 +503,7 @@ class TestAppRegistration:
         meta = AppRegistry.get_instance().get("prerelease-alias")
         assert "OldWorkflow" in meta.workflow_types
 
-    def test_non_numeric_removal_version_is_rejected(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_non_numeric_removal_version_is_rejected(self) -> None:
         """The removal declaration itself stays dotted-numeric: a final
         release is the only expiry the contract accepts."""
         with pytest.raises(EntryPointDeclarationError, match="dotted numeric"):
@@ -543,9 +519,7 @@ class TestAppRegistration:
                 ) -> _QiOutput:  # pragma: no cover - not executed
                     return _QiOutput()
 
-    def test_removal_version_without_aliases_is_ignored(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_removal_version_without_aliases_is_ignored(self) -> None:
         class NoAliasExpiryApp(App):
             name = "no-alias-expiry"
             legacy_workflow_types_removal_version = "0.0.1"
@@ -559,9 +533,7 @@ class TestAppRegistration:
         meta = AppRegistry.get_instance().get("no-alias-expiry")
         assert set(meta.workflow_types) == {"no-alias-expiry:work"}
 
-    def test_postgres_like_mixed_app_keeps_all_existing_workflow_types(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_postgres_like_mixed_app_keeps_all_existing_workflow_types(self) -> None:
         """A run() + crawler + miner app must keep its established type set."""
 
         class PostgresLikeApp(App):
@@ -593,7 +565,7 @@ class TestAppRegistration:
 
 
 @pytest.fixture
-def _qi_app(clean_app_registry: object, clean_task_registry: object):  # type: ignore[no-untyped-def]
+def _qi_app():  # type: ignore[no-untyped-def]
     """Register a two-entry-point app with aliases and point the handler at it."""
     from application_sdk.handler import service as svc
 
@@ -651,9 +623,7 @@ class TestResolveOutputType:
 
 
 class TestImplicitBareTypeSelector:
-    def test_bare_app_name_in_body_selector_reaches_run(
-        self, clean_app_registry: object, clean_task_registry: object
-    ) -> None:
+    def test_bare_app_name_in_body_selector_reaches_run(self) -> None:
         """A legacy body selector carrying the bare app name must keep
         reaching the implicit run() entry point on a mixed app."""
         from application_sdk.handler import service as svc

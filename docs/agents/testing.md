@@ -156,6 +156,14 @@ them to every test through an autouse fixture, so a test needs no reset of its
 own. Request them by name only where ordering matters — a fixture that
 registers an app must run after the reset.
 
+Do not add a `setup_method` / `teardown_method`, `try`/`finally`, or fixture
+whose job is `AppRegistry.reset()`, `TaskRegistry.reset()` or
+`clear_infrastructure()`. pytest runs the conftest autouse fixtures before a
+class's `setup_method` and tears them down after `teardown_method`, so each
+test already starts and ends with both registries and the infrastructure
+context empty. Call a reset inside a test only when the reset is the behaviour
+under test (an app that is no longer registered, a cleared context).
+
 ## What SDK Review Checks for Tests
 
 The reviewer enforces these test rules (G4 guardrail):

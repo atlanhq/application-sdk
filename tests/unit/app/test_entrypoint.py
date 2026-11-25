@@ -173,10 +173,6 @@ class TestEntrypointContractErrors:
 class TestEntrypointAppRegistration:
     """Tests for App subclass auto-registration with @entrypoint methods."""
 
-    @pytest.fixture(autouse=True)
-    def _reset_registries(self, clean_app_registry, clean_task_registry) -> None:  # type: ignore[no-untyped-def]
-        pass
-
     def test_app_with_entrypoint_auto_registers(self) -> None:
         """An App with @entrypoint methods registers in the AppRegistry."""
 
@@ -423,10 +419,6 @@ class _BetaOutput(Output):
 
 class TestMixedEntrypointRegistration:
     """Tests for App registration when run() and @entrypoint methods coexist."""
-
-    @pytest.fixture(autouse=True)
-    def _reset_registries(self, clean_app_registry, clean_task_registry) -> None:  # type: ignore[no-untyped-def]
-        pass
 
     # ── Scenario 1: run() only ────────────────────────────────────────────
 

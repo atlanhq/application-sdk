@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.app import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import (
     TaskDeclarationError,
     _load_default_schedule_to_close_seconds,
@@ -117,14 +116,6 @@ class TestResolveActivityTimeBounds:
 
 
 class TestTaskDeclaration:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_unset_by_default_so_todays_behaviour_is_unchanged(self) -> None:
         class _App(App):
             @task(timeout_seconds=600)

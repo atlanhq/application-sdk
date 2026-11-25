@@ -328,20 +328,16 @@ class TestResolveCredentialFile:
         """A started app's deployment store is reused, not rebuilt per call."""
         from application_sdk.infrastructure.context import (
             InfrastructureContext,
-            clear_infrastructure,
             set_infrastructure,
         )
 
         deployment_store = object()
         set_infrastructure(InfrastructureContext(storage=deployment_store))  # type: ignore[arg-type]
-        try:
-            result = await resolve_credential_file(
-                "objectstore://kerberos/krb5.conf",
-                "krb5.conf",
-                raise_on_error=True,
-            )
-        finally:
-            clear_infrastructure()
+        result = await resolve_credential_file(
+            "objectstore://kerberos/krb5.conf",
+            "krb5.conf",
+            raise_on_error=True,
+        )
 
         mock_create_store.assert_not_called()
         mock_download.assert_awaited_once_with(

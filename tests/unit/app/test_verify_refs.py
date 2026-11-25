@@ -15,7 +15,6 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StoreTarget
@@ -76,17 +75,7 @@ def _make_app(*, upstream: object | None = None) -> App:
     return app
 
 
-class _ResetsRegistries:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-
-class TestVerifyRefs(_ResetsRegistries):
+class TestVerifyRefs:
     async def test_all_present_returns_the_counts(self) -> None:
         app = _make_app()
         refs = [_ref(e) for e in ("database", "schema", "table", "column")]
@@ -388,7 +377,7 @@ class TestVerifyRefs(_ResetsRegistries):
         head.assert_not_awaited()
 
 
-class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
+class TestVerifyRefsFeedsTheStallWatchdog:
     """``verify_refs`` takes the ADR-0018 backstop instead of a duration budget
     (pinned in ``test_framework_task_timeouts.py``), which is only safe because
     the loop emits. These are the hooks that make it emit."""
@@ -441,7 +430,7 @@ class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
         assert progress_marks.count("storage.verify_ref") == 0
 
 
-class TestVerifyRefsWithManifest(_ResetsRegistries):
+class TestVerifyRefsWithManifest:
     """FND-3762: a manifest-carrying directory ref is checked by its manifest.
 
     The manifest is written last, so its presence is the proof the hand-off
