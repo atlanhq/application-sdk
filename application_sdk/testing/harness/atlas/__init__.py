@@ -59,6 +59,7 @@ from application_sdk.testing.harness.expectations import (
     LineageEdge,
     LineageEdgeCounts,
     LocatedName,
+    sampled_qualified_names,
 )
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
@@ -628,52 +629,30 @@ async def sample_qualified_names(
         before this split it was also what a failed search returned, which made
         the location check pass silently on an Atlas outage.
     """
-    from pyatlan.model.assets import Asset  # noqa: PLC0415
-    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
-
-    label = f"qualified-name samples under {connection_qualified_name}"
-    started = time.monotonic()
-    if not type_names:
-        name, attempts, elapsed = _one_shot(label, started)
-        return Settled(label=name, attempts=attempts, elapsed=elapsed, value={})
-    prefix = f"{connection_qualified_name}/"
-    connection_qn = connection_qualified_name
-
-    async def _sample_one(type_name: str) -> list[str]:
-        request = (
-            FluentSearch()
-            .where(FluentSearch.active_assets())
-            .where(Asset.QUALIFIED_NAME.startswith(prefix))
-            .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
-            .where(Asset.TYPE_NAME.eq(type_name))
-            .include_on_results(Asset.QUALIFIED_NAME)
-            .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
-        ).to_request()
-        request.dsl.size = per_type
-        results = await client.asset.search(request)
-        page = results.current_page() or []
-        # Asset.qualified_name is str | None; the `if qn` narrows it to str so
-        # the return stays list[str], and the len cap enforces per_type without
-        # a trailing slice.
-        qns: list[str] = []
-        for asset in page:
-            qn = asset.qualified_name
-            if qn:
-                qns.append(qn)
-            if len(qns) >= per_type:
-                break
-        return qns
-
-    try:
-        sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))
-    except Exception as error:  # noqa: BLE001 — _unreadable reports the failure as a typed Settled result
-        return _unreadable(label, started, error)
-    name, attempts, elapsed = _one_shot(label, started)
+    reading = await _sample_located(
+        client,
+        connection_qualified_name,
+        type_names,
+        ancestor_attributes=(),
+        per_type=per_type,
+        label=f"qualified-name samples under {connection_qualified_name}",
+    )
+    if isinstance(reading, Indeterminate):
+        return Indeterminate(
+            label=reading.label,
+            attempts=reading.attempts,
+            elapsed=reading.elapsed,
+            cause=reading.cause,
+            transient_failures=reading.transient_failures,
+        )
     return Settled(
-        label=name,
-        attempts=attempts,
-        elapsed=elapsed,
-        value=dict(zip(type_names, sampled, strict=True)),
+        label=reading.label,
+        attempts=reading.attempts,
+        elapsed=reading.elapsed,
+        value={
+            type_name: sampled_qualified_names(sample)
+            for type_name, sample in reading.value.items()
+        },
     )
 
 
@@ -720,10 +699,33 @@ async def sample_located_names(
         search could not be read, for the reason given on
         :func:`sample_qualified_names`.
     """
+    return await _sample_located(
+        client,
+        connection_qualified_name,
+        type_names,
+        ancestor_attributes=ancestor_attributes,
+        per_type=per_type,
+        label=f"located-name samples under {connection_qualified_name}",
+    )
+
+
+async def _sample_located(
+    client: AsyncAtlanClient,
+    connection_qualified_name: str,
+    type_names: Sequence[str],
+    *,
+    ancestor_attributes: Sequence[Sequence[str]],
+    per_type: int,
+    label: str,
+) -> Reading[Mapping[str, Sequence[LocatedName]]]:
+    """The one search behind both qualified-name samplers.
+
+    :func:`sample_qualified_names` is this with no ancestors, projected to bare
+    names, so the query the location check depends on is written once.
+    """
     from pyatlan.model.assets import Asset  # noqa: PLC0415
     from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
 
-    label = f"located-name samples under {connection_qualified_name}"
     started = time.monotonic()
     if not type_names:
         name, attempts, elapsed = _one_shot(label, started)

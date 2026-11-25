@@ -81,6 +81,7 @@ __all__ = [
     "evaluate_locations",
     "normalise_attribute_expectations",
     "normalise_attribute_expectations_at",
+    "sampled_qualified_names",
 ]
 
 #: :attr:`Finding.expectation` value marking a finding that exists because a
@@ -140,6 +141,25 @@ class LocatedName:
     qualified_name: str
     ancestors: tuple[str, ...] = ()
     name: str | None = None
+
+
+def sampled_qualified_names(sample: Sequence[str | LocatedName]) -> list[str]:
+    """The bare qualified names of a depth sample, whichever shape it holds.
+
+    The one projection from a :data:`SampleRead` entry to its qualified name, so
+    every reader that only wants the names (a log line, a settled outcome) agrees
+    on it.
+
+    Args:
+        sample: Sampled entries, as plain qualified names or :class:`LocatedName`.
+
+    Returns:
+        Each entry's qualified name, in sample order.
+    """
+    return [
+        entry.qualified_name if isinstance(entry, LocatedName) else entry
+        for entry in sample
+    ]
 
 
 #: One per-type sample of qualified names, or the fact that it could not be

@@ -161,7 +161,6 @@ from application_sdk.testing.harness.expectations import (
     Finding,
     LineageEdge,
     LineageEdgeRead,
-    LocatedName,
     SampleRead,
     Unreadable,
     evaluate_attributes,
@@ -171,6 +170,7 @@ from application_sdk.testing.harness.expectations import (
     evaluate_locations,
     normalise_attribute_expectations,
     normalise_attribute_expectations_at,
+    sampled_qualified_names,
 )
 from application_sdk.testing.harness.identity import (
     Minter,
@@ -4873,12 +4873,7 @@ class BaseE2ETest:
                 {
                     name: value
                     if isinstance(value, Unreadable)
-                    else [
-                        entry.qualified_name
-                        if isinstance(entry, LocatedName)
-                        else entry
-                        for entry in value
-                    ]
+                    else sampled_qualified_names(value)
                     for name, value in sample_reads.items()
                 },
             )
@@ -5066,10 +5061,7 @@ class BaseE2ETest:
             connection_read=connection_read,
             lineage_read=lineage_read,
             asset_qn_samples={
-                name: [
-                    entry.qualified_name if isinstance(entry, LocatedName) else entry
-                    for entry in value
-                ]
+                name: sampled_qualified_names(value)
                 for name, value in samples.items()
                 if not isinstance(value, Unreadable)
             },
