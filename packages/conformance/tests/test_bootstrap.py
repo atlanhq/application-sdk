@@ -896,7 +896,10 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
 #: Release Gate's workflow also holds the job that re-runs it on a review
 #: verdict (FND-5321), so the gate is named by its job id.
 _MERGE_GROUP_SKIPPING_GATES = {
-    "release-gate.yaml": ("release-gate", "github.event_name == 'pull_request'"),
+    "release-gate.yaml": (
+        "release-gate",
+        "github.event_name == 'pull_request_target'",
+    ),
 }
 
 
@@ -921,7 +924,6 @@ def test_gate_skips_merge_group_at_job_level(name: str, gate: tuple[str, str]) -
 
 _SUPERSEDING_CALLERS = {
     "conformance.yaml": "conformance-",
-    "release-gate.yaml": "release-gate-",
     "generated-freshness.yaml": "generated-freshness-caller-",
 }
 
@@ -944,6 +946,24 @@ def test_caller_supersedes_only_on_a_new_pr_commit(name: str, prefix: str) -> No
         + '\'["opened", "synchronize"]\'), github.event.action)'
         + " && github.ref || github.run_id }}",
         "cancel-in-progress": "${{ github.event_name == 'pull_request' && "
+        "github.event.action == 'synchronize' }}",
+    }
+
+
+def test_release_gate_supersedes_only_on_a_new_pr_commit() -> None:
+    """The same rule as the callers above (FND-3314), for the one caller on
+    `pull_request_target` (FND-5321). There `github.ref` is the BASE branch,
+    which every pull request shares, so the group is keyed on the pull
+    request number instead: keyed on the ref, one PR's push would cancel
+    every other PR's gate."""
+    concurrency = yaml.safe_load(render("release-gate.yaml"))["concurrency"]
+    assert concurrency == {
+        "group": "release-gate-"
+        + "${{ github.event_name == 'pull_request_target' && contains(fromJSON("
+        + '\'["opened", "synchronize"]\'), github.event.action)'
+        + " && format('pr-{0}', github.event.pull_request.number)"
+        + " || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request_target' && "
         "github.event.action == 'synchronize' }}",
     }
 
