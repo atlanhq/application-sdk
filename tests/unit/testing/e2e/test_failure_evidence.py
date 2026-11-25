@@ -32,12 +32,11 @@ import pytest
 from application_sdk.testing.e2e import BaseE2ETest
 from application_sdk.testing.e2e.base import FullDAGOutcome
 from application_sdk.testing.harness.automation_engine import (
-    DAGNodeResult,
     DAGNodeStatus,
-    DAGRunResult,
     DAGRunStatus,
 )
 from application_sdk.testing.harness.evidence import PLACEHOLDER
+from tests.unit.testing._ae_fakes import node, run_result
 
 _CONN_QN = "default/postgres/1700000000042"
 
@@ -67,19 +66,17 @@ def _suite(tmp_path: Path) -> _Suite:
 
 def _outcome(*, failed: bool = True) -> FullDAGOutcome:
     return FullDAGOutcome(
-        ae_result=DAGRunResult(
+        ae_result=run_result(
+            DAGRunStatus.FAILED if failed else DAGRunStatus.SUCCEEDED,
+            node(
+                "extract",
+                DAGNodeStatus.FAILED,
+                started_at_ms=1_000,
+                completed_at_ms=3_000,
+                error="auth failed for password=hunter2",
+            ),
             run_id="ae-run-1",
             workflow_slug="postgres-e2e-1",
-            status=DAGRunStatus.FAILED if failed else DAGRunStatus.SUCCEEDED,
-            nodes=[
-                DAGNodeResult(
-                    name="extract",
-                    status=DAGNodeStatus.FAILED,
-                    started_at_ms=1_000,
-                    completed_at_ms=3_000,
-                    error_message="auth failed for password=hunter2",
-                ),
-            ],
         ),
         connection_qualified_name=_CONN_QN,
         connection_in_atlas=False,

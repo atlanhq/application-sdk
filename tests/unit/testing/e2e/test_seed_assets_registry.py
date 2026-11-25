@@ -27,7 +27,7 @@ refuses that in every request shape, and since FND-3569 the same
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -43,6 +43,7 @@ from application_sdk.testing.harness.teardown import (
     ConnectionDeleteReport,
     DeleteType,
 )
+from tests.unit.testing._ae_fakes import FakeAE
 
 _RUN_QN = "default/openapi/1787587123106596"
 _SEED_QN = "default/snowflake/1787587123106596"
@@ -56,43 +57,36 @@ def _run_id(qualified_name: str) -> str:
     return f"run-{qualified_name}"
 
 
-class _RecordingAE:
-    """Stand-in AE client that serves scripted ``delete`` node outputs.
+def _delete_node_outputs(
+    harness: BaseE2ETest,
+    scripted: dict[str, dict[str, Any] | BaseException],
+) -> Callable[[str, str], dict[str, Any] | BaseException]:
+    """Scripted ``delete`` node outputs, keyed by AE run id.
 
-    Only :meth:`get_node_outputs` is reached: ``delete_connection`` itself is
-    patched out, so this is what teardown's storage read-back talks to.
+    Only ``get_node_outputs`` is reached: ``delete_connection`` itself is
+    patched out, so this is what teardown's storage read-back talks to. An
+    unscripted run is an FND-3569+ connection-delete that purged the seed roots
+    of the one connection it was pointed at — and only those, so a root checked
+    against another connection's run reads as missing.
     """
 
-    def __init__(
-        self,
-        harness: BaseE2ETest,
-        scripted: dict[str, dict[str, Any] | BaseException],
-    ) -> None:
-        self._harness = harness
-        self._scripted = scripted
-        self.reads: list[tuple[str, str]] = []
-
-    async def get_node_outputs(self, run_id: str, node_id: str) -> dict[str, Any]:
-        self.reads.append((run_id, node_id))
-        scripted = self._scripted.get(run_id)
-        if isinstance(scripted, BaseException):
-            raise scripted
-        if scripted is not None:
-            return scripted
-        # An FND-3569+ connection-delete that purged the seed roots of the one
-        # connection it was pointed at — and only those, so a root checked
-        # against another connection's run reads as missing.
+    def _outputs(run_id: str, _node_id: str) -> dict[str, Any] | BaseException:
+        if run_id in scripted:
+            return scripted[run_id]
         return {
             "storage_objects_deleted": 3,
             "storage_deleted_by_prefix": {
                 f"{root}/": 3
-                for root, seeded_qn in self._harness._seeded_prefixes.items()
+                for root, seeded_qn in harness._seeded_prefixes.items()
                 if run_id == _run_id(seeded_qn)
             },
         }
 
-    async def aclose(self) -> None:
-        """Teardown closes the pool last; nothing to release here."""
+    return _outputs
+
+
+def _reads(ae: FakeAE) -> list[tuple[str, str]]:
+    return ae.args("get_node_outputs", "run_id", "node_id")
 
 
 @asynccontextmanager
@@ -195,7 +189,7 @@ def _harness(
 
     harness = _SeedingE2ETest()
     harness.run_id = 1787587123
-    harness._ae = _RecordingAE(harness, node_outputs or {})
+    harness._ae = FakeAE(node_outputs=_delete_node_outputs(harness, node_outputs or {}))
     harness.connection_qualified_name = _RUN_QN
     # A run that submitted its DAG against its own connection, which is what
     # every test here but ``TestTeardownSkipsAConnectionThatWasNeverCreated`` is
@@ -442,7 +436,7 @@ class TestTeardownIncludesSeededConnections:
         ae = harness._ae
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
-        assert ae.reads == []
+        assert _reads(ae) == []
         assert warnings == []
 
     def test_an_absent_app_falls_back_to_the_runner_purge(
@@ -515,7 +509,7 @@ class TestTeardownConfirmsTheSeedRootPurge:
         ae = harness._ae
         harness.seed_assets(_spec())
         harness.teardown_method(method=None)
-        assert ae.reads == [(_run_id(_SEED_QN), _DELETE_NODE)]
+        assert _reads(ae) == [(_run_id(_SEED_QN), _DELETE_NODE)]
         assert warnings == []
 
     def test_each_root_is_checked_against_its_own_connections_run(
@@ -540,7 +534,7 @@ class TestTeardownConfirmsTheSeedRootPurge:
         harness.seed_assets(_spec())
         harness.seed_assets(_spec(other_qn))
         harness.teardown_method(method=None)
-        assert ae.reads == [
+        assert _reads(ae) == [
             (_run_id(_SEED_QN), _DELETE_NODE),
             (_run_id(other_qn), _DELETE_NODE),
         ]
@@ -557,7 +551,7 @@ class TestTeardownConfirmsTheSeedRootPurge:
         ae = harness._ae
         harness.seed_assets(_spec())
         harness.teardown_method(method=None)
-        assert [run_id for run_id, _node in ae.reads] == [_run_id(_SEED_QN)]
+        assert ae.args("get_node_outputs", "run_id") == [_run_id(_SEED_QN)]
 
     def test_a_pre_fnd3569_delete_warns_with_the_root_and_run(
         self, monkeypatch: pytest.MonkeyPatch
@@ -652,7 +646,7 @@ class TestTeardownConfirmsTheSeedRootPurge:
         harness.seed_assets(_spec())
         harness.teardown_method(method=None)
         assert purged == [_SEED_QN]
-        assert ae.reads == []
+        assert _reads(ae) == []
         left = [w for w in warnings if f"{_SEED_PREFIX}/" in w]
         assert len(left) == 1
         assert "run-stalled" in left[0]
@@ -735,7 +729,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         # And no runner-side purge either: the fallback exists for a delete that
         # did not complete, not for one that was never needed.
         assert purged == []
-        assert ae.reads == []
+        assert _reads(ae) == []
 
     def test_a_submitted_run_still_deletes_its_own_connection(
         self, monkeypatch: pytest.MonkeyPatch
@@ -785,7 +779,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         assert harness.deleted_connections == [_SEED_QN]
         assert harness.recorded_delete_plans[0].ae_workflow_name.endswith("-teardown-2")
         # Its seed root is still confirmed against its own delete run.
-        assert ae.reads == [(_run_id(_SEED_QN), _DELETE_NODE)]
+        assert _reads(ae) == [(_run_id(_SEED_QN), _DELETE_NODE)]
         assert warnings == []
 
     def test_the_skipped_delete_is_logged_rather_than_silent(

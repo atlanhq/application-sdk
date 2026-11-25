@@ -16,6 +16,14 @@
 - The CI script tests (`.github/scripts/tests/`) run under `.github/scripts/pytest.ini`, not the root config. Its `pythonpath` makes every script and every shared helper there (`_workflows.py`, `_frozen_clock.py`, `_gha_expr.py`, …) importable by name, so never add a `sys.path.insert` for either directory (`test_pytest_ini.py` fails one). Read workflow YAML through `_workflows.py` instead of a per-file `_load` / `_job` / `_step`. See `docs/standards/ci.md` ("Running the script tests").
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
+## Shared Harness Doubles
+
+The four harness seams each have one shared double under `tests/unit/testing/`: `_atlas_fakes.py` (pyatlan), `_cluster_fakes.py` (Kubernetes), `_temporal_fakes.py` (Temporal) and `_ae_fakes.py` (Automation Engine). Use them; do not write a per-file `_FakeAE` or a private `_node` / `_succeeded` / `_result` builder.
+
+- `FakeAE` implements every public `AEClient` method with the client's parameters, records each call's bound arguments (`ae.calls_to(m)`, `ae.args(m, *names)`, `ae.methods`), and serves scripted `poll_native_status` readings in order. `test_ae_fakes.py` fails when a client method is added or its signature changes, so update the fake in the same PR.
+- Build `DAGRunResult` / `DAGNodeResult` with `node()`, `run_result()`, `succeeded()`, `failed()`, `stalled()` and `numbered()` from the same module.
+- A test that needs failure behaviour the constructor cannot script (for example, a submit that reports a run id and then raises) uses a thin `FakeAE` subclass that calls `super()`.
+
 ## Shared State Under xdist
 
 An xdist worker runs many tests in one process, and threads from earlier tests
