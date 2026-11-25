@@ -26,7 +26,7 @@ import re
 import time
 import urllib.parse
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -494,6 +494,7 @@ def compute_facts(
     files: list[FileDiff],
     cfg: Config,
     tests_changed: list[FileDiff] | None = None,
+    test_text: tuple[Mapping[str, str | None], Mapping[str, str | None]] | None = None,
 ) -> code_facts.Facts:
     """The regression and history facts for the files under review, in review
     order. No model call; the history half makes at most
@@ -502,12 +503,14 @@ def compute_facts(
 
     `tests_changed` are the test files this round changed, taken before file
     selection: a deleted test file is skipped by selection ("deletion only"),
-    and it is exactly a weakened expectation FP15 asks about."""
+    and it is exactly a weakened expectation FP15 asks about. `test_text` are
+    their base and head copies (`weakened_expectations`)."""
     fx = code_facts.Facts()
     if cfg.facts.regression:
         fx.symbols = code_facts.regression_symbols(ws, files)
         fx.expectations = code_facts.weakened_expectations(
-            files if tests_changed is None else tests_changed
+            files if tests_changed is None else tests_changed,
+            *(test_text or (None, None)),
         )
         fx.regression_read = True
     if cfg.facts.history and files:
@@ -957,20 +960,41 @@ def run(
     # The weakened-expectation facts are read from the round's test files before
     # selection, which skips a test file deleted outright.
     tests_changed = changed_tests(all_files, cfg)
+    # Both copies of each changed test file, so the assertions are compared as
+    # syntax trees, not lines: a re-wrapped `assert` weakens nothing (FND-5316).
+    # The base copies are shared with triage below.
+    old_text: dict[str, str | None] = {}
+    test_new: dict[str, str | None] = {}
+    if cfg.facts.regression:
+        for fd in tests_changed[: cfg.max_changed_files]:
+            old_path = fd.old_path or fd.path
+            old_text[old_path] = (
+                "" if fd.status == "added" else gh.file_at(old_path, range_base)
+            )
+            test_new[fd.path] = (
+                "" if fd.status == "deleted" else head_text.get(fd.path) or None
+            )
     weakened = (
-        code_facts.weakened_expectations(tests_changed) if cfg.facts.regression else []
+        code_facts.weakened_expectations(tests_changed, old_text, test_new)
+        if cfg.facts.regression
+        else []
     )
     weakened_paths = {e.path for e in weakened}
     res.skipped_files = sel.skipped
 
     # Mechanical change is proven and set aside before any model call (triage.py):
     # a 100-file rename or reformat costs a summary line, not 100 files of review.
-    old_text: dict[str, str | None] = {}
     for fd in sel.reviewed[: cfg.max_changed_files]:
-        if fd.path.endswith(".py") and fd.status == "modified":
+        if (
+            fd.path.endswith(".py")
+            and fd.status == "modified"
+            and fd.path not in old_text
+        ):
             old_text[fd.path] = gh.file_at(fd.path, range_base)
     res.triage = triage(
-        sel.reviewed, old_text, {k: (v or None) for k, v in head_text.items()}
+        sel.reviewed,
+        {fd.path: old_text.get(fd.path) for fd in sel.reviewed if fd.path in old_text},
+        {k: (v or None) for k, v in head_text.items()},
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
@@ -1119,6 +1143,7 @@ def run(
                 _whole_files([fd for b in bundles for fd in b.files]),
                 cfg,
                 tests_changed=tests_changed,
+                test_text=(old_text, test_new),
             )
             res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
             trace.line(f"regression: {fx.regression_line()}")
@@ -1453,6 +1478,13 @@ def run(
             # No answer at all (FND-5316): its 0 findings are not a clean read,
             # so the review is incomplete and the next `/review` retries it.
             note = no_review_note(b, bundles)
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.shallow:
+            # Stopped by the context ceiling before it could read the code
+            # around its diff (FND-5316): not a review of its files.
+            note = shallow_note(b, bundles, "/review")
             trace.line(note)
             res.incomplete.append(note)
             failed_paths.extend(bundle_paths.get(b.label, []))
@@ -2478,17 +2510,41 @@ def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
     )
 
 
+def shallow_note(result: BundleResult, bundles: list[Bundle], command: str) -> str:
+    """The incomplete reason for a bundle the context ceiling stopped early
+    (`BundleResult.shallow`): it read little past its own diff, so what it
+    found is not a full review of its files, and they are retried."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    return (
+        f"Bundle `{result.label}` was reviewed shallowly: it reached the context "
+        f"ceiling at turn {result.ceiling_turn} of {result.turn_budget}, so its "
+        f"{len(result.findings) + len(result.unplaced)} finding(s) do not cover it "
+        f"({shown}); `{command}` retries it"
+    )
+
+
 # Every skip reason past the cap starts with this (`UNREAD_REASONS`): a state
 # written by an earlier version says "bundle cap (lowest-risk code, …)".
 BUNDLE_CAP = "bundle cap"
 MAX_RANGES_SHOWN = 6  # line ranges named per partly reviewed file
 
 
+# The most diff a re-packed bundle may hold (estimated tokens). It was half
+# the context ceiling, 30,000 at a 60,000 ceiling; the ceiling is now 200,000
+# (FND-5316), and a 100,000-token diff would start a bundle near it with no room
+# to read anything. Kept at the old value: past `max_bundles` the fix is more
+# bundles, not deeper ones.
+MAX_REPACK_DIFF_TOKENS = 30_000
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     """Bundles in review order — riskiest first — within `max_bundles`.
 
-    Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed. If that is still over the cap,
+    Past the cap, bundles are first re-packed larger (up to
+    `MAX_REPACK_DIFF_TOKENS` of diff) so every file still gets reviewed. If that is still over the cap,
     the code the app ships (app, then contract, build files and CI) and the
     rest (tests, then anything else) are packed apart, in that order
     (FND-5316): a test file no longer rides in the bundle of the source it
@@ -2499,10 +2555,7 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
-        bigger = min(
-            max(total // cfg.max_bundles + 1, 9000),
-            cfg.limits.context_limit_tokens // 2,
-        )
+        bigger = min(max(total // cfg.max_bundles + 1, 9000), MAX_REPACK_DIFF_TOKENS)
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
         if len(bundles) > cfg.max_bundles:
             diffs = cast("list[FileDiff]", files)
