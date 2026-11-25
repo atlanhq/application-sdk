@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 444,
-    "warning": 5493
+    "warning": 5460
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -79,7 +79,7 @@
       "warning:reportUnknownMemberType": 9
     },
     ".github/scripts/discover_org_consumers.py": {
-      "warning:reportUnknownMemberType": 10
+      "warning:reportUnknownMemberType": 7
     },
     ".github/scripts/docker_registry_mirror.py": {
       "error:reportOptionalMemberAccess": 1,
@@ -263,7 +263,7 @@
       "warning:reportUnknownMemberType": 22
     },
     ".github/scripts/renovate_rebase_conflicted.py": {
-      "warning:reportUnknownMemberType": 11
+      "warning:reportUnknownMemberType": 8
     },
     ".github/scripts/renovate_refusal_alarm.py": {
       "warning:reportUnknownMemberType": 9
@@ -445,14 +445,14 @@
       "warning:reportUnknownMemberType": 86
     },
     ".github/scripts/tests/test_discover_org_consumers.py": {
-      "warning:reportUnknownMemberType": 65
+      "warning:reportUnknownMemberType": 50
     },
     ".github/scripts/tests/test_dispatch_vuln_triage.py": {
       "warning:reportUnknownMemberType": 11
     },
     ".github/scripts/tests/test_docker_registry_mirror.py": {
       "error:reportAttributeAccessIssue": 4,
-      "warning:reportUnknownMemberType": 24
+      "warning:reportUnknownMemberType": 18
     },
     ".github/scripts/tests/test_e2e_branch_recheck.py": {
       "warning:reportUnknownMemberType": 9
@@ -649,7 +649,7 @@
     },
     ".github/scripts/tests/test_renovate_rebase_conflicted.py": {
       "error:reportArgumentType": 1,
-      "warning:reportUnknownMemberType": 15
+      "warning:reportUnknownMemberType": 9
     },
     ".github/scripts/tests/test_renovate_refusal_alarm.py": {
       "warning:reportUnknownMemberType": 18

@@ -38,13 +38,6 @@ import sys
 #: buildx's marker for a non-platform index entry (provenance / SBOM).
 _UNKNOWN = "unknown"
 
-#: Media types whose payload is a single image manifest rather than an index.
-#: Present for the error message only — the shape is detected structurally.
-_MANIFEST_TYPES = (
-    "application/vnd.oci.image.manifest.v1+json",
-    "application/vnd.docker.distribution.manifest.v2+json",
-)
-
 
 class PlatformAssertError(RuntimeError):
     """The manifest does not carry the platforms that were asked for."""

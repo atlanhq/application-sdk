@@ -83,6 +83,9 @@ two auto-fixable rules:
 - **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
   this is never mechanical:
+  - Python contract build hooks under `contract/templates/` run with system
+    Python before the app's SDK environment is installed. Leave their stdlib
+    JSON calls unchanged; they cannot rely on the SDK-provided `orjson`.
   - A compatibility fallback is already compliant: keep `json.dumps(obj)` when
     it is in an `except TypeError` handler for a `try` body that attempts
     `orjson.dumps(obj)` with the same argument expression. The normal path uses

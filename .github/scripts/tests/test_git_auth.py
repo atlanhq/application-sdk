@@ -54,7 +54,9 @@ def test_token_rewrite_covers_both_atlanhq_remote_forms_in_real_git(
     tmp_path: Path, remote: str
 ) -> None:
     got = _git(
-        ["ls-remote", "--get-url", remote], tmp_path, git_auth.git_auth_env(TOKEN)
+        ["ls-remote", "--get-url", remote],
+        tmp_path,
+        git_auth.rewrite_env(git_auth.token_rewrite(TOKEN)),
     )
     assert got.strip() == AUTHED
     assert _git(["ls-remote", "--get-url", remote], tmp_path).strip() == remote
@@ -64,7 +66,9 @@ def test_token_rewrite_covers_both_atlanhq_remote_forms_in_real_git(
 def test_token_rewrite_leaves_other_remotes_alone(tmp_path: Path) -> None:
     remote = "https://github.com/someone-else/dep.git"
     got = _git(
-        ["ls-remote", "--get-url", remote], tmp_path, git_auth.git_auth_env(TOKEN)
+        ["ls-remote", "--get-url", remote],
+        tmp_path,
+        git_auth.rewrite_env(git_auth.token_rewrite(TOKEN)),
     )
     assert got.strip() == remote
 
@@ -75,7 +79,7 @@ def test_rewrite_keeps_config_entries_the_env_already_carries(tmp_path: Path) ->
         "GIT_CONFIG_KEY_0": "user.name",
         "GIT_CONFIG_VALUE_0": "kept",
     }
-    env = {**base, **git_auth.git_auth_env(TOKEN, base)}
+    env = {**base, **git_auth.rewrite_env(git_auth.token_rewrite(TOKEN), base)}
     assert env["GIT_CONFIG_COUNT"] == "3"
     assert _git(["config", "user.name"], tmp_path, env).strip() == "kept"
 

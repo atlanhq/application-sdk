@@ -97,14 +97,6 @@ class FileDiff:
     def deletions(self) -> int:
         return sum(1 for h in self.hunks for ln in h.lines if ln.kind == "-")
 
-    def right_text(self) -> dict[int, str]:
-        return {
-            ln.new_no: ln.text
-            for h in self.hunks
-            for ln in h.lines
-            if ln.kind != "-" and ln.new_no
-        }
-
     def render(self, max_lines: int | None = None) -> str:
         """The diff as the model sees it: RIGHT-side line numbers on every
         non-deleted line, so a comment's line is read off the page rather
