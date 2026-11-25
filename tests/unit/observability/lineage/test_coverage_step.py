@@ -178,6 +178,7 @@ def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
     pending = got["pending"]
     assert (pending["refCount"], pending["resolvableRefCount"]) == (2, 2)
     assert pending["processQualifiedName"] == f"{CONN}/p1"
+    assert pending["refConnectors"] == ["snowflake"]
     assert pending["inputCount"] == 2 and got["internal"]["inputCount"] == 1
     assert (pending["columnRefCount"], pending["resolvableColumnRefCount"]) == (1, 1)
     assert summary["totals"]["withLineage"] == 9
