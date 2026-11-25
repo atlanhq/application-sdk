@@ -496,7 +496,8 @@ still on disk).
 
 **Release Gate requires that status** (FND-5321). A pull request merges only
 when the reviewer App's newest `connector-reviewer` status on its head is
-`success`: every finding fixed or dismissed, or `/review waive` for that head.
+`success`: every finding fixed or dismissed, `/review waive` for that head, or
+`/review` answering `exempt`.
 `pending` reads "still running", `error` "re-run `/review`", `failure` names
 the open findings (the gate's job summary lists each one's id, severity, title,
 principle and suggestion, read from the reviewer's own summary comment), and no

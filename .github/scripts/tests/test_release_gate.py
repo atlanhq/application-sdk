@@ -17,6 +17,7 @@ application-sdk checkout, never from the pull request.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import re
 import shutil
@@ -25,7 +26,9 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+import connector_reviewer.github as reviewer_github
 import gate_check_verdict
+import pr_test_command
 import pytest
 import release_gate as rg
 import yaml
@@ -38,7 +41,8 @@ from conformance.bootstrap.render import (
 from connector_reviewer.exempt import DOCS, VERSION_BUMP, Exemption
 from connector_reviewer.findings import Finding, PRState
 from connector_reviewer.github import STATUS_CONTEXT, bot_login
-from pr_test_command import GitHub
+from connector_reviewer.review import SUMMARY_MARKER
+from pr_test_command import GitHub, GitHubError
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRIPTS = REPO_ROOT / ".github" / "scripts"
@@ -47,6 +51,8 @@ OTHER = "b" * 40
 BUMP = "bump-version-main"
 ACTIONS_BOT = "github-actions[bot]"
 APP = "atlan-app-fleet[bot]"
+# `_gather` swaps the module attribute for a stub factory; this stays real.
+_REAL_REVIEWER_GITHUB = reviewer_github.GitHub
 
 
 def _row(
@@ -540,6 +546,101 @@ def test_rerun_uses_the_gate_check_rerun(monkeypatch: pytest.MonkeyPatch) -> Non
     calls.clear()
     assert rg.main([*argv, "--creator", "someone"]) == 0
     assert calls == []
+
+
+def test_a_rerun_that_cannot_be_made_fails_the_job(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed re-run must fail visibly: the gate would otherwise keep its
+    stale verdict with nothing on record."""
+
+    def rerun(github: GitHub, sha: str, at: datetime | None) -> bool:
+        raise GitHubError("Release Gate run 1 did not finish")
+
+    monkeypatch.setattr(gate_check_verdict, "rerun_release_gate", rerun)
+    argv = ["rerun", "--repo", "o/r", "--sha", HEAD, "--context", STATUS_CONTEXT]
+    assert rg.main([*argv, "--creator", APP]) == 1
+    assert "::error::Release Gate run 1 did not finish" in capsys.readouterr().err
+
+
+# ---- reading GitHub: the trust and fail-closed boundary of `gather` --------
+
+
+class _Rows:
+    """Stands in for pr_test_command.GitHub: only `status_rows` is read."""
+
+    rows: list[dict[str, Any]] = []
+    error: str = ""
+
+    def __init__(self, repo: str) -> None:
+        self.repo = repo
+
+    def status_rows(self, sha: str) -> list[dict[str, Any]]:
+        if self.error:
+            raise GitHubError(self.error)
+        return self.rows
+
+
+def _comment(login: str, state: PRState) -> dict[str, Any]:
+    body = f"{SUMMARY_MARKER}\nsummary\n{state.encode()}"
+    return {"id": 1, "user": {"login": login}, "body": body}
+
+
+def _gather(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    comments: list[dict[str, Any]] | None = None,
+    comments_status: int = 200,
+    rows: list[dict[str, Any]] | None = None,
+    rows_error: str = "",
+) -> rg.ReviewFacts:
+    """Run `gather` with the statuses and the reviewer's REST reads stubbed.
+    The pull request's head has moved on, so the classifier answers None
+    without a diff."""
+
+    def transport(method: str, path: str, body: object, accept: str) -> tuple[int, str]:
+        if "/issues/7/comments" in path:
+            return comments_status, json.dumps(comments or [])
+        if path.endswith("/pulls/7"):
+            return 200, json.dumps({"head": {"sha": OTHER}, "base": {"sha": OTHER}})
+        return 404, "{}"
+
+    monkeypatch.setattr(_Rows, "rows", rows or [])
+    monkeypatch.setattr(_Rows, "error", rows_error)
+    monkeypatch.setattr(pr_test_command, "GitHub", _Rows)
+    monkeypatch.setattr(
+        reviewer_github,
+        "GitHub",
+        lambda repo: _REAL_REVIEWER_GITHUB(repo, transport=transport),
+    )
+    _, facts = rg.gather("o/r", 7, HEAD, "")
+    return facts
+
+
+def test_gather_trusts_only_the_apps_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A state block in anyone else's comment is not the reviewer's state:
+    it can neither mark the PR reviewed nor supply findings."""
+    state = PRState(round=1, findings=[_finding("F-aaaaaa", "high")])
+    forged = _gather(monkeypatch, comments=[_comment("a-maintainer", state)])
+    assert not forged.reviewed and forged.findings == ()
+    real = _gather(monkeypatch, comments=[_comment(APP, state)])
+    assert real.reviewed and [f.id for f in real.findings] == ["F-aaaaaa"]
+
+
+def test_gather_fails_closed_when_the_state_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = _gather(monkeypatch, comments_status=502)
+    assert facts.unreadable and "502" in facts.unreadable
+    assert rg.decide_review(facts, HEAD)[0] is False
+
+
+def test_gather_fails_closed_when_the_statuses_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = _gather(monkeypatch, rows_error="HTTP 500")
+    assert facts.unreadable == "HTTP 500"
+    assert rg.decide_review(facts, HEAD)[0] is False
 
 
 # ---- the shim --------------------------------------------------------------
