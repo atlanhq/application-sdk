@@ -16270,6 +16270,45 @@ def test_a_gate_file_with_no_gate_finding_is_still_line_reviewed(
         assert "covered by the gate finding" not in gh.comments[0]["body"]
 
 
+def test_a_covered_gate_file_s_added_symbols_reach_no_prompt(
+    repo: Path, tmp_path: Path
+):
+    """A covered Python gate file's new function is not listed in
+    `<symbols_added_by_this_pr>` for the other files' bundles; with no gate
+    finding on it, it is listed as before."""
+    gate_py = ".github/scripts/release_gate.py"
+    old = "def check():\n    return True\n"
+    new = old + "\n\ndef skip_the_gate():\n    return False\n"
+    listed = f"{gate_py}: skip_the_gate"  # the symbols block's line, nowhere else
+    for fact, covered in (
+        (_write_fact(tmp_path, mismatches={gate_py: DRIFT}), True),
+        (_write_fact(tmp_path, name="clean.json"), False),
+    ):
+        gh = _gate_pr(
+            GATE_H1,
+            _diff_of(gate_py, old, new) + DIFF,
+            {
+                (gate_py, "b0"): old,
+                (gate_py, GATE_H1): new,
+                ("app/storage/fetch.py", GATE_H1): SRC_V2,
+            },
+        )
+        script = Script()
+        res = run(
+            gh=gh,
+            number=1,
+            root=repo,
+            cfg=cfg_for(repo),
+            principles=principles_of(repo),
+            client_factory=_factory(script),
+            gate_fact=fact,
+        )
+        assert bool(res.gate_covered) is covered
+        sent = json.dumps(script.requests) + json.dumps(script.approach_requests)
+        assert (listed in sent) is not covered, fact
+        assert "app/storage/fetch.py" in _bundle_paths(res)
+
+
 def test_covered_follows_what_reconcile_keeps_open():
     """A file is covered while its gate finding is open or raised this round;
     a dismissed gate finding covers nothing, so the line review judges the

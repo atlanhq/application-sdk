@@ -616,7 +616,8 @@ one finding per changed mismatched file, deletion and rename, head and version
 binding, `reconcile`, a two-round review, a forced resync, recheck refused, a
 hand-edited gate file as one finding and in no line-review bundle or approach
 request while the PR's other files are reviewed, a gate file with no gate
-finding still reviewed, `covered`, and
+finding still reviewed, a covered file's added symbols in no prompt, `covered`,
+and
 `gate_render.py` run in isolated mode against this repository's own bootstrap
 output) and `test_connector_reviewer_workflow.py` (the gate job holds no secret
 or App token, its checkouts, the fact's path to the review, the review job
