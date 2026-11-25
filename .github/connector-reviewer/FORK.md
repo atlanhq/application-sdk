@@ -736,6 +736,22 @@ context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
   `test_import_only_means_nothing_but_import_statements` cases that swapped `os`
   for `sys` and `a` for `b` now expect a line review, with same-module cases added.
 
+- **Weakened expectations (connector-reviewer only: lens has no facts).**
+  `facts.weakened_expectations` now takes both copies of each changed test file
+  (`review.run` reads the base copy at the reviewed range's base, shared with triage,
+  and the head copy from `head_side_text`; both call sites, the trace's facts and
+  `compute_facts`, pass them). When both parse, each function's expectations are
+  compared as syntax trees (`facts._structural`): an `assert`'s condition (its
+  message is not the expectation), `pytest.raises(...)`, and assert methods. A
+  re-wrap, reformat or reordering reports nothing; an assertion gone or changed
+  still does, with its base line. The line rules carry over: an expectation that
+  moved to a test the pull request adds is not lost, a changed one is one with the
+  same left side gained in the same function, a deleted test counts only with a
+  lost expectation, a new skip counts unless one like it was removed. Helper
+  functions in a test file are compared too, as the line rules did through the
+  hunk header. A file whose copy is missing or does not parse falls back to the
+  diff lines.
+
 ## Not changed, and worth knowing before the next change
 
 Nothing listed at the moment. The three items that were here (the test-file

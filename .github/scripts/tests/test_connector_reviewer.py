@@ -10961,6 +10961,170 @@ def test_reformatted_whitespace_is_not_a_removed_assertion():
     assert _expectations(text) == []
 
 
+# The re-wrap a formatter made in a live review (FND-5316): three `assert x, msg`
+# statements moved their parentheses from the condition to the message. The AST
+# is unchanged, and the line comparison reported "2 assertion removed, 1
+# expectation changed".
+_REWRAP_OLD = """class TestDescriptions:
+    def test_edits_reach_the_source(self) -> None:
+        self.run_and_assert_full_dag()
+        assert len(self.dag_outcomes) == len(
+            self.dag_runs
+        ), "not every configured DAG run produced an outcome"
+
+    async def assert_filtered(self, client) -> None:
+        comments = await read_comments(client)
+        assert (
+            comments.get(FILTERED.path) is None
+        ), f"the filtered asset got a comment: {comments}"
+
+    async def assert_quiet_then_off(self, client) -> None:
+        comments = await read_comments(client)
+        assert (
+            comments[TARGET.path] == TARGET.text
+        ), f"an edit made while the toggle was OFF reached the source: {comments}"
+"""
+_REWRAP_NEW = """class TestDescriptions:
+    def test_edits_reach_the_source(self) -> None:
+        self.run_and_assert_full_dag()
+        assert len(self.dag_outcomes) == len(self.dag_runs), (
+            "not every configured DAG run produced an outcome"
+        )
+
+    async def assert_filtered(self, client) -> None:
+        comments = await read_comments(client)
+        assert comments.get(FILTERED.path) is None, (
+            f"the filtered asset got a comment: {comments}"
+        )
+
+    async def assert_quiet_then_off(self, client) -> None:
+        comments = await read_comments(client)
+        assert comments[TARGET.path] == TARGET.text, (
+            f"an edit made while the toggle was OFF reached the source: {comments}"
+        )
+"""
+_REWRAP_PATH = "tests/e2e/test_description_e2e.py"
+
+
+def _rewrap_diff(new: str) -> str:
+    """The unified diff of `_REWRAP_OLD` -> `new`, as git prints it."""
+    import difflib  # noqa: PLC0415 - only these tests build a diff from two texts
+
+    body = "".join(
+        difflib.unified_diff(
+            _REWRAP_OLD.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            f"a/{_REWRAP_PATH}",
+            f"b/{_REWRAP_PATH}",
+        )
+    )
+    return f"diff --git a/{_REWRAP_PATH} b/{_REWRAP_PATH}\n" + body
+
+
+def test_a_rewrapped_assert_is_not_a_weakened_expectation():
+    files = parse_unified_diff(_rewrap_diff(_REWRAP_NEW))
+    # The diff lines alone still misread it (the fallback when a copy is missing).
+    assert facts_mod.weakened_expectations(files) != []
+    assert (
+        facts_mod.weakened_expectations(
+            files, {_REWRAP_PATH: _REWRAP_OLD}, {_REWRAP_PATH: _REWRAP_NEW}
+        )
+        == []
+    )
+
+
+def test_an_assertion_really_removed_or_changed_is_still_reported_structurally():
+    weakened = _REWRAP_NEW.replace(
+        """        assert comments.get(FILTERED.path) is None, (
+            f"the filtered asset got a comment: {comments}"
+        )
+""",
+        "",
+    ).replace(
+        "comments[TARGET.path] == TARGET.text", "comments[TARGET.path] != TARGET.text"
+    )
+    files = parse_unified_diff(_rewrap_diff(weakened))
+    found = facts_mod.weakened_expectations(
+        files, {_REWRAP_PATH: _REWRAP_OLD}, {_REWRAP_PATH: weakened}
+    )
+    assert [(e.kind, e.text, e.line) for e in found] == [
+        ("assertion removed", "assert comments.get(FILTERED.path) is None", 10),
+        (
+            "expectation changed",
+            "assert comments[TARGET.path] == TARGET.text → "
+            "assert comments[TARGET.path] != TARGET.text",
+            16,
+        ),
+    ]
+
+
+def test_structural_expectations_keep_the_line_rules_for_moves_skips_and_deleted_tests():
+    old_a = "def test_a():\n    assert f() == 1\n    assert g() == 2\n"
+    new_a = "def test_a():\n    assert f() == 1\n"
+    new_b = "@pytest.mark.skip(reason='flaky')\ndef test_b():\n    assert g() == 2\n"
+    gone = "def test_gone():\n    assert parse('x') is None\n"
+    diff = (
+        _udiff(
+            "tests/unit/test_a.py",
+            [" def test_a():", "     assert f() == 1", "-    assert g() == 2"],
+        )
+        + _udiff(
+            "tests/unit/test_b.py",
+            [
+                "+@pytest.mark.skip(reason='flaky')",
+                "+def test_b():",
+                "+    assert g() == 2",
+            ],
+        )
+        + _udiff(
+            "tests/unit/test_gone.py",
+            ["-def test_gone():", "-    assert parse('x') is None"],
+            status="deleted",
+        )
+    )
+    found = facts_mod.weakened_expectations(
+        parse_unified_diff(diff),
+        {
+            "tests/unit/test_a.py": old_a,
+            "tests/unit/test_b.py": "",
+            "tests/unit/test_gone.py": gone,
+        },
+        {
+            "tests/unit/test_a.py": new_a,
+            "tests/unit/test_b.py": new_b,
+            "tests/unit/test_gone.py": "",
+        },
+    )
+    # The assertion moved to a test the PR adds; the new test's skip counts; the
+    # deleted file's test and its assertion are gone.
+    assert [(e.path, e.kind, e.text) for e in found] == [
+        ("tests/unit/test_b.py", "skip added", "pytest.mark.skip(reason='flaky')"),
+        ("tests/unit/test_gone.py", "assertion removed", "assert parse('x') is None"),
+        ("tests/unit/test_gone.py", "test removed", "test_gone"),
+    ]
+
+
+def test_the_review_reads_both_copies_of_a_changed_test_for_the_facts(repo: Path):
+    """End to end: the run hands weakened_expectations the base and head copies,
+    so the re-wrap reaches neither the trace nor the prompt as a weakening."""
+    gh = fake_github()
+    gh.diffs[("b0", "h1")] = _rewrap_diff(_REWRAP_NEW) + DISPOSE_DIFF
+    gh.files[(_REWRAP_PATH, "b0")] = _REWRAP_OLD
+    gh.files[(_REWRAP_PATH, "h1")] = _REWRAP_NEW
+    script = Script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=PrincipleSet(),
+        client_factory=_factory(script),
+    )
+    assert res.state is not None
+    assert "no test expectation weakened" in res.state.facts["regression"]
+    assert not any("assertion removed" in _sent(r) for r in script.requests)
+
+
 class _History:
     """A fake of the history reads: commits per path and patches per commit."""
 

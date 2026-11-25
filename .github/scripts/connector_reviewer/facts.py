@@ -25,11 +25,13 @@ and a note in the trace.
 
 from __future__ import annotations
 
+import ast
 import queue
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, TypeVar
@@ -200,10 +202,23 @@ def _scoped(fd: FileDiff) -> list[tuple[Line, str, str]]:
     return out
 
 
-def weakened_expectations(files: list[FileDiff]) -> list[Expectation]:
+def weakened_expectations(
+    files: list[FileDiff],
+    old_text: Mapping[str, str | None] | None = None,
+    new_text: Mapping[str, str | None] | None = None,
+) -> list[Expectation]:
     """Existing test expectations this pull request weakened or removed.
 
-    A removed assertion counts unless the same line (whitespace aside) is added
+    With both copies of a test file (`old_text` at the reviewed range's base,
+    keyed by its old path; `new_text` at the head; "" for a side where the
+    file does not exist), they are compared structurally (`_structural`): the
+    assertions of each test, as syntax trees. Re-wrapping `assert x, msg` over
+    three lines, reformatting or reordering reports nothing; an assertion
+    gone or changed still does (FND-5316: a re-wrap was reported as two
+    assertions removed and one expectation changed). A file whose copies are
+    missing or do not parse is compared by its diff lines, as below.
+
+    By diff lines: a removed assertion counts unless the same line (whitespace aside) is added
     back in the same test, in any test file of the pull request, or in a test
     the pull request adds: so a moved, reformatted or renamed test does not
     fire, and added tests never do. The same line added to another test that
@@ -215,6 +230,29 @@ def weakened_expectations(files: list[FileDiff]) -> list[Expectation]:
     test_files = [
         fd for fd in files if fd.path.endswith(".py") and context._is_test(fd.path)
     ]
+    trees: dict[str, tuple[dict[str, _TestFacts], dict[str, _TestFacts]]] = {}
+    if old_text is not None and new_text is not None:
+        for fd in test_files:
+            sides = (
+                _tests_in(old_text.get(fd.old_path or fd.path)),
+                _tests_in(new_text.get(fd.path)),
+            )
+            if sides[0] is not None and sides[1] is not None:
+                trees[fd.path] = (sides[0], sides[1])
+    by_lines = _by_lines(test_files)
+    if not trees:
+        return by_lines
+    structural = _structural(trees, [fd.path for fd in test_files])
+    return [
+        e
+        for fd in test_files
+        for e in (structural if fd.path in trees else by_lines)
+        if e.path == fd.path
+    ]
+
+
+def _by_lines(test_files: list[FileDiff]) -> list[Expectation]:
+    """`weakened_expectations` from the diff lines alone."""
     scoped = {fd.path: _scoped(fd) for fd in test_files}
     added_in: dict[str, set[str]] = {}  # line -> tests it is added in
     removed_all: set[str] = set()
@@ -286,6 +324,194 @@ def weakened_expectations(files: list[FileDiff]) -> list[Expectation]:
         for line, name in gone_tests:
             if name in lost_in:
                 out.append(Expectation(fd.path, line, "test removed", name))
+    return out
+
+
+# ---- weakened expectations, structurally -------------------------------------
+
+
+@dataclass
+class _Check:
+    key: str  # the assertion's syntax tree, without positions (an assert's message aside)
+    left: (
+        str  # what it checks (a comparison's left side, the assert method), "" if none
+    )
+    text: str  # the assertion as one line of source
+    line: int
+
+
+@dataclass
+class _TestFacts:
+    line: int
+    checks: list[_Check] = field(default_factory=list)
+    skips: list[str] = field(default_factory=list)  # skip/xfail markers and calls
+
+
+def _dump(node: ast.AST) -> str:
+    return ast.dump(node, include_attributes=False)
+
+
+def _dotted(node: ast.AST) -> str:
+    """`pytest.mark.skip` for that attribute chain, "" for anything else."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _one_line(node: ast.AST) -> str:
+    return " ".join(ast.unparse(node).split())
+
+
+def _check(node: ast.AST) -> _Check | None:
+    """The expectation `node` states, if it is one: an `assert`, a
+    `pytest.raises(...)`, or an assert method (`self.assertEqual`,
+    `mock.assert_called_once_with`)."""
+    line = getattr(node, "lineno", 0)
+    if isinstance(node, ast.Assert):
+        # The message is not the expectation: rewording it weakens nothing.
+        left = node.test.left if isinstance(node.test, ast.Compare) else None
+        return _Check(
+            _dump(node.test),
+            _dump(left) if left is not None else "",
+            "assert " + _one_line(node.test),
+            line,
+        )
+    if isinstance(node, ast.Call):
+        name = _dotted(node.func)
+        last = name.rsplit(".", 1)[-1]
+        if name in ("pytest.raises", "raises") or (
+            isinstance(node.func, ast.Attribute) and last.startswith("assert")
+        ):
+            return _Check(_dump(node), _dump(node.func), _one_line(node), line)
+    return None
+
+
+def _skips(node: ast.AST) -> list[str]:
+    out: list[str] = []
+    for dec in getattr(node, "decorator_list", []):
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        if _dotted(target) in _SKIP_MARKS:
+            out.append(_one_line(dec))
+    return out
+
+
+_SKIP_MARKS = frozenset(
+    {
+        "pytest.mark.skip",
+        "pytest.mark.skipif",
+        "pytest.mark.xfail",
+        "unittest.skip",
+        "unittest.skipIf",
+        "unittest.skipUnless",
+    }
+)
+_SKIP_CALLS = frozenset({"pytest.skip", "pytest.xfail"})
+
+
+def _tests_in(text: str | None) -> dict[str, _TestFacts] | None:
+    """Each function of a test file (`test_x`, `Class.helper`) with its
+    expectations and skip markers, or None when the text is not known or
+    does not parse. "" is a file that does not exist on that side."""
+    if text is None:
+        return None
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    out: dict[str, _TestFacts] = {}
+
+    def visit(body: list[ast.stmt], prefix: str, inherited: list[str]) -> None:
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                visit(node.body, f"{prefix}{node.name}.", inherited + _skips(node))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Every function: a test's assertions often sit in a helper it calls.
+                facts = _TestFacts(node.lineno, skips=inherited + _skips(node))
+                for sub in ast.walk(node):
+                    c = _check(sub)
+                    if c:
+                        facts.checks.append(c)
+                    elif isinstance(sub, ast.Call) and _dotted(sub.func) in _SKIP_CALLS:
+                        facts.skips.append(_one_line(sub))
+                out[prefix + node.name] = facts
+
+    visit(tree.body, "", [])
+    return out
+
+
+def _structural(
+    trees: dict[str, tuple[dict[str, _TestFacts], dict[str, _TestFacts]]],
+    order: list[str],
+) -> list[Expectation]:
+    """Weakened expectations from each test file's two parsed copies.
+
+    Per test, the old and the new expectations are compared as multisets of
+    syntax trees. One the new copy lacks is moved, not removed, when a test
+    the pull request adds (in any of these files) has it; otherwise it is an
+    expectation changed when the same test gained one that checks the same
+    thing (`_Check.left`), else an assertion removed. A test that is gone
+    counts only when one of its expectations is lost. A skip marker or call a
+    test gained counts unless one like it was removed elsewhere."""
+    moved: Counter[str] = Counter()
+    removed_skips: set[str] = set()
+    for old, new in trees.values():
+        for name, facts in new.items():
+            if name not in old:
+                moved.update(c.key for c in facts.checks)
+        for name, facts in old.items():
+            removed_skips.update(
+                set(facts.skips) - set(new[name].skips if name in new else [])
+            )
+    out: list[Expectation] = []
+    for path in order:
+        if path not in trees:
+            continue
+        old, new = trees[path]
+        for name, facts in old.items():
+            now = new.get(name)
+            kept = Counter(c.key for c in now.checks) if now else Counter()
+            gained = [
+                c
+                for c in (now.checks if now else [])
+                if c.key not in Counter(x.key for x in facts.checks)
+            ]
+            lost = False
+            for c in facts.checks:
+                if kept[c.key] > 0:
+                    kept[c.key] -= 1
+                    continue
+                if moved[c.key] > 0:
+                    moved[c.key] -= 1
+                    continue
+                lost = True
+                swap = next((g for g in gained if c.left and g.left == c.left), None)
+                if swap:
+                    out.append(
+                        Expectation(
+                            path,
+                            c.line,
+                            "expectation changed",
+                            f"{c.text} → {swap.text}",
+                        )
+                    )
+                else:
+                    out.append(Expectation(path, c.line, "assertion removed", c.text))
+            if now is None and lost and name.rsplit(".", 1)[-1].startswith("test"):
+                out.append(
+                    Expectation(
+                        path, facts.line, "test removed", name.rsplit(".", 1)[-1]
+                    )
+                )
+        for name, facts in new.items():
+            before = Counter(old[name].skips) if name in old else Counter()
+            for skip in (Counter(facts.skips) - before).elements():
+                if skip not in removed_skips:
+                    out.append(Expectation(path, 0, "skip added", skip))
     return out
 
 

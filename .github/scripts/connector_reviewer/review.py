@@ -26,7 +26,7 @@ import re
 import time
 import urllib.parse
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -494,6 +494,7 @@ def compute_facts(
     files: list[FileDiff],
     cfg: Config,
     tests_changed: list[FileDiff] | None = None,
+    test_text: tuple[Mapping[str, str | None], Mapping[str, str | None]] | None = None,
 ) -> code_facts.Facts:
     """The regression and history facts for the files under review, in review
     order. No model call; the history half makes at most
@@ -502,12 +503,14 @@ def compute_facts(
 
     `tests_changed` are the test files this round changed, taken before file
     selection: a deleted test file is skipped by selection ("deletion only"),
-    and it is exactly a weakened expectation FP15 asks about."""
+    and it is exactly a weakened expectation FP15 asks about. `test_text` are
+    their base and head copies (`weakened_expectations`)."""
     fx = code_facts.Facts()
     if cfg.facts.regression:
         fx.symbols = code_facts.regression_symbols(ws, files)
         fx.expectations = code_facts.weakened_expectations(
-            files if tests_changed is None else tests_changed
+            files if tests_changed is None else tests_changed,
+            *(test_text or (None, None)),
         )
         fx.regression_read = True
     if cfg.facts.history and files:
@@ -957,20 +960,41 @@ def run(
     # The weakened-expectation facts are read from the round's test files before
     # selection, which skips a test file deleted outright.
     tests_changed = changed_tests(all_files, cfg)
+    # Both copies of each changed test file, so the assertions are compared as
+    # syntax trees, not lines: a re-wrapped `assert` weakens nothing (FND-5316).
+    # The base copies are shared with triage below.
+    old_text: dict[str, str | None] = {}
+    test_new: dict[str, str | None] = {}
+    if cfg.facts.regression:
+        for fd in tests_changed[: cfg.max_changed_files]:
+            old_path = fd.old_path or fd.path
+            old_text[old_path] = (
+                "" if fd.status == "added" else gh.file_at(old_path, range_base)
+            )
+            test_new[fd.path] = (
+                "" if fd.status == "deleted" else head_text.get(fd.path) or None
+            )
     weakened = (
-        code_facts.weakened_expectations(tests_changed) if cfg.facts.regression else []
+        code_facts.weakened_expectations(tests_changed, old_text, test_new)
+        if cfg.facts.regression
+        else []
     )
     weakened_paths = {e.path for e in weakened}
     res.skipped_files = sel.skipped
 
     # Mechanical change is proven and set aside before any model call (triage.py):
     # a 100-file rename or reformat costs a summary line, not 100 files of review.
-    old_text: dict[str, str | None] = {}
     for fd in sel.reviewed[: cfg.max_changed_files]:
-        if fd.path.endswith(".py") and fd.status == "modified":
+        if (
+            fd.path.endswith(".py")
+            and fd.status == "modified"
+            and fd.path not in old_text
+        ):
             old_text[fd.path] = gh.file_at(fd.path, range_base)
     res.triage = triage(
-        sel.reviewed, old_text, {k: (v or None) for k, v in head_text.items()}
+        sel.reviewed,
+        {fd.path: old_text.get(fd.path) for fd in sel.reviewed if fd.path in old_text},
+        {k: (v or None) for k, v in head_text.items()},
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
@@ -1119,6 +1143,7 @@ def run(
                 _whole_files([fd for b in bundles for fd in b.files]),
                 cfg,
                 tests_changed=tests_changed,
+                test_text=(old_text, test_new),
             )
             res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
             trace.line(f"regression: {fx.regression_line()}")
