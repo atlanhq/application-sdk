@@ -226,6 +226,40 @@ class TestInitSqlClientGuidRoute:
 
 
 # ---------------------------------------------------------------------------
+# extract_* / transform_* timing — the env defaults reach them (FND-5224)
+# ---------------------------------------------------------------------------
+
+_SCALING_TASKS = tuple(
+    f"{verb}_{entity}"
+    for verb in ("extract", "transform")
+    for entity in ("databases", "schemas", "tables", "columns", "views", "procedures")
+)
+
+
+@pytest.mark.parametrize("name", _SCALING_TASKS)
+def test_scaling_tasks_take_the_process_wide_timing_defaults(name: str) -> None:
+    """Runtime scales with source size, so the operator's env knobs must win.
+
+    A hard-coded value here made ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` and
+    ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` dead settings for every SqlApp, and
+    killed a large ``extract_columns`` at 30 minutes.
+    """
+    from application_sdk.app.task import (
+        _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+        _DEFAULT_TIMEOUT_SECONDS,
+        get_task_metadata,
+    )
+
+    meta = get_task_metadata(getattr(SqlApp, name))
+    assert meta is not None
+    assert meta.timeout_seconds == _DEFAULT_TIMEOUT_SECONDS
+    assert meta.heartbeat_timeout_seconds == _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
+    # Unlike the two above, the beat interval has no env knob; the bare
+    # ``@task()`` default is what a large source gets.
+    assert meta.auto_heartbeat_seconds == 10
+
+
+# ---------------------------------------------------------------------------
 # extract_* tasks — SQL stream → raw JSONL (no parquet)
 # ---------------------------------------------------------------------------
 
