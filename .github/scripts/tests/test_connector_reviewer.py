@@ -14459,6 +14459,8 @@ def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
             "v0.1.1rc64",
             "v0.1.1rc64",
         ),
+        # HTTPS's default port, spelled out, is the same server.
+        (_lock('{ registry = "https://pypi.org:443/simple" }'), "v3.40.0", "v3.40.0"),
         # A git pin is the locked commit after `#`, whatever `rev=` names.
         (
             _lock(
@@ -14475,7 +14477,7 @@ def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
             f"3.40.0 at commit {_SHA[:12]}",
         ),
     ],
-    ids=["release", "firewall-registry", "rc", "git-rev", "git-branch"],
+    ids=["release", "firewall-registry", "rc", "default-port", "git-rev", "git-branch"],
 )
 def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: str):
     res = sdk_source_mod.resolve(lock)
@@ -14541,6 +14543,16 @@ def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: s
             _lock('{ registry = "https://pypi.org.evil.example/simple" }'),
             "not PyPI or its mirror",
         ),
+        # The known host on another port is another server (F-af93d5), and a
+        # port that does not parse is no registry at all.
+        (
+            _lock('{ registry = "https://pypi.org:8443/simple" }'),
+            "not PyPI or its mirror",
+        ),
+        (
+            _lock('{ registry = "https://pypi.org:abc/simple" }'),
+            "not PyPI or its mirror",
+        ),
         # An unparseable git URL falls back instead of aborting the review.
         (
             _lock(
@@ -14575,6 +14587,8 @@ def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: s
         "unknown-registry",
         "http-registry",
         "lookalike-registry",
+        "registry-other-port",
+        "registry-bad-port",
         "malformed-git-url",
         "two-pins",
     ],
@@ -15555,6 +15569,31 @@ _ENDOR = "factory.endorlabs.com/v1/namespaces/atlan.atlanhq/firewall/pypi/simple
             "not come from PyPI",
         ),
         (_conformance_lock(registry="http://pypi.org/simple"), "not come from PyPI"),
+        # A known host on a port other than HTTPS's default is another server
+        # (F-af93d5); a port that does not parse is no registry. The default
+        # port, spelled out, is the same index.
+        (
+            _conformance_lock(registry="https://pypi.org:8443/simple"),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(
+                registry=f"https://{_ENDOR.replace('.com', '.com:8443', 1)}"
+            ),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(registry="https://pypi.org:99999/simple"),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(registry="https://pypi.org:abc/simple"),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(registry="https://pypi.org:443/simple"),
+            gate_mod.Pin("0.60.0", "https://pypi.org/simple"),
+        ),
         (_conformance_lock("0.60.0.dev1"), "is not a released version"),
         (
             _conformance_lock() + _conformance_lock("0.59.0").split("\n\n", 1)[1],

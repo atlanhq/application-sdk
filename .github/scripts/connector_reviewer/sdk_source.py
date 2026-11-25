@@ -191,7 +191,8 @@ def _pin_of(entry: dict[str, object], package: str = PACKAGE) -> SdkPin | str:
 
 # Registries whose `atlan-application-sdk` is the PyPI release, so a version
 # maps to application-sdk's own release tag: PyPI, and the org's registry
-# firewall, which mirrors it. Exact host and path prefix; anything else falls back.
+# firewall, which mirrors it. HTTPS on its default port, exact host and path
+# prefix; anything else falls back.
 _KNOWN_REGISTRIES = (
     ("pypi.org", "/simple"),
     ("factory.endorlabs.com", "/v1/namespaces/atlan.atlanhq/firewall/pypi/simple"),
@@ -203,16 +204,18 @@ def _known_registry(raw: object) -> bool:
 
 
 def _registry_of(raw: object) -> tuple[str, str] | None:
-    """The `_KNOWN_REGISTRIES` entry a registry source URL is under, or None."""
+    """The `_KNOWN_REGISTRIES` entry a registry source URL is under, or None.
+    A known host on another port is another server, so it is not one."""
     if not isinstance(raw, str):
         return None
     try:
         url = urllib.parse.urlsplit(raw)
         host = url.hostname
+        port = url.port  # raises ValueError on a port that does not parse
     except ValueError:
         return None
     path = url.path.rstrip("/")
-    if url.scheme != "https":
+    if url.scheme != "https" or port not in (None, 443):
         return None
     for h, p in _KNOWN_REGISTRIES:
         if host == h and (path == p or path.startswith(p + "/")):
