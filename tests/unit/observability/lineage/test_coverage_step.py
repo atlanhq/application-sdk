@@ -221,6 +221,17 @@ def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
     ]
 
 
+def test_a_partial_failure_explains_an_asset_with_no_lineage(run_files, tmp_path):
+    recorder = CoverageRecorder()
+    recorder.partial(f"{CONN}/nothing", UpstreamIdentityTooSparse)
+    run_coverage_step(run_files, str(tmp_path / "cov"), SPEC, recorder, REGISTRY)
+    row = rows(tmp_path / "cov")["nothing"]
+    assert (row["verdict"], row["reasonCode"]) == (
+        "MISSING",
+        "UPSTREAM_IDENTITY_TOO_SPARSE",
+    )
+
+
 def test_an_app_can_key_its_recorder_by_its_own_id(run_files, tmp_path):
     spec = CoverageSpec(
         app_name="bi",

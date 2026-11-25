@@ -100,7 +100,11 @@ def classify(
             return assess(LineageStatus.PARTIAL_LINEAGE, partial)
         return assess(LineageStatus.HAS_LINEAGE)
     # The first reason recorded stands: later paths are fallbacks of the first.
-    code = recorded.missing[0] if recorded is not None and recorded.missing else None
+    code = None
+    if recorded is not None:
+        # Nothing was built: a partial failure is then the whole explanation.
+        codes = recorded.missing or recorded.partial
+        code = codes[0] if codes else None
     return assess(
         LineageStatus.MISSING_LINEAGE,
         registry.resolve(code) if code else UninstrumentedPath,
