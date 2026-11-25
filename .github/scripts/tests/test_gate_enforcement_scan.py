@@ -42,7 +42,7 @@ from gate_enforcement_scan import (
     evaluate_repo,
     fetch_arrival_samples,
     fetch_pulls_for_commit,
-    fetch_tests_workflow_last_modified,
+    fetch_tests_workflow_change,
     list_fleet_repos,
     parse_arrival_nodes,
     parse_contexts_response,
@@ -1599,7 +1599,7 @@ def test_a_missing_tests_workflow_yields_no_cutoff():
         assert args[1].startswith(f"repos/{REPO}/commits?path=")
         return json.dumps({"d": None})
 
-    assert fetch_tests_workflow_last_modified(REPO, run=run) is None
+    assert fetch_tests_workflow_change(REPO, run=run) == (None, None)
 
 
 def test_the_cutoff_is_the_last_change_not_the_first():
@@ -1611,9 +1611,9 @@ def test_the_cutoff_is_the_last_change_not_the_first():
 
     def run(args: list) -> str:
         sent.append(args[1])
-        return json.dumps({"d": WORKFLOW_CHANGED})
+        return json.dumps({"d": WORKFLOW_CHANGED, "s": "c" * 40})
 
-    assert fetch_tests_workflow_last_modified(REPO, run=run) == WORKFLOW_CHANGED
+    assert fetch_tests_workflow_change(REPO, run=run) == (WORKFLOW_CHANGED, "c" * 40)
     assert "per_page=1" in sent[0]
     assert "path=.github/workflows/tests.yaml" in sent[0]
 

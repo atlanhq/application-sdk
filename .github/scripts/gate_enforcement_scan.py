@@ -682,17 +682,6 @@ def fetch_has_tests_workflow_file(repo: str, run: RunFn = _run_gh) -> bool:
     return True
 
 
-def fetch_tests_workflow_last_modified(
-    repo: str, run: RunFn = _run_gh
-) -> Optional[str]:
-    """When ``.github/workflows/tests.yaml`` last changed, or ``None``.
-
-    The date half of `fetch_tests_workflow_change`, for callers that only need
-    the cutoff.
-    """
-    return fetch_tests_workflow_change(repo, run=run)[0]
-
-
 def fetch_tests_workflow_change(
     repo: str, run: RunFn = _run_gh
 ) -> tuple[Optional[str], Optional[str]]:
