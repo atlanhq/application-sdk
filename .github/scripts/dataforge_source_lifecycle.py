@@ -17,7 +17,7 @@ it. This is the wake/pause half:
     the workflow so a cancelled or failed run never leaks a running instance.
 
 Run as a checked-out ``.github/scripts`` script (NOT a composite action) for two
-reasons: the call site already needs the sparse checkout + globalprotect-connect
+reasons: the call site already needs the sparse checkout + twingate-connect
 to reach ``api.dataforge.atlan.dev`` over the VPN (that host admits only the VPN
 egress IPs), and a script — unlike an isolated composite action — can import the
 shared pieces instead of copying them. The GitHub-ref transport comes from

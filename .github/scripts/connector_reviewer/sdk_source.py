@@ -125,6 +125,12 @@ def _lock_entries(lock_text: str) -> list[dict[str, object]] | str:
     ]
 
 
+def lock_entries(lock_text: str) -> list[dict[str, object]] | str:
+    """The `[[package]]` tables of a `uv.lock`, or why it does not parse. The
+    gate-file fact reads the conformance pin from them (FND-5325)."""
+    return _lock_entries(lock_text)
+
+
 def resolve(lock_text: str) -> Resolution:
     """The pinned application-sdk in a `uv.lock`'s text. Never raises."""
     all_entries = _lock_entries(lock_text)
@@ -185,7 +191,8 @@ def _pin_of(entry: dict[str, object], package: str = PACKAGE) -> SdkPin | str:
 
 # Registries whose `atlan-application-sdk` is the PyPI release, so a version
 # maps to application-sdk's own release tag: PyPI, and the org's registry
-# firewall, which mirrors it. Exact host and path prefix; anything else falls back.
+# firewall, which mirrors it. HTTPS on its default port, exact host and path
+# prefix; anything else falls back.
 _KNOWN_REGISTRIES = (
     ("pypi.org", "/simple"),
     ("factory.endorlabs.com", "/v1/namespaces/atlan.atlanhq/firewall/pypi/simple"),
@@ -193,18 +200,37 @@ _KNOWN_REGISTRIES = (
 
 
 def _known_registry(raw: object) -> bool:
+    return _registry_of(raw) is not None
+
+
+def _registry_of(raw: object) -> tuple[str, str] | None:
+    """The `_KNOWN_REGISTRIES` entry a registry source URL is under, or None.
+    A known host on another port is another server, so it is not one."""
     if not isinstance(raw, str):
-        return False
+        return None
     try:
         url = urllib.parse.urlsplit(raw)
         host = url.hostname
+        port = url.port  # raises ValueError on a port that does not parse
     except ValueError:
-        return False
+        return None
     path = url.path.rstrip("/")
-    return url.scheme == "https" and any(
-        host == h and (path == p or path.startswith(p + "/"))
-        for h, p in _KNOWN_REGISTRIES
-    )
+    if url.scheme != "https" or port not in (None, 443):
+        return None
+    for h, p in _KNOWN_REGISTRIES:
+        if host == h and (path == p or path.startswith(p + "/")):
+            return (h, p)
+    return None
+
+
+def known_index(raw: object) -> str | None:
+    """The index to install from for a `uv.lock` registry source that is PyPI
+    or the org's mirror, rebuilt from `_KNOWN_REGISTRIES` and never the lock's
+    own spelling (which could carry credentials, a query or a longer path);
+    None for any other source. The gate-file fact installs the pinned
+    conformance package from it (FND-5325, `gate.py`)."""
+    found = _registry_of(raw)
+    return f"https://{found[0]}{found[1]}" if found else None
 
 
 def resolve_root(root: Path) -> Resolution:
