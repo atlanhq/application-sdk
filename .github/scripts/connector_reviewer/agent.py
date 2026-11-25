@@ -73,6 +73,9 @@ _PRINCIPLE_ID = re.compile(r"\b[FR]P\d{2}\b")
 # quote is checked up to STEP_QUOTE_KEEP characters, and must carry at least
 # STEP_QUOTE_MIN non-space characters, as a skeptic's quote must, unless it is
 # one whole line that pins one place (`_short_line_at`).
+# A bundle whose final turn the context ceiling forces before this turn was
+# reviewed shallowly (`BundleResult.shallow`), and the review is incomplete.
+SHALLOW_BEFORE_TURN = 4
 MAX_CHAIN_STEPS = 6
 STEP_QUOTE_KEEP = 400
 STEP_QUOTE_MIN = 12
@@ -163,6 +166,17 @@ class BundleResult:
     # Its 0 findings mean it was not read to a conclusion, not that it is
     # clean; review.run makes the review incomplete and retries its files.
     unanswered: bool = False
+    # The turn on which the final turn was forced by the context ceiling (its
+    # number, 1-based), or 0. Before `SHALLOW_BEFORE_TURN` the bundle had read
+    # little past its own diff (`shallow`): its findings are not a full review.
+    ceiling_turn: int = 0
+
+    @property
+    def shallow(self) -> bool:
+        """The context ceiling forced this bundle's final turn before turn
+        `SHALLOW_BEFORE_TURN` (FND-5316: a live bundle hit it at turn 3 of 24,
+        and the summary called the review complete)."""
+        return 0 < self.ceiling_turn < SHALLOW_BEFORE_TURN
 
 
 def no_answer(res: BundleResult) -> bool:
@@ -987,6 +1001,8 @@ def _loop(
                 else "time limit"
             )
             res.forced = why
+            if why == "context ceiling":
+                res.ceiling_turn = res.turns + 1
             trace.line(
                 f"[{bundle.label}] final turn forced ({why}): only code_comment/task_done now"
             )

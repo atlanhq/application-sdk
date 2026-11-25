@@ -10685,6 +10685,51 @@ def test_app_code_bundles_finish_before_any_test_bundle_starts(repo: Path):
     assert state_of(res).pending_files == ["app/storage/fetch.py"]
 
 
+# ---- a bundle the context ceiling stops early is a shallow review (FND-5316) ------------------
+
+
+def test_a_bundle_the_context_ceiling_stops_before_turn_4_is_shallow(repo: Path):
+    """A live bundle hit the context ceiling at turn 3 of 24 and the summary
+    still read as a full review. The turn the ceiling forced is recorded."""
+    ws, bundle = _ws(repo)
+    lim = agent_mod.AgentLimits(context_limit_tokens=10, plan=0)
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(client, ws, bundle, PrincipleSet(), {}, [], lim)
+    assert (res.forced, res.ceiling_turn, res.shallow) == ("context ceiling", 1, True)
+    # Forced at turn 4 or later, it read past its diff: not shallow.
+    assert not agent_mod.BundleResult("b", ceiling_turn=4).shallow
+    assert not agent_mod.BundleResult("b").shallow
+
+
+def test_a_shallow_bundle_makes_the_review_incomplete_and_retries_its_files(
+    repo: Path, tmp_path: Path
+):
+    gh = fake_github()
+    cfg = cfg_for(repo)
+    cfg.limits.context_limit_tokens = 10  # every bundle starts over it
+    cfg.limits.plan = 0
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=PrincipleSet(),
+        client_factory=_factory(script),
+    )
+    body = gh.comments[0]["body"]
+    assert "was reviewed shallowly: it reached the context ceiling at turn 1" in body
+    assert "`app/storage/fetch.py`" in body
+    # Never green unless every part was read: red, and the next `/review` redoes
+    # it (its only bundle was shallow, so the head is not recorded as reviewed).
+    assert gh.statuses[-1]["state"] == "error"
+    assert "review incomplete" in gh.statuses[-1]["description"]
+    assert state_of(res).reviewed_head == ""
+    rep = report_mod.write(res, 1, str(tmp_path / "run.json"), None)
+    assert [(b["ceiling_turn"], b["shallow"]) for b in rep["bundles"]] == [(1, True)]
+
+
 # ---- finalize: a crashed, cancelled or timed-out run never leaves a stale or green status ----------
 
 RUN_URL = "https://github.com/o/r/actions/runs/105"

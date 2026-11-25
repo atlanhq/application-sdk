@@ -798,6 +798,17 @@ context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
   `test_files_past_the_bundle_cap_are_unread` patches `MAX_REPACK_DIFF_TOKENS`
   instead of the ceiling.
 
+- **A ceiling hit is never silent (both copies).** When the context ceiling forces a
+  bundle's final turn, `BundleResult.ceiling_turn` records the turn. Before turn
+  `agent.SHALLOW_BEFORE_TURN` (4) the bundle is `shallow`: `review.run` adds
+  `review.shallow_note` ("Bundle `x` was reviewed shallowly: it reached the context
+  ceiling at turn 3 of 24 …") to the incomplete reasons, so the status is red,
+  "review incomplete", and its files go to `pending_files` like a failed bundle's
+  (when every bundle failed, the head is left unreviewed and the next run redoes
+  it). Its findings are kept. The run report has `ceiling_turn` and `shallow` per
+  bundle. This follows the verdict rule that the status is never green unless every
+  part of the change was read.
+
 ## Not changed, and worth knowing before the next change
 
 Nothing listed at the moment. The three items that were here (the test-file

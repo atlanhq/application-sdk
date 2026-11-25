@@ -81,6 +81,10 @@ def build(res: RunResult) -> dict[str, Any]:
                 "planned": b.planned,
                 "tools": b.tool_calls,
                 "stop": b.stop,
+                # The context ceiling forced the final turn at this turn (0: it
+                # did not), and whether that was early enough to be shallow.
+                "ceiling_turn": b.ceiling_turn,
+                "shallow": b.shallow,
                 # whole: the run report is where an error is read in full
                 "error": redact(b.error) if b.error else b.error,
                 "findings": len(b.findings),

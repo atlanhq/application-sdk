@@ -9836,3 +9836,36 @@ def test_the_review_prompt_caps_an_unread_control_bypass():
     text = " ".join(prompts_mod.REVIEW_SYSTEM.split())
     assert "must name that control and cite where you read it" in text
     assert 'at most medium and is worded "verify that <control> covers this"' in text
+
+
+# ---- a bundle the context ceiling stops early is a shallow review (FND-5316) ------------------
+
+
+def test_a_bundle_the_context_ceiling_stops_before_turn_4_is_shallow(repo: Path):
+    ws, bundle = _ws(repo)
+    lim = agent_mod.AgentLimits(context_limit_tokens=10, plan=0)
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(client, ws, bundle, RuleSet([], {}), {}, [], lim)
+    assert (res.ceiling_turn, res.shallow) == (1, True)
+    assert not agent_mod.BundleResult("b", ceiling_turn=4).shallow
+
+
+def test_a_shallow_bundle_makes_the_review_incomplete_and_retries_its_files(repo: Path):
+    gh = FakeGitHub()
+    cfg = cfg_for(repo)
+    cfg.limits.context_limit_tokens = 10
+    cfg.limits.plan = 0
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    res = run(
+        gh=cast(Any, gh),
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=RuleSet([], {}),
+        client_factory=_factory(script),
+    )
+    body = gh.comments[0]["body"]
+    assert "was reviewed shallowly: it reached the context ceiling at turn 1" in body
+    assert gh.statuses[-1]["state"] == "error"
+    assert res.state is not None and res.state.reviewed_head == ""
