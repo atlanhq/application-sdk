@@ -948,3 +948,25 @@ def test_a_planted_marker_comment_is_never_edited() -> None:
     gh = _Comments([planted])
     assert rg.upsert_comment(gh, 7, f"{rg.COMMENT_MARKER}\nx") == "created"
     assert gh.writes == [("post", 7)]
+
+
+@pytest.mark.parametrize("missing", ["--head-ref", "--labels"])
+def test_the_release_identifiers_are_required(missing: str) -> None:
+    """lens F-2c4f21: a call without them must not read as a non-release PR."""
+    argv = {
+        "--repo": "o/r",
+        "--pr": "7",
+        "--head-sha": HEAD,
+        "--head-ref": BUMP,
+        "--labels": "[]",
+    }
+    del argv[missing]
+    flat = [x for pair in argv.items() for x in pair]
+    with pytest.raises(SystemExit) as raised:
+        rg.main(["gate", *flat])
+    assert raised.value.code == 2
+
+
+def test_the_shim_passes_both_release_identifiers(shim: Any) -> None:
+    run = _steps(shim, "release-gate")[-1]["run"]
+    assert '--head-ref "$HEAD_REF"' in run and '--labels "$LABELS"' in run

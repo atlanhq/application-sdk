@@ -809,8 +809,12 @@ def _build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--repo", required=True)
     gate.add_argument("--pr", type=int, required=True)
     gate.add_argument("--head-sha", required=True)
-    gate.add_argument("--head-ref", default="")
-    gate.add_argument("--labels", default="[]", help="label names as a JSON array")
+    # Both decide whether the release duty applies, so neither has a default:
+    # a call that leaves one out must fail, never read as "not a release PR".
+    gate.add_argument("--head-ref", required=True, help="the PR's head branch")
+    gate.add_argument(
+        "--labels", required=True, help="the PR's label names as a JSON array"
+    )
     gate.add_argument("--run-url", default="", help="this run, linked from the comment")
     gate.add_argument("--config-dir", default="", help="the reviewer's config dir")
     gate.add_argument(
