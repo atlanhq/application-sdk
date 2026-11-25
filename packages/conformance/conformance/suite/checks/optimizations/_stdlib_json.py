@@ -287,11 +287,25 @@ class OrjsonOverStdlibJsonChecker(ast.NodeVisitor):
         self._json_module_names = json_module_names
         self._json_func_names = json_func_names
         self._fallback_calls = fallback_calls
+        self._skip_stdlib_json = self._is_contract_template_build_hook(filename)
         self._findings: list[Finding] = []
+
+    @staticmethod
+    def _is_contract_template_build_hook(filename: str) -> bool:
+        """Return whether *filename* is under the system-Python contract templates."""
+        path_parts = tuple(filename.replace("\\", "/").split("/"))
+        return any(
+            path_parts[index : index + 2] == ("contract", "templates")
+            for index in range(len(path_parts) - 1)
+        )
 
     def visit_Call(self, node: ast.Call) -> None:
         attr = _bound_call_attr(node, self._json_module_names, self._json_func_names)
-        if attr is not None and id(node) not in self._fallback_calls:
+        if (
+            not self._skip_stdlib_json
+            and attr is not None
+            and id(node) not in self._fallback_calls
+        ):
             self._findings.append(
                 make_finding(
                     filename=self._filename,
