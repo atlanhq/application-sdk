@@ -140,6 +140,12 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # application-sdk reusable. The rest of the mothership kit lived outside
 # ``.github/`` and is retired through ``RETIRED_CONNECTOR_REVIEW_FILES`` below.
 #
+# ``.github/scripts/release_gate.py`` (FND-5321): the Release Gate's decision,
+# vendored so ``release-gate.yaml`` ran the pull request's own copy, which a
+# pull request could edit. The shim now checks the script out of
+# application-sdk at ``main`` and runs it from there, so the vendored copy has
+# nothing left to do. The workflow itself stays managed.
+#
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, or a config bootstrap supersedes, not
 # only a workflow.
@@ -151,6 +157,7 @@ RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/porter-bundle-cnab.yaml",
     ".github/workflows/connector-review-gate.yaml",
     ".github/scripts/connector_review_gate.py",
+    ".github/scripts/release_gate.py",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
 )
@@ -165,7 +172,10 @@ RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
 # reported it as absent while it was managed and reports it as retired now.
 # The Dependabot configs are in ``RETIRED_FILES`` but not here: bootstrap never
 # installed them, and C002 has never reported them.
-RETIRED_ACTION_FILES: tuple[str, ...] = (".github/scripts/connector_review_gate.py",)
+RETIRED_ACTION_FILES: tuple[str, ...] = (
+    ".github/scripts/connector_review_gate.py",
+    ".github/scripts/release_gate.py",
+)
 
 # Retiring a shim and retiring the application-sdk reusable it called are two
 # steps, in that order (FND-4654). Bootstrap deletes a retired shim only when a
@@ -268,7 +278,6 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     ),
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
-    (".github/scripts/release_gate.py", "release_gate.py"),
 )
 
 # The connector review kit: what ``bootstrap --connector-review-kit``, or the
