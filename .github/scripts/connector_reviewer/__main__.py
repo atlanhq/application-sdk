@@ -79,6 +79,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# The repository's one step-output writer, a sibling of this package in
+# `.github/scripts` (on the path as the working directory of `python -m`, and
+# in both reviewer checkouts of connector-reviewer-reusable.yaml).
+import _gha
+
 from . import gate, report, trace
 from .config import load_config, validate
 from .event import FORK_REFUSAL, addressed, decide, is_fork
@@ -635,24 +640,24 @@ def _read_event(args: argparse.Namespace) -> dict[str, Any]:
     return event if isinstance(event, dict) else {}
 
 
-def _write_output(out: str) -> bool:
-    """Append `out` to `$GITHUB_OUTPUT` (stdout when it is unset, a local
-    run). False, with the reason on stderr, when the write fails."""
-    path = os.environ.get("GITHUB_OUTPUT")
-    if not path:
-        print(out, end="")
-        return True
+def _write_output(out: str, without: str) -> bool:
+    """Hand `out`, `name=value` lines, to the step's outputs through the
+    repository's one writer (`.github/scripts/_gha.py`; stdout outside
+    Actions). False when the write fails, with the reason and `without` (what
+    the run goes on without) on stderr."""
+    outputs = {k: v for k, _, v in (ln.partition("=") for ln in out.splitlines())}
     try:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(out)
+        _gha.set_outputs(outputs)
     except OSError as e:
         print(
-            f"connector-reviewer: could not write the step output ({e}); the "
-            "gate-file check is not made",
+            f"connector-reviewer: could not write the step output ({e}); {without}",
             file=sys.stderr,
         )
         return False
     return True
+
+
+_NO_GATE = "the gate-file check is not made"
 
 
 def _gate_ref(args: argparse.Namespace) -> int:
@@ -662,7 +667,7 @@ def _gate_ref(args: argparse.Namespace) -> int:
     steps after it are skipped, and the review says the check did not run."""
     out = gate.head_ref_output(args.event_name or "", _read_event(args), args.pr or 0)
     print(f"connector-reviewer: gate-file check reads {out.strip() or 'no ref'}")
-    return 0 if _write_output(out) else 1
+    return 0 if _write_output(out, _NO_GATE) else 1
 
 
 def _gate_base(args: argparse.Namespace) -> int:
@@ -672,7 +677,7 @@ def _gate_base(args: argparse.Namespace) -> int:
     `gate-ref`."""
     out = gate.base_ref_output(Path(args.merge_checkout))
     print(f"connector-reviewer: gate-file check base: {out.strip() or 'none'}")
-    return 0 if _write_output(out) else 1
+    return 0 if _write_output(out, _NO_GATE) else 1
 
 
 def _gate_fact(args: argparse.Namespace) -> int:

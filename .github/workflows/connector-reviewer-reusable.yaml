@@ -37,7 +37,8 @@ name: Connector reviewer (reusable)
 #     own, on its own runner, so that nothing it installs can reach the review
 #     job's secrets: a venv isolates packages, not credentials.
 #   * `review` holds the secrets and runs only the reviewer (standard library
-#     Python). It has four checkouts, none of them imported or run:
+#     Python, with this repository's `.github/scripts/_gha.py` step-output
+#     writer beside it). It has four checkouts, none of them imported or run:
 #       - the caller's default branch, sparse, only its
 #         `.github/connector-reviewer/principles/` (the app's own principles,
 #         trusted: the pull request and the branch it targets cannot rewrite
@@ -122,6 +123,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts/connector_reviewer
+            .github/scripts/_gha.py
           sparse-checkout-cone-mode: false
           path: sdk
           persist-credentials: false
@@ -286,6 +288,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts/connector_reviewer
+            .github/scripts/_gha.py
             .github/connector-reviewer
           sparse-checkout-cone-mode: false
           path: sdk
