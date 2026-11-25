@@ -5,7 +5,11 @@
 [model]
 # Model Gateway serves provider-qualified ids (GET /openai/v1/models); the bare
 # "gpt-6-luna" alias was LiteLLM's. Preflight refuses an id the key cannot see.
-name = "atlan-bedrock-dev/global.openai.gpt-6-luna"
+# "openai/gpt-6-luna" is provider-agnostic: the gateway routes it across every provider
+# deployment it supports. It replaced the Bedrock-pinned
+# "atlan-bedrock-dev/global.openai.gpt-6-luna", which hit Bedrock throttling (rate limit
+# errors) that blocked PR reviews.
+name = "openai/gpt-6-luna"
 reasoning_effort = "max"  # luna's highest; verified 2026-09-25 on LiteLLM: max + tools works on /v1/responses
 # "responses" (/v1/responses): the only API on which luna reasons AND calls tools; reasoning
 # is also carried between turns. "chat" (/v1/chat/completions): tools only work with
@@ -37,7 +41,6 @@ max_bundles = 8
 concurrency = 4
 max_changed_files = 60
 exclude = [
-  ".mothership/**",
   "conformance/**/fixtures/**",
   "tests/**/fixtures/**",
   "tests/**/golden/**",
