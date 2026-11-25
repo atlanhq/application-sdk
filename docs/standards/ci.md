@@ -545,18 +545,14 @@ context) re-runs the newest Release Gate run on that commit through
 `gate_check_verdict.rerun_release_gate`, the same re-run a `gate-check` verdict
 uses. The decision is `.github/scripts/release_gate.py` in this repository,
 checked out at `main` by the shim; bootstrap no longer vendors it. The gate job
-runs on `pull_request_target`, so GitHub always runs the default branch's copy
-of `release-gate.yaml`: a pull request can edit neither the script nor the shim
-that judges it. Because that token can write, nothing of the pull request is
-checked out or run (the pin check reads `uv.lock` and `pyproject.toml` at the
-head through the API), and a fork pull request is safe for the same reason.
-`pull_request_target` has two operational costs. GitHub blocks it by default in
-public repositories from 2026-12-02 unless an org or repository Actions event
-policy allows it, and the resync pull request that installs the shim gets no
-Release Gate run from either copy, so it needs a one-time bypass merge. A pull
-request can still add its own workflow with a job named `Release Gate`: under
-an Actions-only required check that is the remaining exposure, and only an org
-ruleset "required workflow" closes it.
+runs on `pull_request`, as it always has, so no org or repository Actions
+policy is needed. Nothing of the pull request is checked out or run: the pin
+check reads `uv.lock` and `pyproject.toml` at the head through the API, and a
+pull request that edits the old vendored script changes nothing. The exposure
+that every `pull_request` gate already had remains: a pull request can edit
+`release-gate.yaml` itself, or add its own job named `Release Gate`. Such an
+edit is in the diff, and the connector reviewer's gate-file check raises a high
+finding on any hand edit to a bootstrap-managed workflow (FND-5325).
 
 The gate posts no PR comment. Why it failed and what to do ("comment
 `/review`", the open findings, "still running", "re-run `/review`", the

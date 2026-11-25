@@ -689,10 +689,8 @@ def test_the_gate_runs_from_application_sdk_main(shim: Any, job: str) -> None:
 
 @pytest.mark.parametrize("job", ["release-gate", "rerun-on-review"])
 def test_nothing_of_the_pull_request_is_checked_out(shim: Any, job: str) -> None:
-    """Under `pull_request_target` the token can write, so the pull request is
-    never checked out (actions/checkout also refuses that pattern there): the
-    only checkout is application-sdk, and the pin files are read through the
-    API as data."""
+    """The pull request is never checked out or run: the only checkout is
+    application-sdk, and the pin files are read through the API as data."""
     checkouts = [
         s.get("with", {})
         for s in _steps(shim, job)
@@ -718,16 +716,16 @@ def test_the_check_name_is_the_required_context(shim: Any) -> None:
     (a reusable call would report `<job> / Release Gate`)."""
     job = shim["jobs"]["release-gate"]
     assert job["name"] == "Release Gate" and "uses" not in job
-    assert job["if"] == "github.event_name == 'pull_request_target'"
+    assert job["if"] == "github.event_name == 'pull_request'"
 
 
 def test_triggers(shim: Any) -> None:
     on = shim[True]
-    assert on["pull_request_target"]["types"] == ["opened", "synchronize", "reopened"]
-    assert on["pull_request_target"]["branches"] == ["main"]
+    assert on["pull_request"]["types"] == ["opened", "synchronize", "reopened"]
+    assert on["pull_request"]["branches"] == ["main"]
     assert "merge_group" in on and "status" in on
-    # `pull_request` would run the pull request's own copy of the shim.
-    assert "pull_request" not in on
+    # No org or repo Actions policy: the gate stays on `pull_request`.
+    assert "pull_request_target" not in on
 
 
 def test_the_rerun_listens_only_to_the_reviewer(shim: Any) -> None:
@@ -809,12 +807,12 @@ def test_the_config_dir_is_the_checked_out_one(shim: Any) -> None:
 
 
 def test_concurrency_is_per_pull_request(shim: Any) -> None:
-    """Under `pull_request_target`, `github.ref` is the base branch every PR
-    shares: keyed on it, one PR's push would cancel every other PR's gate."""
+    """Keyed on the pull request number, so one PR's push never cancels
+    another PR's gate."""
     group = shim["concurrency"]["group"]
     assert "github.event.pull_request.number" in group
     assert "github.ref" not in group
-    assert "pull_request_target" in shim["concurrency"]["cancel-in-progress"]
+    assert "pull_request" in shim["concurrency"]["cancel-in-progress"]
 
 
 # ---- pins at the head, through the API -------------------------------------

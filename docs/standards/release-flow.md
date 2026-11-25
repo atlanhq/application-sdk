@@ -126,7 +126,7 @@ it too. Read the green `gate-check` on an SDK bump PR as "opted in", never as "p
 
 **Release Gate passes a release PR only on a `success` `gate-check` status on its head**
 (`.github/scripts/release_gate.py` in application-sdk, which the scaffolded `release-gate.yaml`
-checks out at `main` and runs on `pull_request_target`, so a release PR cannot edit its gate; bootstrap vendored it into each app until FND-5321). A release PR
+checks out at `main` and runs, so a release PR cannot edit the gate's script; bootstrap vendored it into each app until FND-5321). A release PR
 the connector reviewer has never reviewed needs no review: a version bump is one of the
 reviewer's exempt classes, so the other half of Release Gate, the `connector-reviewer` verdict
 every other pull request needs (see [ci.md](ci.md)), passes it. Once a bump PR has been reviewed

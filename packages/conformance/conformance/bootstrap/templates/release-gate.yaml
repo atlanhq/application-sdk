@@ -31,15 +31,17 @@ name: Release Gate
 # posts no PR comment.
 #
 # Security shape (review this before changing it):
-#   * The gate runs on `pull_request_target`, so GitHub always runs THIS file
-#     from the default branch, never the pull request's copy: a pull request
-#     that edits this file, or the vendored script bootstrap used to write,
-#     changes nothing about the gate that judges it (FND-5321).
-#   * `pull_request_target` runs with a token that can write, so nothing of
-#     the pull request is checked out or run. The pin check reads uv.lock and
-#     pyproject.toml at the head through the API, as data; the reviewer's
-#     state is read from its comment, as data. Fork pull requests are safe for
-#     the same reason.
+#   * The gate runs on `pull_request`, as it always has, so no org or repo
+#     Actions policy is needed. GitHub runs that event from the pull
+#     request's copy of this file, so a pull request that edits this file can
+#     still change how it is judged, exactly as before FND-5321. Such an edit
+#     is in the diff, and the connector reviewer's gate-file check raises a
+#     high finding on any hand edit to it (FND-5325).
+#   * The decision itself is checked out of application-sdk, so a pull
+#     request that edits the vendored script bootstrap used to write changes
+#     nothing. Nothing of the pull request is checked out or run: the pin check
+#     reads uv.lock and pyproject.toml at the head through the API, as data;
+#     the reviewer's state is read from its comment, as data.
 #   * The job's token can only read; the re-run job can only re-run runs.
 #
 # Branch-protection target: "Release Gate"
@@ -62,8 +64,7 @@ name: Release Gate
 # protects nothing.
 
 on:
-  # Not `pull_request`: that runs the pull request's own copy of this file.
-  pull_request_target:
+  pull_request:
     # No `labeled`/`unlabeled`: a label is no longer the opt-in, and a same-SHA
     # label event only ever added a duplicate run (FND-3839). A verdict
     # arriving re-runs this workflow instead.
@@ -87,17 +88,17 @@ permissions:
 
 # A new commit retires the previous commit's run; see conformance.yaml for why
 # the group is run-unique off the PR path and why only `synchronize` cancels.
-# Keyed on the pull request number: under `pull_request_target`, `github.ref`
-# is the BASE branch, which every pull request shares.
+# Keyed on the pull request number, so one pull request's push never cancels
+# another's run.
 concurrency:
-  group: release-gate-${{ github.event_name == 'pull_request_target' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' && github.event.action == 'synchronize' }}
+  group: release-gate-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
   release-gate:
     name: Release Gate
     # `github.event.pull_request` does not exist on `merge_group`, so the gate
-    # can only run on the pull_request_target event. The skip is at JOB level: a job
+    # can only run on the pull_request event. The skip is at JOB level: a job
     # that starts only to skip its one step is billed a runner minute on every
     # queue entry (FND-3320), while a skipped job bills nothing and still files
     # its `Release Gate` check run with conclusion `skipped` — which a required
@@ -105,7 +106,7 @@ jobs:
     # static: the skipped run must carry the same context string. Nothing is
     # lost by passing here: a pull request that fails this gate on the PR
     # itself never becomes eligible to enter the queue.
-    if: github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:

@@ -4,9 +4,9 @@ Run by the bootstrap-managed ``release-gate.yaml`` in every connector repo,
 from a checkout of THIS repository at ``main`` (FND-5321). Bootstrap used to
 vendor this file into each app, so the pull request's own copy ran and a pull
 request could edit the gate it was judged by. Now the app keeps only the shim,
-and the shim runs on ``pull_request_target``, so GitHub always takes it from
-the default branch: a pull request can edit neither the script nor the shim
-that judges it. Nothing of the pull request is checked out or run; the two
+which runs on ``pull_request`` as before and checks this script out of
+application-sdk, so a pull request cannot edit the script that judges it.
+Nothing of the pull request is checked out or run; the two
 files the pin check needs are read at the head through the API, as data. The
 shim passes everything it knows straight through (per docs/standards/ci.md:
 no branching shell in ``run:``)::
