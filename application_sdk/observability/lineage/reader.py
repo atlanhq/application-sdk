@@ -188,7 +188,7 @@ def _lines(path: str, stats: ReadStats | None) -> Iterator[dict[str, Any]]:
                 yield record
 
 
-def _ref_qn(ref: Any) -> str | None:
+def _ref_qn(ref: object) -> str | None:
     if isinstance(ref, str):
         return ref
     if isinstance(ref, dict):
@@ -198,7 +198,7 @@ def _ref_qn(ref: Any) -> str | None:
     return None
 
 
-def _non_empty(value: Any) -> bool:
+def _non_empty(value: object) -> bool:
     """A relationship attribute that names at least one asset."""
     if isinstance(value, dict):
         return bool(_ref_qn(value) or value.get("guid"))

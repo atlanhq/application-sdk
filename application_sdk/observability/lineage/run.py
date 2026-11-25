@@ -20,7 +20,7 @@ import contextlib
 import os
 from collections import Counter
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, Protocol
 
 import orjson
 
@@ -65,6 +65,12 @@ REFS_FILE = "lineage-coverage-refs.json"
 SUMMARY_FILE = "lineage-coverage.json"
 
 Refine = Callable[[DerivedAsset, Recorded | None, Assessment], Assessment | None]
+
+
+class RecorderLike(Protocol):
+    """What the coverage step needs from a recorder: what was recorded per key."""
+
+    def get(self, key: str) -> Recorded | None: ...
 
 
 def classify(
@@ -163,7 +169,7 @@ def write_coverage(
     paths: Iterable[str],
     output_dir: str,
     spec: CoverageSpec,
-    recorder: Any,
+    recorder: RecorderLike,
     registry: ReasonRegistry,
     run: dict[str, Any] | None = None,
     refine: Refine | None = None,
@@ -232,7 +238,7 @@ def run_coverage_step(
     paths: Iterable[str],
     output_dir: str,
     spec: CoverageSpec,
-    recorder: Any,
+    recorder: RecorderLike,
     registry: ReasonRegistry,
     run: dict[str, Any] | None = None,
     refine: Refine | None = None,
@@ -244,7 +250,7 @@ def run_coverage_step(
     """
     try:
         return write_coverage(paths, output_dir, spec, recorder, registry, run, refine)
-    except Exception as exc:  # noqa: BLE001 - coverage must not fail the run
+    except Exception as exc:
         failed = {
             "appName": getattr(spec, "app_name", None),
             "ledgerVersion": LEDGER_VERSION,
@@ -254,8 +260,9 @@ def run_coverage_step(
         }
         with contextlib.suppress(Exception):
             logger.warning(
-                "Lineage coverage step failed; lineage is unaffected",
-                error_type=type(exc).__name__,
+                "Lineage coverage step failed with %s; lineage is unaffected",
+                type(exc).__name__,
+                exc_info=True,
             )
             os.makedirs(output_dir, exist_ok=True)
             for name in (ASSETS_FILE, REFS_FILE):

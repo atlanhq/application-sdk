@@ -16,7 +16,7 @@ import contextlib
 import functools
 from collections.abc import Callable
 from types import TracebackType
-from typing import Any, ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -28,7 +28,7 @@ R = TypeVar("R")
 __all__ = ["CoverageGuard", "guarded", "stop_recording"]
 
 
-def stop_recording(owner: Any, exc: BaseException) -> None:
+def stop_recording(owner: object | None, exc: BaseException) -> None:
     """Turn recording off on ``owner`` after a coverage error. Never raises.
 
     ``owner`` is anything with ``enabled`` and ``error`` attributes (a recorder),
@@ -38,13 +38,13 @@ def stop_recording(owner: Any, exc: BaseException) -> None:
     with contextlib.suppress(Exception):
         first = owner is None or getattr(owner, "error", None) is None
         if owner is not None:
-            owner.enabled = False
+            setattr(owner, "enabled", False)
             if first:
-                owner.error = type(exc).__name__
+                setattr(owner, "error", type(exc).__name__)
         if first:
             logger.warning(
-                "Lineage coverage stopped recording after an error; lineage is unaffected",
-                error_type=type(exc).__name__,
+                "Lineage coverage stopped recording after %s; lineage is unaffected",
+                type(exc).__name__,
             )
 
 
@@ -58,7 +58,7 @@ class CoverageGuard:
 
     __slots__ = ("_owner",)
 
-    def __init__(self, owner: Any = None) -> None:
+    def __init__(self, owner: object | None = None) -> None:
         self._owner = owner
 
     def __enter__(self) -> CoverageGuard:

@@ -31,7 +31,7 @@ IDENTITY_FIELDS = ("connectorType", "databaseName", "schemaName", "tableName", "
 _SEP = "|"
 
 
-def _normalize(field: str, value: Any) -> str:
+def _normalize(field: str, value: object) -> str:
     text = "" if value is None else str(value).strip()
     return text.lower() if field == "connectorType" else text.upper()
 

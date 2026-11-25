@@ -109,7 +109,7 @@ class CoverageRecorder:
         self._add(entry.unusable, entry, reason, details)
 
     @guarded
-    def note(self, key: str, **attributes: Any) -> None:
+    def note(self, key: str, **attributes: object) -> None:
         entry = self._get(str(key))
         entry.attributes.update({k: v for k, v in attributes.items() if v is not None})
 
@@ -184,7 +184,7 @@ class NoOpCoverageRecorder:
     enabled = False
     error: str | None = None
 
-    def missing(self, *args: Any, **kwargs: Any) -> None:
+    def missing(self, *args: object, **kwargs: object) -> None:
         return None
 
     partial = unusable = note = field_missing = save = missing
