@@ -14,9 +14,31 @@ from application_sdk.observability.lineage.assessment import (
     settle,
 )
 from application_sdk.observability.lineage.funnel import funnel_bucket
+from application_sdk.observability.lineage.guard import (
+    CoverageGuard,
+    guarded,
+    stop_recording,
+)
 from application_sdk.observability.lineage.identity import (
     IDENTITY_SCHEMA_VERSION,
     components_hash,
+)
+from application_sdk.observability.lineage.reader import (
+    AssetRule,
+    CoverageSpec,
+    DerivedAsset,
+    FieldRule,
+    read_run_output,
+)
+from application_sdk.observability.lineage.recorder import (
+    CoverageRecorder,
+    NoOpCoverageRecorder,
+    create_recorder,
+)
+from application_sdk.observability.lineage.run import (
+    classify,
+    run_coverage_step,
+    write_coverage,
 )
 from application_sdk.observability.lineage.taxonomy import (
     SDK_REASONS,
@@ -65,6 +87,7 @@ __all__ = [
     "SDK_REASONS",
     "Assessment",
     "AssetNotFound",
+    "AssetRule",
     "BiDefinitionUnavailable",
     "BiReferenceAmbiguous",
     "BiReferenceUnresolved",
@@ -74,17 +97,23 @@ __all__ = [
     "ColumnProcessNullQualifiedName",
     "ConnectorLimitation",
     "CoverageCounts",
+    "CoverageGuard",
+    "CoverageRecorder",
+    "CoverageSpec",
     "CustomSqlEmptyQuery",
     "CustomSqlNoTablesParsed",
     "CustomSqlParserFailure",
     "CustomSqlTableUnparsed",
+    "DerivedAsset",
     "EdgeBuildFailed",
+    "FieldRule",
     "GapCategory",
     "GenericConnectionType",
     "LineageDisabledBySetting",
     "LineageReason",
     "LineageStatus",
     "MissingMetadata",
+    "NoOpCoverageRecorder",
     "NoSearchableDialect",
     "NoUpstreamData",
     "NoUpstreamTables",
@@ -106,7 +135,14 @@ __all__ = [
     "UpstreamTypeNotRequested",
     "Verdict",
     "assess",
+    "classify",
     "components_hash",
+    "create_recorder",
     "funnel_bucket",
+    "guarded",
+    "read_run_output",
+    "run_coverage_step",
     "settle",
+    "stop_recording",
+    "write_coverage",
 ]
