@@ -1991,14 +1991,6 @@ class TestResolvePutAttributes:
     - no infra context: returns None.
     """
 
-    @pytest.fixture(autouse=True)
-    def _clear_infra(self):
-        from application_sdk.infrastructure.context import clear_infrastructure
-
-        clear_infrastructure()
-        yield
-        clear_infrastructure()
-
     def _make_infra(
         self, store, put_attrs, *, upstream_store=None, upstream_put_attrs=None
     ):

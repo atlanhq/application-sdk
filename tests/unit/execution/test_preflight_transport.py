@@ -14,7 +14,6 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution._temporal import preflight_gate
 from application_sdk.execution._temporal.preflight_gate import (
@@ -134,14 +133,6 @@ class _Out(Output, allow_unbounded_fields=True):
 
 
 class TestTheWorkerWiring:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_the_worker_builds_every_gate_activity_on_the_in_process_transport(
         self,
     ) -> None:

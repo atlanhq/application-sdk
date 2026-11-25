@@ -2240,8 +2240,12 @@ Three further consequences to design for:
 **The ref transport lives in exactly one module, and that is why the lease is a
 script and not a composite action.** `.github/scripts/_gh_refs.py` holds the
 primitives — the CAS, the blob read/write, the ref listing, holder liveness, and
-the 403-rate-limit/403-permission split — and both the tenant lease and the
-DataForge source refcount import it. A composite action cannot: it is checked out
+the 403-rate-limit/403-permission split — and the tenant lease, the DataForge
+source refcount and the e2e dispatch guard all import it. Callers that disagree
+about what a transport failure means do not get a copy each: the module raises
+`TransportError`, a `SystemExit`, so the lease and the refcount fail the job as
+they always did, and the guard, which fails open, catches it by name and
+dispatches (FND-4925). A composite action cannot import it: it is checked out
 in isolation, with no sibling scripts on disk, so it has to carry its own copy.
 The lease was an action, and the copy taken from it for the refcount dropped the
 rate-limit/permission split on the way out — reintroducing the exact conflation

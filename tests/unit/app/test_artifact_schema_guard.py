@@ -27,7 +27,6 @@ from application_sdk.app._artifact_schema_guard import (
 )
 from application_sdk.app.base import App
 from application_sdk.app.entrypoint import entrypoint
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import AssetArtifact, FileReference
@@ -116,18 +115,13 @@ def _write_manifest(directory: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_registry_and_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Register into a clean registry, rooted at a scratch repo layout.
+def _isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Root each test at a scratch repo layout.
 
     ``CONTRACT_GENERATED_DIR`` is a repo-relative path, so the guard reads
     whatever ``app/generated/`` the process is standing in.
     """
-    AppRegistry.reset()
-    TaskRegistry.reset()
     monkeypatch.chdir(tmp_path)
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
 
 
 def _boundary_warnings(recorded: list[warnings.WarningMessage]) -> list[str]:

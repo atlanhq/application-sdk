@@ -77,7 +77,6 @@ UNSCOPED_PERMISSIONS: frozenset[Key] = frozenset(
         ("renovate.yaml", "discover", "app-token"),
         ("renovate.yaml", "renovate", "app-token"),
         ("review-approval-reconcile.yml", "reconcile", "app-token"),
-        ("schedule.yaml", "stale", "app-token"),
         ("sdk-tests-reusable.yaml", "unit", "app-token"),
         ("stale.yml", "stale", "app-token"),
         ("tag-and-publish.yaml", "release", "app-token"),

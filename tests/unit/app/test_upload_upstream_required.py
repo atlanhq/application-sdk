@@ -14,7 +14,6 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 
 
@@ -32,14 +31,6 @@ class _UploadApp(App):
 
 
 class TestUploadRequiresUpstreamWhenAtlanUploadEnabled:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def _app(self, *, upstream: object | None, deployment: object | None) -> App:
         from application_sdk.app.context import AppContext
 
@@ -192,14 +183,6 @@ class TestAliasedStoreMovesNoBytes:
     ``tests/unit/storage/test_transfer.py::…::test_same_store_identity_skips_reconcile``
     pins the same gate from the transfer side.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     async def test_aliased_upload_never_lists_the_source_store(self, tmp_path) -> None:
         from application_sdk.app.context import AppContext

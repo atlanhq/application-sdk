@@ -2446,7 +2446,6 @@ class TestRunHandlerMode:
         from application_sdk.infrastructure._dapr.client import DaprSecretStore
         from application_sdk.infrastructure.context import (
             InfrastructureContext,
-            clear_infrastructure,
             get_infrastructure,
         )
 
@@ -2472,45 +2471,42 @@ class TestRunHandlerMode:
             "/v1.0/metadata": b"{}",
             "/v1.0/secrets/secretstore/cred": b'{"cred": "value"}',
         }
-        try:
-            with (
-                _FakeDaprSidecar(responses) as sidecar,
-                # Undo the unit-tier sidecar interceptor for this test only:
-                # the real pooled transport is what this test is about.
-                patch.object(
-                    dapr_http.httpx, "AsyncHTTPTransport", httpx.AsyncHTTPTransport
-                ),
-                patch(
-                    "application_sdk.main._create_infrastructure",
-                    _fake_create_infrastructure,
-                ),
-                patch(
-                    "application_sdk.storage.preflight.verify_object_store_access",
-                    new_callable=AsyncMock,
-                ),
-                patch(
-                    "application_sdk.main.load_app_class",
-                    return_value=_fake_app_class(),
-                ),
-                patch("application_sdk.main.validate_app_class"),
-                patch("application_sdk.main.load_handler_class", return_value=None),
-                patch("application_sdk.handler.DefaultHandler"),
-                patch(
-                    "application_sdk.execution._temporal.converter.create_data_converter_for_app"
-                ),
-                patch("application_sdk.handler.create_app_handler_service"),
-                patch("application_sdk.handler.service.create_app_handler_service"),
-                # Patch the method, not the class: the request path runs on
-                # whatever loop serves, however the server is started.
-                patch.object(uvicorn.Server, "serve", _serve_fetches_secret),
-                patch(
-                    "application_sdk.main._flush_observability",
-                    new_callable=AsyncMock,
-                ) as mock_flush,
-            ):
-                run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
-        finally:
-            clear_infrastructure()
+        with (
+            _FakeDaprSidecar(responses) as sidecar,
+            # Undo the unit-tier sidecar interceptor for this test only:
+            # the real pooled transport is what this test is about.
+            patch.object(
+                dapr_http.httpx, "AsyncHTTPTransport", httpx.AsyncHTTPTransport
+            ),
+            patch(
+                "application_sdk.main._create_infrastructure",
+                _fake_create_infrastructure,
+            ),
+            patch(
+                "application_sdk.storage.preflight.verify_object_store_access",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "application_sdk.main.load_app_class",
+                return_value=_fake_app_class(),
+            ),
+            patch("application_sdk.main.validate_app_class"),
+            patch("application_sdk.main.load_handler_class", return_value=None),
+            patch("application_sdk.handler.DefaultHandler"),
+            patch(
+                "application_sdk.execution._temporal.converter.create_data_converter_for_app"
+            ),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("application_sdk.handler.service.create_app_handler_service"),
+            # Patch the method, not the class: the request path runs on
+            # whatever loop serves, however the server is started.
+            patch.object(uvicorn.Server, "serve", _serve_fetches_secret),
+            patch(
+                "application_sdk.main._flush_observability",
+                new_callable=AsyncMock,
+            ) as mock_flush,
+        ):
+            run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
 
         assert fetched == ["value"]
         assert loops["create"] is loops["serve"]
