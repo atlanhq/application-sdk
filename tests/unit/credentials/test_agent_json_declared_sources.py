@@ -40,6 +40,7 @@ from application_sdk.infrastructure.secrets import (
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
 )
+from application_sdk.testing.mocks import MockSecretStore
 
 
 @pytest.fixture(autouse=True)
@@ -586,10 +587,6 @@ class TestResolve:
             }
         )
 
-        class LegacyStore:
-            async def get_optional(self, name: str) -> str | None:
-                return {"prod/mysql-user": "u", "prod/mysql-pass": "p"}.get(name)
-
         declared = AgentCredentialSpec.model_validate(
             _v2(
                 host={"value": "db.example.com"},
@@ -603,7 +600,9 @@ class TestResolve:
         )
         store = RecordingStore({"prod/mysql-user": "u", "prod/mysql-pass": "p"})
 
-        legacy_out = await resolve_agent_credential(legacy, LegacyStore())  # type: ignore[arg-type]
+        legacy_out = await resolve_agent_credential(
+            legacy, MockSecretStore({"prod/mysql-user": "u", "prod/mysql-pass": "p"})
+        )
         declared_out = await resolve_agent_credential(declared, store)  # type: ignore[arg-type]
         # Only the ``key-type`` envelope key differs ("single-key" vs the
         # model default ""); every credential field the handler reads is

@@ -23,7 +23,6 @@ import pytest
 from application_sdk.storage import batch, integrity, transfer
 from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageIntegrityError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
     _put,
@@ -32,11 +31,6 @@ from application_sdk.storage.ops import (
     get_file_meta,
     upload_file,
 )
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 def _hash_bytes(data: bytes) -> str:

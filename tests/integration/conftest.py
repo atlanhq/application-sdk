@@ -20,9 +20,11 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from obstore.store import LocalStore
 
 # The registry reset has one definition, in the shared testing fixtures; the
 # autouse ``clean_registries`` below only applies it to every integration test.
+from application_sdk.storage.factory import create_local_store
 from application_sdk.testing.fixtures import (  # noqa: F401
     clean_app_registry,
     clean_task_registry,
@@ -54,6 +56,12 @@ def _integration_env_vars():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> LocalStore:
+    """A real local object store backed by a temp directory."""
+    return create_local_store(tmp_path / "store")
 
 
 @pytest.fixture

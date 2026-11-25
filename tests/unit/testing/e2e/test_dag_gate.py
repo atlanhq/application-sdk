@@ -9,30 +9,10 @@ from __future__ import annotations
 
 from application_sdk.testing.e2e import BaseE2ETest
 from application_sdk.testing.harness.automation_engine import (
-    DAGNodeResult,
     DAGNodeStatus,
-    DAGRunResult,
     DAGRunStatus,
 )
-
-
-def _node(name: str, status: DAGNodeStatus, error: str | None = None) -> DAGNodeResult:
-    return DAGNodeResult(
-        name=name,
-        status=status,
-        started_at_ms=None,
-        completed_at_ms=None,
-        error_message=error,
-    )
-
-
-def _result(*nodes: DAGNodeResult) -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=list(nodes),
-    )
+from tests.unit.testing._ae_fakes import node, run_result
 
 
 class _LineageExpected(BaseE2ETest):
@@ -83,83 +63,92 @@ class TestDAGNodeStatusSkipped:
 
 class TestCoreDAGOkLineageExpected:
     def test_all_succeeded_passes(self) -> None:
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
         )
         assert _LineageExpected()._core_dag_ok(r) is True
 
     def test_skipped_node_fails_when_lineage_expected(self) -> None:
         # Strict gate: a skipped lineage node is a failure when lineage IS wanted.
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.SKIPPED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.SKIPPED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
         )
         assert _LineageExpected()._core_dag_ok(r) is False
 
 
 class TestCoreDAGOkNoLineage:
     def test_skipped_downstream_tolerated(self) -> None:
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.SKIPPED),
-            _node("lineage-app", DAGNodeStatus.SKIPPED),
-            _node("lineage-publish", DAGNodeStatus.OMITTED),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.SKIPPED),
+            node("lineage-app", DAGNodeStatus.SKIPPED),
+            node("lineage-publish", DAGNodeStatus.OMITTED),
         )
         assert _NoLineage()._core_dag_ok(r) is True
 
     def test_pending_downstream_tolerated(self) -> None:
         # Older AE service downgrades Skipped -> Pending; still tolerated.
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.PENDING),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.PENDING),
         )
         assert _NoLineage()._core_dag_ok(r) is True
 
     def test_required_node_not_succeeded_fails(self) -> None:
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.PENDING),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.PENDING),
         )
         assert _NoLineage()._core_dag_ok(r) is False
 
     def test_missing_required_node_fails(self) -> None:
-        r = _result(_node("extract", DAGNodeStatus.SUCCEEDED))
+        r = run_result(DAGRunStatus.SUCCEEDED, node("extract", DAGNodeStatus.SUCCEEDED))
         assert _NoLineage()._core_dag_ok(r) is False
 
     def test_hard_failure_anywhere_fails(self) -> None:
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.FAILED),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.FAILED),
         )
         assert _NoLineage()._core_dag_ok(r) is False
 
     def test_error_message_on_skipped_node_fails(self) -> None:
         # A node carrying an error message is a genuine failure even if its
         # status string isn't in the hard-fail set.
-        r = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.SKIPPED, error="boom"),
+        r = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.SKIPPED, error="boom"),
         )
         assert _NoLineage()._core_dag_ok(r) is False
 
     def test_branch_node_required_when_declared(self) -> None:
-        ok = _result(
-            _node("branch", DAGNodeStatus.SUCCEEDED),
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
-            _node("qi", DAGNodeStatus.SKIPPED),
+        ok = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("branch", DAGNodeStatus.SUCCEEDED),
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
+            node("qi", DAGNodeStatus.SKIPPED),
         )
         assert _NoLineageWithBranch()._core_dag_ok(ok) is True
 
-        missing_branch = _result(
-            _node("extract", DAGNodeStatus.SUCCEEDED),
-            _node("publish", DAGNodeStatus.SUCCEEDED),
+        missing_branch = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
+            node("publish", DAGNodeStatus.SUCCEEDED),
         )
         assert _NoLineageWithBranch()._core_dag_ok(missing_branch) is False

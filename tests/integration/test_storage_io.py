@@ -17,14 +17,7 @@ from application_sdk.storage.batch import (
     upload_file_from_bytes,
     upload_prefix,
 )
-from application_sdk.storage.factory import create_local_store
 from application_sdk.storage.ops import download_file, upload_file
-
-
-@pytest.fixture
-def store(tmp_path):
-    """Create a real local object store backed by a temp directory."""
-    return create_local_store(tmp_path / "store")
 
 
 @pytest.fixture

@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage.chunked import download_file_chunked
 from application_sdk.storage.cloud import CloudStore
@@ -29,11 +27,6 @@ from application_sdk.storage.transfer import download, upload
 from tests.unit.conftest import RecordingProgressTracker
 
 _PART = 1024
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 def _local_file(tmp_path: Path, name: str, parts: int = 4) -> Path:

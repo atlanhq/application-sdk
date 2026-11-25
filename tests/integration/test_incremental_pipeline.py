@@ -24,7 +24,6 @@ from application_sdk.infrastructure.context import (
     set_infrastructure,
 )
 from application_sdk.storage.batch import download_prefix, upload_prefix
-from application_sdk.storage.factory import create_local_store
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,12 +88,6 @@ def _count_jsonl(directory: Path) -> int:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def store(tmp_path):
-    """Real local object store backed by a temp directory."""
-    return create_local_store(tmp_path / "store")
 
 
 @pytest.fixture

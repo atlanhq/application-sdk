@@ -34,6 +34,7 @@ from application_sdk.clients.sql import (
     _with_connect_timeout,
 )
 from application_sdk.clients.sql_errors import SqlClientConnectTimeoutError
+from tests.unit._doubles import StopConnect, record_connect_params
 from tests.unit.loop_probe import LoopProbe
 
 #: The budget a hung ``load()`` runs under, and how long the hung step stays
@@ -209,29 +210,6 @@ class TestWithConnectTimeout:
         assert connect_args == {}
 
 
-class _Stop(Exception):
-    """Raised by the recorder so no connect ever reaches a socket."""
-
-
-def _record_connect_params(engine: Any) -> list[dict[str, Any]]:
-    """Record each connect's driver params, then stop it before any socket opens.
-
-    Registered after the cap, so it sees the params the driver would get.
-    """
-    from sqlalchemy import event
-
-    seen: list[dict[str, Any]] = []
-
-    def _record(
-        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
-    ) -> None:
-        seen.append(dict(cparams))
-        raise _Stop
-
-    event.listen(engine, "do_connect", _record)
-    return seen
-
-
 class TestCapNextConnectTimeout:
     @pytest.mark.parametrize(
         ("connect_args", "url_query", "first"),
@@ -252,9 +230,9 @@ class TestCapNextConnectTimeout:
         url = f"postgresql+psycopg2://u:p@127.0.0.1:1/d{url_query}"
         engine = create_engine(url, connect_args=connect_args)
         _cap_next_connect_timeout(engine, url, 6.2)
-        seen = _record_connect_params(engine)
+        seen = record_connect_params(engine)
         for _ in range(2):
-            with pytest.raises(_Stop):
+            with pytest.raises(StopConnect):
                 engine.raw_connection()
         assert int(seen[0]["connect_timeout"]) == first
         # Later connects keep the configured value.
@@ -288,7 +266,7 @@ class TestSyncLoadBudget:
 
         def _build() -> str:
             seen.append(aws_utils._STS_DEADLINE.get())
-            raise _Stop
+            raise StopConnect
 
         client.get_sqlalchemy_connection_string = _build  # type: ignore[method-assign]
         started = time.monotonic()

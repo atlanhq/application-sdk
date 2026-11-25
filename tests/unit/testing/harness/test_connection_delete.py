@@ -30,6 +30,7 @@ of printing a generic cleanup line.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pytest
@@ -39,7 +40,6 @@ from application_sdk.testing.harness.automation_engine import (
     NoWorkerOnTaskQueueError,
 )
 from application_sdk.testing.harness.automation_engine.wire import (
-    DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
@@ -54,6 +54,7 @@ from application_sdk.testing.harness.teardown import (
     connection_delete_task_queue,
     delete_connection,
 )
+from tests.unit.testing._ae_fakes import FakeAE, node, run_result
 
 _QN = "default/snowflake/1787587123106596"
 _QUEUE = "atlan-connection-delete-production"
@@ -96,88 +97,30 @@ def _result(
     run AE actually executed rather than the one the harness asked for.
     """
     resolved = names or tuple(CONNECTION_DELETE_NODE_ID for _ in statuses)
-    return DAGRunResult(
+    return run_result(
+        run,
+        *(node(name, status) for name, status in zip(resolved, statuses, strict=True)),
         run_id="run-1",
         workflow_slug="slug-1",
-        status=run,
-        nodes=[
-            DAGNodeResult(
-                name=name,
-                status=status,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-            for name, status in zip(resolved, statuses, strict=True)
-        ],
     )
 
 
-class _FakeAE:
-    """The four AE writes a delete makes, scripted rather than performed."""
+def _ae(
+    *polls: DAGRunResult | BaseException,
+    published: PublishedVersion | BaseException | None = _OUR_PUBLISHED,
+    **kwargs: Any,
+) -> FakeAE:
+    """``FakeAE`` scripted as a delete that ran its own graph and succeeded.
 
-    def __init__(
-        self,
-        *,
-        result: DAGRunResult | None = None,
-        poll_error: BaseException | None = None,
-        submit_error: BaseException | None = None,
-        create_error: BaseException | None = None,
-        published: PublishedVersion | None = _OUR_PUBLISHED,
-        published_error: BaseException | None = None,
-    ) -> None:
-        self._result = result or _result(DAGNodeStatus.SUCCEEDED)
-        self._poll_error = poll_error
-        self._submit_error = submit_error
-        self._create_error = create_error
-        self._published = published
-        self._published_error = published_error
-        self.created: list[tuple[str, str]] = []
-        self.versions: list[dict[str, Any]] = []
-        self.submitted: list[str] = []
-        self.submit_kwargs: list[dict[str, Any]] = []
-        self.poll_kwargs: list[dict[str, Any]] = []
-
-    async def create_workflow(self, *, name: str, description: str) -> str:
-        if self._create_error is not None:
-            raise self._create_error
-        self.created.append((name, description))
-        return "slug-1"
-
-    async def wait_for_slug(self, slug: str) -> None:
-        return None
-
-    async def create_version(self, slug: str, body: dict[str, Any]) -> int:
-        self.versions.append(body)
-        return int(body["version"])
-
-    async def publish_version(self, slug: str, version: int) -> None:
-        return None
-
-    async def submit_published_version(self, slug: str, **kwargs: Any) -> str:
-        """Deliberately not ``submit_workflow`` — see the module docstring."""
-        if self._submit_error is not None:
-            raise self._submit_error
-        self.submitted.append(slug)
-        self.submit_kwargs.append(kwargs)
-        return "run-1"
-
-    async def get_published_version(self, slug: str) -> PublishedVersion | None:
-        if self._published_error is not None:
-            raise self._published_error
-        return self._published
-
-    # The real guard, over this fake's scripted read. Borrowed rather than
-    # re-scripted: the decision it makes (which node names are foreign, and
-    # what "unanswered" degrades to) is the thing under test here, and a
-    # second copy of it in a fake would only ever agree with itself.
-    foreign_published_dag = AEClient.foreign_published_dag
-
-    async def poll_native_status(self, run_id: str, **kwargs: Any) -> DAGRunResult:
-        self.poll_kwargs.append(kwargs)
-        if self._poll_error is not None:
-            raise self._poll_error
-        return self._result
+    ``submit_workflow`` is never expected: the teardown submits its published
+    version straight to AE (see the module docstring), and
+    ``test_the_submit_names_only_the_slug`` asserts the Heracles path stays
+    unused. ``foreign_published_dag`` is the real guard over the scripted
+    ``published`` read — the decision it makes is the thing under test here.
+    """
+    return FakeAE(
+        *(polls or (_result(DAGNodeStatus.SUCCEEDED),)), published=published, **kwargs
+    )
 
 
 class TestTheNodeMatchesTheAppsManifest:
@@ -268,7 +211,7 @@ class TestDeleteConnectionReportsRatherThanRaises:
     """Teardown runs post-verdict, so nothing here may become the verdict."""
 
     async def test_a_succeeded_run_is_complete(self) -> None:
-        ae = _FakeAE()
+        ae = _ae()
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert report.complete
         assert report.succeeded
@@ -280,45 +223,51 @@ class TestDeleteConnectionReportsRatherThanRaises:
         resolve and publish over the version this teardown just published.
         FND-1724 could only make both outcomes of that fetch a delete; FND-1775
         removes the fetch, and this is the assertion that it stays removed."""
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(_QN, ae=ae, plan=_plan())
-        assert ae.submitted == ["slug-1"]
+        assert ae.args("submit_published_version", "slug") == ["slug-1"]
+        assert "submit_workflow" not in ae.methods
 
     async def test_an_unset_retry_leaves_aes_own_replication_budget(self) -> None:
         """``submit_published_version`` retries 404 while the just-published
         version replicates, on a budget matched to Heracles' own for the same
         lag. Passing nothing is how a teardown takes it — the plan's field is an
         override, not the default."""
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(_QN, ae=ae, plan=_plan())
-        assert ae.submit_kwargs == [{}]
+        defaults = inspect.signature(AEClient.submit_published_version).parameters
+        assert ae.args(
+            "submit_published_version", "retries", "retry_sleep_seconds"
+        ) == [(defaults["retries"].default, defaults["retry_sleep_seconds"].default)]
 
     async def test_a_retry_override_is_forwarded_to_the_submit(self) -> None:
         """The field survives the conversion because the replication budget is
         still a knob; what it stopped being is a *cold-start* budget, since this
         submit calls no app pod at all."""
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(
             _QN,
             ae=ae,
             plan=_plan(submit_retry=SubmitRetry(retries=3, sleep_seconds=7)),
         )
-        assert ae.submit_kwargs == [{"retries": 3, "retry_sleep_seconds": 7}]
+        assert ae.args(
+            "submit_published_version", "retries", "retry_sleep_seconds"
+        ) == [(3, 7)]
 
     async def test_the_workflow_description_names_the_connection(self) -> None:
         """The name has to be unique and escaping-free, so the QN goes on the
         description — which is where a reader of an AE run list finds which
         connection a teardown was for."""
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(_QN, ae=ae, plan=_plan())
-        _name, description = ae.created[0]
+        [description] = ae.args("create_workflow", "description")
         assert _QN in description
 
     async def test_no_worker_on_the_queue_is_reported_as_an_absent_app(self) -> None:
         """The one failure with its own field: the remediation is "install the
         app", not "investigate the run"."""
-        ae = _FakeAE(
-            poll_error=NoWorkerOnTaskQueueError(
+        ae = _ae(
+            NoWorkerOnTaskQueueError(
                 message="nothing polled the queue", resource=_QUEUE
             )
         )
@@ -331,25 +280,25 @@ class TestDeleteConnectionReportsRatherThanRaises:
         """Armed, or a tenant without the app burns the full ceiling on every
         connection before the fallback gets to reclaim anything — and named, or
         the operator is told a queue had no worker without being told which."""
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(_QN, ae=ae, plan=_plan(stall_grace_seconds=90))
-        assert ae.poll_kwargs[0]["stall_grace_seconds"] == 90
-        assert ae.poll_kwargs[0]["stall_task_queue"] == _QUEUE
+        assert ae.calls_to("poll_native_status")[0]["stall_grace_seconds"] == 90
+        assert ae.calls_to("poll_native_status")[0]["stall_task_queue"] == _QUEUE
 
     async def test_the_progress_watchdog_is_not_armed(self) -> None:
         """``connection-delete`` is a single node that legitimately sits Running
         while it drains a connection, which a node-glyph comparison cannot tell
         from a wedge. The poll ceiling is the bound instead."""
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(_QN, ae=ae, plan=_plan())
-        assert ae.poll_kwargs[0]["progress_stall_seconds"] is None
+        assert ae.calls_to("poll_native_status")[0]["progress_stall_seconds"] is None
 
     async def test_a_zero_grace_disables_the_latch_rather_than_firing_at_once(
         self,
     ) -> None:
-        ae = _FakeAE()
+        ae = _ae()
         await delete_connection(_QN, ae=ae, plan=_plan(stall_grace_seconds=0))
-        assert ae.poll_kwargs[0]["stall_grace_seconds"] is None
+        assert ae.calls_to("poll_native_status")[0]["stall_grace_seconds"] is None
 
     async def test_a_published_dag_that_is_not_ours_is_reported_before_polling(
         self,
@@ -357,12 +306,12 @@ class TestDeleteConnectionReportsRatherThanRaises:
         """The graph AE serves is the graph that runs, so a supersede is knowable
         as soon as the submit is in — and polling it would spend the whole
         ceiling on some other app's DAG while the connection sits undeleted."""
-        ae = _FakeAE(published=_SUPERSEDED_BY_THE_APP)
+        ae = _ae(published=_SUPERSEDED_BY_THE_APP)
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert report.dag_superseded
         assert not report.complete
         assert not report.app_absent
-        assert ae.poll_kwargs == []
+        assert "poll_native_status" not in ae.methods
         assert "extract, publish" in report.errors[0]
 
     async def test_a_run_that_executed_another_apps_nodes_is_never_a_delete(
@@ -372,8 +321,8 @@ class TestDeleteConnectionReportsRatherThanRaises:
         before success rather than only on failure: a superseded run is a
         different app's DAG, so it can go green. Read as a success it would skip
         the fallback and report a connection deleted that is still there."""
-        ae = _FakeAE(
-            result=_result(
+        ae = _ae(
+            _result(
                 DAGNodeStatus.SUCCEEDED,
                 DAGNodeStatus.SUCCEEDED,
                 names=("extract", "publish"),
@@ -389,25 +338,23 @@ class TestDeleteConnectionReportsRatherThanRaises:
         """``None`` is "the read did not get through", which is not "AE published
         something else". Claiming a supersede on it would send every leg to the
         fallback the first time a tenant blipped."""
-        ae = _FakeAE(published=None)
+        ae = _ae(published=None)
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert report.complete
         assert not report.dag_superseded
-        assert ae.poll_kwargs
+        assert "poll_native_status" in ae.methods
 
     async def test_a_read_that_raises_leaves_the_delete_running(self) -> None:
         """The guard is a guard, not a step: teardown runs post-verdict, so a
         read that raises must degrade to "unanswered" rather than turn a working
         delete into a cleanup error."""
-        ae = _FakeAE(published_error=RuntimeError("AE refused the read"))
+        ae = _ae(published=RuntimeError("AE refused the read"))
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert report.complete
         assert not report.dag_superseded
 
     async def test_a_failed_node_is_reported_without_raising(self) -> None:
-        ae = _FakeAE(
-            result=_result(DAGNodeStatus.FAILED, run=DAGRunStatus.FAILED),
-        )
+        ae = _ae(_result(DAGNodeStatus.FAILED, run=DAGRunStatus.FAILED))
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert not report.complete
         assert not report.app_absent
@@ -420,27 +367,27 @@ class TestDeleteConnectionReportsRatherThanRaises:
         expires. Treating those node states as the answer would report a slow
         delete as a failed one — and, worse, a *stopped-watching* run as a
         complete one when the last glyphs happened to be green."""
-        timed_out = DAGRunResult(
+        timed_out = run_result(
+            DAGRunStatus.RUNNING,
+            *_result(DAGNodeStatus.SUCCEEDED).nodes,
             run_id="run-1",
             workflow_slug="slug-1",
-            status=DAGRunStatus.RUNNING,
-            nodes=_result(DAGNodeStatus.SUCCEEDED).nodes,
             timed_out_after_seconds=900.0,
         )
-        report = await delete_connection(
-            _QN, ae=_FakeAE(result=timed_out), plan=_plan()
-        )
+        report = await delete_connection(_QN, ae=_ae(timed_out), plan=_plan())
         assert not report.succeeded
         assert "had not finished" in report.errors[0]
 
     async def test_a_rejected_create_is_reported(self) -> None:
-        ae = _FakeAE(create_error=RuntimeError("AE rejected the create"))
+        ae = _ae(errors={"create_workflow": RuntimeError("AE rejected the create")})
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert not report.complete
         assert "could not publish" in report.errors[0]
 
     async def test_a_rejected_submit_is_reported(self) -> None:
-        ae = _FakeAE(submit_error=RuntimeError("AE rejected the submit"))
+        ae = _ae(
+            errors={"submit_published_version": RuntimeError("AE rejected the submit")}
+        )
         report = await delete_connection(_QN, ae=ae, plan=_plan())
         assert not report.complete
         assert report.ae_workflow_slug == "slug-1"
@@ -450,11 +397,10 @@ class TestDeleteConnectionReportsRatherThanRaises:
         """Blank is never a legitimate target: the app's own guard refuses it
         because its prefix deletes would otherwise degrade to tenant-wide roots.
         Refusing here means the submit that would be refused is never made."""
-        ae = _FakeAE()
+        ae = _ae()
         report = await delete_connection("", ae=ae, plan=_plan())
         assert not report.complete
-        assert ae.created == []
-        assert ae.submitted == []
+        assert ae.methods == []
 
 
 @pytest.mark.parametrize(

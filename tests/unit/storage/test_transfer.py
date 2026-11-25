@@ -17,11 +17,6 @@ from application_sdk.storage.transfer import download, upload
 _IS_WINDOWS = sys.platform == "win32"
 
 
-@pytest.fixture
-def store():
-    return create_memory_store()
-
-
 def _hash_bytes(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)

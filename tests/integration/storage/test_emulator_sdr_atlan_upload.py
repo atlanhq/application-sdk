@@ -40,13 +40,13 @@ from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import (
-    emulator_unavailable,
+    MINIO_ENDPOINT,
     write_dapr_component,
 )
 
-pytestmark = pytest.mark.storage_emulator
+pytestmark = [pytest.mark.storage_emulator, pytest.mark.usefixtures("require_minio")]
 
-_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+
 _USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 _PASS = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 # Two distinct buckets standing in for SDR's two object-storage layers.
@@ -54,20 +54,6 @@ _CUSTOMER_BUCKET = os.environ.get(
     "CUSTOMER_OBJECT_STORE_BUCKET", "sdk-customer-objectstore"
 )
 _ATLAN_BUCKET = os.environ.get("ATLAN_OBJECT_STORE_BUCKET", "sdk-atlan-objectstore")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def require_minio() -> None:
-    """Fail (CI) or skip (local) the module when MinIO isn't reachable or unhealthy."""
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0) as client:
-            resp = client.get(f"{_ENDPOINT}/minio/health/live")
-    except Exception as exc:  # pragma: no cover — env guard
-        emulator_unavailable(f"MinIO not reachable at {_ENDPOINT}: {exc}")
-    if resp.status_code >= 500:  # pragma: no cover — env guard
-        emulator_unavailable(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
 def _s3_store(component_name: str, bucket: str, components_dir):
@@ -79,7 +65,7 @@ def _s3_store(component_name: str, bucket: str, components_dir):
         metadata={
             "bucket": bucket,
             "region": "us-east-1",
-            "endpoint": _ENDPOINT,
+            "endpoint": MINIO_ENDPOINT,
             "forcePathStyle": "true",
             "accessKey": _USER,
             "secretKey": _PASS,

@@ -46,13 +46,13 @@ import pytest
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import (
-    emulator_unavailable,
+    MINIO_ENDPOINT,
     write_dapr_component,
 )
 
-pytestmark = pytest.mark.storage_emulator
+pytestmark = [pytest.mark.storage_emulator, pytest.mark.usefixtures("require_minio")]
 
-_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+
 _USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 _PASS = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 _BUCKET = os.environ.get("S3_EMULATOR_BUCKET", "sdk-emulator-test")
@@ -60,20 +60,6 @@ _BUCKET = os.environ.get("S3_EMULATOR_BUCKET", "sdk-emulator-test")
 # MinIO ignores the RoleArn but boto3 requires the parameter, so any
 # well-formed ARN works here.
 _ROLE_ARN = "arn:aws:iam::000000000000:role/sdk-emulator-assume-role"
-
-
-@pytest.fixture(scope="module", autouse=True)
-def require_minio() -> None:
-    """Fail (CI) or skip (local) the module when MinIO isn't reachable or unhealthy."""
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0) as client:
-            resp = client.get(f"{_ENDPOINT}/minio/health/live")
-    except Exception as exc:  # pragma: no cover — env guard
-        emulator_unavailable(f"MinIO not reachable at {_ENDPOINT}: {exc}")
-    if resp.status_code >= 500:  # pragma: no cover — env guard
-        emulator_unavailable(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +70,7 @@ def sts_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     local run without that variable exercises the same path instead of silently
     calling real AWS STS.
     """
-    monkeypatch.setenv("AWS_ENDPOINT_URL_STS", _ENDPOINT)
+    monkeypatch.setenv("AWS_ENDPOINT_URL_STS", MINIO_ENDPOINT)
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
 
@@ -97,7 +83,7 @@ def _assume_role_cloud_store(components_dir) -> CloudStore:
         metadata={
             "bucket": _BUCKET,
             "region": "us-east-1",
-            "endpoint": _ENDPOINT,
+            "endpoint": MINIO_ENDPOINT,
             "forcePathStyle": "true",
             "assumeRoleArn": _ROLE_ARN,
             # Base credentials for the STS call itself.
@@ -153,7 +139,7 @@ async def test_assume_role_from_credentials_roundtrips_via_sdk(
     # credential wiring and the STS exchange under test stay real.
     from application_sdk import _obstore_config
 
-    monkeypatch.setenv("AWS_ENDPOINT_URL", _ENDPOINT)
+    monkeypatch.setenv("AWS_ENDPOINT_URL", MINIO_ENDPOINT)
     sdk_client_options = _obstore_config.obstore_client_options
     monkeypatch.setattr(
         _obstore_config,

@@ -20,10 +20,9 @@ pass or fail for reasons unrelated to the import graph.
 
 from __future__ import annotations
 
-import subprocess
-import sys
-
 import pytest
+
+from tests.unit._doubles import loaded_after_importing
 
 #: Every module in the substrate. Listed explicitly rather than discovered by
 #: walking the package: a new module added here without a conscious decision
@@ -49,27 +48,6 @@ _FORBIDDEN = (
 )
 
 
-def _loaded_after_importing(module: str) -> set[str]:
-    """Import *module* in a fresh interpreter; return the SDK modules it pulled in."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys, importlib;"
-            f"importlib.import_module({module!r});"
-            "print('\\n'.join(m for m in sys.modules if m.startswith('application_sdk')))",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-    assert result.returncode == 0, (
-        f"importing {module} in a fresh interpreter failed:\n{result.stderr}"
-    )
-    return {line for line in result.stdout.splitlines() if line}
-
-
 @pytest.mark.parametrize("module", _RUNTIME_MODULES)
 def test_a_runtime_module_pulls_in_no_layer_above_it(module: str) -> None:
     """The substrate imports the logger and nothing else from ``application_sdk``.
@@ -79,7 +57,7 @@ def test_a_runtime_module_pulls_in_no_layer_above_it(module: str) -> None:
     the first thing imported in a process. Fix it by moving the dependency down
     into ``_runtime`` or by not needing it, never by making the caller lazy.
     """
-    loaded = _loaded_after_importing(module)
+    loaded = loaded_after_importing(module)
     violations = sorted(
         name
         for name in loaded
@@ -100,7 +78,7 @@ def test_storage_ops_imports_without_the_execution_layer() -> None:
     absent (not merely that the import succeeded) is what keeps the *layering*
     honest rather than only the load order.
     """
-    loaded = _loaded_after_importing("application_sdk.storage.ops")
+    loaded = loaded_after_importing("application_sdk.storage.ops")
     assert "application_sdk.storage.ops" in loaded
     assert "application_sdk.execution" not in loaded, (
         "storage.ops pulled in the execution layer again — the storage → "
