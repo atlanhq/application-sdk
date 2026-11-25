@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
-from write_dapr_components import _COMPONENTS, main, write_components
+from write_dapr_components import (
+    SDR_E2E_SECRETS_FILE,
+    main,
+    render_components,
+    write_components,
+    write_sdr_e2e_components,
+)
+
+from application_sdk.dev._dapr_components import (
+    render_components as sdk_render_components,
+)
 
 # The names the SDK resolves at startup; objectstore is the one whose absence
 # crashed CI (StorageBindingNotFoundError [AAF-STR-003]).
@@ -103,10 +114,64 @@ def test_all_written_yaml_is_valid_and_named(tmp_path: Path) -> None:
 
 
 def test_template_keys_match_expected_names() -> None:
-    # Guards against a filename/metadata-name mismatch when editing _COMPONENTS.
-    assert {
-        name.removesuffix(".yaml") for name in _COMPONENTS
-    } == _EXPECTED_COMPONENT_NAMES
+    # Guards against a filename/metadata-name mismatch in the shared templates.
+    rendered = render_components(objectstore_root="/o", eventstore_root="/e")
+    assert {name.removesuffix(".yaml") for name in rendered} == (
+        _EXPECTED_COMPONENT_NAMES
+    )
+    for filename, content in rendered.items():
+        assert yaml.safe_load(content)["metadata"]["name"] == filename.removesuffix(
+            ".yaml"
+        )
+
+
+def test_renders_the_sdk_embedded_runtime_templates() -> None:
+    # The script must render the SDK's own templates, not a copy: the same
+    # inputs give byte-identical output to application_sdk.dev._dapr_components.
+    kwargs = {
+        "objectstore_root": "/o",
+        "eventstore_root": "/e",
+        "secrets_file": "/s.json",
+    }
+    assert render_components(**kwargs) == sdk_render_components(**kwargs)
+
+
+def test_sdr_e2e_profile_writes_container_layout(tmp_path: Path) -> None:
+    components = tmp_path / "components"
+    result = write_sdr_e2e_components(components)
+
+    assert result == {
+        "objectstore.yaml": "wrote",
+        "eventstore.yaml": "wrote",
+        "secretstore.yaml": "wrote",
+    }
+
+    def _meta(name: str) -> dict[str, str]:
+        spec = _load(components / f"{name}.yaml")["spec"]
+        return {m["name"]: m["value"] for m in spec["metadata"]}
+
+    # Container paths go in verbatim: never resolved against the runner.
+    assert _meta("objectstore") == {"rootPath": "/tmp/atlan-data"}
+    assert _meta("eventstore") == {"rootPath": "/tmp/atlan-eventstore"}
+    secret_spec = _load(components / "secretstore.yaml")["spec"]
+    assert secret_spec["type"] == "secretstores.local.file"
+    assert _meta("secretstore")["secretsFile"] == SDR_E2E_SECRETS_FILE
+
+
+def test_main_sdr_e2e_profile(tmp_path: Path) -> None:
+    rc = main([str(tmp_path / "out"), "--profile", "sdr-e2e"])
+    assert rc == 0
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == [
+        "eventstore.yaml",
+        "objectstore.yaml",
+        "secretstore.yaml",
+    ]
+
+
+def test_main_sdr_e2e_profile_rejects_host_roots(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main([str(tmp_path), "--profile", "sdr-e2e", "--objectstore-root", "x"])
+    assert exc.value.code == 2
 
 
 def test_main_defaults_to_components_dir_and_exits_zero(
@@ -141,6 +206,17 @@ def test_main_reports_io_failure(tmp_path: Path, monkeypatch, capsys) -> None:
     # Point the components dir at a path whose parent is a file → mkdir fails.
     clash = tmp_path / "afile"
     clash.write_text("x")
-    rc = main([str(clash / "components")])
+    rc = main(
+        [
+            str(clash / "components"),
+            "--objectstore-root",
+            str(tmp_path / "obj"),
+            "--eventstore-root",
+            str(tmp_path / "evt"),
+        ]
+    )
     assert rc == 1
     assert "::error::" in capsys.readouterr().err
+    # A failed write leaves no binding roots behind.
+    assert not (tmp_path / "obj").exists()
+    assert not (tmp_path / "evt").exists()

@@ -601,7 +601,9 @@ runs:
           --sdr-config-dir "$SDR_CONFIG_DIR" --script "$SECRETS_SCRIPT"
 
     # SDK defaults first, app overrides on top so apps can replace any single
-    # component file without forking the whole set. Two-store mode is the one
+    # component file without forking the whole set. The SDK defaults are
+    # rendered from application_sdk/dev/_dapr_components.py (the same templates
+    # the embedded runtime uses) by write_dapr_components.py --profile sdr-e2e. Two-store mode is the one
     # exception: see select_dapr_components.py docstring for why the app's
     # own objectstore.yaml override is skipped in that mode. Branching logic
     # lives in the tested script per docs/standards/ci.md; this step is
@@ -613,9 +615,11 @@ runs:
         APP_COMPONENTS: ${{ inputs.components-dir }}
         TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
+        python3 "$SDR_E2E_ROOT/../../scripts/write_dapr_components.py" \
+          "$RUNNER_TEMP/sdr-e2e-sdk-components" --profile sdr-e2e
         python3 "$SDR_E2E_ROOT/select_dapr_components.py" \
           --ci-components-dir ci-deploy/components \
-          --sdk-components-dir "$SDR_E2E_ROOT/components" \
+          --sdk-components-dir "$RUNNER_TEMP/sdr-e2e-sdk-components" \
           --app-components-dir "${APP_COMPONENTS}" \
           --sdr-config-dir "$SDR_CONFIG_DIR" \
           --two-store "${TWO_STORE}"

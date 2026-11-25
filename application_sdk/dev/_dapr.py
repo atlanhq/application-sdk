@@ -28,6 +28,11 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from application_sdk.dev._dapr_components import (
+    DEFAULT_EVENTSTORE_ROOT,
+    DEFAULT_OBJECTSTORE_ROOT,
+    render_components,
+)
 from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
     DaprComponentsDirNotFoundError,
@@ -247,103 +252,6 @@ def _pick_free_ports(count: int) -> list[int]:
         return [sock.getsockname()[1] for sock in socks]
 
 
-DEFAULT_OBJECTSTORE_ROOT = "./local/dapr/objectstore"
-DEFAULT_EVENTSTORE_ROOT = "./local/dapr/eventstore"
-
-_COMPONENTS_YAML = {
-    "statestore.yaml": """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: statestore
-spec:
-  type: state.in-memory
-  version: v1
-  metadata: []
-""",
-    "secretstore.yaml": """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: secretstore
-spec:
-  type: secretstores.local.env
-  version: v1
-  metadata: []
-""",
-    "deployment-secret-store.yaml": """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: deployment-secret-store
-spec:
-  type: secretstores.local.env
-  version: v1
-  metadata: []
-""",
-    "objectstore.yaml": """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: objectstore
-spec:
-  type: bindings.localstorage
-  version: v1
-  metadata:
-    - name: rootPath
-      value: {objectstore_root}
-""",
-    "eventstore.yaml": """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: eventstore
-spec:
-  type: bindings.localstorage
-  version: v1
-  metadata:
-    - name: rootPath
-      value: {eventstore_root}
-""",
-    "pubsub.yaml": """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: pubsub
-spec:
-  type: pubsub.in-memory
-  version: v1
-  metadata: []
-""",
-}
-
-
-# File-backed secret store, used when a ``secrets_file`` path is supplied (e.g.
-# integration tests that assert specific secret values from a checked-in JSON
-# file). Hyphenated keys like ``api-key`` round-trip cleanly through a file but
-# not through ``local.env``. The component only references the file path — no
-# secret values pass through this process.
-_SECRET_STORE_FILE_YAML = """\
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {name}
-spec:
-  type: secretstores.local.file
-  version: v1
-  metadata:
-    - name: secretsFile
-      value: {secrets_file}
-    - name: nestedSeparator
-      value: ":"
-"""
-
-_FILE_SECRET_STORE_NAMES = ("secretstore", "deployment-secret-store")
-# Component filenames re-emitted as file-backed when a secrets file is supplied;
-# derived from the names above so adding a store only requires editing one place.
-_FILE_SECRET_STORE_FILENAMES = {f"{n}.yaml" for n in _FILE_SECRET_STORE_NAMES}
-
-
 def _write_components(
     components_dir: Path,
     objectstore_root: Path = Path(DEFAULT_OBJECTSTORE_ROOT),
@@ -352,34 +260,26 @@ def _write_components(
 ) -> None:
     """Write the auto-generated Dapr component YAMLs into *components_dir*.
 
-    When *secrets_file* (a path to a JSON secrets file) is provided, the
-    ``secretstore`` / ``deployment-secret-store`` components are emitted as
-    ``secretstores.local.file`` pointing at that file, instead of the default
-    env-var store. Only the path is referenced — secret *values* never flow
-    through this process.
+    The templates live in :mod:`application_sdk.dev._dapr_components`, shared
+    with the CI component writer. The binding roots are created and resolved to
+    absolute paths here. When *secrets_file* (a path to a JSON secrets file) is
+    provided, the ``secretstore`` / ``deployment-secret-store`` components are
+    emitted as ``secretstores.local.file`` pointing at that file, instead of the
+    default env-var store. Only the path is referenced — secret *values* never
+    flow through this process.
     """
     components_dir.mkdir(parents=True, exist_ok=True)
     objectstore_root.mkdir(parents=True, exist_ok=True)
     eventstore_root.mkdir(parents=True, exist_ok=True)
-    for filename, template in _COMPONENTS_YAML.items():
-        # When a secrets file is supplied, skip the default env-var secret
-        # store components — they are re-emitted as file-backed below.
-        if secrets_file is not None and filename in _FILE_SECRET_STORE_FILENAMES:
-            continue
-        (components_dir / filename).write_text(
-            template.format(
-                objectstore_root=str(objectstore_root.resolve()),
-                eventstore_root=str(eventstore_root.resolve()),
-            ),
-            encoding="utf-8",
-        )
-    if secrets_file is not None:
-        resolved = str(Path(secrets_file).resolve())
-        for name in _FILE_SECRET_STORE_NAMES:
-            (components_dir / f"{name}.yaml").write_text(
-                _SECRET_STORE_FILE_YAML.format(name=name, secrets_file=resolved),
-                encoding="utf-8",
-            )
+    rendered = render_components(
+        objectstore_root=str(objectstore_root.resolve()),
+        eventstore_root=str(eventstore_root.resolve()),
+        secrets_file=(
+            str(Path(secrets_file).resolve()) if secrets_file is not None else None
+        ),
+    )
+    for filename, content in rendered.items():
+        (components_dir / filename).write_text(content, encoding="utf-8")
 
 
 _LOG_TAIL_BYTES = 4096
