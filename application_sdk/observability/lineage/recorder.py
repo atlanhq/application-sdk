@@ -21,10 +21,13 @@ guarded: an error stops recording and is swallowed (:mod:`.guard`).
 
 from __future__ import annotations
 
+import os
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+import orjson
 
 from application_sdk.observability.lineage.guard import guarded
 from application_sdk.observability.lineage.taxonomy import LineageReason
@@ -121,6 +124,49 @@ class CoverageRecorder:
         except Exception:  # noqa: BLE001
             return None
 
+    @guarded
+    def save(self, path: str) -> None:
+        """Write what was recorded, so a later step (another activity, another
+        process) can run coverage. The file holds reason codes, the details and
+        attributes the app passed, and whether recording stopped early."""
+        payload = {
+            "error": self.error,
+            "keys": {
+                key: {
+                    "missing": entry.missing,
+                    "partial": entry.partial,
+                    "unusable": entry.unusable,
+                    "details": entry.details,
+                    "attributes": entry.attributes,
+                    "fieldMissing": dict(entry.field_missing),
+                }
+                for key, entry in self._by_key.items()
+            },
+        }
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(orjson.dumps(payload, default=str))
+
+    @classmethod
+    def load(cls, path: str) -> CoverageRecorder:
+        """The recorder a lineage step saved. Raises if the file is unreadable;
+        call it inside the coverage step, which reports that as FAILED."""
+        with open(path, "rb") as fh:
+            payload = orjson.loads(fh.read())
+        recorder = cls()
+        for key, saved in (payload.get("keys") or {}).items():
+            recorder._by_key[key] = Recorded(
+                missing=list(saved.get("missing") or []),
+                partial=list(saved.get("partial") or []),
+                unusable=list(saved.get("unusable") or []),
+                details=dict(saved.get("details") or {}),
+                attributes=dict(saved.get("attributes") or {}),
+                field_missing=Counter(saved.get("fieldMissing") or {}),
+            )
+        recorder.error = payload.get("error")
+        recorder.enabled = False  # a loaded recorder is read-only
+        return recorder
+
     @property
     def recorded_keys(self) -> int:
         """How many keys hold anything. Not ``__len__``: a recorder must stay
@@ -137,7 +183,7 @@ class NoOpCoverageRecorder:
     def missing(self, *args: Any, **kwargs: Any) -> None:
         return None
 
-    partial = unusable = note = field_missing = missing
+    partial = unusable = note = field_missing = save = missing
 
     recorded_keys = 0
 

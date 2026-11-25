@@ -250,6 +250,42 @@ def test_an_empty_recorder_is_truthy():
     assert CoverageRecorder().recorded_keys == 0
 
 
+def test_a_saved_recorder_gives_the_same_rows(run_files, tmp_path):
+    recorder = CoverageRecorder()
+    recorder.missing(f"{CONN}/why", CustomSqlParserFailure, {"line": 3})
+    recorder.unusable(f"{CONN}/fallback", CustomSqlParserFailure)
+    recorder.partial(f"{CONN}/sparse", UpstreamIdentityTooSparse)
+    recorder.note(f"{CONN}/pending", kind="published", when={1, 2})
+    recorder.field_missing(f"{CONN}/pending", "FIELD_X", 2)
+    recorder.save(str(tmp_path / "state" / "recorded.json"))
+    assert recorder.error is None
+    loaded = CoverageRecorder.load(str(tmp_path / "state" / "recorded.json"))
+    loaded.missing("late", CustomSqlParserFailure)  # read-only
+    assert loaded.get("late") is None
+
+    run_coverage_step(run_files, str(tmp_path / "a"), SPEC, recorder, REGISTRY)
+    run_coverage_step(run_files, str(tmp_path / "b"), SPEC, loaded, REGISTRY)
+    a, b = rows(tmp_path / "a"), rows(tmp_path / "b")
+    # A value JSON can't hold is written as text, not a failed run.
+    assert a["pending"]["attributes"].pop("when") == "{1, 2}"
+    assert b["pending"]["attributes"].pop("when") == "{1, 2}"
+    assert a == b
+
+
+def test_saving_never_raises_and_a_stopped_recorder_stays_degraded(tmp_path, run_files):
+    recorder = CoverageRecorder()
+    (tmp_path / "blocked").write_text("a file")
+    recorder.save(str(tmp_path / "blocked" / "recorded.json"))
+    assert recorder.error in ("NotADirectoryError", "FileExistsError")
+    stopped = CoverageRecorder()
+    stopped.missing("k", object())  # type: ignore[arg-type]
+    stopped.enabled = True  # as if saved just before the error turned it off
+    stopped.save(str(tmp_path / "recorded.json"))
+    loaded = CoverageRecorder.load(str(tmp_path / "recorded.json"))
+    summary = run_coverage_step(run_files, str(tmp_path / "c"), SPEC, loaded, REGISTRY)
+    assert summary["coverageStatus"] == "DEGRADED"
+
+
 class Boom(RuntimeError):
     pass
 
