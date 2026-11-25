@@ -351,7 +351,9 @@ class TestTaskRetryPolicyConflict:
 
         policy = RetryPolicy(max_attempts=2)
 
-        with pytest.warns(DeprecationWarning, match="retry_max_attempts is ignored"):
+        with pytest.warns(
+            DeprecationWarning, match="arguments are ignored: retry_max_attempts\\."
+        ):
 
             class MyApp:
                 @task(retry_policy=policy, retry_max_attempts=5)
@@ -400,7 +402,7 @@ class TestTaskRetryPolicyConflict:
         message = str(record[0].message)
         assert "@task(name='fetch')" in message
         assert (
-            "retry_initial_interval_seconds, retry_max_interval_seconds are ignored"
+            "ignored: retry_initial_interval_seconds, retry_max_interval_seconds."
             in message
         )
         assert "retry_max_attempts" not in message

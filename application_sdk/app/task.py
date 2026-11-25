@@ -470,12 +470,11 @@ def _warn_retry_overrides_ignored(task_name: str | None, overrides: list[str]) -
     """
     where = f"@task(name={task_name!r})" if task_name else "@task"
     message = (
-        f"{where}: {', '.join(overrides)} "
-        f"{'is' if len(overrides) == 1 else 'are'} ignored because retry_policy "
-        "is also passed, and the policy alone sets the task's retries. Put the "
-        "value on the RetryPolicy (max_attempts, initial_interval, "
-        "max_interval) and drop the argument; this warning will be an error "
-        f"in v{RETRY_OVERRIDE_ERROR_VERSION} (TaskDeclarationError)."
+        f"{where}: retry_policy alone sets the task's retries, so these "
+        f"arguments are ignored: {', '.join(overrides)}. Use the RetryPolicy fields "
+        "instead (max_attempts, initial_interval, max_interval) and drop the "
+        "argument; passing both will be an error in "
+        f"v{RETRY_OVERRIDE_ERROR_VERSION} (TaskDeclarationError)."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=3)
     logger.warning("%s", message)
