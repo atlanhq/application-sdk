@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tools.migrate_v3 import SDK_APP_BASE_NAMES
 from tools.migrate_v3.fingerprint import (
     _V3_BASE_CONNECTOR_TYPES,
@@ -100,37 +102,33 @@ class TestV2Priority:
 
 
 class TestV3Detection:
-    def test_sql_metadata_extractor_already_migrated(self, tmp_path: Path) -> None:
-        _write(
-            tmp_path,
-            "app/connector.py",
-            "from application_sdk.templates import SqlMetadataExtractor\n"
-            "class MyConnector(SqlMetadataExtractor): pass\n",
-        )
-        result = fingerprint_connector(tmp_path)
-        assert result.connector_type == "sql_metadata"
-        assert result.already_migrated is True
-
-    def test_incremental_sql_metadata_extractor_already_migrated(
-        self, tmp_path: Path
+    @pytest.mark.parametrize(
+        ("source", "connector_type"),
+        [
+            pytest.param(
+                "from application_sdk.templates import SqlMetadataExtractor\n"
+                "class MyConnector(SqlMetadataExtractor): pass\n",
+                "sql_metadata",
+                id="sql_metadata_extractor",
+            ),
+            pytest.param(
+                "from application_sdk.templates import IncrementalSqlMetadataExtractor\n",
+                "incremental_sql",
+                id="incremental_sql_metadata_extractor",
+            ),
+            pytest.param(
+                "from application_sdk.templates import SqlQueryExtractor\n",
+                "sql_query",
+                id="sql_query_extractor",
+            ),
+        ],
+    )
+    def test_already_migrated(
+        self, tmp_path: Path, source: str, connector_type: str
     ) -> None:
-        _write(
-            tmp_path,
-            "app/connector.py",
-            "from application_sdk.templates import IncrementalSqlMetadataExtractor\n",
-        )
+        _write(tmp_path, "app/connector.py", source)
         result = fingerprint_connector(tmp_path)
-        assert result.connector_type == "incremental_sql"
-        assert result.already_migrated is True
-
-    def test_sql_query_extractor_already_migrated(self, tmp_path: Path) -> None:
-        _write(
-            tmp_path,
-            "app/connector.py",
-            "from application_sdk.templates import SqlQueryExtractor\n",
-        )
-        result = fingerprint_connector(tmp_path)
-        assert result.connector_type == "sql_query"
+        assert result.connector_type == connector_type
         assert result.already_migrated is True
 
     def test_sql_app_already_migrated(self, tmp_path: Path) -> None:

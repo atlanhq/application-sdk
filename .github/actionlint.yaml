@@ -60,7 +60,10 @@ paths:
   .github/workflows/build-and-scan.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
-  # The queue-diff jobs' script checkout (FND-3321).
+  # The queue-diff job's script checkout (FND-3321), one copy since FND-4928.
+  .github/workflows/queue-diff-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
   .github/workflows/checks-reusable.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'

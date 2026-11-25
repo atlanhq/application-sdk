@@ -52,6 +52,11 @@ def _match(path: str, patterns: tuple[str, ...] | list[str]) -> bool:
     )
 
 
+def excluded(path: str, exclude: tuple[str, ...] | list[str]) -> bool:
+    """Does an exclude pattern name this path?"""
+    return _match(path, exclude)
+
+
 def model_visible(
     files: list[FileDiff], exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE
 ) -> list[FileDiff]:
