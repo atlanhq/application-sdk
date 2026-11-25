@@ -36,19 +36,26 @@ TOOLKIT_CONNECTOR_CONFIG = '{"credential": "toolkit-default"}\n'
 CANONICAL_CONNECTOR_CONFIG = '{"credential": "hand-maintained"}\n'
 
 
+def _git_out(repo: Path, *args: str) -> str:
+    """Run git in *repo* and return its stdout; on failure, fail with git's
+    own stderr. `check=True` reported only the exit status, which left a CI
+    failure of `git add -A` (exit 128) with no stated cause."""
+    result = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, (
+        f"git {' '.join(args)} exited {result.returncode} in {repo}\n"
+        f"stderr:\n{result.stderr}\nstdout:\n{result.stdout}"
+    )
+    return result.stdout
+
+
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    _git_out(repo, *args)
 
 
 def _commit_count(repo: Path) -> int:
-    out = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return int(out.stdout.strip())
+    return int(_git_out(repo, "rev-list", "--count", "HEAD").strip())
 
 
 @pytest.fixture
