@@ -224,7 +224,7 @@ def _decode_tolerant_utf8(data: Any) -> str:
     rate-limited WARNING on the replacement path as the psycopg2 path does.
     """
     if data is None:
-        return None  # type: ignore[return-value]  # mirrors driver semantics for SQL NULL
+        return None  # pyright: ignore[reportReturnType]  # mirrors driver semantics for SQL NULL
     return _tolerant_utf8_decode(data)[0]
 
 
@@ -287,7 +287,7 @@ def install_tolerant_connection_decoder() -> bool:
         or every UTF-8 entry was already tolerant.
     """
     try:
-        import psycopg2.extensions as ext  # type: ignore[import-not-found]  # noqa: PLC0415
+        import psycopg2.extensions as ext  # noqa: PLC0415
     except ImportError:  # conformance: ignore[E008] optional dep psycopg2 not installed; driver-detection probe
         return False  # conformance: ignore[E007] driver-detection probe; ImportError means optional dep absent, not an error
 
@@ -337,7 +337,7 @@ def _attach_psycopg3(dbapi_connection: Any) -> bool:
     Returns True on success, False if the driver isn't available.
     """
     try:
-        from psycopg.adapt import (  # type: ignore[import-not-found]  # noqa: PLC0415
+        from psycopg.adapt import (  # noqa: PLC0415
             Loader,
         )
     except ImportError:  # conformance: ignore[E008] optional dep psycopg not installed; driver-detection probe

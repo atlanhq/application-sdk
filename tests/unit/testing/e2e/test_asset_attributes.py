@@ -24,12 +24,6 @@ import pytest
 
 from application_sdk.testing.e2e._errors import AtlasReadIndeterminateError
 from application_sdk.testing.e2e.base import BaseE2ETest, DAGSpec, FullDAGOutcome
-from application_sdk.testing.e2e.client import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-)
 from application_sdk.testing.harness.expectations import (
     AssetAttributes,
     AssetRef,
@@ -38,6 +32,7 @@ from application_sdk.testing.harness.expectations import (
     Present,
     Unreadable,
 )
+from tests.unit.testing._ae_fakes import succeeded
 
 _QN = "default/trino/1700000000123456"
 
@@ -81,27 +76,10 @@ def _sample(qualified_name: str, **values: object) -> AssetAttributes:
     return AssetAttributes(qualified_name=qualified_name, values=values)
 
 
-def _succeeded() -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[
-            DAGNodeResult(
-                name="extract",
-                status=DAGNodeStatus.SUCCEEDED,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-        ],
-    )
-
-
 def _outcome(attribute_reads: Any) -> FullDAGOutcome:
     """A run that passed every other assertion, so only the values are on trial."""
     return FullDAGOutcome(
-        ae_result=_succeeded(),
+        ae_result=succeeded("extract"),
         connection_qualified_name=_QN,
         connection_in_atlas=True,
         asset_counts={"Database": 1, "Schema": 1},
@@ -207,7 +185,7 @@ class TestGrading:
     def test_a_suite_that_declares_nothing_grades_nothing(self) -> None:
         suite = _suite(_NoAttributeCheck)
         outcome = FullDAGOutcome(
-            ae_result=_succeeded(),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=True,
             asset_counts={"Schema": 1},
@@ -295,7 +273,7 @@ class TestTheRead:
             _settled({"Database": 1, "Schema": 1}),
         )
 
-        outcome = await suite._read_inventory(object(), _succeeded())
+        outcome = await suite._read_inventory(object(), succeeded("extract"))
 
         assert calls == [
             {
@@ -325,7 +303,7 @@ class TestTheRead:
         monkeypatch.setattr(base_module.atlas, "count_total_assets", _settled(1))
         monkeypatch.setattr(base_module.atlas, "count_assets", _settled({"Schema": 1}))
 
-        await _suite(_NoAttributeCheck)._read_inventory(object(), _succeeded())
+        await _suite(_NoAttributeCheck)._read_inventory(object(), succeeded("extract"))
         assert not called
 
 
@@ -391,7 +369,7 @@ def _addressed_right() -> dict[AssetRef, list[AssetAttributes]]:
 def _five_schema_outcome(addressed: Any) -> FullDAGOutcome:
     """A run whose counts and per-type matchers all pass, so only values differ."""
     return FullDAGOutcome(
-        ae_result=_succeeded(),
+        ae_result=succeeded("extract"),
         connection_qualified_name=_QN,
         connection_in_atlas=True,
         asset_counts={"Schema": 2},
@@ -530,7 +508,9 @@ class TestPerAssetAddressing:
         monkeypatch.setattr(base_module.atlas, "count_total_assets", _settled(2))
         monkeypatch.setattr(base_module.atlas, "count_assets", _settled({"Schema": 2}))
 
-        outcome = await _suite(_FiveSchemas)._read_inventory(object(), _succeeded())
+        outcome = await _suite(_FiveSchemas)._read_inventory(
+            object(), succeeded("extract")
+        )
 
         assert calls == [
             {
@@ -556,5 +536,5 @@ class TestPerAssetAddressing:
         monkeypatch.setattr(base_module.atlas, "count_total_assets", _settled(1))
         monkeypatch.setattr(base_module.atlas, "count_assets", _settled({"Schema": 1}))
 
-        await _suite(_NoAttributeCheck)._read_inventory(object(), _succeeded())
+        await _suite(_NoAttributeCheck)._read_inventory(object(), succeeded("extract"))
         assert not called

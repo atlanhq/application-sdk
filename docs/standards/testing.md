@@ -20,6 +20,14 @@
       (Snowflake, Databricks, Tableau, DBT and their minors); optional elsewhere
     - Test files should mirror the source structure
     - Test file names should start with `test_`
+    - `packages/conformance/tests/` shares helpers through `tests/_helpers.py`
+      (`ids`, `active_ids`, `write_py`, `scan_files`, `uv_lock`, `extract_node`,
+      `sdk_root`); import from it rather than defining a local copy
+    - The SDK's unit tests share doubles through `tests/unit/_doubles.py`
+      (`FakeClock`, `StaticHandler`, `SiblingProbe`, `loaded_after_importing`,
+      `record_connect_params`, the Temporal `ExecuteInput` / `WorkflowInfo` /
+      `ActivityInfo`) and the shipped `application_sdk.testing.mocks`
+      (`MockSecretStore`); import from them rather than defining a local copy
 
 - **Connector-App Testing Tiers (Agreed Architecture)**
 
@@ -126,3 +134,8 @@
   - Keep test data minimal and focused
   - Use factories for complex objects
   - Clean up test data after tests
+
+- **Skipping Tests**
+  - An unconditional `@pytest.mark.skip` (decorator, `pytestmark` or `pytest.param(marks=...)`) must name the ticket that lifts it in its reason, e.g. `reason="waits on FND-1234"`. A hook in `tests/conftest.py` fails any test whose skip reason has no ticket key.
+  - Prefer fixing or deleting a broken test over skipping it. A skip with no owner becomes permanent.
+  - `skipif` is not checked: its condition (a platform, a missing optional dependency) is what makes it temporary.

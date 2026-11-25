@@ -50,6 +50,7 @@ breaks an entry fails the generator rather than shipping a wrong pair.
 
 from __future__ import annotations
 
+import importlib
 import importlib.resources as _ir
 import json
 import typing
@@ -214,9 +215,7 @@ def build_relationship_data() -> RelationshipData:
     Imports pyatlan_v9 lazily: only the generator and the drift test call this,
     never a scan.
     """
-    import importlib
-
-    import msgspec
+    import msgspec  # noqa: PLC0415 — msgspec comes with pyatlan_v9, which only the generator installs
 
     assets = importlib.import_module(_ASSETS_MODULE)
     referenceable = assets.Referenceable

@@ -19,7 +19,11 @@ Full-DAG AE harness (new — subclass per connector)::
     from application_sdk.testing.e2e import SQLAppE2ETest          # SQL connectors
     from application_sdk.testing.e2e import SystemAppE2ETest       # system apps
     from application_sdk.testing.e2e.payload import AgentSpec, ConnectionSpec
-    from application_sdk.testing.e2e.client import AEWorkflowClient
+
+The Automation Engine run types a suite grades (``DAGRunResult``,
+``DAGNodeStatus`` and the rest) live in the harness::
+
+    from application_sdk.testing.harness.automation_engine import DAGRunResult
 
 Asserting on attribute VALUES needs the matcher vocabulary, which lives with the
 evaluator that grades it::

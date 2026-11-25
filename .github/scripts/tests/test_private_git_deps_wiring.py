@@ -7,7 +7,8 @@ env, so every later step, including the tests, pre-commit hooks and
 conformance series that import app code, could read it.
 
 They now mint a read-only fleet App token scoped to the app's private repos
-(the inline shape pinned by ``_scoped_mint.py``) and hand it to
+(``.github/actions/scoped-private-deps-token``, pinned by ``_scoped_mint.py``)
+and hand it to
 ``.github/scripts/git_auth.py`` alone, which uses it only to mirror-clone those
 repos: uv, and every build backend it runs, install from the local mirrors
 with no token in their env (lens round 5). These tests pin that shape, so a
@@ -27,25 +28,26 @@ git's own; git_auth.py itself is executed in test_git_auth.py.
 
 from __future__ import annotations
 
+import copy
 import re
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+from _scoped_mint import (
+    NOT_REQUIRED,
+    assert_action_shape,
+    assert_inline_scoped_mint,
+    assert_scoped_mint,
+    calls,
+    load_action,
+)
+from _workflows import ACTIONS, WORKFLOWS, job, load_workflow, steps, triggers
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _scoped_mint import assert_scoped_mint  # noqa: E402
-
-Workflow = dict[Any, Any]
 Step = dict[str, Any]
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOWS = REPO_ROOT / ".github" / "workflows"
-ACTIONS = REPO_ROOT / ".github" / "actions"
-
-#: (workflow file, job id, the boolean input that opts a caller in)
+#: (workflow file, job id, the boolean input that opts a caller in). Each
+#: mints on that input; e2e mints on every run (the image build needs it too)
+#: and requires the token only with the input (``E2E_UNGATED``).
 JOBS = [
     ("tests-reusable.yaml", "unit", "private-git-deps"),
     ("tests-reusable.yaml", "integration", "private-git-deps"),
@@ -56,6 +58,11 @@ JOBS = [
     ("release-version-bump.yaml", "bump-version", "private_git_auth"),
 ]
 JOB_IDS = [f"{wf}:{job}" for wf, job, _ in JOBS]
+E2E_UNGATED = {("tests-reusable.yaml", "e2e")}
+#: Still inline: the SDK's own PRs run it (sdk-gate.yaml, conformance.yaml), so
+#: it cannot call an action that is not on main yet. Moves to the action in a
+#: follow-up once this one has merged.
+INLINE = {("conformance-reusable.yaml", "suite")}
 
 #: Composites that receive the token as ``git-auth-token``.
 COMPOSITES = [
@@ -80,22 +87,9 @@ GIT_CONFIG_WRITE = re.compile(
 )
 
 
-def _load(path: Path) -> Workflow:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _job(workflow_file: str, job: str) -> dict[str, Any]:
-    return _load(WORKFLOWS / workflow_file)["jobs"][job]
-
-
-def _steps(workflow_file: str, job: str) -> list[Step]:
-    return _job(workflow_file, job)["steps"]
-
-
-def _mint(steps: list[Step]) -> Step:
-    mints = [s for s in steps if s.get("id") == MINT_ID]
-    assert len(mints) == 1, f"expected one step with id {MINT_ID!r}"
-    return mints[0]
+def _with(step: Step) -> dict[str, Any]:
+    value = step.get("with")
+    return value if isinstance(value, dict) else {}
 
 
 def _runs_git_auth(step: Step) -> bool:
@@ -109,13 +103,13 @@ def _mirrors(step: Step) -> bool:
 # ── No persisted credential, no job-wide token ────────────────────────────────
 
 
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
+@pytest.mark.parametrize(("workflow_file", "job_id", "flag"), JOBS, ids=JOB_IDS)
 def test_no_step_writes_a_git_credential(
-    workflow_file: str, job: str, flag: str
+    workflow_file: str, job_id: str, flag: str
 ) -> None:
     writers = [
         s.get("name")
-        for s in _steps(workflow_file, job)
+        for s in steps(job(load_workflow(workflow_file), job_id))
         if GIT_CONFIG_WRITE.search(s.get("run", ""))
     ]
     assert writers == [], (
@@ -123,9 +117,9 @@ def test_no_step_writes_a_git_credential(
     )
 
 
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_no_job_level_token(workflow_file: str, job: str, flag: str) -> None:
-    env = _job(workflow_file, job).get("env") or {}
+@pytest.mark.parametrize(("workflow_file", "job_id", "flag"), JOBS, ids=JOB_IDS)
+def test_no_job_level_token(workflow_file: str, job_id: str, flag: str) -> None:
+    env = job(load_workflow(workflow_file), job_id).get("env") or {}
     assert "GIT_TOKEN" not in env
     leaked = [
         k for k, v in env.items() if "ORG_PAT_GITHUB" in str(v) or TOKEN_REF in str(v)
@@ -136,34 +130,110 @@ def test_no_job_level_token(workflow_file: str, job: str, flag: str) -> None:
 # ── The mint ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
+@pytest.mark.parametrize(("workflow_file", "job_id", "flag"), JOBS, ids=JOB_IDS)
 def test_token_is_minted_scoped_to_the_apps_private_repos(
-    workflow_file: str, job: str, flag: str
+    workflow_file: str, job_id: str, flag: str
 ) -> None:
-    assert_scoped_mint(
-        _steps(workflow_file, job),
-        mint_id=MINT_ID,
-        repos_id=REPOS_ID,
-        cond=f"inputs.{flag}",
+    job_steps = steps(job(load_workflow(workflow_file), job_id))
+    if (workflow_file, job_id) in INLINE:
+        # Includes the fail-closed guard straight after the soft mint.
+        assert_inline_scoped_mint(
+            job_steps, mint_id=MINT_ID, repos_id=REPOS_ID, cond=f"inputs.{flag}"
+        )
+    elif (workflow_file, job_id) in E2E_UNGATED:
+        assert_scoped_mint(
+            job_steps, mint_id=MINT_ID, cond=None, require=f"${{{{ inputs.{flag} }}}}"
+        )
+    else:
+        # `require` omitted: the action's default, so a failed mint fails here.
+        assert_scoped_mint(job_steps, mint_id=MINT_ID, cond=f"inputs.{flag}")
+
+
+def test_the_action_fails_closed() -> None:
+    assert_action_shape(load_action())
+
+
+def _workflow_calls() -> list[tuple[tuple[str, str, str], Step]]:
+    found: list[tuple[tuple[str, str, str], Step]] = []
+    for path in sorted(WORKFLOWS.glob("*.y*ml")):
+        jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
+        for job_id, body in jobs.items():
+            for step in calls(body.get("steps") or []):
+                found.append(((path.name, job_id, str(step.get("id"))), step))
+    return found
+
+
+def test_every_call_requires_the_token_or_says_why_not() -> None:
+    """``require: "false"`` only where an empty token fails visibly later on."""
+    found = _workflow_calls()
+    assert len(found) == 11
+    opted_out = {site for site, step in found if _with(step).get("require") == "false"}
+    assert opted_out == set(NOT_REQUIRED)
+    for site, step in found:
+        require = _with(step).get("require")
+        assert require in (None, "false", "${{ inputs.private-git-deps }}"), site
+
+
+def test_no_inline_mint_outside_the_action() -> None:
+    """``git_auth.py repos`` runs in the action, and inline only in ``INLINE``."""
+    inline: set[tuple[str, str]] = set()
+    for path in sorted(WORKFLOWS.glob("*.y*ml")):
+        jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
+        for job_id, body in jobs.items():
+            # A reusable-workflow call (`uses:`) has no steps; the sweep skips it.
+            job_steps: list[Step] = body.get("steps") or []
+            if any("git_auth.py repos" in s.get("run", "") for s in job_steps):
+                inline.add((path.name, job_id))
+    assert inline == INLINE
+
+
+def test_inline_mint_without_its_guard_is_caught() -> None:
+    """Red-green: dropping the guard after the inline soft mint fails the pin."""
+    suite = steps(job(load_workflow("conformance-reusable.yaml"), "suite"))
+    at = [s.get("id") for s in suite].index(MINT_ID)
+    unguarded = suite[: at + 1] + suite[at + 2 :]
+    with pytest.raises(AssertionError, match="fail-closed guard"):
+        assert_inline_scoped_mint(
+            unguarded,
+            mint_id=MINT_ID,
+            repos_id=REPOS_ID,
+            cond="inputs.private-git-deps",
+        )
+
+
+def test_action_without_its_guard_is_caught() -> None:
+    """Red-green: an action whose guard is gone, or fails open, fails the pin."""
+    spec = load_action()
+    spec["runs"]["steps"] = spec["runs"]["steps"][:2]
+    with pytest.raises((AssertionError, ValueError)):
+        assert_action_shape(spec)
+    spec = load_action()
+    guard = spec["runs"]["steps"][2]
+    guard["if"] = guard["if"].replace(
+        "inputs.require != 'false'", "inputs.require == 'true'"
     )
+    with pytest.raises(AssertionError):
+        assert_action_shape(spec)
+    # Mentions `exit 1` and the secrets, but exits 0 (lens F-23fb19).
+    spec = load_action()
+    spec["runs"]["steps"][2]["run"] = (
+        'echo "::error::exit 1: pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY"\n'
+    )
+    with pytest.raises(AssertionError, match="exits 0"):
+        assert_action_shape(spec)
 
 
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_missing_token_fails_naming_the_secrets(
-    workflow_file: str, job: str, flag: str
-) -> None:
-    steps = _steps(workflow_file, job)
-    mint = steps.index(_mint(steps))
-    guards = [
-        (i, s)
-        for i, s in enumerate(steps)
-        if s.get("if") == f"inputs.{flag} && {REPOS_REF} != '' && {TOKEN_REF} == ''"
-    ]
-    assert len(guards) == 1
-    i, guard = guards[0]
-    assert i == mint + 1
-    assert "exit 1" in guard["run"]
-    assert "FLEET_APP_ID" in guard["run"] and "FLEET_APP_PRIVATE_KEY" in guard["run"]
+def test_inline_guard_that_succeeds_is_caught() -> None:
+    """Red-green: an inline guard that echoes but exits 0 fails the pin."""
+    suite = copy.deepcopy(
+        steps(job(load_workflow("conformance-reusable.yaml"), "suite"))
+    )
+    at = [s.get("id") for s in suite].index(MINT_ID)
+    suite[at + 1]["run"] = suite[at + 1]["run"].replace("exit 1", "echo exit 1")
+    with pytest.raises(AssertionError, match="exits 0"):
+        assert_inline_scoped_mint(
+            suite, mint_id=MINT_ID, repos_id=REPOS_ID, cond="inputs.private-git-deps"
+        )
 
 
 # ── Who reads the token ───────────────────────────────────────────────────────
@@ -184,9 +254,11 @@ def _readers(steps: list[Step]) -> list[tuple[Step, str]]:
     return found
 
 
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
-def test_token_reaches_only_git_auth(workflow_file: str, job: str, flag: str) -> None:
-    readers = _readers(_steps(workflow_file, job))
+@pytest.mark.parametrize(("workflow_file", "job_id", "flag"), JOBS, ids=JOB_IDS)
+def test_token_reaches_only_git_auth(
+    workflow_file: str, job_id: str, flag: str
+) -> None:
+    readers = _readers(steps(job(load_workflow(workflow_file), job_id)))
     assert readers, "the minted token is never used"
     for step, where in readers:
         name = step.get("name") or step.get("uses")
@@ -194,6 +266,9 @@ def test_token_reaches_only_git_auth(workflow_file: str, job: str, flag: str) ->
             assert _mirrors(step), (
                 f"{name}: GIT_TOKEN on a step other than `git_auth.py mirror`"
             )
+        elif where == "with.git-token" and "/actions/sdr-e2e@" in step["uses"]:
+            # The image build's BuildKit secret (test_image_build_git_token.py).
+            continue
         elif where == "with.git-auth-token":
             assert step["uses"].startswith(
                 "atlanhq/application-sdk/.github/actions/"
@@ -203,11 +278,11 @@ def test_token_reaches_only_git_auth(workflow_file: str, job: str, flag: str) ->
             pytest.fail(f"{name}: token read as {where}")
 
 
-@pytest.mark.parametrize(("workflow_file", "job", "flag"), JOBS, ids=JOB_IDS)
+@pytest.mark.parametrize(("workflow_file", "job_id", "flag"), JOBS, ids=JOB_IDS)
 def test_git_auth_steps_require_the_token_only_when_opted_in(
-    workflow_file: str, job: str, flag: str
+    workflow_file: str, job_id: str, flag: str
 ) -> None:
-    for step, where in _readers(_steps(workflow_file, job)):
+    for step, where in _readers(steps(job(load_workflow(workflow_file), job_id))):
         if where != "env.GIT_TOKEN":
             continue
         required = str(step["env"]["PRIVATE_GIT_DEPS"])
@@ -217,14 +292,14 @@ def test_git_auth_steps_require_the_token_only_when_opted_in(
 
 
 @pytest.mark.parametrize(
-    ("workflow_file", "job", "flag"),
+    ("workflow_file", "job_id", "flag"),
     [j for j in JOBS if j[0] != "release-version-bump.yaml"],
     ids=[i for i in JOB_IDS if not i.startswith("release")],
 )
 def test_composite_gets_the_token_only_when_opted_in(
-    workflow_file: str, job: str, flag: str
+    workflow_file: str, job_id: str, flag: str
 ) -> None:
-    for step, where in _readers(_steps(workflow_file, job)):
+    for step, where in _readers(steps(job(load_workflow(workflow_file), job_id))):
         if where == "with.git-auth-token":
             assert (
                 step["with"]["git-auth-token"]
@@ -237,11 +312,10 @@ def test_composite_gets_the_token_only_when_opted_in(
 
 @pytest.mark.parametrize("action", COMPOSITES)
 def test_composite_hands_the_token_only_to_git_auth(action: str) -> None:
-    spec = _load(ACTIONS / action / "action.yaml")
+    spec = load_workflow(ACTIONS / action / "action.yaml")
     assert spec["inputs"]["git-auth-token"]["default"] == ""
-    steps = spec["runs"]["steps"]
     readers = 0
-    for step in steps:
+    for step in steps(spec):
         assert not GIT_CONFIG_WRITE.search(step.get("run", "")), step.get("name")
         env = step.get("env") or {}
         with_ = step.get("with") or {}
@@ -262,8 +336,10 @@ def test_composite_hands_the_token_only_to_git_auth(action: str) -> None:
 
 def test_setup_deps_tokenless_install_is_unchanged() -> None:
     """A caller without a token installs exactly as before (and never needs python3)."""
-    steps = _load(ACTIONS / "setup-deps" / "action.yaml")["runs"]["steps"]
-    by_name = {s.get("name"): s for s in steps}
+    by_name = {
+        s.get("name"): s
+        for s in steps(load_workflow(ACTIONS / "setup-deps" / "action.yaml"))
+    }
     plain = by_name["Install dependencies"]
     authed = by_name["Install dependencies (private git dependencies)"]
     assert (
@@ -284,8 +360,11 @@ def test_setup_deps_tokenless_install_is_unchanged() -> None:
 def test_release_bump_relocks_without_git_auth_when_not_opted_in() -> None:
     """A caller pinning ``sdk_scripts_ref`` to a revision without git_auth.py
     must still bump: the no-private-deps path never runs it."""
-    steps = _steps("release-version-bump.yaml", "bump-version")
-    relocks = [s for s in steps if "uv lock" in s.get("run", "")]
+    relocks = [
+        s
+        for s in steps(job(load_workflow("release-version-bump.yaml"), "bump-version"))
+        if "uv lock" in s.get("run", "")
+    ]
     assert [s["if"] for s in relocks] == [
         "${{ !inputs.private_git_auth }}",
         "inputs.private_git_auth",
@@ -302,12 +381,13 @@ def test_release_bump_relocks_without_git_auth_when_not_opted_in() -> None:
 def _all_steps() -> list[tuple[str, Step]]:
     found: list[tuple[str, Step]] = []
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
-        jobs: dict[str, dict[str, Any]] = _load(path).get("jobs") or {}
-        for job_id, job in jobs.items():
-            for step in job.get("steps") or []:
+        jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
+        for job_id, body in jobs.items():
+            # A reusable-workflow call (`uses:`) has no steps; the sweep skips it.
+            for step in body.get("steps") or []:
                 found.append((f"{path.name}:{job_id}", step))
     for path in sorted(ACTIONS.glob("*/action.y*ml")):
-        runs: dict[str, Any] = _load(path).get("runs") or {}
+        runs: dict[str, Any] = load_workflow(path).get("runs") or {}
         for step in runs.get("steps") or []:
             found.append((path.parent.name, step))
     return found
@@ -346,17 +426,17 @@ def test_every_token_holding_step_only_mirrors() -> None:
 
 
 def test_conformance_presyncs_before_the_dependency_series() -> None:
-    steps = _steps("conformance-reusable.yaml", "suite")
-    ids = [s.get("id") for s in steps]
+    suite = steps(job(load_workflow("conformance-reusable.yaml"), "suite"))
+    ids = [s.get("id") for s in suite]
     presync = ids.index("git-deps-presync")
     detect = ids.index("detect-dependency")
     assert presync < detect
     # Same plain sync the vendored action runs, so its own sync fetches nothing.
-    assert steps[presync]["run"].endswith("run -- uv sync")
+    assert suite[presync]["run"].endswith("run -- uv sync")
     # A failed pre-sync stops D rather than letting it fail again, unexplained.
-    assert "steps.git-deps-presync.outcome != 'failure'" in steps[detect]["if"]
-    assert "GIT_TOKEN" not in str(steps[detect].get("env") or {})
-    assert "git-auth" not in str(steps[detect].get("with") or {})
+    assert "steps.git-deps-presync.outcome != 'failure'" in suite[detect]["if"]
+    assert "GIT_TOKEN" not in str(suite[detect].get("env") or {})
+    assert "git-auth" not in str(suite[detect].get("with") or {})
 
 
 # ── Interface: callers pin @main and must keep parsing ───────────────────────
@@ -374,8 +454,7 @@ def test_conformance_presyncs_before_the_dependency_series() -> None:
 def test_secrets_interface_keeps_org_pat_and_declares_the_app(
     workflow_file: str,
 ) -> None:
-    on = _load(WORKFLOWS / workflow_file)[True]  # YAML 1.1 reads `on:` as True
-    secrets = on["workflow_call"]["secrets"]
+    secrets = triggers(load_workflow(workflow_file))["workflow_call"]["secrets"]
     # Still declared: a caller that maps it explicitly would fail at startup.
     assert "ORG_PAT_GITHUB" in secrets
     for name in ("FLEET_APP_ID", "FLEET_APP_PRIVATE_KEY"):
@@ -386,13 +465,13 @@ def test_secrets_interface_keeps_org_pat_and_declares_the_app(
 
 
 def test_api_member_installs_through_git_auth_after_the_mirror() -> None:
-    steps = _steps("tests-reusable.yaml", "api-member")
-    names = [s.get("name") for s in steps]
+    member = steps(job(load_workflow("tests-reusable.yaml"), "api-member"))
+    names = [s.get("name") for s in member]
     mirror = names.index("Mirror private git dependencies")
     install = names.index("Install the api member alone and mount it like the host")
     assert mirror < install
-    assert _mirrors(steps[mirror])
-    assert "uv pip install" in steps[install]["run"]
+    assert _mirrors(member[mirror])
+    assert "uv pip install" in member[install]["run"]
     assert re.search(
-        r"git_auth\.py run -- \\\n\s*uv pip install", steps[install]["run"]
+        r"git_auth\.py run -- \\\n\s*uv pip install", member[install]["run"]
     ), "the member's install must run through git_auth.py"

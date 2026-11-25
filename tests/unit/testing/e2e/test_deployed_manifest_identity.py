@@ -29,9 +29,9 @@ from application_sdk.testing.e2e._manifest_identity import (
     node_identities,
 )
 from application_sdk.testing.e2e.base import _supersedes
-from application_sdk.testing.e2e.client import AEWorkflowClient, PublishedVersion
+from application_sdk.testing.e2e.client import AEWorkflowClient
 from application_sdk.testing.harness._poll import fake_clock
-from application_sdk.testing.harness.automation_engine import AEClient
+from application_sdk.testing.harness.automation_engine import AEClient, PublishedVersion
 from application_sdk.testing.harness.automation_engine.wire import (
     first_version_row as _first_version_row,
 )

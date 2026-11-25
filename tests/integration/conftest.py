@@ -20,6 +20,15 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from obstore.store import LocalStore
+
+# The registry reset has one definition, in the shared testing fixtures; the
+# autouse ``clean_registries`` below only applies it to every integration test.
+from application_sdk.storage.factory import create_local_store
+from application_sdk.testing.fixtures import (  # noqa: F401
+    clean_app_registry,
+    clean_task_registry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +56,12 @@ def _integration_env_vars():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> LocalStore:
+    """A real local object store backed by a temp directory."""
+    return create_local_store(tmp_path / "store")
 
 
 @pytest.fixture
@@ -96,15 +111,11 @@ async def temporal_client(temporal_host):
 
 
 @pytest.fixture(autouse=True)
-def clean_registries():
+def clean_registries(
+    clean_app_registry,  # noqa: F811 — the imported fixture, requested by name
+    clean_task_registry,  # noqa: F811 — the imported fixture, requested by name
+) -> None:
     """Reset AppRegistry and TaskRegistry before and after each test."""
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
 
 
 @pytest.fixture
@@ -155,12 +166,10 @@ def run_worker(temporal_client, task_queue):
     @asynccontextmanager
     async def _ctx(**kwargs):
         kwargs.setdefault("shutdown_drain_delay_seconds", 0)
-        worker = create_worker(
-            temporal_client,
-            task_queue,
-            passthrough_modules={"tests"},
-            **kwargs,
-        )
+        # No passthrough for "tests": the test modules that define the apps
+        # are re-imported in the sandbox for every run, as a consumer app's
+        # modules are in production, so workflow code here is checked too.
+        worker = create_worker(temporal_client, task_queue, **kwargs)
         async with worker:
             yield
 

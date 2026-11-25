@@ -86,6 +86,7 @@ NO_IMPORT_SITE: dict[str, str] = {
 
 #: Extra requirements with no import site, and why the extra carries them.
 EXTRA_NO_IMPORT_SITE: dict[str, str] = {
+    "dnspython": "[mcp]: published CVE floor on a fastmcp -> email-validator dependency",
     "httpx2": "[tests]: starlette's TestClient transport, for the app's own tests",
 }
 

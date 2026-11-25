@@ -1555,15 +1555,16 @@ All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` 
 
 ### Seeding credentials for local dev
 
-For local testing with credentials, use `run_dev_combined()` with `MockSecretStore`:
+For local testing with credentials, pass them to `run_dev_combined()` as `credentials=`. The SDK provisions them through the dev local-vault route once the handler is up and injects the returned `credential_guid` into `example_input`:
 ```python
-from application_sdk.testing.mocks import MockSecretStore
-
-secrets = {"my-cred": json.dumps({"host": "...", "password": "..."})}
-credential_stores = {"default": MockSecretStore(secrets)}
-
-await run_dev_combined(MyApp, credential_stores=credential_stores)
+await run_dev_combined(
+    MyApp,
+    credentials={"host": "...", "port": "5432", "username": "...", "password": "..."},
+    example_input={"connection": {"connection_name": "dev"}},
+)
 ```
+
+Do not pass `credential_stores=`: it is deprecated and ignored, and was never read.
 
 ### Credential resolution — `CredentialRef.resolve(input)`, not raw `get_secret`
 
@@ -1646,9 +1647,9 @@ When you `from application_sdk.templates import SqlApp`, Python imports all temp
 
 ### os.environ is blocked inside Temporal workflow sandbox
 
-`os.environ.get()` cannot be called from `run()` — Temporal's sandbox blocks it as non-deterministic. Read env vars at module level:
+`os.environ.get()` / `os.getenv()` cannot be called from `run()`, an `@entrypoint`, or any helper they call. Temporal's sandbox refuses it as non-deterministic, and the workflow task fails until a fixed build is deployed. The same applies to `tempfile`, `shutil`, `open()`, `os.listdir`, `datetime.now()` and `uuid.uuid4()` (use `self.now()` / `self.uuid()`; move I/O into a `@task`). String-only `os.path` calls (`join`, `dirname`, `basename`, ...) are allowed; `os.path.exists` and other filesystem reads are not. Read env vars at module level:
 ```python
-# Module level — runs at import time, before sandbox
+# Module level: the sandbox allows reads at import time
 _MY_CONFIG = os.environ.get("MY_CONFIG", "default")
 
 class MyApp(App):

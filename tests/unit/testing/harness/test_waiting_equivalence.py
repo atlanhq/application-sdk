@@ -50,19 +50,19 @@ from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
     NoWorkerOnTaskQueueError,
 )
-from application_sdk.testing.e2e.client import (
-    AEWorkflowClient,
-    DAGNodeResult,
+from application_sdk.testing.e2e.client import AEWorkflowClient
+from application_sdk.testing.harness._poll import fake_clock
+from application_sdk.testing.harness.automation_engine import (
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
 )
-from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine.wire import (
     node_glyph as _node_glyph,
 )
 from application_sdk.testing.harness.budgets import CONNECTOR_CI, Wait
 from application_sdk.testing.harness.waiting import poll_until
+from tests.unit.testing._ae_fakes import numbered
 
 _RUN_ID = "test-run-123"
 _AE = CONNECTOR_CI.budgets[Wait.AE_RUN]
@@ -92,25 +92,6 @@ _SAME_VERDICT = {
 # ---------------------------------------------------------------------------
 # Building readings
 # ---------------------------------------------------------------------------
-
-
-def _result(run_status: DAGRunStatus, *node_statuses: DAGNodeStatus) -> DAGRunResult:
-    """One ``native-status`` reading with one node per given status."""
-    return DAGRunResult(
-        run_id=_RUN_ID,
-        workflow_slug="slug",
-        status=run_status,
-        nodes=[
-            DAGNodeResult(
-                name=f"node{index}",
-                status=status,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-            for index, status in enumerate(node_statuses)
-        ],
-    )
 
 
 def _blip(retry_after: float | None = None) -> AtlanApiHttpError:
@@ -279,16 +260,16 @@ async def _harness(script: Script) -> Observed:
 # The scripts
 # ---------------------------------------------------------------------------
 
-_RUNNING_NODE = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
-_PENDING_NODE = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
-_NOT_DISPATCHED = _result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
-_SUCCEEDED = _result(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
-_FAILED = _result(DAGRunStatus.FAILED, DAGNodeStatus.FAILED)
+_RUNNING_NODE = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+_PENDING_NODE = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+_NOT_DISPATCHED = numbered(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
+_SUCCEEDED = numbered(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
+_FAILED = numbered(DAGRunStatus.FAILED, DAGNodeStatus.FAILED)
 
 #: Alternates its glyph summary every poll, so the watchdog never closes and the
 #: run reaches its ceiling still visibly progressing.
 _PROGRESSING: Script = [
-    _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING, status)
+    numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING, status)
     for _ in range(40)
     for status in (DAGNodeStatus.PENDING, DAGNodeStatus.RUNNING)
 ]

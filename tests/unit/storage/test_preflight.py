@@ -902,3 +902,41 @@ async def test_run_check_never_raises_per_store_above_its_share() -> None:
         await check_run_storage_access(infra, timeout_seconds=40)
 
     assert seen == [20.0], seen
+
+
+class TestProbeTimeoutEnv:
+    """``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS`` through the shared reader (FND-5223)."""
+
+    KEY = "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS"
+
+    def test_unset_or_empty_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.preflight import _load_probe_timeout
+
+        monkeypatch.delenv(self.KEY, raising=False)
+        assert _load_probe_timeout() == 30.0
+        monkeypatch.setenv(self.KEY, "")
+        assert _load_probe_timeout() == 30.0
+
+    def test_valid_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from application_sdk.storage.preflight import _load_probe_timeout
+
+        monkeypatch.setenv(self.KEY, "60")
+        assert _load_probe_timeout() == 60.0
+
+    @pytest.mark.parametrize("raw", ["inf", "nan", "0", "-5", "abc"])
+    def test_unusable_value_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """``inf`` was accepted and made the probe wait forever on a blackholed
+        endpoint, which is the stall this timeout exists to prevent."""
+        from application_sdk.storage import preflight
+
+        monkeypatch.setenv(self.KEY, raw)
+        with (
+            patch.object(preflight.logger, "warning") as warning,
+            patch("application_sdk.common._env.logger.warning") as env_warning,
+        ):
+            assert preflight._load_probe_timeout() == 30.0
+        assert warning.called or env_warning.called

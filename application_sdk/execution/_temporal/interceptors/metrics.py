@@ -203,8 +203,7 @@ def _begin_share(now_ns: int) -> resource_sampler.ShareMark | None:
     # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
     try:
         return resource_sampler.ACTIVITY_SHARES.begin(now_ns / 1_000_000_000)
-    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort observability; a sampling failure must never fail the activity it measures
         return None
 
 
@@ -217,21 +216,35 @@ def _end_share(
     # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
     try:
         return resource_sampler.ACTIVITY_SHARES.end(mark, now_ns / 1_000_000_000)
-    # conformance: ignore[E004] best-effort observability; a sampling failure must never fail the activity it measures
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort observability; a sampling failure must never fail the activity it measures
         return None
 
 
 class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
-    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        if workflow.unsafe.is_replaying():
-            return await self.next.execute_workflow(input)
+    """Records one ``temporal.workflow.executions`` sample per run.
 
+    A run can be split across several workflow-instance lifetimes: a cache
+    eviction (``max_cached_workflows`` pressure, sticky-queue timeout) tears the
+    instance down mid-run, and a worker restart hands the run to another worker
+    that rebuilds it by replaying history. Each lifetime enters
+    ``execute_workflow``, so neither entry nor exit of this method is a run
+    boundary on its own. The rules that make the sample land exactly once:
+
+    * Never skip instrumentation at entry. A rehydrated instance enters while
+      replaying but may be the one that completes the run live.
+    * Emit in ``finally`` only when ``workflow.unsafe.is_replaying()`` is false.
+      Eviction teardown cancels the coroutine with replay forced on (temporalio
+      treats eviction as replay), and replaying an already-closed history ends
+      under replay too. Neither is the run's real outcome.
+    * Measure duration from history time, ``workflow.now() - info.start_time``,
+      not this process's clock: a rehydrated instance did not see the start.
+    """
+
+    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         info = workflow.info()
         attrs = {
             "temporal.workflow.type": info.workflow_type or "",
         }
-        start_ns = time.monotonic_ns()
         status = "OK"
         exc_caught: BaseException | None = None
         try:
@@ -242,20 +255,20 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             exc_caught = exc
             raise
         finally:
-            duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
-            tagged = {**attrs, "otel.status_code": status}
             # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
             try:
-                _workflow_executions().add(1, tagged)
-                _workflow_duration().record(duration_s, tagged)
-                if status == "ERROR":
-                    classified = _classify_failure(exc_caught)
-                    _workflow_failures_classified().add(
-                        1,
-                        {**attrs, **classified},
-                    )
-            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
-            except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
+                if not workflow.unsafe.is_replaying():
+                    duration_s = (workflow.now() - info.start_time).total_seconds()
+                    tagged = {**attrs, "otel.status_code": status}
+                    _workflow_executions().add(1, tagged)
+                    _workflow_duration().record(duration_s, tagged)
+                    if status == "ERROR":
+                        classified = _classify_failure(exc_caught)
+                        _workflow_failures_classified().add(
+                            1,
+                            {**attrs, **classified},
+                        )
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on metric emission; best-effort observability; metric emission must never block or raise in a workflow finally block
                 pass
 
 
@@ -300,8 +313,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                     cpu_s, mem_gib_s = shares
                     _activity_cpu_seconds().record(cpu_s, tagged)
                     _activity_mem_gib_seconds().record(mem_gib_s, tagged)
-            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
-            except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the activity on metric emission; best-effort observability; metric emission must never block or raise in an activity finally block
                 pass
 
 

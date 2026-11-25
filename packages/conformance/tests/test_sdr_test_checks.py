@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conformance.suite.checks.sdr_test_checks import discover, scan_all, scan_path
+from conformance.suite.checks.sdr_test_checks import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -40,10 +40,6 @@ def _write(tmp_path: Path, files: dict[str, str]) -> None:
 def _run(tmp_path: Path) -> list:
     paths = discover(tmp_path)
     return scan_all(paths, tmp_path)
-
-
-def _ids(findings: list) -> list[str]:
-    return [f.rule_id for f in findings]
 
 
 # ── Rule metadata ────────────────────────────────────────────────────────────
@@ -370,13 +366,3 @@ def test_discover_finds_test_files(tmp_path: Path) -> None:
 
 def test_discover_empty_when_tests_absent(tmp_path: Path) -> None:
     assert discover(tmp_path) == []
-
-
-# ── scan_path no-op ──────────────────────────────────────────────────────────
-
-
-def test_scan_path_is_noop(tmp_path: Path) -> None:
-    f = tmp_path / "tests" / "test_x.py"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text("pass\n")
-    assert scan_path(f, tmp_path) == []

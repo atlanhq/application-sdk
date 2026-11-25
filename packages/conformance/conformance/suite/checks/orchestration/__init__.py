@@ -36,10 +36,11 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
-    EXCLUDE_DIRS,
     _IgnoreDirective,
     _parse_directives,
+    discover_with_tests,
     make_cli_main,
+    make_scan_path,
 )
 from conformance.suite.checks._ast_common._safe_swap import source_lines
 from conformance.suite.schema.findings import Finding
@@ -51,10 +52,6 @@ from ._temporal_import_confinement import check_p006
 
 SERIES = "P"
 
-# This series scans test files too (see module docstring), so the universal
-# ``tests``/``test`` directory exclusion is dropped from the discovery filter.
-_EXCLUDE_DIRS = EXCLUDE_DIRS - {"tests", "test"}
-
 __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
 
@@ -65,15 +62,7 @@ def discover(root: Path) -> list[Path]:
     the ``tests``/``test`` trees and ``test_*`` files — the orchestration seam
     applies to test harnesses too.
     """
-    paths: list[Path] = []
-    for path in root.rglob("*.py"):
-        if set(path.parts) & _EXCLUDE_DIRS:
-            continue
-        rel_parts = path.relative_to(root).parts
-        if any(p.startswith(".") for p in rel_parts[:-1]):
-            continue
-        paths.append(path)
-    return sorted(paths)
+    return discover_with_tests(root)
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
@@ -95,17 +84,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     ]
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P004 + P005 + P006).  P007 requires :func:`scan_all`."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

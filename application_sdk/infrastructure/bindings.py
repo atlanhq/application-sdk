@@ -6,15 +6,24 @@ from typing import ClassVar, Protocol
 
 from typing_extensions import deprecated
 
-from application_sdk.errors import BINDING_ERROR, ErrorCode
+from application_sdk import _deprecation
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class BindingError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+@dataclass(kw_only=True)
+class BindingError(_LegacyErrorCodeMixin, DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.infrastructure.BindingUnavailableError`` — removed in v4.0."""
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = BINDING_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_BINDING"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("binding_name", "binding"),
+        ("operation", "operation"),
+    )
+    binding_name: str | None = None
+    operation: str | None = None
 
     def __init__(
         self,
@@ -26,7 +35,7 @@ class BindingError(DependencyUnavailableError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "BindingError is deprecated; use application_sdk.infrastructure.BindingUnavailableError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -34,25 +43,22 @@ class BindingError(DependencyUnavailableError):
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.binding_name = binding_name
         self.operation = operation
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
 
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.binding_name:
-            parts.append(f"binding={self.binding_name}")
-        if self.operation:
-            parts.append(f"operation={self.operation}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+@dataclass(kw_only=True)
+class BindingUnavailableError(BindingError):
+    """A binding invocation failed: the sidecar or the bound resource did not answer.
+
+    Raised by the SDK's own ``Binding`` implementations. It subclasses the deprecated
+    ``BindingError`` only until v4.0, so ``except BindingError:`` clauses keep matching
+    what the SDK raises; constructing it does not warn. v4.0 deletes
+    ``BindingError`` and re-bases this class onto ``DependencyUnavailableError``.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_BINDING"
+    binding_name: str | None = None
+    operation: str | None = None
 
 
 @deprecated(
@@ -109,7 +115,7 @@ class Binding(Protocol):
             Binding response.
 
         Raises:
-            BindingError: If invocation fails.
+            BindingUnavailableError: If invocation fails.
         """
         ...
 
@@ -174,3 +180,21 @@ class OutputBinding(Protocol):
             BindingError: If write fails.
         """
         ...
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "BINDING_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import types
 import urllib.request
+import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -671,8 +672,10 @@ class TestLazyPackage:
     def test_every_reexport_still_resolves(self) -> None:
         from application_sdk.testing import integration
 
-        for name in integration.__all__:
-            assert getattr(integration, name) is not None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            for name in integration.__all__:
+                assert getattr(integration, name) is not None
         assert set(integration.__all__) <= set(dir(integration))
 
     def test_unknown_attribute_still_raises(self) -> None:
@@ -686,24 +689,45 @@ class TestLazyPackage:
 
         assert set(integration._LAZY_EXPORTS) == set(integration.__all__)
 
-    def test_names_shared_with_a_submodule_are_bound_eagerly(self) -> None:
-        """A function named like its own submodule must not be left to ``__getattr__``.
+    def test_names_shared_with_a_submodule_never_bind_the_module(self) -> None:
+        """A function named like its own submodule must never resolve to the module.
 
         Python binds a submodule onto its package the first time the submodule
-        loads. If a colliding export is resolved lazily, whoever triggers that
-        first load — a direct submodule import, or ``__getattr__`` fetching a
-        sibling name from the same module — leaves the module bound under the
-        function's name, and ``__getattr__`` is never consulted again for it.
-        The only order-independent defence is an eager binding in the package
-        body, so every collision must already be in the module namespace.
+        loads. If that first load happened outside the package body — a direct
+        submodule import, or ``__getattr__`` fetching a sibling name from the
+        same module — the module would sit in the package namespace under the
+        function's name, and ``__getattr__`` would never be consulted again for
+        it. The package body loads every colliding submodule itself and then
+        removes the binding, so the namespace never holds the module and the
+        name always reaches ``__getattr__``.
         """
         from application_sdk.testing import integration
 
         colliding = set(integration._LAZY_EXPORTS) & integration._LAZY_SUBMODULES
         assert "lazy" in colliding  # the case that motivated this test
         for name in colliding:
-            assert name in vars(integration), f"{name!r} is resolved lazily"
-            assert not isinstance(vars(integration)[name], types.ModuleType), name
+            assert not isinstance(vars(integration).get(name), types.ModuleType), name
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                served = getattr(integration, name)
+            assert not isinstance(served, types.ModuleType), name
+
+    def test_deprecated_names_are_never_bound(self) -> None:
+        """A deprecated name in the package namespace would stop warning.
+
+        ``__getattr__`` only runs for names the module does not already hold,
+        so caching a deprecated name, or binding it eagerly, silences every
+        later import of it (FND-4911 moved ``lazy`` off its eager binding for
+        this reason).
+        """
+        from application_sdk.testing import integration
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            for name in integration._DEPRECATED_CONSTANTS:
+                getattr(integration, name)
+        bound = set(integration._DEPRECATED_CONSTANTS) & set(vars(integration))
+        assert not bound, sorted(bound)
 
     def test_lazy_is_the_function_whatever_loads_first(self) -> None:
         """``from ... import lazy`` is callable regardless of import order.

@@ -39,8 +39,6 @@ from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Replayer
-from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 import application_sdk.app.base as app_base
 from application_sdk.app.base import App
@@ -60,9 +58,8 @@ from application_sdk.execution._temporal.preflight_gate import (
     preflight_gate_activity_name,
     preflight_warmup_activity_name,
 )
-from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.retry import NO_RETRY
-from application_sdk.execution.sandbox import SandboxConfig
+from application_sdk.execution.settings import load_interceptor_settings
 from application_sdk.handler.contracts import (
     PreflightGateMode,
     WarmupObservation,
@@ -85,6 +82,7 @@ from application_sdk.testing import (
 from application_sdk.testing.preflight import (  # noqa: F401 — fixture, requested by gate_rows
     capture_preflight_outcomes,
 )
+from tests.unit.execution.fixtures.replay.harness import replay
 
 pytestmark = pytest.mark.integration
 
@@ -401,18 +399,16 @@ class TestReadyAtTheFirstProbe:
 
 
 async def _replay(run: Run) -> None:
-    """Replay ``run``'s history on this build; raises on any non-determinism."""
-    replayer = Replayer(
-        workflows=get_all_app_workflows(),
-        workflow_runner=SandboxedWorkflowRunner(
-            restrictions=SandboxConfig()
-            .with_passthrough_modules("tests")
-            .to_temporal_restrictions()
-        ),
-        data_converter=pydantic_data_converter,
-    )
-    replayed = await replayer.replay_workflow(
-        await run.handle.fetch_history(), raise_on_replay_failure=False
+    """Replay ``run``'s history on this build; raises on any non-determinism.
+
+    Through the worker's own interceptor chain and flags, so what replays is
+    the shape that ran, not a bare workflow.
+    """
+    settings = load_interceptor_settings()
+    replayed = await replay(
+        await run.handle.fetch_history(),
+        events=settings.enable_event_interceptor,
+        cleanup=settings.enable_cleanup_interceptor,
     )
     assert replayed.replay_failure is None, replayed.replay_failure
 

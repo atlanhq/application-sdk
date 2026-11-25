@@ -68,6 +68,81 @@ def emulator_unavailable(reason: str) -> NoReturn:
     pytest.skip(reason)
 
 
+#: Where each storage emulator listens. CI's service containers set the env
+#: vars; the defaults match ``uv run poe start-deps``.
+MINIO_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+AZURITE_ENDPOINT = os.environ.get(
+    "AZURE_STORAGE_ENDPOINT", "http://localhost:10000"
+).rstrip("/")
+#: Azurite's well-known dev account — public, emulator-only.
+AZURITE_ACCOUNT = "devstoreaccount1"
+GCS_EMULATOR_ENDPOINT = os.environ.get(
+    "GCS_EMULATOR_ENDPOINT", "http://localhost:9095"
+).rstrip("/")
+
+
+def require_reachable(url: str, name: str) -> None:
+    """Fail (CI) or skip (local) unless *url* answers below 500.
+
+    Unreachable and 5xx are both "unavailable": a reachable but unhealthy
+    emulator should stop here with a clear message, not fail a round-trip with
+    an opaque one.
+    """
+    import httpx
+
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            resp = client.get(url)
+    except httpx.HTTPError as exc:  # pragma: no cover — env guard
+        emulator_unavailable(f"{name} not reachable at {url}: {exc}")
+    if resp.status_code >= 500:  # pragma: no cover — env guard
+        emulator_unavailable(f"{name} unhealthy at {url}: HTTP {resp.status_code}")
+
+
+# Opt a module in with ``pytestmark = pytest.mark.usefixtures("require_minio")``.
+
+
+@pytest.fixture(scope="module")
+def require_minio() -> None:
+    """Fail (CI) or skip (local) the module when MinIO isn't reachable or healthy."""
+    require_reachable(f"{MINIO_ENDPOINT}/minio/health/live", "MinIO")
+
+
+@pytest.fixture(scope="module")
+def require_azurite() -> None:
+    """Fail (CI) or skip (local) the module when Azurite isn't reachable or healthy."""
+    # Azurite answers the bare account URL with 400, not 5xx: reachable.
+    require_reachable(f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}", "Azurite")
+
+
+@pytest.fixture(scope="module")
+def require_testbench() -> None:
+    """Fail (CI) or skip (local) the module when the GCS emulator (proxy) isn't
+    reachable or healthy."""
+    require_reachable(
+        f"{GCS_EMULATOR_ENDPOINT}/storage/v1/b?project=test", "GCS emulator"
+    )
+
+
+# CI sets this on the real-cloud jobs: they log in to all three clouds and export
+# the bucket variables, so a missing one is a broken job (a renamed repo variable,
+# a dropped env line), not a developer without cloud access. Skipping there turned
+# the job green with no cloud test run.
+_CLOUD_REQUIRED = os.environ.get("STORAGE_CLOUD_REQUIRED") == "1"
+
+
+def cloud_unavailable(reason: str) -> NoReturn:
+    """Fail when ``STORAGE_CLOUD_REQUIRED=1`` (CI), otherwise skip.
+
+    The ``require_s3`` / ``require_azure`` / ``require_gcs`` guards route through
+    here so local runs without cloud access still skip, while CI cannot pass on
+    skips.
+    """
+    if _CLOUD_REQUIRED:
+        pytest.fail(f"{reason} (STORAGE_CLOUD_REQUIRED=1)", pytrace=False)
+    pytest.skip(reason)
+
+
 # ---------------------------------------------------------------------------
 # Local-filesystem fixtures (no cloud credentials needed)
 # ---------------------------------------------------------------------------
@@ -165,7 +240,7 @@ GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"
 
 @pytest.fixture(autouse=True)
 def require_s3(request):
-    """Skip ``s3_integration`` tests unless keyless AWS creds are present.
+    """Skip (or fail, see ``cloud_unavailable``) ``s3_integration`` tests unless keyless AWS creds are present.
 
     Keyless: the CI OIDC step (configure-aws-credentials) exports the ambient
     chain (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN); tests omit creds from the
@@ -182,7 +257,7 @@ def require_s3(request):
             "(AWS_ACCESS_KEY_ID / AWS_PROFILE / AWS_WEB_IDENTITY_TOKEN_FILE / …)"
         )
     if missing:
-        pytest.skip(
+        cloud_unavailable(
             f"Real AWS access required. Missing: {', '.join(missing)}. "
             "In CI these come from the keyless OIDC role; locally set "
             "S3_BUCKET + an env-detectable AWS credential signal (exported keys "
@@ -192,7 +267,7 @@ def require_s3(request):
 
 @pytest.fixture(autouse=True)
 def require_azure(request):
-    """Skip ``azure_integration`` tests unless keyless Azure WI creds are present.
+    """Skip (or fail) ``azure_integration`` tests unless keyless Azure WI creds are present.
 
     Keyless: the storage account has shared-key access disabled, so auth is
     Workload Identity Federation — the SP client/tenant id plus a federated
@@ -210,7 +285,7 @@ def require_azure(request):
     if not AZURE_FEDERATED_TOKEN_FILE or not os.path.exists(AZURE_FEDERATED_TOKEN_FILE):
         missing.append("AZURE_FEDERATED_TOKEN_FILE (existing)")
     if missing:
-        pytest.skip(
+        cloud_unavailable(
             f"Real Azure (Workload Identity) access required. Missing: {', '.join(missing)}. "
             "In CI these come from the keyless OIDC federated SP."
         )
@@ -218,7 +293,7 @@ def require_azure(request):
 
 @pytest.fixture(autouse=True)
 def require_gcs(request):
-    """Skip ``gcs_integration`` tests unless keyless GCS (ADC) access is present.
+    """Skip (or fail) ``gcs_integration`` tests unless keyless GCS (ADC) access is present.
 
     Keyless: the CI WIF step (google-github-actions/auth) sets ADC via
     GOOGLE_APPLICATION_CREDENTIALS; tests omit creds so obstore uses ADC.
@@ -233,7 +308,7 @@ def require_gcs(request):
     if not GOOGLE_APPLICATION_CREDENTIALS:  # ADC file from the WIF step
         missing.append("GOOGLE_APPLICATION_CREDENTIALS (ADC)")
     if missing:
-        pytest.skip(
+        cloud_unavailable(
             f"Real GCS access required. Missing: {', '.join(missing)}. "
             "In CI these come from the keyless WIF auth step."
         )

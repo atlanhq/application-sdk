@@ -95,11 +95,13 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     is_test_function,
     make_cli_main,
     make_finding,
+    make_scan_path,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -139,15 +141,7 @@ def discover(root: Path) -> list[Path]:
     uncollectable-file defects can occur under any tier directory. Returns
     ``[]`` when ``tests/`` is absent.
     """
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    paths: list[Path] = []
-    for path in base.rglob("*.py"):
-        if "__pycache__" in path.parts:
-            continue
-        paths.append(path)
-    return sorted(paths)
+    return discover_tree(root, "tests")
 
 
 # ---------------------------------------------------------------------------
@@ -649,17 +643,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single test file, producing repo-root-relative URIs."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 # ---------------------------------------------------------------------------

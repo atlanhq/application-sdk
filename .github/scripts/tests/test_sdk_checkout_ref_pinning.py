@@ -95,7 +95,7 @@ def _step_blocks_from_text(path: Path) -> list[tuple[int, list[str]]]:
         if not _REPOSITORY_LINE.match(line):
             continue
         start = next(i for i in range(idx, -1, -1) if _STEP_START.match(lines[i]))
-        indent = len(_STEP_START.match(lines[start]).group("indent"))  # type: ignore[union-attr]
+        indent = len(_STEP_START.match(lines[start]).group("indent"))  # pyright: ignore[reportOptionalMemberAccess]
         end = idx + 1
         while end < len(lines):
             stripped = lines[end].strip()
@@ -156,6 +156,15 @@ def test_only_the_reviewed_checkouts_are_exempt() -> None:
     # comment in a workflow.
     exempt = sorted((c.file, c.job) for c in CHECKOUTS if c.exempt_reason is not None)
     assert exempt == [
+        # The connector reviewer's copy of the SDK source at the version the
+        # pull request head's uv.lock pins (FND-5331, FND-5316: the lock is read
+        # through the API as data, so the ref is the pull request author's
+        # choice, bounded by the checks below). It is not a pinning knob for
+        # code that runs: the reviewer's own scripts come from the separate
+        # checkout at `job.workflow_sha`, and this tree is only read as text by
+        # its read-only tools. The ref is validated to a release tag or a 40-hex
+        # commit of this repository (connector_reviewer/sdk_source.py).
+        (".github/workflows/connector-reviewer-reusable.yaml", "review"),
         # The callback that completes the mirrored check on a dispatching SDK
         # PR: `application-sdk-ref` is set by this repo's own cross-repo
         # dispatch, not by a consumer, so the PR tests its own callback scripts.

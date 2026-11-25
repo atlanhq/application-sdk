@@ -11,7 +11,7 @@ else:
     try:
         import tomllib
     except ImportError:
-        import tomli as tomllib  # type: ignore[no-reuse-stubs,import-not-found]
+        import tomli as tomllib
 
 from conformance.suite.schema.findings import Finding
 

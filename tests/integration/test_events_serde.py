@@ -26,8 +26,9 @@ Setup notes
   ``monkeypatch.setenv`` to override it before ``create_worker`` is called.
 - ``_publish_event_via_binding`` is patched to a no-op that captures events,
   avoiding the need for a real Dapr binding.
-- ``publish_event`` activity is only registered on the worker when the
-  event interceptor is enabled (see ``execution/_temporal/worker.py``).
+- ``publish_event`` and the workflow side of the event interceptor are always
+  registered; whether a run publishes is pinned on the run from the worker's
+  setting at the run's first workflow task (see ``execution/_temporal/run_flags.py``).
 """
 
 from __future__ import annotations
@@ -315,7 +316,7 @@ def _failing_event_binding(workflow_start_error: str) -> tuple[mock.MagicMock, l
     """
     import orjson
 
-    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.bindings import BindingUnavailableError
 
     sent: list[dict] = []
 
@@ -323,8 +324,10 @@ def _failing_event_binding(workflow_start_error: str) -> tuple[mock.MagicMock, l
         payload = orjson.loads(data)
         sent.append(payload)
         if payload["event_name"] == ApplicationEventNames.WORKFLOW_START.value:
-            raise BindingError(
-                workflow_start_error, binding_name="eventstore", operation=operation
+            raise BindingUnavailableError(
+                message=workflow_start_error,
+                binding_name="eventstore",
+                operation=operation,
             )
 
     binding = mock.MagicMock()

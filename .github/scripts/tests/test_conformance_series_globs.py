@@ -27,15 +27,11 @@ contains an alternative anchored at that root.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _conformance_series import paths_glob  # noqa: E402
-from _conformance_series import series as conformance_series  # noqa: E402
+from _conformance_series import paths_glob
+from _conformance_series import series as conformance_series
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CHECKS_DIR = REPO_ROOT / "packages" / "conformance" / "conformance" / "suite" / "checks"

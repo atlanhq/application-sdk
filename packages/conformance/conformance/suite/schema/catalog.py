@@ -24,6 +24,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from conformance import __version__
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -82,6 +83,25 @@ class RemediationReference(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+RULE_DOCS_BLOB_BASE = (
+    "https://github.com/atlanhq/application-sdk/blob/"
+    f"conformance-v{__version__}/packages/conformance/conformance/docs/rules/by-id/"
+)
+"""Prefix of every rule's ``help_uri``: the single-rule page at the release tag
+of the installed conformance version.
+
+Pinned to the tag, not ``main``, so an app on an older conformance reads the
+docs its own rules were written against.  The by-id page rather than a series
+page plus ``#anchor`` because GitHub renders the ``{#e001}`` heading attribute
+as literal text — a series anchor never scrolls to the rule.
+"""
+
+
+def rule_help_uri(rule_id: str) -> str:
+    """Return the SARIF ``helpUri`` for *rule_id*."""
+    return f"{RULE_DOCS_BLOB_BASE}{rule_id}.md"
+
+
 class RuleDefinition(BaseModel):
     """A single rule definition.
 
@@ -98,8 +118,9 @@ class RuleDefinition(BaseModel):
     tier: EnforcementTier
     """``warn`` or ``block``."""
 
-    mechanism: RuleMechanism
-    """``static`` or ``test``."""
+    mechanism: RuleMechanism = RuleMechanism.STATIC
+    """``static`` or ``test``.  Every rule is ``static`` (see
+    :class:`~.disposition.RuleMechanism`), so a definition leaves it unset."""
 
     scope: RuleScope
     """Where the rule applies — ``sdk``, ``app``, or ``both``.  Required (no
@@ -170,7 +191,6 @@ class RuleDefinition(BaseModel):
 
     short_description: str = ""
     full_description: str = ""
-    help_uri: str | None = None
     orthogonal_gate: Literal["tests", "pkl-eval", "skip", "docker-build"] | None = None
     """Named gate to run after a source-code fix.  ``None`` or ``"tests"`` runs
     the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate;
@@ -230,6 +250,26 @@ class RuleDefinition(BaseModel):
     rationale: str = ""
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds. Surfaced as ``atlan/rationale`` in SARIF ``properties``."""
+
+    @property
+    def help_uri(self) -> str:
+        """The rule's documentation page, derived from ``id`` (:func:`rule_help_uri`)."""
+        return rule_help_uri(self.id)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_help_uri(cls, data: Any) -> Any:
+        """Reject a hand-written ``help_uri``.
+
+        Each rule once carried its own URL, and 46 of them went on pointing at
+        a path removed when the package moved under ``packages/``.  The link
+        is derived from ``id`` so it cannot drift from the docs again.
+        """
+        if isinstance(data, dict) and "help_uri" in data:
+            raise ValueError(
+                f"{data.get('id', '?')}: help_uri is derived from the rule id — omit it."
+            )
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -317,10 +357,10 @@ class RuleDefinition(BaseModel):
             )
         return self
 
-    def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
+    def to_reporting_descriptor(self) -> ReportingDescriptor:  # pyright: ignore[reportUndefinedVariable]  # noqa: F821
         """Return the SARIF ``ReportingDescriptor`` wire form for this rule."""
-        from conformance.suite.schema.extensions import AtlanRuleProperties
-        from conformance.suite.schema.sarif import (
+        from conformance.suite.schema.extensions import AtlanRuleProperties  # noqa: PLC0415 — circular: extensions imports catalog
+        from conformance.suite.schema.sarif import (  # noqa: PLC0415 — circular: extensions imports catalog
             ReportingConfiguration,
             ReportingDescriptor,
         )

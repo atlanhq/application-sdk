@@ -29,20 +29,17 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    contract_files,
     make_cli_main,
     make_toml_finding,
     parse_toml_suppressions,
+    pkl_code_lines,
     safe_read_text,
 )
 from conformance.suite.checks.dapr_objectstore import (
-    contract_files,
+    contract_false_findings,
     deploy_dapr_false_line,
     discover,
-    pkl_code_lines,
-)
-from conformance.suite.checks.legacy_contract._directives_pkl import (
-    _make_pkl_finding_suppressed,
-    _parse_pkl_directives,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -55,7 +52,6 @@ __all__ = [
     "discover",
     "main",
     "scan_all",
-    "scan_path",
 ]
 
 # ``secretstore = false`` anywhere on a pkl line, including the one-line form
@@ -159,36 +155,17 @@ def app_uses_credentials(root: Path) -> bool:
 
 
 def _contract_findings(root: Path) -> list[Finding]:
-    findings: list[Finding] = []
-    for path in contract_files(root):
-        text = safe_read_text(path)
-        if text is None:
-            continue
-        directives = _parse_pkl_directives(text)
-        rel = path.relative_to(root).as_posix()
-        for lineno, code in enumerate(pkl_code_lines(text), start=1):
-            if not _PKL_FALSE_RE.search(code):
-                continue
-            suppressed, justification = _make_pkl_finding_suppressed(
-                rule_id=_RULE_ID, line=lineno, directives=directives
-            )
-            findings.append(
-                Finding(
-                    rule_id=_RULE_ID,
-                    file=rel,
-                    line=lineno,
-                    column=1,
-                    message=(
-                        "The contract sets deploy.dapr.secretstore to false, but "
-                        "the app resolves credentials. The deployer then leaves out "
-                        "the secret store the SDK reads every credential through, "
-                        f"and each credential lookup fails with HTTP 500. {_FIX}"
-                    ),
-                    suppressed=suppressed,
-                    suppression_justification=justification,
-                )
-            )
-    return findings
+    return contract_false_findings(
+        root,
+        rule_id=_RULE_ID,
+        pattern=_PKL_FALSE_RE,
+        message=(
+            "The contract sets deploy.dapr.secretstore to false, but "
+            "the app resolves credentials. The deployer then leaves out "
+            "the secret store the SDK reads every credential through, "
+            f"and each credential lookup fails with HTTP 500. {_FIX}"
+        ),
+    )
 
 
 def _atlan_yaml_findings(root: Path) -> list[Finding]:
@@ -225,11 +202,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not paths or not app_uses_credentials(root):
         return []
     return _contract_findings(root) or _atlan_yaml_findings(root)
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K030 is cross-artifact; use :func:`scan_all`."""
-    return []
 
 
 main = make_cli_main(

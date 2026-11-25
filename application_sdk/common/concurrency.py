@@ -6,9 +6,10 @@ API host serves without the worker SDK: its usual app-facing path,
 Both paths are the same function.
 """
 
-import os
+from typing_extensions import deprecated
 
 from application_sdk._logging import get_logger
+from application_sdk._runtime.cgroup import available_cpus
 from application_sdk._runtime.offload import (  # noqa: F401 — re-exported for handler code
     run_in_thread,
 )
@@ -17,29 +18,36 @@ logger = get_logger(__name__)
 
 
 def get_actual_cpu_count() -> int:
-    """Get the actual number of CPUs available to the current process.
+    """Whole CPUs this process may use: the tighter of affinity and the CPU limit.
 
-    Uses CPU affinity when available (handles cgroups/container limits
-    correctly). Falls back to ``os.cpu_count()`` on platforms without
-    ``sched_getaffinity``.
+    ``os.cpu_count()`` and the affinity mask both report the node's cores, not
+    the pod's: a worker limited to one CPU on a 16-core node sees 16 from
+    either. This also reads the container's CFS quota (cgroup v2 ``cpu.max``,
+    else v1 ``cpu.cfs_quota_us``), so it returns 1 there. A fractional quota
+    rounds down, never below 1.
+
+    It is the same number the SDK sizes its own thread and process pools
+    from (:func:`application_sdk._runtime.cgroup.available_cpus`).
 
     Returns:
-        Number of CPUs available.
+        Number of CPUs available, at least 1.
     """
-    try:
-        return len(os.sched_getaffinity(0)) or 1  # type: ignore[attr-defined]
-    except AttributeError:
-        logger.warning(
-            "sched_getaffinity unavailable on this platform; falling back to os.cpu_count()",
-            exc_info=True,
-        )
-        return os.cpu_count() or 1
+    return available_cpus()
 
 
+@deprecated(
+    "get_safe_num_threads is deprecated; use get_actual_cpu_count() and size "
+    "the pool for your workload, or run_in_thread, whose pool the SDK already "
+    "sizes from the CPU limit — will be removed in v4.0."
+)
 def get_safe_num_threads() -> int:
     """Get recommended number of threads for parallel processing.
+
+    .. deprecated:: 3.58.0
+        Use :func:`get_actual_cpu_count` and pick a multiple that suits the
+        workload, or :func:`run_in_thread`. Will be removed in v4.0.
 
     Returns:
         2x the number of available CPU cores, minimum 2.
     """
-    return get_actual_cpu_count() * 2 or 2
+    return available_cpus() * 2

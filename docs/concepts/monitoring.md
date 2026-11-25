@@ -48,8 +48,11 @@ The FastAPI `/metrics` endpoint (or a worker push) merges:
   `server.address`, `network.protocol.version`,
   `http.response.status_code`. The metric is named
   `http_server_request_duration_seconds` (seconds, not milliseconds).
-  Stable conventions are enabled via `OTEL_SEMCONV_STABILITY_OPT_IN=http`
-  — set in the chart by default for v3+ apps.
+  Stable conventions are enabled via `OTEL_SEMCONV_STABILITY_OPT_IN=http`,
+  which the handler service sets itself before instrumenting, so every
+  runtime (chart-deployed, local dev, self-deployed) emits the same names.
+  An explicit value in the environment wins; if you set one, include
+  `http` (or `http/dup` to also emit the legacy `http_server_duration_milliseconds`).
 - **Temporal SDK** families from `MetricsInterceptor` (counters and
   histograms emitted by activity/workflow execution) plus, when enabled
   and reachable, the Rust-core families proxied from `127.0.0.1:9464`
@@ -295,6 +298,21 @@ OTel auto-instrumentation does), the SDK uses that provider and attaches none of
 go wherever your provider sends them. To supply your own, install it with
 `opentelemetry.trace.set_tracer_provider(...)` before calling `run_main`.
 
+**Function spans with `@observability`.** Decorating a sync or async function with
+`@observability()` (from `application_sdk.observability.decorators.observability_decorator`) records,
+per call:
+
+- one `function_calls` counter increment, labelled `function`, `outcome` and `error_type`;
+- one span named after the function, from the call's start to its end, as a child of the span current
+  at the call site (for example the Temporal activity span). The span is only created when
+  `ATLAN_ENABLE_OTLP_TRACES` is on;
+- one `tracing`-level log line, plus an ERROR line with the traceback when the call raises. The
+  exception is re-raised unchanged.
+
+The span is emitted when the call returns. It is not current while the function runs, so spans the
+function itself opens are siblings of it, not children. Trace records are not buffered or written to
+the object store.
+
 In Kubernetes, set `OTEL_EXPORTER_OTLP_ENDPOINT` using the Downward API:
 
 ```yaml
@@ -357,6 +375,17 @@ adding a new queryable field is a deliberate one-line change next to the emitter
 prefixes (`atlan.`, `temporal.`, `failure.`, `exception.`, `otel.`, `tenant.`, `workflow_run.`) pass
 through without being individually listed.
 
+A dropped key is not silent. Each drop adds 1 to the `log.extra_key.dropped` counter, labelled with
+the dropped `key` (at most 64 distinct labels per process; later keys share `_other`). The first drop
+of each key also logs one DEBUG line naming it; past 1024 distinct keys per process, new keys are
+only counted, so a stream of data-derived keys cannot grow the worker's memory. A unit test (`tests/unit/observability/test_log_extra_allowlist.py`)
+fails when an SDK log call passes a literal field that is not allowlisted, so in practice the counter
+measures app fields and third-party `extra=` keys, which the test cannot see.
+
+`AtlanLoggerAdapter` accepts a stdlib-style `extra={...}` dict and spreads its entries into the bound
+fields; an explicit keyword field wins over an `extra` entry with the same name. The SDK installs the
+adapter as Temporal's `workflow.logger`, so code written for a stdlib logger keeps its fields.
+
 ### Log provenance: the `source` field
 
 Every record carries a low-cardinality `source` attribute answering *which layer emitted this line*.
@@ -408,6 +437,14 @@ for dashboards and alerts:
 | `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate): <message>`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
 | `activity.started` | INFO | `activity.started <ActivityType>` |
 | `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
+
+`workflow.started` and `workflow.ended` are logged once per run even when the run spans several
+workflow-instance lifetimes (a cache eviction, or a worker restart that hands the run to another
+worker). `workflow.started` comes from the lifetime that runs the first workflow task live;
+`workflow.ended` comes from the lifetime that finishes the run live. A lifetime that rebuilds the run
+by replaying history logs no `started`, and eviction teardown logs no `ended`. The `(<ms>ms)` duration
+and `temporal.workflow.duration_ms` are history time measured from the run's first workflow task, so
+they stay correct when the finishing worker did not see the start.
 
 The body after the token is a **human-readable summary, not a contract** — it names the subject and,
 on failure, folds in the first line of the exception message (truncated) and the root-cause frame, so
@@ -850,7 +887,7 @@ cid = ctx.correlation_id if ctx else None  # str (empty when unset) or None when
 
 ## Observability Store Sink
 
-By default, logs, metrics, and traces are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|traces|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
+By default, logs and metrics are also written to gzip-compressed NDJSON files (`.json.gz`) in the object store under `artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|sizing}/year=YYYY/month=MM/day=DD/hour=HH/`. Traces are never written to the object store; they leave as spans through the tracer provider (OTLP, plus stdout when the development-only `ATLAN_ENABLE_TRACES_CONSOLE` is on). `sdr` is used when `ENABLE_ATLAN_UPLOAD` is true, `non-sdr` otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.
 
 Control with:
 
@@ -871,7 +908,7 @@ See [Configuration](../configuration.md#logging) for all observability variables
 
 ### The background flush loop
 
-Every periodic flush (logs, metrics, traces, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
+Every periodic flush (logs, metrics, sizing) and the Segment sender run on one daemon thread, `atlan-observability-loop`, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, `ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS` (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.
 
 The console writer stays a separate thread on purpose. It does blocking writes to stdout and stderr, and on the shared loop a stalled pipe would stall every flush.
 

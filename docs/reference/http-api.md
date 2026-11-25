@@ -361,7 +361,12 @@ Same manifest, with the inputs in the request body instead of the query string. 
 
 Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
 
-**Request body:** `multipart/form-data` with a `file` field.
+**Request body:** `multipart/form-data` with a `file` field, and optional `filename`, `prefix` and `contentType` fields. `prefix` (default `workflow_file_upload`) is the object-store prefix the file is stored under, as `{prefix}/{uuid}.{ext}`. It must be relative `/`-separated segments of letters, digits, `_`, `-` and `.`, with no `.` or `..` segment, at most 256 characters. On the worker it is kept as given but may not start with an SDK-owned root (`persistent-artifacts`, `artifacts`, `connection-cache`); on the consolidated API host it is placed under `persistent-artifacts/apps/{app}/uploads/`.
+
+**Error responses:**
+
+- `400` — `prefix` is unsafe, or (on the worker) starts with an SDK-owned root.
+- `503 {"detail": "Storage not configured"}`
 
 **Response:** `FileUploadResponse` serialized with camelCase aliases:
 ```json
@@ -450,7 +455,9 @@ response merges all in-process metric sources:
 
 - Custom metrics from `record_metric()` and direct OTel meter use
 - HTTP server instrumentation (FastAPIInstrumentor, stable OTel HTTP
-  semantic conventions: `http.request.method`, `http.route`, etc.)
+  semantic conventions: `http.request.method`, `http.route`, etc.;
+  duration as `http_server_request_duration_seconds`. The service sets
+  `OTEL_SEMCONV_STABILITY_OPT_IN=http` when it is unset)
 - Temporal SDK Rust-core families when enabled and reachable (proxied
   in-process from `127.0.0.1:9464` in combined mode). The proxied body is
   capped at `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES`; an oversize body is

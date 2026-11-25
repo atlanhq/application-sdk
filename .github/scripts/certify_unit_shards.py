@@ -32,12 +32,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
+
+from _gha import set_output
 
 #: pytest exits 5 when it collects nothing. One shard of several can
 #: legitimately be empty (more shards than tests), so it is recorded as
@@ -179,14 +180,6 @@ def _subprocess_runner(command: Sequence[str]) -> int:
     return subprocess.run(list(command), check=False).returncode
 
 
-def _write_output(key: str, value: str) -> None:
-    output_path = os.environ.get("GITHUB_OUTPUT")
-    if output_path:
-        with open(output_path, "a", encoding="utf-8") as handle:
-            handle.write(f"{key}={value}\n")
-    print(f"{key}={value}")
-
-
 def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner) -> int:
     parser = argparse.ArgumentParser(description="Shard the certify gate's unit tests.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -221,7 +214,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner)
     for reason in reasons:
         level = "error" if outcome in ("failure", "install_failed") else "warning"
         print(f"::{level}::{reason}")
-    _write_output("outcome", outcome)
+    print(f"Verdict: {outcome}")
+    set_output("outcome", outcome)
     return 0
 
 

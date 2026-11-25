@@ -590,21 +590,24 @@ on:
           ("managed"; optional there — empty means newest active entry for the
           datasource). A UUID, not a secret in the credential sense, but kept
           in secrets so rotating the pinned instance never needs a code change.
+      # Unused since the dataforge path went Twingate-only (FND-4169). Still
+      # declared because connector repos with an explicit `secrets:` block
+      # pass them, and GitHub rejects a caller that passes an undeclared
+      # secret. Remove once no caller passes them.
       GLOBALPROTECT_USERNAME:
         required: false
-        description: |
-          GlobalProtect CI account for the dataforge fetch — dataforge's api
-          host and the provisioned sources admit only the VPN egress IPs.
-          Org-level at atlanhq; `secrets: inherit` callers need nothing.
+        description: Deprecated and unused. Kept so existing callers still parse.
       GLOBALPROTECT_PASSWORD:
         required: false
-        description: Paired with GLOBALPROTECT_USERNAME.
+        description: Deprecated and unused. Kept so existing callers still parse.
       TWINGATE_SHARED_KEY:
         required: false
         description: |
-          Org-wide Twingate service-account key; reaches api.dataforge.atlan.dev.
-          The dataforge wake / pause jobs try it before GlobalProtect, which
-          stays the fallback. Empty means GlobalProtect only, as before.
+          Org-wide Twingate service-account key; reaches api.dataforge.atlan.dev
+          and the DataForge CI source hosts. It is the only route for every
+          dataforge step (wake, pause, integration, e2e). Empty means no route:
+          the dataforge calls cannot connect and the leg falls back to repo creds
+          or the hermetic source, per dataforge-hermetic-fallback.
       # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
       # lives in a YAML comment rather than in the description below because
       # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
@@ -816,63 +819,23 @@ jobs:
       # private repos the app names (none named: no mint). It only reaches
       # git_auth.py's mirror clones: uv, and every build backend it runs,
       # install from local mirrors with no token in their env (FND-4740,
-      # lens round 5). A failed mint gets the named error below.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (private git deps)
-        if: inputs.private-git-deps
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: git-deps-repos
-        if: inputs.private-git-deps
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # lens round 5). A failed mint fails the action, named.
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
       - name: Mint read-only token for private git dependencies
         id: git-deps-token
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        if: inputs.private-git-deps
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
-          permission-contents: read
-
-      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require the token when private-git-deps is set
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
-        run: |
-          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
-          exit 1
 
       # Opt-in (java-version). Sets JAVA_HOME and PATH for the steps after it,
       # so the composite below runs the tests on this JDK.
       - name: Set up Java (java-version)
         if: inputs.java-version != ''
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ inputs.java-version }}
@@ -1077,47 +1040,15 @@ jobs:
 
       # Private atlanhq git deps, as in the unit job: the member's wheel
       # carries the app's git requirements, so `uv pip install` below clones
-      # them. The token only reaches git_auth.py's mirror clones (FND-4740).
-      - name: Checkout SDK git_auth.py (private git deps)
-        if: inputs.private-git-deps
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: git-deps-repos
-        if: inputs.private-git-deps
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          rm -rf .sdk-git-auth
-
+      # them. The token only reaches git_auth.py's mirror clones (FND-4740),
+      # scoped by .github/actions/scoped-private-deps-token.
       - name: Mint read-only token for private git dependencies
         id: git-deps-token
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        if: inputs.private-git-deps
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree.
-          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
-          permission-contents: read
-
-      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require the token when private-git-deps is set
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
-        run: |
-          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
-          exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1136,7 +1067,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # The only step that holds the token: it mirror-clones the private deps
       # into $RUNNER_TEMP/git-mirrors and exits, so no build backend uv runs
@@ -1256,6 +1187,7 @@ jobs:
       # source credentials from one locked instance, never two. Empty when the
       # caller does not use dataforge; the fetch chain below then self-skips.
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
     steps:
       - name: echo distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -1294,64 +1226,24 @@ jobs:
       # private repos the app names (none named: no mint). It only reaches
       # git_auth.py's mirror clones: uv, and every build backend it runs,
       # install from local mirrors with no token in their env (FND-4740,
-      # lens round 5). A failed mint gets the named error below.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (private git deps)
-        if: inputs.private-git-deps
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: git-deps-repos
-        if: inputs.private-git-deps
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # lens round 5). A failed mint fails the action, named.
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
       - name: Mint read-only token for private git dependencies
         id: git-deps-token
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        if: inputs.private-git-deps
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
-          permission-contents: read
-
-      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require the token when private-git-deps is set
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
-        run: |
-          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
-          exit 1
 
       # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
       # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
       # Exported/run here rather than passed to the composite action below,
       # because every action this workflow calls is pinned @main: an input added
       # on a feature branch is silently ignored until it lands. Sparse-checks-out
-      # .github/scripts and globalprotect-connect (the latter needed only on the
+      # .github/scripts and the VPN actions (the latter needed only on the
       # dataforge path — a couple of extra files otherwise). Unconditional: the
       # Docker Hub mirror step below runs a script from it on every connector.
       - name: Fetch SDK CI scripts (Docker mirror, source credentials, dataforge fetch)
@@ -1370,7 +1262,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts
-            .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           # No `token:` here: application-sdk is public, so the run's own
@@ -1426,30 +1318,30 @@ jobs:
       # the instance (curation is the instance owner's one-time setup).
       #
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action, from the
-      # job.workflow_sha sparse checkout — same provenance pinning as the
-      # scripts above. `resubnet-docker` moves Docker off Atlan's 172.17/16
-      # before the tunnel comes up; it was a separate copy-pasted step at each
-      # of the four dataforge call sites until the action absorbed it.
-      - name: Connect to GlobalProtect VPN (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+      # egress IPs, reached over Twingate (the only route since FND-4169),
+      # from the job.workflow_sha sparse checkout — same provenance pinning as
+      # the scripts above. `resubnet-docker` moves Docker off Atlan's
+      # 172.17/16 before the tunnel comes up.
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
         continue-on-error: true
-        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
         with:
-          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
           resubnet-docker: "true"
+      - name: Clean up after a stopped Twingate step
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
 
-      # Dataforge-sourced connector credentials. The fetch's stdout is captured
-      # into a shell variable — values never reach the log — and handed to
-      # export_extra_env.py, whose mask-first two-pass protocol is the audited
-      # path into $GITHUB_ENV. One fetch feeds both passes, so the masked strings
-      # and the written strings can never diverge. Auth is the run's GitHub OIDC
-      # token exchanged at dataforge — no stored dataforge secret (needs the
-      # job's id-token permission, added above, and a dataforge workload binding
-      # for the repo).
       - name: Fetch connector source credentials from dataforge
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
@@ -1507,7 +1399,7 @@ jobs:
       # `registry-mirrors` makes the daemon try mirror.gcr.io (Google's public
       # Docker Hub cache) first and fall back to Docker Hub on a miss; image
       # names and testcontainers are unchanged, and only docker.io pulls are
-      # affected. Must run AFTER the GlobalProtect step: its `resubnet-docker`
+      # affected. Must run AFTER the Twingate step: its `resubnet-docker`
       # overwrites daemon.json, which would drop the mirror. Best-effort: fails
       # only if Docker is down even after restoring the old daemon.json.
       - name: Use mirror.gcr.io as a Docker Hub mirror
@@ -1526,7 +1418,7 @@ jobs:
       # See the unit job.
       - name: Set up Java (java-version)
         if: inputs.java-version != ''
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ inputs.java-version }}
@@ -1951,6 +1843,10 @@ jobs:
       ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
        (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0')))
     runs-on: ubuntu-latest
+    # A wake failure (e.g. a missing dataforge workload binding) must not fail the
+    # workflow run: /gate-check's verdict reads the run's conclusion, not just
+    # Tests Gate. The job still shows red with its ::error:: annotation.
+    continue-on-error: true
     timeout-minutes: 30
     permissions:
       contents: write # create the per-run holder ref
@@ -1964,9 +1860,8 @@ jobs:
       # api.dataforge.atlan.dev admits only the VPN egress IPs, so — exactly like
       # the integration / e2e fetch steps — the job sparse-checks-out this
       # reusable's scripts + VPN actions at job.workflow_sha and dials the
-      # tunnel BEFORE the lifecycle call. Twingate first (no shared address
-      # pool), GlobalProtect only when Twingate is absent or fails. Without a
-      # tunnel every call fails at connect on POST /oauth/token. All steps gated
+      # Twingate tunnel BEFORE the lifecycle call. Without a tunnel every
+      # call fails at connect on POST /oauth/token. All steps gated
       # on the pin being set and repo creds absent, so a caller without a
       # dataforge pin does nothing.
       #
@@ -1983,7 +1878,6 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts
-            .github/actions/globalprotect-connect
             .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -2008,16 +1902,7 @@ jobs:
           sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
           sudo rm -f /etc/apt/sources.list.d/twingate.list
           sudo timeout -k 5 30 dpkg --configure -a || true
-      - name: Connect to GlobalProtect VPN (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
-        continue-on-error: true
-        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
-        with:
-          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
-          mothership-url: https://api.dataforge.atlan.dev
-          resubnet-docker: "true"
+
       - name: Wake the pinned dataforge source (resume + readiness poll)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         # resource-id NOT on argv — the script reads DATAFORGE_RESOURCE_ID from
@@ -2118,49 +2003,18 @@ jobs:
       # private atlanhq dependency (FND-4744). A read-only fleet App token, not
       # ORG_PAT_GITHUB: every build backend that `uv sync` runs can read it.
       # Minted on every build, not on `private-git-deps`: a Dockerfile without
-      # the secret mount ignores it. `continue-on-error` and no PAT fallback: a
+      # the secret mount ignores it. `require: "false"` and no PAT fallback: a
       # missing token only fails a build that needs it, at its clone.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (image build)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: image-git-repos
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
       - name: Mint read-only token for the image build
         id: image-git-token
-        if: steps.image-git-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.image-git-repos.outputs.repositories }}
-          permission-contents: read
+          require: "false"
 
       - id: build
         uses: atlanhq/application-sdk/.github/actions/build-app-image@main
@@ -2580,7 +2434,11 @@ jobs:
     # 48 → 50 for the FND-831 settle. The lease TTL still clears the hold this
     # is half of (1.5 × (50 + 120) min < 16200s), so it needs no change; at 60
     # it would.
-    timeout-minutes: 50
+    #
+    # 50 → 65 for the 15-min "Restore the previous version" step, which runs
+    # only after a failed install and so sits on top of the install budget, not
+    # inside it. The lease TTL rose to 16800s with it (1.5 × (65 + 120) min).
+    timeout-minutes: 65
     concurrency:
       # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
       # is the lease's job now (lease-tenant above), and the lease is strictly
@@ -2722,6 +2580,15 @@ jobs:
         id: atlan_yaml
         run: python3 application-sdk-scripts/.github/scripts/parse_atlan_yaml.py
 
+      # The connector form files, read by the release path's own producer so the
+      # e2e registration carries the app_configs a release ships (FND-4909).
+      # Without them LM has no forms to materialise for the version under test.
+      # Empty output when the app ships no app/generated/; the script then omits
+      # the field, as the release path does.
+      - name: Read app/generated/ for app_configs
+        id: app_configs
+        run: python3 application-sdk-scripts/.github/scripts/build_and_publish/prepare.py app-configs
+
       # Everything reaches the shell through env:, nothing through `${{ }}` inside
       # run:. Three reasons, in descending order of severity:
       #
@@ -2740,8 +2607,16 @@ jobs:
       # --app-id is deliberately omitted: the script reads app_id from atlan.yaml
       # in the working directory (and validates the result either way), so the id
       # has one source rather than being threaded through a step output.
+      # Its own timeout, not just the job's: a job timeout cancels the job, and
+      # `failure()` is false on a cancelled job, so a hung install would skip
+      # "Restore the previous version" — the slow path is the one most likely to
+      # strand a broken build. A step timeout fails the step instead, so the
+      # restore still runs. 45 min clears the script's own ~25 min of waits, and
+      # 45 + the restore's 15 leaves 5 of the job's 65 for the steps above.
+      # test_install_step_timeout_leaves_room_for_the_restore holds both.
       - name: Install the app under test
         id: install
+        timeout-minutes: 45
         env:
           IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
           VERSION: ${{ needs.merge-e2e-image.outputs.version }}
@@ -2751,6 +2626,8 @@ jobs:
           SDK_VERSION: ${{ steps.atlan_yaml.outputs.sdk_version }}
           ENTRYPOINTS: ${{ steps.atlan_yaml.outputs.entrypoints }}
           RELEASE_MODEL: ${{ steps.atlan_yaml.outputs.release_model }}
+          ENABLE_SDR: ${{ steps.atlan_yaml.outputs.enable_sdr }}
+          APP_CONFIGS: ${{ steps.app_configs.outputs.app_configs }}
           CREATED_BY: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
@@ -2765,6 +2642,8 @@ jobs:
             --sdk-version "$SDK_VERSION" \
             --entrypoints "$ENTRYPOINTS" \
             --release-model "$RELEASE_MODEL" \
+            --self-deployed-runtime "$ENABLE_SDR" \
+            --app-configs "$APP_CONFIGS" \
             --created-by "$CREATED_BY"
         # --install-retry-seconds is left at its default (600). A freshly
         # published release is not immediately installable: LM resolves the
@@ -2775,10 +2654,36 @@ jobs:
         # the sum of the two, or a slow sync reads as a job timeout instead of
         # the actionable error the script would otherwise raise.
 
+      # A failed install must not strand the build under test on a shared pool
+      # tenant. `install` records the version the tenant ran BEFORE it publishes
+      # anything, so this can put it back whatever failed after that point. A
+      # broken build left in place breaks every later run against the tenant
+      # and can misbehave on the tenant itself (an ai-memory build left its
+      # Service in a vcluster-syncer recreate loop on two pool tenants).
+      # Skipped when nothing was installed before: there is nothing to return
+      # to, and uninstall is not reliable (DISTR-921). Its own timeout is added
+      # on top of the install budget in this job's timeout-minutes.
+      - name: Restore the previous version
+        id: restore
+        if: failure() && steps.install.outputs.previous_version_id != ''
+        timeout-minutes: 15
+        env:
+          PREVIOUS_VERSION: ${{ steps.install.outputs.previous_version }}
+          PREVIOUS_VERSION_ID: ${{ steps.install.outputs.previous_version_id }}
+          VERSION: ${{ needs.merge-e2e-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py restore \
+            --base-url "$ATLAN_BASE_URL" \
+            --version-id "$PREVIOUS_VERSION_ID" \
+            --expected "$PREVIOUS_VERSION" \
+            --rolled-back-from "$VERSION"
+
       - name: Summarise
         if: always()
         env:
           IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
+          RESTORED: ${{ steps.restore.outputs.restored_version }}
           SKIPPED: ${{ steps.install.outputs.skipped }}
           RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
           INSTALLED: ${{ steps.install.outputs.installed_version }}
@@ -2802,6 +2707,7 @@ jobs:
             echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
             echo "| Established at layer | \`${LAYER:-unknown}\` |"
             echo "| Pod reports build | \`${POD_BUILD_ID:-not reported}\` |"
+            echo "| Restored after failure | \`${RESTORED:-no}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   e2e:
@@ -2932,6 +2838,7 @@ jobs:
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -2982,7 +2889,7 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts
-            .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           # Falls back to the run's own token because this step became
@@ -3050,44 +2957,30 @@ jobs:
       # hermetic source carries the run instead of failing it.
       #
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action, from the
-      # job.workflow_sha sparse checkout — same provenance pinning
-      # as the scripts. The health probe targets the dataforge api host —
-      # the thing this tunnel actually has to reach. KNOWN LIMIT: the
-      # action derives its GP client identity from run/job/attempt, and
-      # GITHUB_JOB is identical across matrix legs, so concurrent legs can
-      # displace each other's sessions — the fetch then falls back to repo
-      # creds by design. A better run strategy is tracked on FND-279.
-      - name: Connect to GlobalProtect VPN (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+      # egress IPs, reached over Twingate from the job.workflow_sha sparse
+      # checkout — same provenance pinning as the scripts. The health probe
+      # targets the dataforge api host — the thing this tunnel actually has
+      # to reach.
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
         continue-on-error: true
-        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
         with:
-          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
-          # Moves Docker off Atlan's 172.17/16 before the tunnel comes up —
-          # deleting the docker0 route afterwards instead breaks buildx
-          # (atlan-postgres-app run 31571886125). Was a separate copy-pasted
-          # step at each of the four dataforge call sites until the action
-          # absorbed it.
           resubnet-docker: "true"
-          # This is a MATRIX job, so the action's default identity (run id +
-          # GITHUB_JOB + attempt) is the same string for every leg and the legs
-          # evict each other's VPN sessions — last connect wins, the rest fail
-          # the crawl on an unreachable source. matrix.name is the per-leg
-          # discriminator (suite x cloud), so each leg is its own "computer".
-          client-suffix: ${{ matrix.name }}
+      - name: Clean up after a stopped Twingate step
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
 
-      # Dataforge-sourced connector credentials. The fetch's stdout is
-      # captured into a shell variable — values never reach the log — and
-      # handed to export_extra_env.py, whose mask-first two-pass protocol is
-      # the audited path into $GITHUB_ENV. One fetch feeds both passes, so
-      # the masked strings and the written strings can never diverge. Auth is
-      # the run's GitHub OIDC token exchanged at dataforge — no stored
-      # dataforge secret (needs the job's id-token permission and a
-      # dataforge workload binding for the repo).
       - name: Fetch connector source credentials from dataforge
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
         continue-on-error: true
@@ -3121,64 +3014,23 @@ jobs:
           DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
         run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
 
-      # The sdr-e2e action runs `uv sync` on the RUNNER as well as in the image
-      # build, so the host side needs the token too; `git-token` below only
-      # reaches the Docker build.
-      # Private atlanhq git deps: a read-only fleet App token scoped to the
-      # private repos the app names (none named: no mint). It only reaches
-      # git_auth.py's mirror clones: uv, and every build backend it runs,
-      # install from local mirrors with no token in their env (FND-4740,
-      # lens round 5). A failed mint gets the named error below.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (private git deps)
-        if: inputs.private-git-deps
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: git-deps-repos
-        if: inputs.private-git-deps
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # One scoped mint (.github/actions/scoped-private-deps-token: the private
+      # atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS; no mint
+      # when it names none) for both consumers below:
+      # * the image build's `git_token` secret (FND-4744), on every run: a
+      #   Dockerfile without the secret mount ignores it;
+      # * the host-side `uv sync` the sdr-e2e action runs on the RUNNER, only
+      #   with private-git-deps. There it reaches git_auth.py's mirror clones
+      #   alone: uv, and every build backend it runs, install from local
+      #   mirrors with no token in their env (FND-4740, lens round 5).
+      # A failed mint fails here, named, only when private-git-deps is set.
       - name: Mint read-only token for private git dependencies
         id: git-deps-token
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
-          permission-contents: read
-
-      # The condition stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: Require the token when private-git-deps is set
-        if: inputs.private-git-deps && steps.git-deps-repos.outputs.repositories != '' && steps.git-deps-token.outputs.token == ''
-        run: |
-          echo "::error title=No token for private git dependencies::private-git-deps is true but the fleet App token did not mint. Pass FLEET_APP_ID and FLEET_APP_PRIVATE_KEY (secrets: inherit, or name both in an explicit secrets: mapping)."
-          exit 1
+          require: ${{ inputs.private-git-deps }}
 
       # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
       # The action self-installs uv only when application-sdk-ref is set
@@ -3187,54 +3039,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
           enable-cache: true
-
-      # The image build's `git_token` secret (FND-4744). Separate from the
-      # opt-in `git-deps-token` above, which is for the host-side `uv sync`:
-      # this one is minted on every run, because a Dockerfile without the
-      # secret mount ignores it. Same read-only App token, no PAT fallback.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (image build)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: image-git-repos
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
-      - name: Mint read-only token for the image build
-        id: image-git-token
-        if: steps.image-git-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.image-git-repos.outputs.repositories }}
-          permission-contents: read
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
@@ -3315,7 +3121,7 @@ jobs:
           # Dockerfile whose `uv sync` clones a private atlanhq dependency can
           # authenticate. A read-only App token, not the PAT above; a Dockerfile
           # that declares no such secret mount simply ignores it.
-          git-token: ${{ steps.image-git-token.outputs.token }}
+          git-token: ${{ steps.git-deps-token.outputs.token }}
 
   # ── Hand the tenant to whoever is next in the queue ──────────────────────
   # Prompt release, not the mechanism that makes the lease safe. GitHub cancels
@@ -3413,6 +3219,8 @@ jobs:
       inputs.dataforge-mode == 'resource' &&
       needs.wake-dataforge-source.result != 'skipped')
     runs-on: ubuntu-latest
+    # Non-blocking for the same reason as wake-dataforge-source.
+    continue-on-error: true
     timeout-minutes: 30
     permissions:
       contents: write # delete holder refs (this run's + reaped abandoned ones)
@@ -3432,7 +3240,6 @@ jobs:
           ref: ${{ job.workflow_sha }}
           sparse-checkout: |
             .github/scripts
-            .github/actions/globalprotect-connect
             .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
@@ -3457,16 +3264,7 @@ jobs:
           sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
           sudo rm -f /etc/apt/sources.list.d/twingate.list
           sudo timeout -k 5 30 dpkg --configure -a || true
-      - name: Connect to GlobalProtect VPN (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
-        continue-on-error: true
-        uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
-        with:
-          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
-          mothership-url: https://api.dataforge.atlan.dev
-          resubnet-docker: "true"
+
       - name: Pause the pinned dataforge source (refcounted, always-runs)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         env:
@@ -3528,7 +3326,7 @@ jobs:
       # this job touches application-sdk with a single credential).
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -3778,7 +3576,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
@@ -3933,49 +3731,15 @@ jobs:
           uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
-      # `upload-artifact` classifies the artifact service's finalize 403 as
-      # non-retryable and fails on the first occurrence, even though the bytes
-      # already landed and the next attempt normally succeeds. That failed the
-      # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once, and never fail the gate on it:
-      # the scorecard is reporting, not a gate.
+      # Non-fatal: the scorecard is reporting, not a gate.
       - name: Upload scorecard
-        id: upload-scorecard
         if: hashFiles('results/test-readiness.json') != ''
         continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: test-readiness-scorecard
           path: results/test-readiness.json
           retention-days: 14
-          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
-          # a run, so re-running a failed job would otherwise 409 here and burn the
-          # retry on a conflict that has nothing to do with a finalize failure. It is
-          # also what holds the invariant every consumer of this upload globs on:
-          # at most ONE live artifact ever matches `<name>*`.
-          overwrite: true
-
-      # A finalize 403 comes from an intermediary having a moment, and the
-      # retry runs about a second later — well inside the same window. Wait
-      # it out, so the two attempts fail independently or not at all.
-      - name: Wait before the upload retry
-        if: steps.upload-scorecard.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload scorecard (retry)
-        if: steps.upload-scorecard.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
-          # failure leaves an unfinalized record holding that name for the whole
-          # run. The list API cannot see it, so `overwrite` cannot clear it and
-          # CreateArtifact 409s — a same-named retry could never have worked.
-          # Consumers resolve this artifact by `<name>*` glob, not exact name.
-          name: test-readiness-scorecard-retry
-          path: results/test-readiness.json
-          retention-days: 14
-          overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
   #

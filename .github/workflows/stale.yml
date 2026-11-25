@@ -11,19 +11,23 @@ name: Stale issues and PRs (Reusable)
 #     call-stale-workflow:
 #       uses: atlanhq/application-sdk/.github/workflows/stale.yml@main
 #
+# application-sdk's own nightly schedule.yaml `stale` job calls it too,
+# with debug-only: false and the fleet App secrets (FND-4930): it labels this
+# repo's issues and PRs for real, and never closes them.
+#
 # This file did not exist until now -- every caller above has been failing
 # with a "workflow not found" startup error since the bootstrap template
-# was introduced. Mirrors this repo's own stale job (schedule.yaml),
-# including debug-only: true: that's a deliberate choice here (observe,
-# don't auto-close) so activating this for the first time across the whole
-# fleet doesn't immediately close a large accumulated backlog. A caller that
-# wants real closure passes `debug-only: false` and a `days-before-close`
-# (FND-1973); the defaults keep every other caller label-only.
+# was introduced. debug-only defaults true: that's a deliberate choice here
+# (observe, don't auto-close) so activating this for the first time across
+# the whole fleet doesn't immediately close a large accumulated backlog. A
+# caller that wants real labelling passes `debug-only: false`; one that also
+# wants closure adds a `days-before-close` (FND-1973). The defaults keep every
+# other caller a dry run.
 #
 # When flipping debug-only off, mind write permissions: the permissions block
 # below declares the maximum this reusable workflow can use, but for a caller
 # invoked via `uses:` those are capped by the caller's token, not escalated. On
-# the fallback path (secrets.GITHUB_TOKEN, which every current caller uses), a
+# the fallback path (secrets.GITHUB_TOKEN, which every fleet caller uses), a
 # caller whose default token is read-only would have these writes capped and
 # actions/stale would 403 on the first label/comment. Before real closure, the
 # caller must either grant `issues: write` / `pull-requests: write` at its job
@@ -69,7 +73,7 @@ on:
     secrets:
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller (none use 'secrets: inherit' yet) -- falls back to the default GITHUB_TOKEN, which is sufficient here."
+        description: "atlan-app-fleet App ID (org secret). Passed by application-sdk's own schedule.yaml; fleet callers pass nothing and fall back to the default GITHUB_TOKEN, which is sufficient here."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
@@ -88,7 +92,7 @@ jobs:
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}

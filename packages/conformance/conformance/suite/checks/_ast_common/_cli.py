@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Protocol
 
 from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.schema.validate import validate_sarif
 
 from ._discovery import discover as _default_discover
 from ._io import safe_read_text
@@ -136,8 +137,6 @@ def make_cli_main(
         report = findings_to_report(findings, tool_version=args.tool_version)
 
         if args.validate:
-            from conformance.suite.schema.validate import validate_sarif
-
             validate_sarif(report)
 
         payload = json.dumps(
@@ -148,6 +147,6 @@ def make_cli_main(
         else:
             print(payload)
 
-        return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
+        return report.runs[0].invocations[0].exit_code  # pyright: ignore[reportReturnType]
 
     return main

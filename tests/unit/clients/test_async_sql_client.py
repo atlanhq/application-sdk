@@ -6,6 +6,7 @@ import pytest
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient
 from application_sdk.clients.sql_errors import SqlPandasResultError
+from tests.unit._doubles import StopConnect, record_connect_params
 
 
 @pytest.fixture
@@ -375,25 +376,6 @@ async def test_run_query_wrap_is_retryable_client_side(
 _IAM_URL = "postgresql+psycopg://u:{token}@127.0.0.1:1/db"
 
 
-class _StopConnect(Exception):
-    """Raised by the recorder so no connect ever reaches a socket."""
-
-
-def _record_connect_params(sync_engine: Any) -> list[dict[str, Any]]:
-    from sqlalchemy import event
-
-    seen: list[dict[str, Any]] = []
-
-    def _record(
-        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
-    ) -> None:
-        seen.append(dict(cparams))
-        raise _StopConnect
-
-    event.listen(sync_engine, "do_connect", _record)
-    return seen
-
-
 async def test_an_async_refresh_builds_the_token_off_the_event_loop() -> None:
     """An async engine connects on the loop; the STS-bound build must not run there."""
     pytest.importorskip("psycopg")
@@ -422,11 +404,11 @@ async def test_an_async_refresh_builds_the_token_off_the_event_loop() -> None:
             clock=lambda: now[0],
         ),
     )
-    seen = _record_connect_params(engine.sync_engine)
+    seen = record_connect_params(engine.sync_engine)
     now[0] += 11 * 60
 
     async def _connect() -> None:
-        with pytest.raises(_StopConnect):
+        with pytest.raises(StopConnect):
             async with engine.connect():
                 pass
 
@@ -504,7 +486,7 @@ async def test_a_cancelled_waiter_does_not_break_the_shared_refresh() -> None:
         clock=lambda: now[0],
     )
     event.listen(engine.sync_engine, "do_connect", listener)
-    seen = _record_connect_params(engine.sync_engine)
+    seen = record_connect_params(engine.sync_engine)
     now[0] += 11 * 60
 
     async def _connect() -> None:
@@ -524,7 +506,7 @@ async def test_a_cancelled_waiter_does_not_break_the_shared_refresh() -> None:
         await waiter
     release.set()
 
-    with pytest.raises(_StopConnect):
+    with pytest.raises(StopConnect):
         await owner
     assert seen[-1]["password"] == "token-1"
     await engine.dispose()

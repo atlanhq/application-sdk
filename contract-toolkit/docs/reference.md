@@ -539,6 +539,11 @@ typealias ArtifactFieldTypeExtended =
 Field declarations use `ArtifactFieldTypeExtended`. The vocabulary is *logical*, not
 physical — one member covers several physical encodings.
 
+The SDK owns this vocabulary (`application_sdk.validation.artifacts`). `src/SdkNames.pkl`
+copies its members and those of `ArtifactFormat`; `tests/artifact_schemas_test.pkl` checks
+each typealias accepts exactly its copy, and `scripts/test-sdk-import.py` checks each copy
+equals the SDK's constant.
+
 | Logical | parquet / arrow | NDJSON / JSON |
 |---|---|---|
 | `string` | `string`, `large_string` | JSON string |
@@ -741,8 +746,11 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 |---|---|---|---|
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a single-entrypoint app. Optional `connectorShortName`, `connectionType` and `connectionCategory` replace the values generated into `app/generated/_e2e_base.py`; an unset field keeps the derived value, so the default output is byte-identical. Setting `connectorShortName` changes which app the run targets (the harness fills the manifest's `{app_name}` token from it); when the app writes its primary credential configmap (`uiConfig` set, `hasCredentialConfig`, and `credentialAuthOptions` set) it also emits `connector_config_name` (the root `connectorConfigName`; never on a system app), and an alias on an app whose only credential configs are `additionalCredentialConfigs` is refused. `argoPackageName`, `argoTemplateName` and `connectorConfigName` are refused here: set the root properties of the same names. Changes no other generated file, and not the base class, which still follows `connector.category`. Use `connectionType` / `connectionCategory` when the app enriches a connection of a source it does not declare as its `connector`, e.g. a query-history miner whose user picks any database connection: `e2eOverrides { connectionType = "postgres"; connectionCategory = "database" }`. `"warehouse"` is the harness default, so the toolkit never emits it. Refused on a multi-entrypoint bundle root and on an entrypoint's `contract`; use `Entrypoint.e2eOverrides` there. |
 
-A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared or `e2eOverrides` names them): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+
+The class attributes a generated base may assign are listed in `SdkNames.e2eBaseAttributes`, and `App.pkl` refuses to emit any other. `scripts/test-sdk-import.py` checks each listed name is declared on `BaseE2ETest`, and that every name a generated example's base assigns is declared on its SDK base class, so an SDK rename fails CI instead of leaving a dead attribute in every connector. `connection_category` is left out when it equals the SDK default (`SdkNames.e2eConnectionCategoryDefault`, `"warehouse"`). A generated `_e2e_substitutions.py` never redeclares a field its SDK parent declares (`SdkNames.mustacheSubstitutionFields` / `sqlMustacheSubstitutionFields`, checked equal to the SDK models' fields).
 
 #### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
 
@@ -754,6 +762,8 @@ Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOp
 Only `_e2e_credential.py` carries both classes; the credential configmap (`atlan-connectors-{name}.json`) and the workflow config are unaffected. See [`examples/agent-e2e/`](../examples/agent-e2e/).
 
 > **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so an agent-mode e2e run can submit `"agent"`.
+
+> **DateInput and FileUploader:** `_e2e_substitutions.py` types a `DateInput` as `int` (default `0`) and a `FileUploader` as `dict[str, Any] | None` (default `None`), matching the `int` and `FileReference | None` fields `_input.py` declares for them. The harness substitutes the dumped default into the DAG arg, so a `str` default of `""` would fail the app's own input validation on a default e2e submission.
 
 > **multiSelect DropDown — `defaultSelection`, never a stringified `default`:** a `DropDown` with `multiSelect = true` submits a *list* of keys, so `_e2e_substitutions.py` types it `list[str]` (never `Literal[...]`, which describes a single choice).
 >
@@ -1169,7 +1179,7 @@ A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value,
 
 A system app has no manifest of its own: each caller declares the app's DAG node. Hand-written node classes such as `PopularityNode` restate the app's args and drift from them. A system app with `inputs` therefore also renders `contract/generated/input.pkl`: the node class callers add to their `extraNodes`, with one typed property per input.
 
-The file is synced into the toolkit as `src/system/<name>.pkl`. Any connector, whether internal, public or partner-built, then imports it through the toolkit dependency it already has, and the toolkit version it pins fixes the contract version:
+**Planned, not yet available:** the file's intended home is the toolkit, as `src/system/<name>.pkl`. Any connector, whether internal, public or partner-built, would then import it through the toolkit dependency it already has, and the toolkit version it pins would fix the contract version. `src/system/` and the sync that would fill it do not exist yet, so no published toolkit version contains a `system/` module and the import below does not resolve today. It shows the intended shape:
 
 ```pkl
 // caller's contract/app.pkl
@@ -1211,11 +1221,11 @@ The node takes `appName = name`, `workflowType` (or `name`), `taskQueue = "<task
 - At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, a raw `args` entry for one it does (set the property instead), and a value outside its input's type or bounds.
 - At the system app's render: an input whose property name would override a node property (`depends_on` → `dependsOn`, or `inputArgs`), two inputs mapping to the same property, and an `ObjectField` whose `className` is the node class or a Pkl type the module uses (`String`, `Listing`, `App`, ...).
 
-**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `../App.pkl`, which resolves from the synced home `src/system/<name>.pkl`; only a contract that evaluates the file in place changes it). In a multi-entrypoint system app the bundle writes each entrypoint's caller node to `contract/generated/<entrypoint>/input.pkl`; see [Multi-Entrypoint Bundle](#multi-entrypoint-bundle).
+**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `../App.pkl`, written for the planned toolkit home `src/system/<name>.pkl`; only a contract that evaluates the file in place changes it). In a multi-entrypoint system app the bundle writes each entrypoint's caller node to `contract/generated/<entrypoint>/input.pkl`; see [Multi-Entrypoint Bundle](#multi-entrypoint-bundle).
 
-**Syncing.** The copy in the app's repo is the sync source: it is generated with the app's contract and not evaluated there. When the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version fixes the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input and no new required input. The toolkit does not compare one release's inputs with the last. The app repo's `B005` conformance rule does, checking the generated `AppInputContract` against its `contract_schema.lock.json`, and it blocks only where that repo's conformance is enforced.
+**Syncing (planned).** Nothing syncs the file yet. The plan: the copy in the app's repo is the sync source, generated with the app's contract and not evaluated there; when the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version would fix the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input and no new required input. The toolkit does not compare one release's inputs with the last. The app repo's `B005` conformance rule does, checking the generated `AppInputContract` against its `contract_schema.lock.json`, and it blocks only where that repo's conformance is enforced.
 
-**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app's contract is synced into `src/system/`.
+**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. Until `src/system/` exists and the app's contract is synced into it, callers keep using those hand-written nodes.
 
 ### Multi-Entrypoint Bundle
 
@@ -1243,7 +1253,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
-| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName` and `connectorConfigName` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName`, `connectorConfigName`, `connectionType` and `connectionCategory` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
@@ -1268,8 +1278,8 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 **System bundles (FND-3563):** a bundle entrypoint is a *UI-less system entrypoint* when its contract (or the bundle root) sets `type = "system"` and the contract declares no `uiConfig`. Only these entrypoints change layout; every other entrypoint renders byte-for-byte as before.
 
 - Its files go to `app/generated/<entrypoint_snake>/` (`usage-analysis` → `usage_analysis`), so `from app.generated.usage_analysis._input import UsageAnalysisAppInputContract` imports. A hyphen-free name is unchanged. The SDK already imports `app.generated.<entrypoint_snake>._input`. The SDK's artifact-schema readers (`validation.sources.artifact_schema_paths` and the registration-time guard) look for `artifact_schemas.json` under the wire-name dir, then the snake_case dir. Conformance K016 does not check these entrypoints: it only sees entrypoint dirs that hold a `manifest.json`.
-- Its caller node goes to `contract/generated/<entrypoint>/input.pkl` instead of `app/generated/<entrypoint>/contract/generated/input.pkl`. This also applies to a system sub-contract that has a `uiConfig`; that entrypoint otherwise keeps its wire-name dir, because the SDK reads its manifest and form under the wire name. Each sub-contract's file names its own synced home, `src/system/<contract name>.pkl`, and its `inputContractToolkitImport` default (`../App.pkl`) resolves from there as it does for a single-entrypoint system app.
-- Its caller node takes `appName` from the bundle root's `name` and `taskQueue` from the root's `<taskQueuePrefix>-{deployment_name}` (default `atlan-<root name>-{deployment_name}`), not from the sub-contract. A system bundle is one App class, run by one worker on one queue for every entrypoint, so a node that names the sub-contract would route to an app and queue that nothing serves. `workflowType` still comes from the sub-contract: set `workflowType` there to keep a legacy name such as `KeifuWorkflow`. The file's header and sync home (`src/system/<contract name>.pkl`) still name the sub-contract.
+- Its caller node goes to `contract/generated/<entrypoint>/input.pkl` instead of `app/generated/<entrypoint>/contract/generated/input.pkl`. This also applies to a system sub-contract that has a `uiConfig`; that entrypoint otherwise keeps its wire-name dir, because the SDK reads its manifest and form under the wire name. Each sub-contract's `inputContractToolkitImport` default (`../App.pkl`) is written for its own planned toolkit home, `src/system/<contract name>.pkl`, as for a single-entrypoint system app.
+- Its caller node takes `appName` from the bundle root's `name` and `taskQueue` from the root's `<taskQueuePrefix>-{deployment_name}` (default `atlan-<root name>-{deployment_name}`), not from the sub-contract. A system bundle is one App class, run by one worker on one queue for every entrypoint, so a node that names the sub-contract would route to an app and queue that nothing serves. `workflowType` still comes from the sub-contract: set `workflowType` there to keep a legacy name such as `KeifuWorkflow`. The file's header and planned toolkit home (`src/system/<contract name>.pkl`) still name the sub-contract.
 - Any system entrypoint's `_e2e_base.py` (with or without a `uiConfig`) extends `SystemAppE2ETest` and names no `argo_*`, `app_service_url` or `connector_config_name`: `type` decides the base class, as for a single-entrypoint system app. A UI-less one also has no `manifest_path`, `required_dag_nodes` or `expect_*` lines (it has no manifest or extract/publish DAG), a comment telling the suite to set `manifest_path` and `required_dag_nodes`, and `entrypoint = "<entrypoint>"`.
 
 See [`examples/system-bundle/`](examples/system-bundle/).
@@ -2398,7 +2408,7 @@ form looks the same:
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
-| `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, and `outputValueType` for object-returning branches |
+| `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, `outputValueType` for object-returning branches, and `stringMap` (see [String-map conditionals](#string-map-conditionals-stringmap)) |
 | `CustomWidget` | `<widgetName>` | `str` | Escape hatch for bespoke frontend components. `widgetName` picks the component; `props` pass through verbatim into the `ui` object. Use sparingly — prefer typed widgets. |
 
 ##### SageV2 warmup
@@ -2465,7 +2475,20 @@ the frontend renderer shape.
 
 ## Connectors.pkl — Connector Registry
 
-90+ connector constants. Each has `value` (string identifier) and `category`.
+163 connector constants. Each has `value` (string identifier) and `category`.
+
+The registry is a hand copy of pyatlan's `AtlanConnectorType`. In CI,
+`scripts/test-sdk-import.py` compares it with the pyatlan the SDK locks: every
+pyatlan connector must have a constant of the same name, value and category,
+and the `AtlanConnectionCategory` typealias must accept exactly pyatlan's
+`AtlanConnectionCategory` values. When pyatlan adds a connector type or
+category, add it here. Two constants have no pyatlan member: `UNKNOWN_CUSTOM`
+(a placeholder) and `QLIKSENSE_ENTERPRISE_WINDOWS`. One category differs on
+purpose: `SAP_ECC` is `warehouse` here and `erp` in pyatlan. The category picks
+the generated e2e base class (`warehouse`, `database`, `lake` and `queryengine`
+generate `SQLAppE2ETest`; any other generates `BaseE2ETest`) and is emitted as
+`connection_category`, so correcting it would change the generated e2e code of
+every contract that uses `SAP_ECC`.
 
 ```pkl
 class Type {
@@ -2476,7 +2499,8 @@ class Type {
 typealias AtlanConnectionCategory =
   "warehouse"|"bi"|"custom"|"ObjectStore"|"SaaS"|"lake"|
   "queryengine"|"elt"|"database"|"API"|"eventbus"|
-  "data-quality"|"schema-registry"|"app"
+  "data-quality"|"schema-registry"|"app"|
+  "ai"|"erp"|"data-processing"
 ```
 
 Common connectors:
@@ -2499,8 +2523,11 @@ Common connectors:
 | `MSSQL` | `"mssql"` | warehouse |
 | `MYSQL` | `"mysql"` | warehouse |
 | `ORACLE` | `"oracle"` | warehouse |
-| `SAP_S4_HANA` | `"sap-s4-hana"` | erp |
-| `SAP_ECC` | `"sap-ecc"` | erp |
+| `SAP_S4_HANA` | `"sap-s4-hana"` | warehouse |
+| `SAP_ECC` | `"sap-ecc"` | warehouse |
+| `SAP_S4` | `"sap-s4"` | erp |
+| `GENERIC_OPENLINEAGE` | `"generic-openlineage"` | data-processing |
+| `AI` | `"ai"` | ai |
 
 ---
 
@@ -4197,6 +4224,54 @@ from application_sdk.contracts.types import TreeSelection
   Its filters are `TreeSelection | str` and keep every level of the tree. A JSON-object string, the form the Automation Engine sends, is decoded into the tree, so `'{"cat": {"ns": {"t": {}}}}'` arrives as a dict. `None`, regex strings and legacy quoted-CSV strings are handled as in `ExtractionInput`. The SQL-injection check still applies, including its nesting-depth limit (trees deeper than 5 levels are refused). A `FilterMap`-shaped value (`{"db": ["schema"]}`, its JSON string, or a list) is refused: its values are regex patterns, not selected nodes. In this mode every filter widget must be a tree widget that sets `treeSelection`, or a `TextInput` (a regex fills the `str` arm); any other filter widget fails evaluation. The class is for apps that read the filters themselves: `SqlMetadataExtractor` and `SqlApp` refuse it with `SqlTreeFilterInputUnsupportedError`, because their task inputs keep two levels. Setting the flag on these widgets was ignored before, so a contract that already sets it changes base class on upgrade. See [`examples/tree-filters/`](../examples/tree-filters/).
 - **Minimum versions for the filter case:** the first contract-toolkit release after 0.33.0 (on 0.33.0 and earlier the flag is ignored on these two widgets, with no error), and the first SDK release that includes `TreeSelectionExtractionInput` (3.47.0 and earlier do not; on those the generated `_input.py` fails at import with `ImportError`). Raise the SDK floor to that release in the same change that sets the flag.
 
+
+---
+
+## String-map conditionals (`stringMap`)
+
+`stringMap: Boolean = false` on `ConditionalInput` (both `Widgets.ConditionalInput` and `Config.ConditionalInput`), for a field with `outputValueType = "object"`.
+
+**Why.** An object-valued conditional renders `Annotated[dict[str, Any], MaxItems(1000)]`. The SDK refuses `Any` (`PayloadSafetyError [AAF-CTR-002]`), so the generated `_input.py` does not import. When the widget behind the conditional stores a flat string-to-string map, `stringMap = true` types the field as `Annotated[dict[str, str], MaxItems(1000)]` instead.
+
+**When to use it.** The conditional's value is a single-level map whose values are strings. The typical case is a `div` base whose condition swaps in the `dsnTreeMap` widget, which stores `{"<dsn name>": "<connection qualified name>"}`:
+
+```pkl
+["odbc-dsn-config-mapping"] = new Config.ConditionalInput {
+  title = ""
+  baseWidgetType = "div"
+  outputValueType = "object"
+  stringMap = true
+  default = "{}"
+  conditions {
+    new Config.Condition {
+      property = "enable-odbc-connectivity-mapping"
+      value = "true"
+      overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+    }
+  }
+}
+```
+
+Do not use it for nested selections; use `treeSelection` on an apitree for those.
+
+**What changes in generated output.**
+
+- The field type becomes `Annotated[dict[str, str], MaxItems(1000)]`.
+- The field leaves the shared `_coerce_json_object_strings` validator and gets its own `mode="before"` validator, `_coerce_string_maps`:
+  - a dict passes through unchanged (and is then type-checked);
+  - a JSON-object string is decoded into a dict;
+  - `None`, a blank string, a string that is not valid JSON, or valid JSON that is not an object (`"false"`, `"[]"`, `"1"`) becomes `{}`. The last two log at DEBUG, and the log never includes the value; a string that is not valid JSON logs the decode error with `exc_info=True`, so the generated code passes conformance E009.
+
+  Saved configs where a stray scalar ended up in the map field keep validating, as an empty map.
+- A map with a non-string value (`{"dsn": {"host": "h"}}`, `{"dsn": 1}`) fails validation.
+
+**What does not change.** The workflow config JSON (`{name}.json`), the manifest, and the wire format. The flag affects only the Python input model.
+
+**Caveats.**
+
+- Evaluation fails if `stringMap = true` is set on a conditional whose `outputValueType` is not `"object"`, including a field with `includeInInput = false`.
+- Evaluation fails if `stringMap = true` and `treeSelection = true` are both set (`Widgets.ConditionalInput`): they declare conflicting types (`dict[str, str]` vs `TreeSelection`).
+- The default (`false`) keeps the existing `dict[str, Any]` type and the shared coercion, so existing contracts generate byte-identical output.
 ---
 
 ## Post-processing generated output (`contract/post-generate.sh`)

@@ -29,6 +29,7 @@ from conformance.suite.checks.client_lifecycle import (
     scan_path,
     scan_text,
 )
+from tests._helpers import uv_lock
 
 _CLIENT_HEADER = (
     "from application_sdk.clients.base import BaseClient\n"
@@ -665,24 +666,6 @@ _HANDLER = (
 )
 
 
-def _uv_lock(sdk_version: str | None) -> str:
-    """A minimal uv.lock. ``None`` omits the atlan-application-sdk entry."""
-    other = (
-        "[[package]]\n"
-        'name = "some-dep"\n'
-        'version = "1.2.3"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-    if sdk_version is None:
-        return other
-    return (
-        f"{other}\n[[package]]\n"
-        'name = "atlan-application-sdk"\n'
-        f'version = "{sdk_version}"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-
-
 def _app(tmp_path: Path, lock: str | None) -> Path:
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "client.py").write_text(
@@ -698,7 +681,7 @@ def _app(tmp_path: Path, lock: str | None) -> Path:
 def test_resolves_subclass_across_files_at_or_above_floor(
     tmp_path: Path, version: str
 ) -> None:
-    root = _app(tmp_path, _uv_lock(version))
+    root = _app(tmp_path, uv_lock(version))
     fs = scan_all(discover(root), root)
     assert sorted((f.rule_id, f.file, f.line) for f in fs) == [
         ("P056", "app/handler.py", 11),
@@ -712,9 +695,9 @@ def test_resolves_subclass_across_files_at_or_above_floor(
 @pytest.mark.parametrize(
     "lock",
     [
-        _uv_lock("3.45.0"),
-        _uv_lock("3.30.0"),
-        _uv_lock(None),
+        uv_lock("3.45.0"),
+        uv_lock("3.30.0"),
+        uv_lock(None),
         "this is : not valid = toml [",
         None,
     ],
@@ -729,7 +712,7 @@ def test_silent_when_shared_pool_not_confirmed(
 
 
 def test_skips_test_files(tmp_path: Path) -> None:
-    root = _app(tmp_path, _uv_lock("3.46.0"))
+    root = _app(tmp_path, uv_lock("3.46.0"))
     path = root / "tests" / "unit" / "test_client.py"
     path.parent.mkdir(parents=True)
     path.write_text(_HANDLER, encoding="utf-8")
@@ -745,7 +728,7 @@ def test_reaches_the_runner(tmp_path: Path) -> None:
 
     from conformance.suite.runner import main as runner_main
 
-    root = _app(tmp_path, _uv_lock("3.46.0"))
+    root = _app(tmp_path, uv_lock("3.46.0"))
     (root / "atlan.yaml").write_text("name: example\n", encoding="utf-8")
     out = tmp_path / "report.sarif"
     runner_main(["--repo", str(root), "--series", "P", "--output", str(out)])
@@ -758,7 +741,7 @@ def _write(root: Path, files: dict[str, str]) -> Path:
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-    (root / "uv.lock").write_text(_uv_lock("3.46.0"), encoding="utf-8")
+    (root / "uv.lock").write_text(uv_lock("3.46.0"), encoding="utf-8")
     return root
 
 

@@ -24,22 +24,14 @@ from conformance.suite.checks._ast_common._safe_swap import (
 )
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
+from conformance.suite.runner import _blocking
 from conformance.suite.schema.extensions import SafeSwap
+from tests._helpers import scan_files
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
     """Findings of a single rule from a per-file scan of *src* at path *file*."""
     return [f for f in scan_text(src, file) if f.rule_id == rule_id]
-
-
-def _scan_files(tmp_path: Path, files: dict[str, str]) -> list:
-    paths: list[Path] = []
-    for name, src in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(src)
-        paths.append(path)
-    return scan_all(paths, tmp_path)
 
 
 def test_series_letter() -> None:
@@ -80,6 +72,20 @@ def test_p004_suppressed_inline() -> None:
     src = "from temporalio.client import Client  # conformance: ignore[P004] embedded test harness\n"
     fs = _rule(src, "P004")
     assert len(fs) == 1 and fs[0].suppressed
+
+
+def test_p004_gates_unless_suppressed() -> None:
+    """P004 is suppress-only BLOCK: an unsuppressed import gates, a justified one does not.
+
+    Apps must never import temporalio (FND-5383), so the finding has to reach
+    the gate's blocking set; the inline suppression stays the only way out.
+    """
+    (bare,) = _rule("from temporalio import workflow\n", "P004")
+    (justified,) = _rule(
+        "from temporalio import workflow  # conformance: ignore[P004] drives Temporal itself\n",
+        "P004",
+    )
+    assert _blocking([bare, justified]) == [bare]
 
 
 # ── P005 PrivateOrchestrationInternalImport (app) ───────────────────────────
@@ -445,7 +451,7 @@ def test_p006_suppressed_inline() -> None:
 
 
 def _p007(tmp_path: Path, files: dict[str, str]) -> list:
-    return [f for f in _scan_files(tmp_path, files) if f.rule_id == "P007"]
+    return [f for f in scan_files(scan_all, tmp_path, files) if f.rule_id == "P007"]
 
 
 # ── P007 RawTemporalInPublicSurface (sdk) ───────────────────────────────────
@@ -543,7 +549,9 @@ def test_conftest_violations_are_caught(tmp_path: Path) -> None:
         "    client = await Client.connect('localhost:7233')\n"
         "    create_worker(client, task_queue='q')\n"
     )
-    findings = _scan_files(tmp_path, {"tests/integration/conftest.py": conftest})
+    findings = scan_files(
+        scan_all, tmp_path, {"tests/integration/conftest.py": conftest}
+    )
     ids = sorted(f.rule_id for f in findings)
     assert ids == ["P004", "P005"], ids
 

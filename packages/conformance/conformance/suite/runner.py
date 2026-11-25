@@ -21,6 +21,7 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 import conformance.suite.checks.logging as logging_checks
 import conformance.suite.checks.sdr as sdr_checks
@@ -56,6 +57,7 @@ from conformance.suite.checks import (
     error_seam,
     generated_freshness,
     gitignore_entries,
+    httpx_proxy,
     integration_deselect,
     integration_marking,
     legacy_contract,
@@ -65,10 +67,13 @@ from conformance.suite.checks import (
     optimizations,
     orchestration,
     persistence_seam,
+    pinned_task_queue,
+    pool_key_alignment,
     preflight,
     prescriptions,
     release_contract,
     retry_ladder,
+    run_scratch,
     sdr_test_checks,
     security,
     test_quality,
@@ -76,323 +81,162 @@ from conformance.suite.checks import (
     text_io_encoding,
     transform_templates,
 )
-from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
+from conformance.suite.checks._ast_common import (
+    TOOL_VERSION,
+    ParseFailure,
+    detect_scope,
+    parse_failure,
+    source_cache,
+)
+from conformance.suite.checks.preflight._lifetime import scan_removed_config
+from conformance.suite.introduced import BaseUnavailable, introduced_since
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
+from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.schema.sarif import (
+    ArtifactLocation,
+    Location,
+    Notification,
+    PhysicalLocation,
+    Region,
+)
+
+# reportingDescriptorReference id on the notification for an unparseable file.
+PARSE_FAILURE_ID = "conformance/parse-failure"
+
+# Default for ``--since``. CI sets it once on the job, so every per-series
+# ``detect`` step in that job gates on the change without each one passing it.
+SINCE_ENV = "CONFORMANCE_SINCE"
+
+# Default for ``--gate-introduced``. CI sets it on pull-request and
+# merge-queue runs, so a caller still passing ``--exit-zero`` (soft mode)
+# stops only the repository's backlog from failing, not the change's own
+# additions.
+GATE_INTRODUCED_ENV = "CONFORMANCE_GATE_INTRODUCED"
+
+# Per-file parse-failure annotations emitted before the aggregate one stands in
+# for the rest. GitHub keeps at most 10 annotations of each level per step and
+# drops the rest silently. The other summaries can use up to 2 of the same level
+# (blocking + warning under --exit-zero), and the aggregate needs 1, so 7 leaves
+# room for all of them.
+_MAX_PARSE_FILE_ANNOTATIONS = 7
 
 
 @dataclass(frozen=True)
 class CheckRegistration:
     """A registered check module, identified by its rule-series letter.
 
-    A check supplies either ``scan_path`` (per-file scanning) or ``scan_all``
-    (cross-file scanning that needs to see every file before emitting findings —
-    e.g. transitive inheritance resolution).  When ``scan_all`` is set the
-    runner calls it once with the post-exclusion path list; otherwise it calls
-    ``scan_path`` per file.
+    A check supplies ``scan_path`` (per-file scanning), ``scan_all`` (cross-file
+    scanning that needs to see every file before emitting findings — e.g.
+    transitive inheritance resolution), or both.  When ``scan_all`` is set the
+    runner calls it once with the post-exclusion path list and never calls
+    ``scan_path``; otherwise it calls ``scan_path`` per file.
     """
 
     series: str
     discover: Callable[[Path], list[Path]]
-    scan_path: Callable[[Path, Path], list[Finding]]
+    scan_path: Callable[[Path, Path], list[Finding]] | None = None
     scan_all: Callable[[list[Path], Path], list[Finding]] | None = None
 
+    def __post_init__(self) -> None:
+        if self.scan_path is None and self.scan_all is None:
+            raise TypeError(
+                f"check series {self.series!r} defines neither scan_path nor scan_all"
+            )
+
+    @classmethod
+    def from_module(cls, module: ModuleType) -> CheckRegistration:
+        """Register a check module by the names every check module exports.
+
+        ``SERIES`` and ``discover`` are required; ``scan_path`` and ``scan_all``
+        are read when the module defines them.
+        """
+        return cls(
+            series=module.SERIES,
+            discover=module.discover,
+            scan_path=getattr(module, "scan_path", None),
+            scan_all=getattr(module, "scan_all", None),
+        )
+
+    def scan(self, paths: list[Path], root: Path) -> list[Finding]:
+        """Run the check over its post-exclusion *paths*."""
+        if self.scan_all is not None:
+            return self.scan_all(paths, root)
+        assert self.scan_path is not None  # guaranteed by __post_init__
+        findings: list[Finding] = []
+        for path in paths:
+            findings.extend(self.scan_path(path, root))
+        return findings
+
+
+# Every check module the runner dispatches, in dispatch order.  A module under
+# ``conformance/suite/checks`` that defines ``SERIES`` must appear here:
+# ``tests/test_runner_registration.py`` fails otherwise, so a new check cannot
+# be documented and unit-tested yet never run.
+_CHECK_MODULES: tuple[ModuleType, ...] = (
+    actions_pinning,
+    asyncio_loop_scope,
+    bootstrap_drift,
+    client_seam,
+    client_lifecycle,
+    offload_cancel,
+    httpx_proxy,
+    run_scratch,
+    persistence_seam,
+    credential_seam,
+    download_retry,
+    error_handling,
+    error_seam,
+    dependency_conformance,
+    optimizations,
+    prescriptions,
+    gitignore_entries,
+    orchestration,
+    determinism,
+    entrypoint,
+    logging_checks,
+    integration_marking,
+    test_quality,
+    test_structure,
+    coverage_config,
+    integration_deselect,
+    e2e_deployment_name,
+    e2e_agent_spec,
+    e2e_workflow_shape,
+    e2e_generated_harness,
+    entrypoint_e2e_coverage,
+    e2e_system_app_base,
+    dockerfile_conformance,
+    deprecation,
+    entrypoint_alignment,
+    app_name_alignment,
+    preflight,
+    legacy_contract,
+    generated_freshness,
+    artifact_schema_declared,
+    artifact_schema_writer,
+    manifest_contract,
+    manifest_app_name,
+    release_contract,
+    dapr_objectstore,
+    dapr_secretstore,
+    pinned_task_queue,
+    pool_key_alignment,
+    sdr_checks,
+    transform_templates,
+    sdr_test_checks,
+    dev_entrypoint,
+    security,
+    text_io_encoding,
+    atomic_publish,
+    retry_ladder,
+)
 
 _CHECKS: list[CheckRegistration] = [
-    CheckRegistration(
-        series=actions_pinning.SERIES,
-        discover=actions_pinning.discover,
-        scan_path=actions_pinning.scan_path,
-    ),
-    CheckRegistration(
-        series=asyncio_loop_scope.SERIES,
-        discover=asyncio_loop_scope.discover,
-        scan_path=asyncio_loop_scope.scan_path,
-    ),
-    CheckRegistration(
-        series=bootstrap_drift.SERIES,
-        discover=bootstrap_drift.discover,
-        scan_path=bootstrap_drift.scan_path,
-    ),
-    CheckRegistration(
-        series=client_seam.SERIES,
-        discover=client_seam.discover,
-        scan_path=client_seam.scan_path,
-    ),
-    CheckRegistration(
-        series=client_lifecycle.SERIES,
-        discover=client_lifecycle.discover,
-        scan_path=client_lifecycle.scan_path,
-        scan_all=client_lifecycle.scan_all,
-    ),
-    CheckRegistration(
-        series=offload_cancel.SERIES,
-        discover=offload_cancel.discover,
-        scan_path=offload_cancel.scan_path,
-        scan_all=offload_cancel.scan_all,
-    ),
-    CheckRegistration(
-        series=persistence_seam.SERIES,
-        discover=persistence_seam.discover,
-        scan_path=persistence_seam.scan_path,
-    ),
-    CheckRegistration(
-        series=credential_seam.SERIES,
-        discover=credential_seam.discover,
-        scan_path=credential_seam.scan_path,
-        scan_all=credential_seam.scan_all,
-    ),
-    CheckRegistration(
-        series=download_retry.SERIES,
-        discover=download_retry.discover,
-        scan_path=download_retry.scan_path,
-    ),
-    CheckRegistration(
-        series=error_handling.SERIES,
-        discover=error_handling.discover,
-        scan_path=error_handling.scan_path,
-        # scan_all builds F005's preflight scope across files for E004.
-        scan_all=error_handling.scan_all,
-    ),
-    CheckRegistration(
-        series=error_seam.SERIES,
-        discover=error_seam.discover,
-        scan_path=error_seam.scan_path,
-    ),
-    CheckRegistration(
-        series=dependency_conformance.SERIES,
-        discover=dependency_conformance.discover,
-        scan_path=dependency_conformance.scan_path,
-        scan_all=dependency_conformance.scan_all,
-    ),
-    CheckRegistration(
-        series=optimizations.SERIES,
-        discover=optimizations.discover,
-        scan_path=optimizations.scan_path,
-    ),
-    CheckRegistration(
-        series=prescriptions.SERIES,
-        discover=prescriptions.discover,
-        scan_path=prescriptions.scan_path,
-        scan_all=prescriptions.scan_all,
-    ),
-    CheckRegistration(
-        series=gitignore_entries.SERIES,
-        discover=gitignore_entries.discover,
-        scan_path=gitignore_entries.scan_path,
-    ),
-    CheckRegistration(
-        series=orchestration.SERIES,
-        discover=orchestration.discover,
-        scan_path=orchestration.scan_path,
-        scan_all=orchestration.scan_all,
-    ),
-    CheckRegistration(
-        series=determinism.SERIES,
-        discover=determinism.discover,
-        scan_path=determinism.scan_path,
-    ),
-    CheckRegistration(
-        series=entrypoint.SERIES,
-        discover=entrypoint.discover,
-        scan_path=entrypoint.scan_path,
-    ),
-    CheckRegistration(
-        series=logging_checks.SERIES,
-        discover=logging_checks.discover,
-        scan_path=logging_checks.scan_path,
-        scan_all=logging_checks.scan_all,
-    ),
-    CheckRegistration(
-        series=integration_marking.SERIES,
-        discover=integration_marking.discover,
-        scan_path=integration_marking.scan_path,
-    ),
-    CheckRegistration(
-        series=test_quality.SERIES,
-        discover=test_quality.discover,
-        scan_path=test_quality.scan_path,
-    ),
-    CheckRegistration(
-        series=test_structure.SERIES,
-        discover=test_structure.discover,
-        scan_path=test_structure.scan_path,
-        scan_all=test_structure.scan_all,
-    ),
-    CheckRegistration(
-        series=coverage_config.SERIES,
-        discover=coverage_config.discover,
-        scan_path=coverage_config.scan_path,
-    ),
-    CheckRegistration(
-        series=integration_deselect.SERIES,
-        discover=integration_deselect.discover,
-        scan_path=integration_deselect.scan_path,
-    ),
-    CheckRegistration(
-        series=e2e_deployment_name.SERIES,
-        discover=e2e_deployment_name.discover,
-        scan_path=e2e_deployment_name.scan_path,
-    ),
-    CheckRegistration(
-        series=e2e_agent_spec.SERIES,
-        discover=e2e_agent_spec.discover,
-        scan_path=e2e_agent_spec.scan_path,
-    ),
-    CheckRegistration(
-        series=e2e_workflow_shape.SERIES,
-        discover=e2e_workflow_shape.discover,
-        scan_path=e2e_workflow_shape.scan_path,
-        scan_all=e2e_workflow_shape.scan_all,
-    ),
-    CheckRegistration(
-        series=e2e_generated_harness.SERIES,
-        discover=e2e_generated_harness.discover,
-        scan_path=e2e_generated_harness.scan_path,
-        scan_all=e2e_generated_harness.scan_all,
-    ),
-    CheckRegistration(
-        series=entrypoint_e2e_coverage.SERIES,
-        discover=entrypoint_e2e_coverage.discover,
-        scan_path=entrypoint_e2e_coverage.scan_path,
-        scan_all=entrypoint_e2e_coverage.scan_all,
-    ),
-    CheckRegistration(
-        series=e2e_system_app_base.SERIES,
-        discover=e2e_system_app_base.discover,
-        scan_path=e2e_system_app_base.scan_path,
-        scan_all=e2e_system_app_base.scan_all,
-    ),
-    CheckRegistration(
-        series=dockerfile_conformance.SERIES,
-        discover=dockerfile_conformance.discover,
-        scan_path=dockerfile_conformance.scan_path,
-    ),
-    CheckRegistration(
-        series=deprecation.SERIES,
-        discover=deprecation.discover,
-        scan_path=deprecation.scan_path,
-        scan_all=deprecation.scan_all,
-    ),
-    CheckRegistration(
-        series=entrypoint_alignment.SERIES,
-        discover=entrypoint_alignment.discover,
-        scan_path=entrypoint_alignment.scan_path,
-        scan_all=entrypoint_alignment.scan_all,
-    ),
-    CheckRegistration(
-        series=app_name_alignment.SERIES,
-        discover=app_name_alignment.discover,
-        scan_path=app_name_alignment.scan_path,
-        scan_all=app_name_alignment.scan_all,
-    ),
-    CheckRegistration(
-        series=preflight.SERIES,
-        discover=preflight.discover,
-        scan_path=preflight.scan_path,
-        scan_all=preflight.scan_all,
-    ),
-    CheckRegistration(
-        series=legacy_contract.SERIES,
-        discover=legacy_contract.discover,
-        scan_path=legacy_contract.scan_path,
-    ),
-    CheckRegistration(
-        series=generated_freshness.SERIES,
-        discover=generated_freshness.discover,
-        scan_path=generated_freshness.scan_path,
-        scan_all=generated_freshness.scan_all,
-    ),
-    CheckRegistration(
-        series=artifact_schema_declared.SERIES,
-        discover=artifact_schema_declared.discover,
-        scan_path=artifact_schema_declared.scan_path,
-        scan_all=artifact_schema_declared.scan_all,
-    ),
-    CheckRegistration(
-        series=artifact_schema_writer.SERIES,
-        discover=artifact_schema_writer.discover,
-        scan_path=artifact_schema_writer.scan_path,
-        scan_all=artifact_schema_writer.scan_all,
-    ),
-    CheckRegistration(
-        series=manifest_contract.SERIES,
-        discover=manifest_contract.discover,
-        scan_path=manifest_contract.scan_path,
-        scan_all=manifest_contract.scan_all,
-    ),
-    CheckRegistration(
-        series=manifest_app_name.SERIES,
-        discover=manifest_app_name.discover,
-        scan_path=manifest_app_name.scan_path,
-        scan_all=manifest_app_name.scan_all,
-    ),
-    CheckRegistration(
-        series=release_contract.SERIES,
-        discover=release_contract.discover,
-        scan_path=release_contract.scan_path,
-        scan_all=release_contract.scan_all,
-    ),
-    CheckRegistration(
-        series=dapr_objectstore.SERIES,
-        discover=dapr_objectstore.discover,
-        scan_path=dapr_objectstore.scan_path,
-        scan_all=dapr_objectstore.scan_all,
-    ),
-    CheckRegistration(
-        series=dapr_secretstore.SERIES,
-        discover=dapr_secretstore.discover,
-        scan_path=dapr_secretstore.scan_path,
-        scan_all=dapr_secretstore.scan_all,
-    ),
-    CheckRegistration(
-        series=sdr_checks.SERIES,
-        discover=sdr_checks.discover,
-        scan_path=sdr_checks.scan_path,
-        scan_all=sdr_checks.scan_all,
-    ),
-    CheckRegistration(
-        series=transform_templates.SERIES,
-        discover=transform_templates.discover,
-        scan_path=transform_templates.scan_path,
-    ),
-    CheckRegistration(
-        series=sdr_test_checks.SERIES,
-        discover=sdr_test_checks.discover,
-        scan_path=sdr_test_checks.scan_path,
-        scan_all=sdr_test_checks.scan_all,
-    ),
-    CheckRegistration(
-        series=dev_entrypoint.SERIES,
-        discover=dev_entrypoint.discover,
-        scan_path=dev_entrypoint.scan_path,
-    ),
-    CheckRegistration(
-        series=security.SERIES,
-        discover=security.discover,
-        scan_path=security.scan_path,
-    ),
-    CheckRegistration(
-        series=text_io_encoding.SERIES,
-        discover=text_io_encoding.discover,
-        scan_path=text_io_encoding.scan_path,
-    ),
-    CheckRegistration(
-        series=atomic_publish.SERIES,
-        discover=atomic_publish.discover,
-        scan_path=atomic_publish.scan_path,
-    ),
-    CheckRegistration(
-        series=retry_ladder.SERIES,
-        discover=retry_ladder.discover,
-        scan_path=retry_ladder.scan_path,
-    ),
+    CheckRegistration.from_module(module) for module in _CHECK_MODULES
 ]
 
-
-# Registry invariant: every registered checker's series must have rule
-# definitions in the catalog (so get_rule() resolves for each finding it emits).
 assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 
@@ -425,13 +269,34 @@ def _series_in_scope(series: str, active: RuleScope | None) -> bool:
     )
 
 
+def _print_parse_failures(
+    parse_failures: list[ParseFailure], label: str, *, gating: bool = True
+) -> None:
+    """List the files no check scanned, so a clean summary is never a lie."""
+    if not parse_failures:
+        return
+    tag = "FAIL" if gating else "WARN"
+    n = len(parse_failures)
+    print(
+        f"conformance ({label}): {n} file{'s' if n != 1 else ''} could not be "
+        f"parsed, so no check scanned {'them' if n != 1 else 'it'}.\n"
+    )
+    for failure in parse_failures:
+        print(f"  [PARSE] [{tag}] {failure.file}:{failure.line}:{failure.column}")
+        print(f"  {failure.message}\n")
+
+
 def _print_human_summary(
     findings: list[Finding],
     series: str | None,
     excluded_prefixes: tuple[str, ...] = (),
+    parse_failures: list[ParseFailure] | None = None,
+    *,
+    parse_failures_gate: bool = True,
 ) -> None:
     """Print a human-readable violation/warning summary to stdout."""
     label = f"{series}-series" if series else "conformance suite"
+    _print_parse_failures(parse_failures or [], label, gating=parse_failures_gate)
     active = [f for f in findings if not f.suppressed]
     suppressed = [f for f in findings if f.suppressed]
     excluded_note = (
@@ -439,6 +304,8 @@ def _print_human_summary(
         if excluded_prefixes
         else ""
     )
+    if parse_failures:
+        excluded_note += " (files listed above were not scanned)"
     if not active and not suppressed:
         print(f"conformance ({label}): no violations found.{excluded_note}")
         return
@@ -466,14 +333,26 @@ def _pct(msg: str) -> str:
     return msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _pct_prop(value: str) -> str:
+    """Percent-encode a workflow-command *property* value (``file=``, ``title=``).
+
+    Properties also need ``:`` and ``,`` escaped: unescaped, a repo-controlled
+    file name could end the property list early or, with a newline, start a
+    forged workflow command of its own.
+    """
+    return _pct(value).replace(":", "%3A").replace(",", "%2C")
+
+
 def _emit_github_summary_annotations(
     findings: list[Finding],
     series: str | None,
     excluded_prefixes: tuple[str, ...] = (),
     *,
     exit_zero: bool = False,
+    parse_failures: list[ParseFailure] | None = None,
+    parse_failures_gate: bool = True,
 ) -> None:
-    """Emit at most four summary annotations to the GitHub Actions log.
+    """Emit summary annotations to the GitHub Actions log.
 
     Per-finding annotations are capped at 10 per type by GitHub without any
     visible indication of truncation, making it impossible to track overall
@@ -488,8 +367,17 @@ def _emit_github_summary_annotations(
     downgraded from ``::error`` to ``::warning`` so the annotation severity
     matches the job exit code — preventing red error banners on a green job.
 
-    Emits nothing when there are no findings and no exclusions.
+    Files that could not be parsed get one aggregate annotation with the full
+    count, plus a file-anchored annotation each for the first
+    :data:`_MAX_PARSE_FILE_ANNOTATIONS`: there is no SARIF result for such a
+    file, so this is its only mark on the PR. The aggregate is what survives
+    GitHub's cap. They are ``::error`` only when they gate the run and
+    ``exit_zero`` is off.
+
+    Emits nothing when there are no findings, no exclusions and no parse
+    failures.
     """
+    parse_failures = parse_failures or []
     blocking = [
         f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.BLOCK
     ]
@@ -498,7 +386,13 @@ def _emit_github_summary_annotations(
     ]
     suppressed = [f for f in findings if f.suppressed]
 
-    if not blocking and not warns and not suppressed and not excluded_prefixes:
+    if (
+        not blocking
+        and not warns
+        and not suppressed
+        and not excluded_prefixes
+        and not parse_failures
+    ):
         return
 
     server = os.getenv("GITHUB_SERVER_URL", "https://github.com")
@@ -510,6 +404,31 @@ def _emit_github_summary_annotations(
         detail = "Download the SARIF artifact from this workflow run for full details."
 
     label = f"{series}-series" if series else "conformance suite"
+
+    if parse_failures:
+        parse_level = "error" if parse_failures_gate and not exit_zero else "warning"
+        n = len(parse_failures)
+        shown = parse_failures[:_MAX_PARSE_FILE_ANNOTATIONS]
+        for failure in shown:
+            print(
+                f"::{parse_level} file={_pct_prop(failure.file)},"
+                f"line={failure.line},col={failure.column},"
+                f"title={_pct_prop('Conformance: file not scanned')}"
+                f"::{_pct(failure.message)}"
+            )
+        more = (
+            f" Only the first {len(shown)} are annotated; the log lists all {n}."
+            if n > len(shown)
+            else ""
+        )
+        msg = _pct(
+            f"{n} file{'s' if n != 1 else ''} could not be parsed, so no check "
+            f"in {label} scanned {'them' if n != 1 else 'it'}.{more} {detail}"
+        )
+        title = _pct_prop(
+            f"Conformance: {n} file{'s' if n != 1 else ''} not scanned ({label})"
+        )
+        print(f"::{parse_level} title={title}::{msg}")
 
     if blocking:
         n = len(blocking)
@@ -552,8 +471,6 @@ def parse_rule_ids(raw: str) -> set[str]:
     the exact bug class ``--series L004`` used to cause (a series letter match
     against a full rule id selected zero checks and reported a clean repo).
     """
-    from conformance.suite.rules import CATALOG
-
     ids = {r.strip().upper() for r in raw.split(",") if r.strip()}
     if not ids:
         raise SystemExit("--rule was provided but contained no rule ids")
@@ -590,7 +507,172 @@ def _drop_excluded(
     ]
 
 
-def main(argv: list[str] | None = None) -> int:
+def _python_files(paths: Iterable[Path]) -> set[Path]:
+    """The discovered paths that are Python sources (checks also discover YAML,
+    Dockerfiles and the repo root itself)."""
+    return {p for p in paths if p.suffix == ".py" and p.is_file()}
+
+
+def _parse_failures(py_paths: Iterable[Path], root: Path) -> list[ParseFailure]:
+    """Parse each discovered Python file once; return the ones that fail.
+
+    Every AST check skips a file it cannot parse, and nearly all of them do it
+    silently.  Checking once here, over the union of what the in-scope checks
+    discovered, reports that gap for every check without each one having to.
+    """
+    failures = (parse_failure(p, root) for p in sorted(py_paths))
+    return [f for f in failures if f is not None]
+
+
+def _to_notification(failure: ParseFailure, *, gating: bool = True) -> Notification:
+    """SARIF notification for *failure*; ``error`` gates the run, ``warning`` does not."""
+    return Notification(
+        message={"text": failure.message},
+        level="error" if gating else "warning",
+        descriptor={"id": PARSE_FAILURE_ID},
+        locations=[
+            Location(
+                physical_location=PhysicalLocation(
+                    artifact_location=ArtifactLocation(uri=failure.file),
+                    region=Region(start_line=failure.line, start_column=failure.column),
+                )
+            )
+        ],
+    )
+
+
+def _checks_for_rules(rule_ids: set[str]) -> list[CheckRegistration]:
+    """Return the registered checks that can emit any of *rule_ids*."""
+    series = {rid[0] for rid in rule_ids}
+    active = [c for c in _CHECKS if c.series in series]
+    if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
+        active = [c for c in active if c.scan_all is preflight.scan_all]
+    return active
+
+
+def _collect(
+    root: Path,
+    active: list[CheckRegistration],
+    *,
+    active_scope: RuleScope | None,
+    excluded_prefixes: tuple[str, ...],
+    rule_ids: set[str] | None,
+    series: set[str] | None,
+) -> tuple[list[Finding], set[Path]]:
+    """Run *active* over *root*; return (in-scope findings, Python files seen).
+
+    One tree, one pass. ``main`` calls it for the working tree, and ``--since``
+    calls it again for the base tree with the rules that fired.
+    """
+    all_findings: list[Finding] = []
+    py_paths: set[Path] = set()
+    # One read, one parse and one discovery walk per file for the whole pass,
+    # shared by every check (see _ast_common._source_cache). Scoped to this
+    # call: the --since base pass scans a different tree with its own cache.
+    with source_cache():
+        for check in active:
+            # Skip a whole check when none of its series' rules could be in
+            # scope (e.g. the all-APP D-series when scanning the SDK itself).
+            if not _series_in_scope(check.series, active_scope):
+                continue
+            paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
+            py_paths |= _python_files(paths)
+            all_findings.extend(check.scan(paths, root))
+
+    # --exclude also applies at the finding level: a check that discovers the
+    # repo root (e.g. K029) reads files beneath it that _drop_excluded never
+    # saw, so filtering paths alone would not keep the "all checks" promise.
+    all_findings = [
+        f for f in all_findings if not _is_excluded(f.file, excluded_prefixes)
+    ]
+
+    selected_rules = {
+        rid
+        for rid, rule in CATALOG.items()
+        if _rule_in_scope(rule.scope, active_scope)
+        and (rule_ids is None or rid in rule_ids)
+        and (series is None or rid[0] in series)
+    }
+    if "F015" in selected_rules:
+        all_findings.extend(
+            finding
+            for finding in scan_removed_config(root)
+            if not _is_excluded(finding.file, excluded_prefixes)
+        )
+    # Drop findings for rules outside the active scope.  This is the
+    # finding-level counterpart to the series-level skip above: it covers
+    # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
+    # so the SARIF report, counts, and exit code reflect only in-scope rules.
+    all_findings = [
+        f
+        for f in all_findings
+        if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
+    ]
+
+    # --rule: keep exactly the requested rules. The series module may have
+    # scanned siblings in the same pass; they are out of this run's contract.
+    if rule_ids is not None:
+        all_findings = [f for f in all_findings if f.rule_id in rule_ids]
+    return all_findings, py_paths
+
+
+def _blocking(findings: list[Finding]) -> list[Finding]:
+    """Return the unsuppressed BLOCK-tier findings: the ones that gate."""
+    return [
+        f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.BLOCK
+    ]
+
+
+def _introduced_blocking(
+    root: Path,
+    since: str,
+    findings: list[Finding],
+    *,
+    active_scope: RuleScope | None,
+    excluded_prefixes: tuple[str, ...],
+) -> list[Finding] | None:
+    """Return the blocking findings the change since *since* adds.
+
+    ``None`` when the base cannot be compared: the caller then keeps the
+    whole-repo verdict, so an error only ever makes the gate stricter. See
+    :mod:`conformance.suite.introduced` for how "adds" is decided.
+    """
+    head = _blocking(findings)
+    fired = {f.rule_id for f in head}
+
+    def scan_base(tree: Path) -> list[Finding]:
+        base, _ = _collect(
+            tree,
+            _checks_for_rules(fired),
+            active_scope=active_scope,
+            excluded_prefixes=excluded_prefixes,
+            rule_ids=fired,
+            series=None,
+        )
+        return _blocking(base)
+
+    try:
+        adds, base_sha = introduced_since(root, since, head, scan_base)
+    except BaseUnavailable as exc:
+        print(
+            f"conformance (--since {since}): {exc}; "
+            "falling back to the whole-repository verdict.\n"
+        )
+        return None
+    inherited = len(head) - len(adds)
+    print(
+        f"conformance (--since {since}, base {base_sha[:12]}): "
+        f"{len(adds)} blocking introduced by this change, "
+        f"{inherited} inherited from the base (reported, not gating)."
+    )
+    for f in adds:
+        print(f"  [{f.rule_id}] [INTRODUCED] {f.file}:{f.line}:{f.column}")
+    print()
+    return adds
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Return the ``detect`` argument parser."""
     parser = argparse.ArgumentParser(description="Atlan conformance suite runner.")
     parser.add_argument("--repo", default=".", metavar="DIR")
     parser.add_argument(
@@ -650,11 +732,68 @@ def main(argv: list[str] | None = None) -> int:
             "The SARIF invocation.exitCode still reflects the real result so "
             "Security tab tracking is unaffected. "
             "Use during soft-enforcement rollouts where violations should be "
-            "observed and tracked but must not block merges."
+            "observed and tracked but must not block merges. "
+            "--gate-introduced narrows it: a blocking finding the change "
+            "itself adds still fails."
         ),
     )
+    parser.add_argument(
+        "--gate-introduced",
+        action="store_true",
+        default=os.getenv(GATE_INTRODUCED_ENV, "").strip().lower() == "true",
+        help=(
+            "With --since: a blocking finding the change introduces fails the "
+            "run even under --exit-zero. --exit-zero then excuses only what "
+            "the base already carries, warnings, and a base that could not "
+            "be compared. No effect without --since. "
+            f"Default: ${GATE_INTRODUCED_ENV}=true."
+        ),
+    )
+    parser.add_argument(
+        "--since",
+        metavar="REF",
+        default=os.getenv(SINCE_ENV, ""),
+        help=(
+            "Gate on the change, not the repository: exit non-zero only for "
+            "blocking findings the working tree has over the merge-base of REF "
+            "and HEAD (e.g. 'origin/main'). Findings the base already carries "
+            "are still reported, and still written to the SARIF, but do not "
+            "fail the run. Warnings never fail it. A file that cannot be "
+            "parsed still fails it, as without --since. If the base cannot "
+            "be compared, every blocking finding fails. "
+            f"Default: ${SINCE_ENV}."
+        ),
+    )
+    return parser
+
+
+def _gate_exit_code(
+    *,
+    exit_zero: bool,
+    sarif_exit_code: int,
+    change_adds: list[Finding] | None,
+    introduced_gates: bool,
+    unanalysed: bool,
+) -> int:
+    """Return the process exit code. The SARIF keeps the whole-repo result.
+
+    * ``--exit-zero``: 0, unless ``--gate-introduced`` found the change added
+      a blocking finding.
+    * no ``--since`` answer (``change_adds is None``): the whole-repo verdict.
+    * otherwise: fail on what the change added, or on an unanalysed file.
+    """
+    if exit_zero:
+        return 1 if introduced_gates else 0
+    if change_adds is None:
+        return sarif_exit_code
+    return 1 if change_adds or unanalysed else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
+    requested: set[str] = set()
     rule_ids: set[str] | None = None
     if args.rule:
         if args.series:
@@ -662,12 +801,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--rule and --series are mutually exclusive (--rule implies its series)"
             )
         rule_ids = parse_rule_ids(args.rule)
-        requested = {rid[0] for rid in rule_ids}
-        active = [c for c in _CHECKS if c.series in requested]
-        from conformance.suite.rules.preflight import RULES as PREFLIGHT_RULES
-
-        if rule_ids <= {rule.id for rule in PREFLIGHT_RULES}:
-            active = [c for c in active if c.scan_all is preflight.scan_all]
+        active = _checks_for_rules(rule_ids)
     elif args.series:
         requested = {s.strip().upper() for s in args.series.split(",")}
         active = [c for c in _CHECKS if c.series in requested]
@@ -688,65 +822,64 @@ def main(argv: list[str] | None = None) -> int:
     # from the repo under scan.  ``None`` means "scope unknown — run everything".
     active_scope = RuleScope(args.scope) if args.scope else detect_scope(root)
 
-    all_findings: list[Finding] = []
-    for check in active:
-        # Skip a whole check when none of its series' rules could be in scope
-        # (e.g. the all-APP D-series when scanning the SDK itself).
-        if not _series_in_scope(check.series, active_scope):
-            continue
-        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
-        if check.scan_all is not None:
-            all_findings.extend(check.scan_all(paths, root))
-        else:
-            for p in paths:
-                all_findings.extend(check.scan_path(p, root))
+    all_findings, py_paths = _collect(
+        root,
+        active,
+        active_scope=active_scope,
+        excluded_prefixes=excluded_prefixes,
+        rule_ids=rule_ids,
+        series=requested if args.series else None,
+    )
 
-    # --exclude also applies at the finding level: a check that discovers the
-    # repo root (e.g. K029) reads files beneath it that _drop_excluded never
-    # saw, so filtering paths alone would not keep the "all checks" promise.
-    all_findings = [
-        f for f in all_findings if not _is_excluded(f.file, excluded_prefixes)
-    ]
-
-    selected_rules = {
-        rid
-        for rid, rule in CATALOG.items()
-        if _rule_in_scope(rule.scope, active_scope)
-        and (rule_ids is None or rid in rule_ids)
-        and (not args.series or rid[0] in requested)
-    }
-    if "F015" in selected_rules:
-        from conformance.suite.checks.preflight._lifetime import scan_removed_config
-
-        all_findings.extend(
-            finding
-            for finding in scan_removed_config(root)
-            if not _is_excluded(finding.file, excluded_prefixes)
-        )
-    # Drop findings for rules outside the active scope.  This is the
-    # finding-level counterpart to the series-level skip above: it covers
-    # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
-    # so the SARIF report, counts, and exit code reflect only in-scope rules.
-    all_findings = [
-        f
-        for f in all_findings
-        if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
-    ]
-
-    # --rule: keep exactly the requested rules. The series module may have
-    # scanned siblings in the same pass; they are out of this run's contract.
-    if rule_ids is not None:
-        all_findings = [f for f in all_findings if f.rule_id in rule_ids]
+    parse_failures = _parse_failures(py_paths, root)
+    # A --rule run's exit code is scoped to exactly the requested rules, but
+    # py_paths spans every check in their series, and no mapping says which
+    # check owns which rule. An unparseable file there may be one the requested
+    # rules never scan, so it is reported as a warning and does not gate.
+    parse_failures_gate = rule_ids is None
 
     # Always surface violations in a human-readable form so CI logs are actionable.
-    _print_human_summary(all_findings, args.rule or args.series, excluded_prefixes)
+    _print_human_summary(
+        all_findings,
+        args.rule or args.series,
+        excluded_prefixes,
+        parse_failures,
+        parse_failures_gate=parse_failures_gate,
+    )
+
+    # --since: which blocking findings did this change add? ``None`` means the
+    # question was not asked (or could not be answered), and the whole-repo
+    # verdict stands.
+    change_adds: list[Finding] | None = None
+    if args.since:
+        change_adds = _introduced_blocking(
+            root,
+            args.since,
+            all_findings,
+            active_scope=active_scope,
+            excluded_prefixes=excluded_prefixes,
+        )
+    # An unanalysed file fails the run whatever the change added: a clean
+    # verdict must mean every discovered file was scanned. Parse failures
+    # are not compared with the base.
+    unanalysed = bool(parse_failures) and parse_failures_gate
+    # True only when --since turns a whole-repo failure into a pass.
+    inherited_only = change_adds is not None and not change_adds and not unanalysed
+    # --gate-introduced: what the change added fails the run even in soft
+    # mode. Only a compared base can say what was added, so an unanswered
+    # --since (``change_adds is None``) leaves --exit-zero fully in force:
+    # soft mode must never start failing a repository for its backlog.
+    introduced_gates = bool(args.gate_introduced and change_adds)
 
     if os.getenv("GITHUB_ACTIONS") == "true":
         _emit_github_summary_annotations(
             all_findings,
             args.rule or args.series,
             excluded_prefixes,
-            exit_zero=args.exit_zero,
+            # Inherited findings annotate as warnings: they do not fail the run.
+            exit_zero=(args.exit_zero and not introduced_gates) or inherited_only,
+            parse_failures=parse_failures,
+            parse_failures_gate=parse_failures_gate,
         )
 
     report = findings_to_report(
@@ -754,6 +887,9 @@ def main(argv: list[str] | None = None) -> int:
         tool_version=args.tool_version,
         excluded_paths=list(excluded_prefixes),
         rule_ids=rule_ids,
+        notifications=[
+            _to_notification(f, gating=parse_failures_gate) for f in parse_failures
+        ],
     )
     for result in report.runs[0].results:
         if result.rule_id == "F019":
@@ -765,8 +901,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(payload)
 
-    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # type: ignore[assignment]
-    return 0 if args.exit_zero else sarif_exit_code
+    sarif_exit_code: int = report.runs[0].invocations[0].exit_code  # pyright: ignore[reportAssignmentType]
+    return _gate_exit_code(
+        exit_zero=args.exit_zero,
+        sarif_exit_code=sarif_exit_code,
+        change_adds=change_adds,
+        introduced_gates=introduced_gates,
+        unanalysed=unanalysed,
+    )
 
 
 if __name__ == "__main__":

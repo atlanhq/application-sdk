@@ -7,7 +7,7 @@
 ///   - credentialAuthOptions: JDBCUrlAuthOption with UrlPartMapping/UrlRef/UrlLiteral
 ///   - ConditionalFieldSpec: small field-level conditional credential input
 ///   - uiConfig: TextInput, BooleanInput, NumericInput, Radio, DropDown, SqlTree,
-///               conditional UIRule, CredentialInput, ConnectionCreator
+///               DateInput, FileUploader, conditional UIRule, CredentialInput, ConnectionCreator
 ///   - extraNodes: custom DAG node outside the typed pipeline
 ///   - notifications: explicit opt-in to the run-completion notification node
 ///   - marketplace metadata: docsUrl, shortDescription, longDescription, tags
@@ -291,6 +291,21 @@ uiConfig = new UIConfig {
             formatOnBlur = true
           }
         }
+        // DateInput → `int` (epoch seconds) in both `_input.py` and
+        // `_e2e_substitutions.py`; the substitution default is 0.
+        ["modified_since"] = new DateInput {
+          title = "Modified since"
+          helpText = "Only extract assets modified on or after this date."
+          width = 4
+        }
+        // FileUploader → `FileReference | None` in `_input.py` and
+        // `dict[str, Any] | None` (default None) in `_e2e_substitutions.py`.
+        ["mapping_file"] = new FileUploader {
+          title = "Mapping file"
+          helpText = "Optional CSV that maps source owners to Atlan users."
+          fileTypes { "text/csv" }
+          placeholderText = "Upload a CSV"
+        }
         // lifecycle = "deprecated": generated Python field carries Field(deprecated=True).
         ["legacy_timeout"] = new NumericInput {
           title = "Legacy timeout"
@@ -321,6 +336,31 @@ uiConfig = new UIConfig {
           credentialType = "atlan-connectors-full-featured"
           excludePatterns = List("information_schema")
           placeholderText = "Select schemas"
+        }
+        // Object conditional storing a flat string map: hidden until the toggle
+        // is on, then rendered as a dsnTreeMap (DSN name -> connection QN).
+        // stringMap = true types it dict[str, str] so the input imports.
+        ["enable-dsn-mapping"] = new Radio {
+          title = "Enable DSN mapping"
+          possibleValues {
+            ["true"] = "True"
+            ["false"] = "False"
+          }
+          default = "false"
+        }
+        ["dsn-mapping"] = new ConditionalInput {
+          title = ""
+          baseWidgetType = "div"
+          outputValueType = "object"
+          stringMap = true
+          default = "{}"
+          conditions {
+            new Condition {
+              property = "enable-dsn-mapping"
+              value = "true"
+              overrideUi = new Mapping { ["widget"] = "dsnTreeMap" }
+            }
+          }
         }
         // Preflight checks; keep the SageV2 widget last in the final step.
         // warmup = true declares that the app's handler overrides

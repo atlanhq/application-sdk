@@ -564,9 +564,9 @@ class TestAWSUtils:
             "DbPassword": "test_password",
         }
 
-        # Mock get_cluster_identifier to return a cluster ID
+        # Mock the cluster lookup to return a cluster ID
         with patch(
-            "application_sdk.common.aws_utils.get_cluster_identifier"
+            "application_sdk.common.aws_utils._get_cluster_identifier"
         ) as mock_get_cluster:
             mock_get_cluster.return_value = "auto-detected-cluster"
 
@@ -744,3 +744,51 @@ class TestAWSUtils:
         assert result == []
         mock_client.assert_called_once_with("ec2", region_name="us-east-1")
         mock_ec2.describe_regions.assert_called_once()
+
+
+class TestRedshiftHelperDeprecations:
+    """The five Redshift helpers warn, each exactly once per call."""
+
+    @pytest.mark.parametrize(
+        ("name", "call"),
+        [
+            ("get_cluster_identifier", lambda: get_cluster_identifier(MagicMock())),
+            ("create_aws_session", lambda: create_aws_session({})),
+            (
+                "get_cluster_credentials",
+                lambda: get_cluster_credentials(
+                    MagicMock(), {"cluster_id": "c"}, {"database": "d"}
+                ),
+            ),
+            (
+                "get_cluster_credentials",
+                # No cluster_id: the lookup runs, and must not warn a second time.
+                lambda: get_cluster_credentials(MagicMock(), {}, {"database": "d"}),
+            ),
+            (
+                "create_engine_url",
+                lambda: create_engine_url(
+                    "redshift+psycopg2",
+                    {"host": "h"},
+                    {"DbUser": "u", "DbPassword": "p"},
+                    {"database": "d"},
+                ),
+            ),
+        ],
+    )
+    def test_warns_once(self, name, call):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            call()
+        messages = [str(w.message) for w in caught if w.category is DeprecationWarning]
+        assert len(messages) == 1, messages
+        assert messages[0].startswith(f"{name} is deprecated")
+        assert "removed in v4.0" in messages[0]
+
+    @patch("boto3.client")
+    def test_get_all_aws_regions_warns(self, mock_client):
+        mock_client.return_value.describe_regions.return_value = {"Regions": []}
+        with pytest.warns(DeprecationWarning, match="get_all_aws_regions"):
+            get_all_aws_regions()

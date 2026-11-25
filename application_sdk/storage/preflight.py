@@ -22,11 +22,11 @@ Timeout:
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from application_sdk.common._env import env_float
 from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -55,27 +55,31 @@ _RUN_PROBE_FLOOR_SECONDS = 5.0
 # Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
 # indefinitely — obstore wraps the Rust object_store crate, whose default
 # connect_timeout and request timeout are both None.
-_PROBE_TIMEOUT_SECS: float = 30.0
-_raw_timeout = os.environ.get("ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS")
-if _raw_timeout is not None:
-    try:
-        _parsed_timeout = float(_raw_timeout)
-        if _parsed_timeout > 0:
-            _PROBE_TIMEOUT_SECS = _parsed_timeout
-        else:
-            logger.warning(
-                "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=%r is non-positive; using default %.0f s",
-                _raw_timeout,
-                _PROBE_TIMEOUT_SECS,
-            )
-    except ValueError:
-        logger.warning(
-            "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=%r is not a valid number; using default %.0f s",
-            _raw_timeout,
-            _PROBE_TIMEOUT_SECS,
-            exc_info=True,
-        )
-del _raw_timeout
+_DEFAULT_PROBE_TIMEOUT_SECS = 30.0
+
+
+def _load_probe_timeout() -> float:
+    """``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``: positive and finite, else the default.
+
+    Non-finite values are rejected with the malformed ones (warning, default):
+    ``inf`` would make the probe wait forever on a blackholed endpoint, which
+    is the stall this timeout exists to prevent.
+    """
+    timeout = env_float(
+        "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS", _DEFAULT_PROBE_TIMEOUT_SECS, minimum=0.0
+    )
+    if timeout > 0:
+        return timeout
+    logger.warning(
+        "Ignoring env var: ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=%g is not positive; "
+        "using the default %g",
+        timeout,
+        _DEFAULT_PROBE_TIMEOUT_SECS,
+    )
+    return _DEFAULT_PROBE_TIMEOUT_SECS
+
+
+_PROBE_TIMEOUT_SECS: float = _load_probe_timeout()
 
 # Fixed probe key overwritten on every boot — guarantees a single object per
 # store with no accumulation.  A hostname-scoped key would create one object
@@ -345,9 +349,11 @@ async def _probe_store_structured(
             _resolve_put_attributes,
         )
 
-        put_attributes = _resolve_put_attributes(store)  # type: ignore[arg-type]
+        put_attributes = _resolve_put_attributes(store)  # pyright: ignore[reportArgumentType]
     except Exception:
-        logger.debug(
+        # Probing without them can certify a write path real uploads do not
+        # take (a different storage class), so this is not DEBUG detail.
+        logger.warning(
             "Could not resolve put attributes for the %s store probe; "
             "probing without them",
             label,
@@ -360,7 +366,7 @@ async def _probe_store_structured(
         await obstore.put_async(
             store, probe_key, _PREFLIGHT_PAYLOAD, attributes=put_attributes
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — logged at WARNING with a sanitized cause; exc_info would render a presigned URL verbatim
         # The frames are worth keeping — a TLS or driver-level failure is only
         # diagnosable from them — but exc_info=True renders the cause verbatim
         # into both exception.stacktrace and exception.message, and the logger
@@ -393,7 +399,7 @@ async def _probe_store_structured(
     # no cleanup is needed and delete permission is never required.
     try:
         await obstore.head_async(store, probe_key)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — logged at WARNING with a sanitized cause and safe traceback
         logger.warning(
             "SDR preflight: read/head probe failed for %s store (binding: %s): %s\n%s",
             label,
@@ -427,7 +433,7 @@ async def _probe_store_structured(
                 chunk_size=_MULTIPART_PROBE_CHUNK_SIZE,
                 attributes=put_attributes,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — logged at WARNING with a sanitized cause and safe traceback
             logger.warning(
                 "Storage preflight: multipart write probe failed for %s store "
                 "(binding: %s): %s\n%s",

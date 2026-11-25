@@ -142,13 +142,15 @@ def gh_request(path: str) -> Response:
 def claim_ref(app: str, sha: str) -> str:
     """The ref ``e2e_dispatch_guard.claim_ref`` wrote before dispatching this.
 
-    The guard runs the app through its own ``slug()`` before building the ref, and
-    this deliberately does not reimplement it. Every rule in that function —
-    unsafe-character mapping, ``..`` collapsing, ``.lock`` stripping — exists for
-    a free-text workflow input, and none of them can fire on a GitHub repository
-    name, whose own character set is already a subset of what slug() permits.
-    Copying the rules here would be dead code that could still drift; a test
-    instead asserts the two agree on every connector repo name in the fleet.
+    The guard runs the app through ``_gh_refs.slug()`` before building the ref,
+    and this deliberately does not reimplement it: this file ships to connector
+    repos, where that module cannot be imported. Every rule in that function
+    exists for a free-text workflow input. The one that CAN fire on a GitHub
+    repository name is the character set, which omits ``.`` (a repo name may
+    contain one; the guard would write ``-``). No connector in the fleet has a
+    dot, so a test asserts the two agree on every connector repo name rather
+    than this copying rules that could drift — a dotted connector fails that
+    test instead of the recheck silently looking for a ref never written.
 
     Case is the one thing that CAN differ (slug lowercases, a repo name need
     not), so it is handled.

@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import base64
-import os
-import sys
 import urllib.error
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__))))
-
-import renovate_reap_refused_locks as reaper  # noqa: E402
-import renovate_uv_lock_bounded as bounded  # noqa: E402
+import renovate_reap_refused_locks as reaper
+import renovate_uv_lock_bounded as bounded
 
 PACKAGES = """
 [[package]]
@@ -397,7 +392,7 @@ class TestFindReapable:
                 return {"content": base64.b64encode(lock_text.encode()).decode()}
             raise AssertionError(f"unexpected url {url}")
 
-        fetch.calls = calls  # type: ignore[attr-defined]
+        fetch.calls = calls  # pyright: ignore[reportFunctionMemberAccess]
         return fetch
 
     def test_finds_a_self_healing_refusal(self):
@@ -466,7 +461,7 @@ class TestFindReapable:
                 return {"content": base64.b64encode(lock_text.encode()).decode()}
             raise AssertionError(f"unexpected url {url}")
 
-        fetch.calls = calls  # type: ignore[attr-defined]
+        fetch.calls = calls  # pyright: ignore[reportFunctionMemberAccess]
         return fetch
 
     def test_finds_a_self_healing_refusal_with_no_pr(self):

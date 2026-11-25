@@ -2,7 +2,7 @@
    Copyright 2024 Atlan Pte. Ltd. */
 
 /// Module for rendering the outputs for a custom package's configuration in Atlan.
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.Connectors
 
 hidden const SNOWFLAKE: Type = new {
@@ -441,6 +441,10 @@ hidden const PREFECT: Type = new {
   value = "prefect"
   category = "elt"
 }
+hidden const DAGSTER: Type = new {
+  value = "dagster"
+  category = "elt"
+}
 hidden const AZURE_DATA_FACTORY: Type = new {
   value = "azure-data-factory"
   category = "elt"
@@ -461,6 +465,9 @@ hidden const SAP_S4_HANA: Type = new {
   value = "sap-s4-hana"
   category = "warehouse"
 }
+// pyatlan says "erp". Kept as "warehouse" so contracts using it keep their
+// generated e2e base class (SQLAppE2ETest) and `connection_category`;
+// `scripts/test-sdk-import.py` allowlists the difference.
 hidden const SAP_ECC: Type = new {
   value = "sap-ecc"
   category = "warehouse"
@@ -581,6 +588,78 @@ hidden const DOCUMENTDB: Type = new {
   value = "documentdb"
   category = "database"
 }
+hidden const FABRIC: Type = new {
+  value = "fabric"
+  category = "bi"
+}
+hidden const DREMIO: Type = new {
+  value = "dremio"
+  category = "database"
+}
+hidden const SSRS: Type = new {
+  value = "ssrs"
+  category = "bi"
+}
+hidden const DATAPLEX: Type = new {
+  value = "dataplex"
+  category = "SaaS"
+}
+hidden const GENERIC_OPENLINEAGE: Type = new {
+  value = "generic-openlineage"
+  category = "data-processing"
+}
+hidden const MONGO: Type = new {
+  value = "mongo"
+  category = "database"
+}
+hidden const COSMOSNOSQL: Type = new {
+  value = "cosmosnosql"
+  category = "database"
+}
+hidden const CASSANDRA: Type = new {
+  value = "cassandra"
+  category = "database"
+}
+hidden const DM: Type = new {
+  value = "dm"
+  category = "database"
+}
+hidden const INFORMATICA_POWERCENTER: Type = new {
+  value = "informatica-powercenter"
+  category = "elt"
+}
+hidden const SAP_ANALYTICS_CLOUD: Type = new {
+  value = "sapanalyticscloud"
+  category = "bi"
+}
+hidden const SAP_DATASPHERE: Type = new {
+  value = "sapdatasphere"
+  category = "warehouse"
+}
+hidden const AWS_SMUS: Type = new {
+  value = "aws-smus"
+  category = "SaaS"
+}
+hidden const AI: Type = new {
+  value = "ai"
+  category = "ai"
+}
+hidden const SAP_S4: Type = new {
+  value = "sap-s4"
+  category = "erp"
+}
+hidden const CLOUDSQL_POSTGRES: Type = new {
+  value = "cloudsql-postgres"
+  category = "database"
+}
+hidden const ALLOYDB_POSTGRES: Type = new {
+  value = "alloydb-postgres"
+  category = "database"
+}
+hidden const SAGEMAKER: Type = new {
+  value = "sagemaker"
+  category = "SaaS"
+}
 
 class Type {
   value: String
@@ -601,4 +680,7 @@ typealias AtlanConnectionCategory =
   "eventbus"|
   "data-quality"|
   "schema-registry"|
-  "app"
+  "app"|
+  "ai"|
+  "erp"|
+  "data-processing"

@@ -1,6 +1,6 @@
 """L-series logging checks — AST-based and TOML-based.
 
-Scans Python source files for logging anti-patterns defined in the L001–L021
+Scans Python source files for logging anti-patterns defined in the L001–L022
 rule catalog.  Every check is purely deterministic: the same source text always
 produces the same set of findings.
 
@@ -19,7 +19,7 @@ Package layout
 Rule implementations are split by category:
 
 * ``_format``      — L001, L003, L011, L014, L018, L020 (message-format rules)
-* ``_level``       — L006, L007, L017 (log-level rules)
+* ``_level``       — L006, L007, L017, L022 (log-level rules)
 * ``_traceback``   — L004 (missing-traceback)
 * ``_security``    — L010 (credential in log)
 * ``_performance`` — L008, L009 (performance/noise rules)
@@ -50,6 +50,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
     make_finding,
+    make_scan_path,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -68,7 +69,7 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
 
 # ---------------------------------------------------------------------------
-# Per-file scan (L001–L015, L017–L020; excludes cross-file L002, L016)
+# Per-file scan (L001–L015, L017–L020, L022; excludes cross-file L002, L016)
 # ---------------------------------------------------------------------------
 
 
@@ -94,17 +95,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file, producing repo-root-relative URIs."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +192,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         fake_node = ast.Module(body=[], type_ignores=[])
         # Line 1, or the first line after a shebang / coding header, so a
         # directive there can suppress it (see _file_level_report_line).
-        fake_node.lineno = report_line_by_file.get(rel_str, 1)  # type: ignore[attr-defined]
-        fake_node.col_offset = 0  # type: ignore[attr-defined]
+        fake_node.lineno = report_line_by_file.get(rel_str, 1)  # pyright: ignore[reportAttributeAccessIssue]
+        fake_node.col_offset = 0  # pyright: ignore[reportAttributeAccessIssue]
         findings.append(
             make_finding(
                 filename=rel_str,

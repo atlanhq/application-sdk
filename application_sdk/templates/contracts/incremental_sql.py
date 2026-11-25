@@ -423,7 +423,7 @@ class ExecuteColumnBatchOutput(Output):
     # part of that vocabulary, hence its own enum; the ignore acknowledges
     # the deliberate field-type narrowing. ``None`` is "not set" in Python;
     # on the wire it stays ``""``, the old default, in both directions.
-    status: ColumnBatchStatus | None = None  # type: ignore[assignment]
+    status: ColumnBatchStatus | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
 
     @field_validator("status", mode="before")
     @classmethod

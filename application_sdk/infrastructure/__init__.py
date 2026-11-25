@@ -8,8 +8,7 @@ Usage:
     from application_sdk.infrastructure.secrets import EnvironmentSecretStore
 """
 
-import warnings
-
+from application_sdk import _deprecation
 from application_sdk.infrastructure._dapr import (
     DaprBinding,
     DaprCredentialVault,
@@ -27,6 +26,7 @@ from application_sdk.infrastructure.bindings import (
     BindingError,
     BindingRequest,
     BindingResponse,
+    BindingUnavailableError,
     InputBinding,
     OutputBinding,
 )
@@ -45,11 +45,13 @@ from application_sdk.infrastructure.context import (
 from application_sdk.infrastructure.credential_vault import (
     CredentialVault,
     CredentialVaultError,
+    CredentialVaultUnavailableError,
 )
 from application_sdk.infrastructure.pubsub import (
     Message,
     PubSub,
     PubSubError,
+    PubSubUnavailableError,
     Subscription,
     _MessageHandler,
 )
@@ -64,7 +66,11 @@ from application_sdk.infrastructure.secrets import (
     SecretStoreUnreachableError,
     get_deployment_secret,
 )
-from application_sdk.infrastructure.state import StateStore, StateStoreError
+from application_sdk.infrastructure.state import (
+    StateStore,
+    StateStoreError,
+    StateStoreUnavailableError,
+)
 
 __all__ = [
     "AgentSecretReadError",
@@ -73,9 +79,11 @@ __all__ = [
     "BindingError",
     "BindingRequest",
     "BindingResponse",
+    "BindingUnavailableError",
     "CapacityPool",
     "CredentialVault",
     "CredentialVaultError",
+    "CredentialVaultUnavailableError",
     "DAPR_SECRET_STORE_COMPONENT",
     "DaprBinding",
     "DaprCredentialVault",
@@ -90,6 +98,7 @@ __all__ = [
     "OutputBinding",
     "PubSub",
     "PubSubError",
+    "PubSubUnavailableError",
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
@@ -98,6 +107,7 @@ __all__ = [
     "SecretStoreUnreachableError",
     "StateStore",
     "StateStoreError",
+    "StateStoreUnavailableError",
     "Subscription",
     "clear_infrastructure",
     "configure_capacity_pool",
@@ -119,16 +129,9 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _MessageHandler
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda _name: _MessageHandler,
+)

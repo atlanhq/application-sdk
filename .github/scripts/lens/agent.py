@@ -22,8 +22,9 @@ ledger (llm.Client) — the real ceiling, whatever the turn budget says.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from . import context, prompts, trace
 from .baseline import PRAdditions
@@ -33,6 +34,7 @@ from .findings import BLOCKING, Finding
 from .llm import (
     BudgetExhausted,
     Client,
+    ContentRejected,
     FatalRequestError,
     LLMError,
     assistant_turn,
@@ -45,6 +47,11 @@ from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 # The whole description of a normal PR: a declared behaviour change is often past
 # the first paragraphs. It sits in the cached prefix, so each turn pays for it once.
 PR_BODY_CHARS = 4000
+
+
+# A bundle whose final turn the context ceiling forces before this turn was
+# reviewed shallowly (`BundleResult.shallow`), and the review is incomplete.
+SHALLOW_BEFORE_TURN = 4
 
 
 @dataclass
@@ -91,6 +98,111 @@ class BundleResult:
     tool_calls: dict[str, int] = field(default_factory=dict)
     stop: str = ""
     error: str = ""
+    # What entered this bundle's prompt, as paths, line ranges and sizes, never the
+    # content: kept so a refused request can name what it held (see `refusal`).
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    # Set when the model provider refused a request (stop == "refused").
+    refusal: dict[str, Any] = field(default_factory=dict)
+    # The turn on which the final turn was forced by the context ceiling (its
+    # number, 1-based), or 0. Before `SHALLOW_BEFORE_TURN` the bundle had read
+    # little past its own diff (`shallow`): its findings are not a full review.
+    ceiling_turn: int = 0
+
+    @property
+    def shallow(self) -> bool:
+        """The context ceiling forced this bundle's final turn before turn
+        `SHALLOW_BEFORE_TURN` (FND-5316: a live bundle hit it at turn 3 of 24,
+        and the summary called the review complete)."""
+        return 0 < self.ceiling_turn < SHALLOW_BEFORE_TURN
+
+
+# ---- prompt manifest -----------------------------------------------------------
+# A refused request cannot be logged (no prompts or code leave the run), so lens
+# records WHERE each piece of its prompt came from instead: enough to name the
+# suspect files and line ranges of a `provider_rejected` refusal.
+
+# `<function path="a.py" lines="3-9">`, `<file path="a.py">`, `File: a.py (… showing 1-200`
+_TAGGED = re.compile(r'path="([^"]+)"(?:[^>]*?\blines="(\d+(?:-\d+)?)")?')
+_FILE_HEADER = re.compile(r"(?m)^File: (\S+) \(total \d+ lines, showing (\d+-\d+)")
+# `a/b.py:12:` (search hits), `DEFINED a/b.py:3-9`, `  a/b.py:40  caller`
+# Anchored at a line start: the code text after a search hit must not add paths.
+_LOCATED = re.compile(r"(?m)^\s*(?:DEFINED\s+)?([\w./-]+\.\w+):(\d+(?:-\d+)?)\b")
+MAX_RANGES_PER_PATH = 40
+
+
+def prompt_locations(text: str) -> dict[str, list[str]]:
+    """The repo paths (and line ranges, where the text gives them) that `text`
+    quotes, in order of first appearance. Ranges per path are capped; the count
+    of paths is not."""
+    out: dict[str, list[str]] = {}
+
+    def add(path: str, lines: str | None) -> None:
+        ranges = out.setdefault(path, [])
+        if lines and lines not in ranges and len(ranges) < MAX_RANGES_PER_PATH:
+            ranges.append(lines)
+
+    for rx in (_TAGGED, _FILE_HEADER, _LOCATED):
+        for m in rx.finditer(text):
+            add(m.group(1), m.group(2))
+    return out
+
+
+def initial_sources(
+    bundle: Bundle, pr_meta: dict[str, Any], ctx: str
+) -> list[dict[str, Any]]:
+    """The manifest of a bundle's first prompt: the PR description, the context
+    block (callers, changed functions, patterns) and each file's diff hunks."""
+    background = len(pr_meta.get("title") or "") + len(pr_meta.get("body") or "")
+    before_files = ctx.split("<review_files>", 1)[0]
+    out: list[dict[str, Any]] = [
+        {"after_turn": 0, "kind": "pr_description", "chars": background},
+        {
+            "after_turn": 0,
+            "kind": "context",
+            "chars": len(before_files),
+            "files": prompt_locations(before_files),
+        },
+    ]
+    for fd in bundle.files:
+        out.append(
+            {
+                "after_turn": 0,
+                "kind": "diff",
+                "chars": len(fd.render(max_lines=600)),
+                "files": {
+                    fd.path: [
+                        f"{h.new_start}-{h.new_start + max(h.new_len, 1) - 1}"
+                        for h in fd.hunks
+                    ]
+                },
+            }
+        )
+    return out
+
+
+def refusal_record(e: ContentRejected, res: BundleResult) -> dict[str, Any]:
+    """What the run report says about a refused request. `suspects` is what
+    entered the prompt since the last successful turn: on turn 0 the whole
+    first prompt, later only the tool results the model had just pulled in."""
+    return {
+        "stage": e.stage,
+        "turn": res.turns,
+        "request_chars": e.request_chars,
+        "input_tokens_est": e.input_tokens_est,
+        "error": e.error,
+        "suspects": [s for s in res.sources if s["after_turn"] == res.turns],
+        "sent": res.sources,
+    }
+
+
+def suspect_paths(refusal: dict[str, Any]) -> list[str]:
+    """The files a refusal's suspects quote, in order, without duplicates."""
+    seen: dict[str, None] = {}
+    suspects = cast(list[dict[str, Any]], refusal.get("suspects") or [])
+    for s in suspects:
+        for p in cast(dict[str, list[str]], s.get("files") or {}):
+            seen.setdefault(p, None)
+    return list(seen)
 
 
 # ---- context -----------------------------------------------------------------
@@ -191,7 +303,9 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
     )
     if not f.body or not evidence.strip():
         return None
-    candidates = [ws.diffs[path]] if path in ws.diffs else []
+    # Only this bundle's files: `ws.diffs` holds every changed file, and a
+    # path from another bundle is that bundle's to review.
+    candidates = [ws.diffs[path]] if path in bundle.paths and path in ws.diffs else []
     # Re-file to another bundle file on a unique hit (the model named the wrong file).
     candidates += [fd for fd in bundle.files if fd.path != path]
     for fd in candidates:
@@ -199,7 +313,10 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         if span:
             f.path = fd.path
             f.line, f.end_line = span
-            if not any(n in fd.added_lines for n in range(f.line, f.end_line + 1)):
+            # A removed line is the change too: a span at a deletion's border
+            # (where `anchor` puts a quote of removed code) is not unchanged code.
+            changed = fd.added_lines | fd.deletion_sites
+            if not any(n in changed for n in range(f.line, f.end_line + 1)):
                 f.scope = "unchanged"  # a diff-context line, not a changed one
             f.id = f.fingerprint()
             return f
@@ -290,6 +407,7 @@ def review_bundle(
         },
     ]
     raw_comments: list[dict[str, Any]] = []
+    res.sources = initial_sources(bundle, pr_meta, messages[2]["content"])
     res.turn_budget = limits.turn_budget(len(bundle.files), bundle.changed_lines)
     try:
         if limits.plan and bundle.changed_lines >= limits.plan_min_lines:
@@ -330,6 +448,14 @@ def review_bundle(
             res.second_pass_added = len(raw_comments) - before
     except BudgetExhausted as e:
         res.stop, res.error = "budget", str(e)
+    except ContentRejected as e:
+        res.stop, res.error = "refused", str(e)
+        res.refusal = refusal_record(e, res)
+        trace.line(
+            f"[{bundle.label}] refused by the model provider after {res.turns} turn(s); "
+            f"request {e.request_chars} chars (~{e.input_tokens_est} tokens); suspects: "
+            + (", ".join(suspect_paths(res.refusal)) or "none named")
+        )
     except FatalRequestError as e:
         res.stop, res.error = "fatal", str(e)
     except LLMError as e:
@@ -438,6 +564,8 @@ def _loop(
                 if turns >= turn_budget
                 else ("context ceiling" if over else "bundle budget share")
             )
+            if why == "context ceiling":
+                res.ceiling_turn = res.turns + 1
             trace.line(
                 f"[{bundle.label}] final turn forced ({why}): only code_comment/task_done now"
             )
@@ -500,6 +628,17 @@ def _loop(
             messages.append(
                 {"role": "tool", "tool_call_id": tc.get("id") or name, "content": reply}
             )
+            if name not in ("code_comment", "task_done"):
+                res.sources.append(
+                    {
+                        "after_turn": res.turns,
+                        "kind": "tool",
+                        "tool": name,
+                        "args": trace.args_summary(name, args),
+                        "chars": len(reply),
+                        "files": prompt_locations(reply),
+                    }
+                )
         if done:
             res.stop = "done"
             return

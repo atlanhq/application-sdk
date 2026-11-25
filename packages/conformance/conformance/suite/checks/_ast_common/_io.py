@@ -23,6 +23,8 @@ skip explicitly::
 
 ``read_bytes()`` needs no wrapper: there is no decode step, and ``ast.parse``
 surfaces a bad-encoding buffer as ``SyntaxError``, which callers already catch.
+Catching it is a skip, not a pass: the runner reports every discovered Python
+file that does not parse (see :mod:`._parse`).
 """
 
 from __future__ import annotations
@@ -31,15 +33,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ._source_cache import read_text
+
 __all__ = ["safe_read_json", "safe_read_text"]
 
 
 def safe_read_text(path: Path, *, encoding: str = "utf-8") -> str | None:
-    """Read *path* as text, returning ``None`` if it cannot be read or decoded."""
-    try:
-        return path.read_text(encoding=encoding)
-    except (OSError, UnicodeDecodeError):
-        return None
+    """Read *path* as text, returning ``None`` if it cannot be read or decoded.
+
+    Inside :func:`._source_cache.source_cache` the text is read once per run.
+    """
+    return read_text(path, encoding=encoding)
 
 
 def safe_read_json(path: Path) -> Any | None:

@@ -405,49 +405,20 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (private git deps)
-        if: inputs.private_git_auth
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: git-deps-repos
-        if: inputs.private_git_auth
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir app
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
+      # require "false": certify reports, it does not stop. A failed mint
+      # fails the mirror and install below, which the verdict blocks on.
       - name: Mint read-only token for private git dependencies
         id: git-deps-token
-        if: inputs.private_git_auth && steps.git-deps-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        if: inputs.private_git_auth
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
-          permission-contents: read
+          project-dir: app
+          require: "false"
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -477,7 +448,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # Before `uv sync`: a dependency that builds a native extension (hive's
       # pykerberos needs libkrb5-dev) cannot install without its headers, and
@@ -532,34 +503,12 @@ jobs:
         run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard "${SHARD}" --total "${TOTAL}" --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shard
 
       - name: Upload shard result
-        id: upload-shard
         if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: certify-shard-${{ matrix.shard }}
           path: certify-shard/
           retention-days: 1
-          # Overwrite on the first attempt too: a re-run attempt must not 409
-          # and leave two live artifacts for `certify`'s glob to merge.
-          overwrite: true
-
-      # A finalize 403 comes from an intermediary having a moment; wait it out
-      # so the two attempts fail independently (docs/standards/ci.md).
-      - name: Wait before the upload retry
-        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
-        run: sleep 20
-
-      - name: Upload shard result (retry)
-        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          # A DISTINCT name: a failed finalize holds the first name for the
-          # run. `certify` downloads by `certify-shard-*` glob, so either lands.
-          name: certify-shard-${{ matrix.shard }}-retry
-          path: certify-shard/
-          retention-days: 1
-          overwrite: true
 
   certify:
     name: Certify app
@@ -588,7 +537,7 @@ jobs:
         # here, by name, instead of silently running on the org PAT. The
         # private-deps install uses its own scoped token below.
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -596,49 +545,20 @@ jobs:
           repositories: application-sdk
           permission-contents: read
 
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (private git deps)
-        if: inputs.private_git_auth
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: git-deps-repos
-        if: inputs.private_git_auth
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir app
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
+      # require "false": certify reports, it does not stop. A failed mint
+      # fails the mirror and install below, which the verdict blocks on.
       - name: Mint read-only token for private git dependencies
         id: git-deps-token
-        if: inputs.private_git_auth && steps.git-deps-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        if: inputs.private_git_auth
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.git-deps-repos.outputs.repositories }}
-          permission-contents: read
+          project-dir: app
+          require: "false"
 
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
@@ -670,7 +590,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -767,26 +687,11 @@ jobs:
       # `-retry`. With `pattern:` an empty match is a success, so a missing leg
       # surfaces in the verdict script (absent result = failed), not here.
       - name: Download unit-test shard results
-        id: download-shards
         if: always() && inputs.unit_test_shards != 1
         continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
         with:
           pattern: certify-shard-*
-          merge-multiple: true
-          path: certify-shards
-
-      - name: Wait before the download retry
-        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
-        run: sleep 20
-
-      - name: Download unit-test shard results (retry)
-        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: certify-shard-*
-          merge-multiple: true
           path: certify-shards
 
       - name: "Unit tests"
@@ -870,7 +775,7 @@ jobs:
 
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -1250,50 +1155,19 @@ jobs:
       # token, not ORG_PAT_GITHUB. Minted on every build, not on
       # `private_git_auth`: that flag gates certify, several callers build
       # private-dependency images without it, and a Dockerfile without the
-      # secret mount ignores it. `continue-on-error` and no PAT fallback: an
+      # secret mount ignores it. `require: "false"` and no PAT fallback: an
       # empty secret is skipped with a warning by build-push-action, so only a
       # build that needs the token fails, at its clone.
-      # Scoped to the private atlanhq repos the app names (git_auth.py
-      # repos: its pyproject.toml / uv.lock files, public repos dropped).
-      # No mint when it names none: create-github-app-token with no
-      # `repositories` would grant the whole installation. The script comes
-      # from this workflow's own commit (job.workflow_sha), so it is the
-      # version that matches the workflow running it.
-      - name: Checkout SDK git_auth.py (image build)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/git_auth.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-git-auth
-          persist-credentials: false
-
-      - name: List the private atlanhq repos the app names (refuses any not allowlisted)
-        id: image-git-repos
-        run: |
-          set -euo pipefail
-          python3 .sdk-git-auth/.github/scripts/git_auth.py repos --project-dir .
-          # Out of the workspace: it is the image build context and the tree
-          # conformance and pre-commit look at.
-          rm -rf .sdk-git-auth
-
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
       - name: Mint read-only token for the image build
         id: image-git-token
-        if: steps.image-git-repos.outputs.repositories != ''
-        # A failed mint leaves the token empty; see the guard below.
-        continue-on-error: true
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          # Capped by ALLOWED_PRIVATE_DEPS in git_auth.py, read from this
-          # workflow's own commit, never the PR's tree: the repos step above
-          # fails the job for any private repo not on it, so a PR's
-          # pyproject.toml / uv.lock cannot widen this scope.
-          repositories: ${{ steps.image-git-repos.outputs.repositories }}
-          permission-contents: read
+          require: "false"
 
       - name: Build and push arch image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -1574,7 +1448,7 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}

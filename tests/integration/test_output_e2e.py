@@ -6,14 +6,26 @@ Runs against the session's shared embedded Temporal server (the
 booting a server per test.
 """
 
+import asyncio
+import os
 from datetime import timedelta
+from typing import Any
 from uuid import uuid4
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.worker import Worker
+from temporalio.worker import (
+    ActivityInboundInterceptor,
+    ExecuteActivityInput,
+    Interceptor,
+    Worker,
+)
 
-from application_sdk.contracts.base import Output
+from application_sdk.app.base import App
+from application_sdk.app.entrypoint import entrypoint
+from application_sdk.app.task import task
+from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference
 from application_sdk.execution._temporal.interceptors.outputs import OutputInterceptor
 from application_sdk.outputs import Artifact, Metric, get_outputs
 
@@ -288,3 +300,144 @@ async def test_outputs_survive_workflow_cache_eviction(temporal_client, task_que
 
     assert result["batch_count"] == 3
     assert result["metrics"]["rows-processed"] == 4000
+
+
+# ---------------------------------------------------------------------------
+# FND-5220: refs tracked by a task on one worker are cleaned up by a
+# cleanup_storage that runs on another, and every worker releases the run's
+# app-state slot once the run has closed.
+# ---------------------------------------------------------------------------
+
+
+class ExtractInput(Input):
+    rows: int = 0
+
+
+class ExtractOutput(Output):
+    raw: FileReference | None = None
+
+
+class RunSummary(Output):
+    """The entry point's own output: a key, not a ref, so no schema is due."""
+
+    raw_key: str = ""
+
+
+class CrossWorkerCleanupApp(App):
+    """Extract writes a TRANSIENT file the interceptor persists to the store."""
+
+    name = "cross-worker-cleanup-app"
+
+    @task
+    async def extract(self, input: ExtractInput) -> ExtractOutput:
+        from application_sdk.execution._temporal.activity_utils import (
+            run_temp_dir,
+        )
+
+        directory = run_temp_dir()
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, "raw.json")
+        with open(path, "w") as f:
+            f.write('{"rows": %d}\n' % input.rows)
+        return ExtractOutput(raw=FileReference(local_path=path))
+
+    @entrypoint
+    async def ingest(self, input: ExtractInput) -> RunSummary:
+        extracted = await self.extract(input)
+        raw = extracted.raw
+        return RunSummary(raw_key=(raw.storage_path or "") if raw else "")
+
+
+class _ForgetSlotsOfOtherTasks(Interceptor):
+    """Makes the extract's worker a different process from the cleanup's.
+
+    Both workers of a test share one process, so after every task but the two
+    cleanups this drops the run's ``_app_state`` slot, as a separate worker's
+    memory would be invisible to the cleanup's. Records the run it saw.
+    """
+
+    def __init__(self) -> None:
+        self.runs: set[tuple[str, str]] = set()
+
+    def intercept_activity(
+        self, next: ActivityInboundInterceptor
+    ) -> ActivityInboundInterceptor:
+        outer = self
+
+        class _Inbound(ActivityInboundInterceptor):
+            async def execute_activity(self, input: ExecuteActivityInput) -> Any:
+                result = await super().execute_activity(input)
+                info = activity.info()
+                run = (info.workflow_id, info.workflow_run_id)
+                outer.runs.add(run)
+                if not info.activity_type.endswith(
+                    (":cleanup_storage", ":cleanup_files")
+                ):
+                    from application_sdk.app.base import (
+                        _app_state,
+                        _app_state_lock,
+                    )
+
+                    with _app_state_lock:
+                        _app_state.pop(run, None)
+                return result
+
+        return _Inbound(next)
+
+
+async def test_transient_ref_from_another_worker_is_cleaned_and_slots_released(
+    temporal_client, task_queue, executor, reregister_app, monkeypatch, tmp_path
+):
+    from application_sdk.app.base import _runs_with_app_state
+    from application_sdk.app.context import AppContext
+    from application_sdk.execution._temporal.credential_sweep import sweep_closed_runs
+    from application_sdk.execution._temporal.worker import create_worker
+    from application_sdk.execution.retry import NO_RETRY
+    from application_sdk.infrastructure import (
+        InfrastructureContext,
+        clear_infrastructure,
+        set_infrastructure,
+    )
+    from application_sdk.storage.factory import create_local_store
+    from application_sdk.testing.fixtures import _redirect_temporary_path
+
+    # The integration conftest turns end-of-run cleanup off; this test is about it.
+    monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
+    _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+    store_root = tmp_path / "store"
+    set_infrastructure(InfrastructureContext(storage=create_local_store(store_root)))
+    reregister_app(CrossWorkerCleanupApp)
+    forget = _ForgetSlotsOfOtherTasks()
+    try:
+        async with create_worker(
+            temporal_client,
+            task_queue,
+            interceptors=[forget],
+            shutdown_drain_delay_seconds=0,
+        ):
+            result = await asyncio.wait_for(
+                executor.execute(
+                    CrossWorkerCleanupApp,
+                    ExtractInput(rows=3),
+                    context=AppContext(
+                        app_name=CrossWorkerCleanupApp._app_name,
+                        app_version="1.0.0",
+                    ),
+                    retry_policy=NO_RETRY,
+                    entry_point="ingest",
+                ),
+                timeout=60,
+            )
+            # The run is closed: the sweeper each worker runs releases its slot.
+            await sweep_closed_runs(temporal_client)
+            remaining = set(_runs_with_app_state()) & forget.runs
+    finally:
+        clear_infrastructure()
+
+    # Auto-persisted TRANSIENT refs land under the run's own file_refs/.
+    assert "/file_refs/" in result.raw_key, result.raw_key
+    left = sorted(
+        str(p.relative_to(store_root)) for p in store_root.rglob("*") if p.is_file()
+    )
+    assert not [k for k in left if "/file_refs/" in k], left
+    assert forget.runs and not remaining

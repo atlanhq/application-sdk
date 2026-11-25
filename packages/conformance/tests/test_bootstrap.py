@@ -11,7 +11,6 @@ import json
 import os
 import pathlib
 import re
-import subprocess
 
 import pytest
 import yaml
@@ -19,19 +18,14 @@ import yaml
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
-from conformance.bootstrap.command import (
-    _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK,
-    _bootstrap_file,
-)
+from conformance.bootstrap.command import _bootstrap_file
 from conformance.bootstrap.extract import (
     SARIF_UPLOAD_OPT_IN_MARKER,
     extract_sarif_upload,
 )
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
-    MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
-    RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_FILES,
     RETIRED_WORKFLOWS,
     SARIF_UPLOAD_WORKFLOW,
@@ -877,12 +871,11 @@ def test_all_shims_have_atlanhq_uses_reference() -> None:
     # `conformance-upload-sarif.yaml` left this set in FND-1994: it is now a
     # thin caller like the rest, so it must carry an `atlanhq/` reference and
     # is no longer exempt.
-    # `connector-review-gate.yaml` is inline for the same reason
-    # `release-gate.yaml` is: a ruleset matches on the check-run name, and for
-    # a job that `uses:` a reusable that name gains a "<caller job id> / "
-    # prefix. The required context here is the bare string "Connector Review",
-    # so the job has to be inline to produce it.
-    inline_ok = {"release-gate.yaml", "connector-review-gate.yaml"}
+    # `release-gate.yaml` is inline because a ruleset matches on the check-run
+    # name, and for a job that `uses:` a reusable that name gains a
+    # "<caller job id> / " prefix. The required context is the bare string
+    # "Release Gate", so the job has to be inline to produce it.
+    inline_ok = {"release-gate.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
@@ -902,7 +895,6 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
 #: job-level skip, mapped to that skip's exact `if:`.
 _MERGE_GROUP_SKIPPING_GATES = {
     "release-gate.yaml": "github.event_name == 'pull_request'",
-    "connector-review-gate.yaml": "github.event_name != 'merge_group'",
 }
 
 
@@ -929,7 +921,6 @@ def test_gate_skips_merge_group_at_job_level(name: str, job_if: str) -> None:
 _SUPERSEDING_CALLERS = {
     "conformance.yaml": "conformance-",
     "release-gate.yaml": "release-gate-",
-    "connector-review-gate.yaml": "connector-review-",
     "generated-freshness.yaml": "generated-freshness-caller-",
 }
 
@@ -1509,7 +1500,7 @@ def test_resync_writes_exactly_when_c002_flags(
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     wf = tmp_path / ".github" / "workflows" / "tests.yaml"
-    wf.write_text(mutate(wf.read_text()))  # type: ignore[operator]
+    wf.write_text(mutate(wf.read_text()))  # pyright: ignore[reportCallIssue]
     before = wf.read_text()
 
     flagged = bool(scan_path(wf, tmp_path))
@@ -2409,6 +2400,12 @@ def test_porter_cnab_workflow_is_retired_but_its_helper_is_not() -> None:
     assert ".github/scripts/registry-login.sh" not in RETIRED_FILES
 
 
+def test_dep_cooldown_workflow_is_retired() -> None:
+    """Cooldown is enforced by the GitHub Security App; the per-repo caller is
+    redundant."""
+    assert "dep-cooldown.yml" in RETIRED_WORKFLOWS
+
+
 # ---------------------------------------------------------------------------
 # Dependabot config: superseded by the Renovate preset, never managed
 # ---------------------------------------------------------------------------
@@ -2776,211 +2773,6 @@ def test_cmd_bootstrap_rerun_with_no_changes_reports_no_managed_file_as_updated(
     assert f"ok (up to date): {skill_md}" in out
 
 
-def test_cmd_bootstrap_installs_connector_review_kit_additively(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The opt-in kit retires only its old state and preserves user settings."""
-    claude = tmp_path / "CLAUDE.md"
-    claude.write_text("# App notes\n")
-    settings = tmp_path / ".claude" / "settings.json"
-    settings.parent.mkdir()
-    settings.write_text(
-        json.dumps(
-            {
-                "hooks": {
-                    "SessionStart": [
-                        {"matcher": "keep-me"},
-                        {
-                            "hooks": [
-                                {
-                                    "command": (
-                                        '"$CLAUDE_PROJECT_DIR"/'
-                                        ".claude/hooks/review-rules-freshness.sh"
-                                    )
-                                }
-                            ]
-                        },
-                    ],
-                    "PreToolUse": [
-                        {
-                            "matcher": "Bash",
-                            "hooks": [
-                                {
-                                    "command": (
-                                        '"$CLAUDE_PROJECT_DIR"/'
-                                        ".claude/hooks/check-review-before-commit.sh"
-                                    )
-                                },
-                                {"command": "scripts/keep-me.sh"},
-                            ],
-                        }
-                    ],
-                }
-            }
-        )
-        + "\n"
-    )
-    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
-        dest = tmp_path / dest_rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text("legacy\n")
-    gitignore = tmp_path / ".gitignore"
-    gitignore.write_text("custom-cache/\n")
-
-    monkeypatch.chdir(tmp_path)
-    assert _cmd_bootstrap(["--connector-review-kit"]) == 0
-
-    for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES:
-        dest = tmp_path / dest_rel
-        assert dest.read_text() == render(template_name)
-        if executable:
-            assert os.stat(dest).st_mode & 0o777 == 0o755
-
-    merged_settings = json.loads(settings.read_text())
-    assert merged_settings["hooks"]["SessionStart"][0] == {"matcher": "keep-me"}
-    assert merged_settings["hooks"]["SessionStart"][1]["hooks"][0]["command"] == (
-        ".claude/hooks/connector-review-reminder.sh"
-    )
-    assert merged_settings["hooks"]["PreToolUse"] == [
-        {"matcher": "Bash", "hooks": [{"command": "scripts/keep-me.sh"}]}
-    ]
-    for dest_rel in RETIRED_CONNECTOR_REVIEW_FILES:
-        assert not (tmp_path / dest_rel).exists()
-    assert "# App notes" in claude.read_text()
-    assert "BEGIN APPLICATION SDK CONNECTOR REVIEW" in claude.read_text()
-    assert (
-        "write-connector-review-marker"
-        not in (tmp_path / ".claude/skills/connector-review/SKILL.md").read_text()
-    )
-    assert ".mothership/.cache/" in gitignore.read_text().splitlines()
-
-
-def test_cmd_bootstrap_connector_review_kit_migrates_eof_legacy_block(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The known old kit block was appended at EOF, so it can be replaced safely."""
-    (tmp_path / "CLAUDE.md").write_text(_KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK)
-    monkeypatch.chdir(tmp_path)
-
-    assert _cmd_bootstrap(["--connector-review-kit"]) == 0
-    text = (tmp_path / "CLAUDE.md").read_text()
-    assert "L1-L4)" not in text
-    assert "BEGIN APPLICATION SDK CONNECTOR REVIEW" in text
-    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
-        ".claude/hooks/connector-review-reminder.sh"
-    )
-
-
-def test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Only the complete known EOF block may be replaced automatically."""
-    claude = tmp_path / "CLAUDE.md"
-    claude.write_text(
-        _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK + "\n### App notes\nKeep this.\n"
-    )
-    monkeypatch.chdir(tmp_path)
-
-    assert _cmd_bootstrap(["--connector-review-kit"]) == 2
-    assert claude.read_text().endswith("### App notes\nKeep this.\n")
-    assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
-
-
-def test_resync_installs_the_connector_review_kit(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """--resync is the fleet's structural catch-up, so it carries the kit too."""
-    monkeypatch.chdir(tmp_path)
-
-    assert _cmd_bootstrap(["--resync"]) == 0
-
-    for dest_rel, template_name, _executable in MANAGED_CONNECTOR_REVIEW_FILES:
-        assert (tmp_path / dest_rel).read_text() == render(template_name)
-    assert (
-        "BEGIN APPLICATION SDK CONNECTOR REVIEW" in (tmp_path / "CLAUDE.md").read_text()
-    )
-    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == (
-        ".claude/hooks/connector-review-reminder.sh"
-    )
-
-
-def test_bare_rerun_never_installs_the_connector_review_kit(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Only --connector-review-kit or the --resync that implies it may opt in.
-
-    The other half of the contract: --resync gained the kit, a bare re-run
-    must still leave local Claude configuration alone.
-    """
-    monkeypatch.chdir(tmp_path)
-
-    assert _cmd_bootstrap([]) == 0
-
-    for dest_rel, _template_name, _executable in MANAGED_CONNECTOR_REVIEW_FILES:
-        assert not (tmp_path / dest_rel).exists()
-    assert not (tmp_path / "CLAUDE.md").exists()
-    assert not (tmp_path / ".claude" / "settings.json").exists()
-
-
-def test_resync_skips_an_unmergeable_kit_without_failing_the_run(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """One hand-edited CLAUDE.md must not block a repo's scaffold catch-up.
-
-    Passed by name the same block is a hard error (exit 2) — see
-    test_cmd_bootstrap_connector_review_kit_preserves_unverified_legacy_suffix.
-    Implied by --resync it is a skip, so the tests.yaml/renovate.json
-    re-render still lands.
-    """
-    claude = tmp_path / "CLAUDE.md"
-    claude.write_text(
-        _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK + "\n### App notes\nKeep this.\n"
-    )
-    monkeypatch.chdir(tmp_path)
-
-    assert _cmd_bootstrap(["--resync"]) == 0
-
-    out = capsys.readouterr().out
-    assert "skipped: cannot safely merge" in out
-    assert "--connector-review-kit" in out
-    assert claude.read_text().endswith("### App notes\nKeep this.\n")
-    assert not (tmp_path / ".claude" / "skills" / "connector-review").exists()
-    assert not (tmp_path / ".claude" / "settings.json").exists()
-    # The rest of the resync is unaffected.
-    assert (tmp_path / ".github" / "workflows" / "tests.yaml").read_text() == render(
-        "tests.yaml", app_name=derive_app_name_from_dir(tmp_path)
-    )
-
-
-@pytest.mark.parametrize(
-    "_dest_rel,template_name",
-    [
-        (dest_rel, template_name)
-        for dest_rel, template_name, executable in MANAGED_CONNECTOR_REVIEW_FILES
-        if executable
-    ],
-)
-def test_connector_review_shell_template_is_valid(
-    _dest_rel: str, template_name: str, tmp_path: pathlib.Path
-) -> None:
-    """Every centrally-written hook/script must pass the shell parser first."""
-    script = tmp_path / template_name
-    script.write_text(render(template_name))
-    proc = subprocess.run(
-        ["bash", "-n", str(script)], capture_output=True, check=False, text=True
-    )
-    assert proc.returncode == 0, proc.stderr
-
-
 # ---------------------------------------------------------------------------
 # --json: structured touched-files manifest
 #
@@ -3159,7 +2951,6 @@ _IN_MONOREPO = (_MONOREPO_ROOT / "application_sdk").is_dir()
 # does not run them itself, so there is nothing to drift from.
 _TEMPLATE_ONLY_ACTION_FILES: frozenset[str] = frozenset(
     {
-        ".github/scripts/connector_review_gate.py",
         ".github/scripts/release_gate.py",
     }
 )

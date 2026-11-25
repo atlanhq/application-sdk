@@ -107,7 +107,6 @@ from conformance.suite.schema.catalog import (
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -125,7 +124,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ContractAmendsLegacyModule",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.9.0",
@@ -188,10 +186,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "deliberate delay is justified (e.g. phased migration tracked in a "
             "follow-on ticket).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -225,7 +219,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LegacyContractApi",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.9.0",
@@ -308,10 +301,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``// conformance: ignore[K002] <reason>`` on "
             "the violating line or the comment-only line directly above it.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k002"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -338,7 +327,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ContractLockDrift",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.9.0",
@@ -398,10 +386,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``uri`` line in ``contract/PklProject`` (or the comment-only line "
             "directly above it) when a deliberate lag is justified.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k003"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -410,16 +394,15 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="K004",
         canonical_reference=(
-            "atlan-metabase-app app/generated/ — atlan.yaml at the repo root plus "
-            "_input.py and manifest.json in app/generated/, the three outputs K004 "
-            "checks. A contract/app.pkl with any of those missing means the repo's own "
+            "atlan-metabase-app atlan.yaml at the repo root plus "
+            "app/generated/_input.py and app/generated/manifest.json, the three "
+            "outputs K004 checks. A contract/app.pkl with any of those missing means the repo's own "
             "generate task has not run since the contract last changed."
         ),
         fix_locus=FixLocus.CONTRACT,
         scope=RuleScope.APP,
         name="MissingGeneratedArtifact",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.9.0",
@@ -494,10 +477,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``amends`` line of ``contract/app.pkl`` when an output is legitimately "
             "not produced for this app.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k004"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -515,7 +494,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="GeneratedArtifactBannerStripped",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.9.0",
@@ -566,10 +544,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "first line of the file (or the line above it) for an app that "
             "deliberately hand-maintains this artifact.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k005"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -589,7 +563,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManifestContractFieldMismatch",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.13.0",
@@ -651,10 +624,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``Output`` class definition (or the comment-only line directly above "
             "it) when a mismatch is understood and deliberately deferred.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k006"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -673,7 +642,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ToolkitVersionOutdated",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         # Not the remediation lane's: the self-hosted Renovate runner opens the
         # toolkit bump and regenerates in postUpgradeTasks, so this rule only
@@ -717,10 +685,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``uri`` line (or the comment-only line directly above it) when a "
             "deliberate lag is justified.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k007"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -739,7 +703,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ToolkitSourceNonCanonical",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.12.0",
@@ -776,10 +739,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Suppress** with ``// conformance: ignore[K008] <reason>`` on the "
             "``uri`` line (or the comment-only line directly above it).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k008"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -808,7 +767,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UnresolvedScaffoldPlaceholder",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.12.0",
@@ -866,10 +824,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "available for text artifacts; a placeholder in a ``.json`` output has "
             "no comment syntax to suppress and must be regenerated.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k009"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -887,7 +841,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="E2EScaffoldingMissing",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.12.0",
@@ -922,10 +875,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``amends`` line of ``contract/app.pkl`` when the app legitimately ships "
             "no E2E scaffolding.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k010"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -951,7 +900,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="AppIdMissingFromContract",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.14.0",
@@ -1010,10 +958,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "publish. It exists only for the rare non-published app that still "
             "ships an ``atlan.yaml``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k011"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1040,7 +984,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="GeneratePoeTaskMissing",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.14.0",
@@ -1091,10 +1034,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "for an app that is genuinely never published through the "
             "marketplace pipeline.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k012"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1114,7 +1053,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManifestNodeAppNameMisattributed",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.18.0",
@@ -1194,10 +1132,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "a directive -- as with K009, the only resolution is to fix the "
             "contract and regenerate. Never hand-edit ``manifest.json``.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k013"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1214,7 +1148,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ReleaseModelUndeclared",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.18.0",
@@ -1294,10 +1227,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppression is rarely the right answer: declaring the value is one "
             "line and is the entire point of the rule.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k014"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1323,7 +1252,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LegacyWorkflowTypeContractDrift",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.23.0",
@@ -1424,10 +1352,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``App`` subclass. Suppressing leaves the two sites free to diverge, "
             "and P016 keeps routing off the manifest either way.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k015"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1444,7 +1368,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="EntrypointArtifactSchemaMissing",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.23.0",
@@ -1544,10 +1467,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "artifact no other app reads, and the wrong call for one that "
             "crosses an app boundary.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k016"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1567,7 +1486,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ArtifactSchemaWriterMismatch",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.23.0",
@@ -1662,10 +1580,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "the consuming side reading an assertion the producer does not "
             "honour.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k017"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1684,7 +1598,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManifestArgNotDeclaredOnInputContract",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.24.0",
@@ -1825,10 +1738,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "it) — or, for an app that inherits a template's ``run()``, on the "
             "app class definition, where that finding is anchored.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k018"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1846,7 +1755,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="FormKeyMissingFromManifestArgs",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.24.0",
@@ -1907,10 +1815,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "directly above it) — for example a field the frontend consumes "
             "directly and deliberately never sends to the workflow.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k019"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -1928,7 +1832,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManifestArgsLegacyNestedEnvelope",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
         since="0.24.0",
@@ -2002,10 +1905,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "envelope for now — a suppression here is a statement that the "
             "migration is scheduled, not that the shape is fine.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k020"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
@@ -2025,7 +1924,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="FilterFieldRejectsAeString",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.26.0",
@@ -2102,10 +2000,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "it) — for example when the string is genuinely coerced by a path the "
             "static check cannot follow.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k021"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -2122,7 +2016,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="EntrypointContractClassNameCollision",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.43.0",
@@ -2181,10 +2074,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "entrypoint method definition (or the comment-only line directly above "
             "it).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k027"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -2208,7 +2097,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DeploymentObjectStoreDisabled",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.56.0",
@@ -2262,10 +2150,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``objectstore:`` line of ``atlan.yaml``. A suppression is almost "
             "never correct: no app built on the SDK starts without the store.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k029"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/contract-toolkit.prose.md",
@@ -2290,7 +2174,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="CredentialSecretStoreDisabled",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
         since="0.57.0",
@@ -2345,12 +2228,224 @@ RULES: tuple[RuleDefinition, ...] = (
             "``secretstore:`` line of ``atlan.yaml``. A suppression is almost never "
             "correct: an app with credentials cannot resolve them without the store.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k030"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="K031",
+        canonical_reference=(
+            "atlan-mysql-app contract/app.pkl — its `deploy` block's `pools` env "
+            "sets only `ATLAN_TENANT_ID` and never `ATLAN_TASK_QUEUE`, so the "
+            "worker derives its queue from the application and deployment names "
+            "and the on-demand variant polls its own."
+        ),
+        rule_interactions=(
+            "For a contract app atlan.yaml is generated: a hand-edit is erased by "
+            "the next regeneration and trips the freshness gate (K005). Fix "
+            "contract/app.pkl (or bump the toolkit) and run the repo's own "
+            "generate task. O005 shares the same helper, "
+            "application_sdk.common.task_queue, for task queues an app builds by "
+            "hand."
+        ),
+        scope=RuleScope.APP,
+        name="PinnedWorkerTaskQueue",
+        tier=EnforcementTier.WARN,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.62.0",
+        rationale=(
+            "The SDK derives the worker's Temporal task queue as "
+            "atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the chart "
+            "suffixes the deployment name with -od for the on-demand variant, so "
+            "each variant polls its own queue. An explicit ATLAN_TASK_QUEUE in "
+            "atlan.yaml (or the contract that generates it) overrides the "
+            "derivation, so the -od worker polls the base queue too. When a worker "
+            "pod is lost the temporal-activity-rerouter moves the retry to "
+            "atlan-<app>-<deployment>-od; KEDA starts the od worker, nothing polls "
+            "that queue, and the run hangs. WARN while the fleet's existing "
+            "findings are fixed; one known app still pins it, to a legacy queue "
+            "name that differs from its app name, so its fix is a queue "
+            "migration, not a deletion. "
+            "Customer impact: a run whose worker pod is lost hangs until the "
+            "workflow timeout (hours) instead of retrying in minutes."
+        ),
+        short_description=(
+            "ATLAN_TASK_QUEUE is pinned in the deploy env — the on-demand worker "
+            "polls the wrong queue and retries hang"
+        ),
+        full_description=(
+            "A deploy or pool ``env`` block of the contract (``contract/**/*.pkl``) or the ``deploy.env`` "
+            "or ``pools.<name>.env`` of ``atlan.yaml`` sets ``ATLAN_TASK_QUEUE``. "
+            "That overrides the SDK's per-deployment queue "
+            "``atlan-{app}-{deployment}``, so the on-demand (``-od``) worker polls "
+            "the base queue and the retries the activity rerouter moves to the "
+            "``-od`` queue are never picked up. The run hangs until its timeout.\n"
+            "\n"
+            'The finding anchors on the ``["ATLAN_TASK_QUEUE"] =`` line in the '
+            "contract when there is one (the same key in ``overrides`` is not an env var), and otherwise on the key in "
+            "``atlan.yaml``. An app with no ``contract/`` is still checked.\n"
+            "\n"
+            "**Fix:** if the pinned value is the queue the SDK derives anyway "
+            "(``atlan-<app name>-<deployment>``), delete the line, then regenerate "
+            "with the repo's generate task and commit the updated ``atlan.yaml`` "
+            "(an app with no contract deletes the line from ``atlan.yaml`` "
+            "directly):\n"
+            "\n"
+            "    env {\n"
+            "      // no ATLAN_TASK_QUEUE: the SDK derives the queue\n"
+            "    }\n"
+            "\n"
+            "If it pins a different, legacy queue name, deleting it moves the "
+            "worker off the queue the manifest dispatches to (``taskQueuePrefix`` "
+            "or a node ``taskQueue``) and the scaling trigger follows. First move "
+            "both to the derived name, or suppress with a reason.\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K031] <reason>`` on the "
+            "``ATLAN_TASK_QUEUE`` line of the contract (or the comment-only line "
+            "above it), or ``# conformance: ignore[K031] <reason>`` on the "
+            "``ATLAN_TASK_QUEUE:`` line of ``atlan.yaml``. A suppression is almost "
+            "never correct: the pinned queue breaks on-demand retries.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="K032",
+        canonical_reference=(
+            "application_sdk contract-toolkit/examples/pools/app.pkl — `cold` is "
+            "a key after the first, so the toolkit renders it as a dedicated "
+            "worker pool with its own task queue, the one a task routed with "
+            'pool="cold" is sent to; `hot`, the first key, is the main worker '
+            "and polls the base queue."
+        ),
+        rule_interactions=(
+            "K033 is the other half of the same cross-check: a dedicated pool "
+            "no task routes to. Renaming a pool in the contract without "
+            "renaming its pool= trips both. The contract is the source of "
+            "atlan.yaml, so regenerate after changing deploy.pools (K005)."
+        ),
+        scope=RuleScope.APP,
+        name="TaskPoolNotDeployed",
+        tier=EnforcementTier.BLOCK,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.62.0",
+        rationale=(
+            '@task(pool="x") routes the task\'s activities to '
+            "atlan-<app>-<deployment>-x (resolve_pool_queue). Only a worker pool "
+            "the chart deploys polls that queue, and the contract-toolkit "
+            "deploys one for each deploy.pools key after the first; the first "
+            "key is the main worker, which polls the base queue. The @task "
+            "validator checks only that the name is kebab-case, so a typo, a "
+            "pool removed from the contract, or the main worker's own key sends "
+            "every call of the task to a queue nothing polls. ADR-0016 rejected "
+            "per-call routing because it reopens exactly this failure and "
+            "promised a build-time gate for decoration-time routing; this is "
+            "that gate. BLOCK: no app in the fleet names an undeployed pool "
+            "today, and the failure is a hang, not a degradation. "
+            "Customer impact: every run that reaches the task hangs until its "
+            "activity or workflow timeout (hours) and then fails."
+        ),
+        short_description=(
+            "@task(pool=) names a pool the app does not deploy — its activities "
+            "go to a queue no worker polls and hang"
+        ),
+        full_description=(
+            'A ``@task(pool="x")`` (``application_sdk.app.task``) names a '
+            "pool that is not a dedicated worker pool of the app. A dedicated "
+            "pool is a ``deploy.pools`` key **after the first** in "
+            "``contract/**/*.pkl`` (or, with no contract pools, in the "
+            "``pools:`` mirror of ``atlan.yaml``), a ``deploy.workerPools[]`` "
+            "``name`` in ``atlan.yaml``, or a pool with a non-empty "
+            "``ATLAN_POOL_<POOL>_QUEUE`` in the main worker's env (the first "
+            "pool's ``env`` in the contract, or ``deploy.env`` in "
+            "``atlan.yaml``): the workflow runs on the main worker, so a pool's "
+            "own ``env`` or ``overrides`` never reaches it. The first ``pools`` key is the app's "
+            "main worker: it polls ``atlan-<app>-<deployment>``, not "
+            "``atlan-<app>-<deployment>-<key>``, so naming it in ``pool=`` "
+            "is also a finding.\n"
+            "\n"
+            "``pool=`` is read from a string literal or a module-level string "
+            "constant of the same module; any other expression is not checked.\n"
+            "\n"
+            "**Fix:** correct the name to a declared pool, or declare the pool "
+            "after the first key and regenerate ``atlan.yaml`` with the repo's "
+            "generate task:\n"
+            "\n"
+            "    deploy = new DeployConfig {\n"
+            "      pools {\n"
+            '        ["default"] = new Pool { }   // main worker\n'
+            '        ["heavy"] = new Pool { }     // @task(pool="heavy")\n'
+            "      }\n"
+            "    }\n"
+            "\n"
+            "To run the task on the main worker, drop ``pool=``.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K032] <reason>`` on the "
+            "``pool=`` line. A suppression is almost never correct: the task's "
+            "activities are never picked up.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="K033",
+        canonical_reference=(
+            "application_sdk application_sdk/app/registry.py — "
+            "`resolve_pool_queue` derives the queue a task routed to a pool is "
+            "sent to; a dedicated pool that no task names never receives work."
+        ),
+        rule_interactions=(
+            "K032 is the other half of the same cross-check: a pool= naming a "
+            "pool the app does not deploy. A renamed pool trips both; fix the "
+            "pair together. Regenerate atlan.yaml after changing deploy.pools "
+            "(K005)."
+        ),
+        scope=RuleScope.APP,
+        name="UnusedWorkerPool",
+        tier=EnforcementTier.WARN,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.62.0",
+        rationale=(
+            "Every deploy.pools key after the first renders its own worker "
+            "deployment, KEDA scaler and on-demand mirror, and each one costs "
+            "Temporal worker-deployment versions. A pool no @task(pool=) names "
+            "never receives an activity, which usually means the task that was "
+            "meant to use it lost or misspelled its pool= (the K032 side of the "
+            "same mistake) or the pool outlived the task. WARN, not BLOCK: an "
+            "app can route to a pool by means this check cannot see. "
+            "Customer impact: none directly; an idle pool is cost and a sign "
+            "the intended routing is not happening."
+        ),
+        short_description=(
+            "A dedicated worker pool is declared but no @task(pool=) routes to it"
+        ),
+        full_description=(
+            "A ``deploy.pools`` key after the first in ``contract/**/*.pkl`` "
+            "(or, with no contract pools, in the ``pools:`` mirror of "
+            "``atlan.yaml``) is not named by any ``@task(pool=...)`` in the "
+            "app's Python. The first key is the main worker and is never "
+            "flagged. The rule stays silent when any ``pool=`` value is not a "
+            "string literal or module-level string constant, since that task "
+            "may be the pool's user.\n"
+            "\n"
+            '**Fix:** route the task meant for it with ``@task(pool="<key>")``, '
+            "or delete the pool and regenerate ``atlan.yaml``.\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K033] <reason>`` on the "
+            "pool's key line in the contract (or the comment-only line above "
+            "it), or ``# conformance: ignore[K033] <reason>`` on the key line of "
+            "``atlan.yaml`` — for a pool the app routes to by other means.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),

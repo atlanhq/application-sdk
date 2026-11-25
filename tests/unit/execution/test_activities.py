@@ -21,10 +21,8 @@ from application_sdk.execution._temporal.activities import (
     TaskContext,
     _track_file_refs,
     create_activity_from_task,
-    get_activity_options,
     get_all_task_activities,
 )
-from application_sdk.execution.retry import RetryPolicy as SdkRetryPolicy
 
 
 # Module-level types so get_type_hints can resolve them
@@ -111,14 +109,6 @@ class _UnrelatedOut(Output, allow_unbounded_fields=True):
 class TestCreateActivityFromTask:
     """Tests for create_activity_from_task()."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def _make_app_with_task(self) -> type[App]:
         class _GreeterApp(App):
             @task(timeout_seconds=60)
@@ -178,14 +168,6 @@ class TestCreateActivityFromTask:
 class TestGetAllTaskActivities:
     """Tests for get_all_task_activities()."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_returns_empty_when_no_apps(self) -> None:
         activities = get_all_task_activities()
         assert activities == []
@@ -204,9 +186,10 @@ class TestGetAllTaskActivities:
                 return _ActOutput()
 
         activities = get_all_task_activities()
-        # 2 user tasks + 7 framework tasks (upload, download, verify_refs,
-        # upload_refs, cleanup_files, cleanup_storage, merge_skipped_records) = 9
-        assert len(activities) == 9
+        # 2 user tasks + 8 framework tasks (upload, download, verify_refs,
+        # upload_refs, cleanup_files, cleanup_storage, merge_skipped_records,
+        # merge_fetch_failures) = 10
+        assert len(activities) == 10
 
     def test_returns_activities_for_all_apps(self) -> None:
         class _AppA(App):
@@ -252,9 +235,9 @@ class TestGetAllTaskActivities:
                 return _Out2()
 
         activities = get_all_task_activities()
-        # 1 user task per app (2) + 7 framework tasks per app (14) = 16
+        # 1 user task per app (2) + 8 framework tasks per app (16) = 18
         # (no dedup — each app has its own qualified activity names)
-        assert len(activities) == 16
+        assert len(activities) == 18
         activity_names = [
             a._task_metadata.name  # type: ignore[attr-defined]
             for a in activities
@@ -266,14 +249,6 @@ class TestGetAllTaskActivities:
 
 class TestAllAppsActivities:
     """Tests for get_all_task_activities() — includes all registered apps' tasks."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_all_apps_tasks_are_included(self) -> None:
         """Tasks from all registered apps should be included."""
@@ -361,100 +336,29 @@ class TestAllAppsActivities:
         assert "_dedup-secondary:task_s" in defn_names
 
 
-class TestGetActivityOptions:
-    """Tests for get_activity_options()."""
+class TestGetActivityOptionsIsDeprecated:
+    """The builder is off every dispatch path; it warns until v4.0.0 removes it."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
+    def test_warns_and_still_returns_options(self) -> None:
+        from application_sdk.app.task import TaskMetadata
+        from application_sdk.execution._temporal.activities import (
+            get_activity_options,
+        )
 
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
+        meta = TaskMetadata(
+            name="t",
+            app_name="_a",
+            func=lambda: None,
+            input_type=_ActInput,
+            output_type=_ActOutput,
+            timeout_seconds=300,
+            retry_max_attempts=5,
+        )
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            options = get_activity_options(meta)  # pyright: ignore[reportDeprecated]
 
-    def test_returns_start_to_close_timeout(self) -> None:
-        class _TimeoutApp(App):
-            @task(timeout_seconds=300)
-            async def my_task(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_timeout-app")
-        my_task = next(t for t in tasks if t.name == "my_task")
-        options = get_activity_options(my_task)
-
-        assert "start_to_close_timeout" in options
         assert options["start_to_close_timeout"] == timedelta(seconds=300)
-
-    def test_returns_retry_policy(self) -> None:
-        class _RetryApp(App):
-            @task(timeout_seconds=60, retry_max_attempts=5)
-            async def retryable(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_retry-app")
-        retryable_task = next(t for t in tasks if t.name == "retryable")
-        options = get_activity_options(retryable_task)
-
-        assert "retry_policy" in options
         assert options["retry_policy"].maximum_attempts == 5
-
-    def test_default_retry_policy_has_max_attempts(self) -> None:
-        class _DefaultRetryApp(App):
-            @task(timeout_seconds=60)
-            async def simple(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_default-retry-app")
-        simple_task = next(t for t in tasks if t.name == "simple")
-        options = get_activity_options(simple_task)
-        assert options["retry_policy"] is not None
-
-    def test_explicit_retry_policy_passed_through(self) -> None:
-        """When task_metadata.retry_policy is set, get_activity_options uses it.
-
-        This exercises the inline import of temporalio.common.RetryPolicy and
-        the rp-is-not-None branch (line ~287-295).
-        """
-
-        class _ExplicitRetryApp(App):
-            @task(
-                timeout_seconds=60,
-                retry_policy=SdkRetryPolicy(
-                    max_attempts=7,
-                    initial_interval=timedelta(seconds=2),
-                    max_interval=timedelta(seconds=42),
-                    backoff_coefficient=3.0,
-                    non_retryable_errors=("ValueError",),
-                ),
-            )
-            async def explicit(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-            async def run(self, input: _ActInput) -> _ActOutput:
-                return _ActOutput()
-
-        task_registry = TaskRegistry.get_instance()
-        tasks = task_registry.get_tasks_for_app("_explicit-retry-app")
-        explicit_task = next(t for t in tasks if t.name == "explicit")
-        options = get_activity_options(explicit_task)
-        rp = options["retry_policy"]
-        assert rp.maximum_attempts == 7
-        assert rp.initial_interval == timedelta(seconds=2)
-        assert rp.maximum_interval == timedelta(seconds=42)
-        assert rp.backoff_coefficient == 3.0
-        assert "ValueError" in rp.non_retryable_error_types
 
 
 # ---------------------------------------------------------------------------
@@ -480,16 +384,16 @@ class TestTrackFileRefs:
 
     def test_noop_when_no_refs(self) -> None:
         # No refs → does not import _app_state, does not raise.
-        _track_file_refs("wf-1")
+        _track_file_refs(("wf-1", "run-1"))
 
     def test_adds_refs_to_app_state(self) -> None:
         from application_sdk.app.base import _app_state
 
         ref = FileReference(local_path="/tmp/foo")
-        _track_file_refs("wf-test-track", ref)
+        _track_file_refs(("wf-test-track", "run-1"), ref)
         from application_sdk.constants import TRACKED_FILE_REFS_KEY
 
-        assert ref in _app_state["wf-test-track"][TRACKED_FILE_REFS_KEY]
+        assert ref in _app_state[("wf-test-track", "run-1")][TRACKED_FILE_REFS_KEY]
 
     def test_upload_refs_output_retained_refs_are_tracked_beside_transient_twin(
         self,
@@ -509,8 +413,8 @@ class TestTrackFileRefs:
         found = _find_file_refs(UploadRefsOutput(prefix="p", refs=[retained]))
         assert found == [retained]
 
-        _track_file_refs("wf-test-upload-refs", *found, transient)
-        tracked = _app_state["wf-test-upload-refs"][TRACKED_FILE_REFS_KEY]
+        _track_file_refs(("wf-test-upload-refs", "run-1"), *found, transient)
+        tracked = _app_state[("wf-test-upload-refs", "run-1")][TRACKED_FILE_REFS_KEY]
         assert {retained, transient} <= tracked
 
 
@@ -520,14 +424,6 @@ class TestActivityFnExecution:
     These exercise the full happy path through the activity body, hitting
     11 inline imports — a regression in any of them fails these tests.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _make_app_and_get_activity(self) -> tuple[type[App], object]:
         class _AfnApp(App):
@@ -776,14 +672,6 @@ class TestSqlWrapRetryabilityReachesTheWire:
     the flag on the exception.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     async def _run_task_raising(self, err: Exception):
         from application_sdk.execution.errors import ApplicationError
 
@@ -852,14 +740,6 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
     redaction at the activity boundary the same failure appears there twice:
     once redacted, once not.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     async def _run_task_raising(self, err: Exception):
         from application_sdk.execution.errors import ApplicationError
@@ -939,13 +819,20 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
         assert "RuntimeError: connect postgres://" in text
 
     async def test_cause_appended_by_str_is_redacted(self) -> None:
-        from application_sdk.storage.errors import StorageError
+        from application_sdk.errors.leaves import DependencyUnavailableError
 
-        # StorageError.__str__ appends ``{type(cause).__name__}: {cause}``
-        # without redaction — the shape the audit found in 13 ``__str__`` copies.
-        err = StorageError(
-            "upload failed",
-            key="artifacts/k.json",
+        # An app-defined error whose __str__ appends ``{type(cause).__name__}:
+        # {cause}`` without redaction — the shape SDK classes had before the
+        # shared mixin (FND-4917). The boundary must not rely on __str__.
+        class _LeakyStrError(DependencyUnavailableError):
+            def __str__(self) -> str:
+                return (
+                    f"{self.message} | key=artifacts/k.json | "
+                    f"caused_by={type(self.cause).__name__}: {self.cause}"
+                )
+
+        err = _LeakyStrError(
+            message="upload failed",
             cause=RuntimeError("connect postgres://svc:hunter2@db/x?token=abc123"),
         )
         assert "hunter2" in str(err)  # precondition: the class does not redact
@@ -1044,3 +931,82 @@ class TestRedactedCauseChain:
             link = link.__cause__
         assert depth == 2
         assert depth <= _MAX_CHAIN_DEPTH
+
+
+class TestRunPrefixUsesTheTaskApp:
+    """FND-4921: the task wrapper composes the run prefix from the task's own App.
+
+    With two Apps registered and ``ATLAN_APPLICATION_NAME`` naming neither, the
+    registry resolver falls back to the env name, while ``App.upload`` writes
+    under the App's own name. The wrapper records the task's App for the whole
+    activity, so ref persistence (and every other run-scoped path built in the
+    activity) lands under the same prefix.
+    """
+
+    def _activity(self) -> object:
+        class _PrefixApp(App):
+            @task(timeout_seconds=60)
+            async def greet(self, input: _AfnIn) -> _AfnOut:
+                return _AfnOut(greeting="hi")
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.greet(input)
+
+        class _OtherApp(App):
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return _AfnOut(greeting="")
+
+        assert len(AppRegistry.get_instance().list_apps()) == 2
+        tasks = TaskRegistry.get_instance().get_tasks_for_app("_prefix-app")
+        return create_activity_from_task(next(t for t in tasks if t.name == "greet"))
+
+    async def test_refs_and_the_activity_scope_use_the_task_app_name(self) -> None:
+        from application_sdk.app.registry import _running_app_name
+
+        activity_fn = self._activity()
+        ctx = TaskContext(
+            app_name="_prefix-app",
+            task_name="greet",
+            run_id="run-1",
+            workflow_id="wf-1",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        infra = mock.MagicMock()
+        infra.upstream_storage = None
+        persist = mock.AsyncMock(side_effect=lambda store, result, **_: result)
+        # Stands in for the output interceptor's activity-wide scope.
+        token = _running_app_name.set("")
+        try:
+            with (
+                mock.patch.object(
+                    activities_module.activity,
+                    "info",
+                    return_value=mock.MagicMock(
+                        workflow_id="wf-1", workflow_run_id="run-1"
+                    ),
+                ),
+                mock.patch(
+                    "application_sdk.infrastructure.context.get_infrastructure",
+                    return_value=infra,
+                ),
+                mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+                mock.patch(
+                    "application_sdk.storage.file_ref_sync.has_refs_to_persist",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "application_sdk.storage.file_ref_sync.persist_file_refs", persist
+                ),
+            ):
+                await activity_fn(ctx, _AfnIn(name="x"))
+            # Still set after the wrapper returns, for the skipped-records part
+            # the output interceptor persists next.
+            assert _running_app_name.get() == "_prefix-app"
+        finally:
+            _running_app_name.reset(token)
+
+        assert (
+            persist.await_args.kwargs["output_path"]
+            == "artifacts/apps/_prefix-app/workflows/wf-1/run-1"
+        )

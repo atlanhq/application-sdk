@@ -38,6 +38,7 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk.common._env import env_str
 from application_sdk.contracts.events import (
     ApplicationEventNames,
     Event,
@@ -45,6 +46,7 @@ from application_sdk.contracts.events import (
     EventTypes,
     WorkflowStates,
 )
+from application_sdk.execution._temporal.run_flags import current_run_flags
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -304,8 +306,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_type = workflow_info.workflow_type
             event.metadata.workflow_id = workflow_info.workflow_id
             event.metadata.workflow_run_id = workflow_info.run_id
-    # conformance: ignore[E004] probe to detect workflow context; exception is expected when called outside a workflow
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe to detect workflow context; exception is expected when called outside a workflow
         logger.debug("Not in workflow context, cannot enrich event metadata")
 
     try:
@@ -318,8 +319,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_id = activity_info.workflow_id
             event.metadata.workflow_run_id = activity_info.workflow_run_id
             event.metadata.workflow_state = WorkflowStates.RUNNING.value
-    # conformance: ignore[E004] probe to detect activity context; exception is expected when called outside an activity
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe to detect activity context; exception is expected when called outside an activity
         logger.debug("Not in activity context, cannot enrich event metadata")
 
     if event.metadata.event_id is None:
@@ -489,17 +489,17 @@ async def _publish_event_via_binding(
     binding_metadata.update(await _get_event_auth_headers())
 
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-        BindingError,
+        BindingUnavailableError,
     )
 
-    binding_error: BindingError | None = None
+    binding_error: BindingUnavailableError | None = None
     try:
         await infra.event_binding.invoke(
             operation="create",
             data=payload,
             metadata=binding_metadata,
         )
-    except BindingError as e:
+    except BindingUnavailableError as e:
         binding_error = e
 
     if binding_error is None:
@@ -577,7 +577,7 @@ async def _publish_event_via_binding(
             binding_metadata,
             timeout=direct_publish_timeout or _DIRECT_PUBLISH_TIMEOUT_SECONDS,
         )
-    # conformance: ignore[E004] both channels failed; the original BindingError is re-raised unchanged so callers' handling and its Dapr cause chain are preserved, and the direct failure is logged with its own traceback here
+    # conformance: ignore[E004] both channels failed; the original BindingUnavailableError is re-raised unchanged so callers' handling and its Dapr cause chain are preserved, and the direct failure is logged with its own traceback here
     except Exception as direct_error:
         _suspend_direct_publish()
         logger.exception(
@@ -756,11 +756,9 @@ def _resolve_event_ingress_url() -> str | None:
     if _ingress_url_resolved and _resolved_ingress_url is not None:
         return _resolved_ingress_url
 
-    import os  # noqa: PLC0415 — cold path
-
     name = _event_store_name()
     for components_dir in (
-        os.environ.get("DAPR_COMPONENTS_PATH", "/app/components"),
+        env_str("DAPR_COMPONENTS_PATH", "/app/components"),
         "./components",
     ):
         url = _read_http_binding_url(components_dir, name)
@@ -844,12 +842,12 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         except Exception:
             logger.warning("Failed to publish activity start event", exc_info=True)
 
-        start_time = time.time()
+        start_time = time.monotonic()
         output = None
         try:
             output = await super().execute_activity(input)
         finally:
-            duration_ms = (time.time() - start_time) * 1000
+            duration_ms = (time.monotonic() - start_time) * 1000
             end_event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
                 event_name=ApplicationEventNames.ACTIVITY_END.value,
@@ -880,6 +878,15 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Returns:
             Any: The result of the workflow execution.
         """
+        # Off for this run when the run was pinned with events off. The pinned
+        # value, not the pod's setting, so a run replays the same whichever
+        # worker picks it up; see ``run_flags``. No pinned value means a worker
+        # that registered this interceptor without RunFlagsInterceptor, which
+        # is the pre-pinning "registered means on".
+        flags = current_run_flags()
+        if flags is not None and not flags.events:
+            return await super().execute_workflow(input)
+
         # Record start time (use workflow.time() for deterministic time in workflows)
         start_time = workflow.time()
 
@@ -944,7 +951,18 @@ class EventInterceptor(Interceptor):
 
     This interceptor provides event tracking capabilities for both
     workflow and activity executions.
+
+    The worker registers it whatever ``APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR``
+    says, because the workflow side decides per run: each run publishes its
+    workflow events when it was pinned with events on (see ``run_flags``), so a
+    worker with events off still replays a run that started with them on.
+    ``activity_events`` is the worker's own value and gates the activity
+    start/end events, which are not workflow commands.
     """
+
+    def __init__(self, *, activity_events: bool = True) -> None:
+        super().__init__()
+        self._activity_events = activity_events
 
     def intercept_activity(
         self, next: ActivityInboundInterceptor
@@ -957,7 +975,10 @@ class EventInterceptor(Interceptor):
         Returns:
             ActivityInboundInterceptor: The activity interceptor.
         """
-        return EventActivityInboundInterceptor(super().intercept_activity(next))
+        inner = super().intercept_activity(next)
+        if not self._activity_events:
+            return inner
+        return EventActivityInboundInterceptor(inner)
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput

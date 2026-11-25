@@ -4,46 +4,47 @@ on:
   schedule:
     - cron: 0 0 * * * # daily at 00:00
 
-permissions:
-  issues: write
-  pull-requests: write
+# Each job grants its own permissions; nothing is granted workflow-wide.
+permissions: {}
 
 jobs:
+  # application-sdk's own issues and PRs, through the same reusable the fleet
+  # calls (FND-4930). Until FND-4930 this was an inline copy of stale.yml that
+  # ran with debug-only: true since the initial commit, so it minted a token
+  # every night and labelled nothing. It now labels for real: Stale label plus
+  # a comment after 60 idle days. days-before-close stays at -1, so nothing is
+  # ever closed. No application-sdk PR workflow triggers on `labeled`
+  # (FND-3839), so a label starts no CI run.
   stale:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Mint fleet App token
-        id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: application-sdk
+    # The reusable's writes are capped by the caller's grant; the App token
+    # (minted inside it, scoped to this repo) carries its own permissions,
+    # and the GITHUB_TOKEN fallback uses these.
+    permissions:
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/stale.yml
+    with:
+      debug-only: false
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
 
-      - name: Close Stale PRs
-        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11
-        with:
-          repo-token: ${{ steps.app-token.outputs.token }}
-          stale-issue-message: 'Stale Issue'
-          stale-pr-message: 'Stale Pull Request'
-          stale-issue-label: 'Stale'
-          stale-pr-label: 'Stale'
-          days-before-stale: 60
-          debug-only: 'true'
+  # Nightly: every rule's canonical_reference still names a path and symbol
+  # that exist on the three reference apps' main (FND-4665).
+  canonical-references:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/canonical-reference-check.yaml
 
-  # Nightly real-cloud storage integration tests against main (no PR context →
-  # no label gate). Same suites as the label-gated job in pull_request.yaml;
-  # conftest skips any cloud whose creds aren't set, so this stays green until
-  # all nine secrets are registered.
-  storage-integration:
-    name: Storage Integration Tests — nightly (S3 / Azure / GCS)
+  # Nightly smoke of the opt-in storage load suite (tests/load). Same
+  # scenarios as `poe load-test-storage`, at 64 MiB instead of 1 GiB: the
+  # smallest size that still exercises the multi-chunk resume path, so the
+  # suite cannot silently rot between manual volume runs (FND-4291).
+  load-smoke:
+    name: Storage Load Tests — nightly smoke (64 MiB)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Keyless: GitHub OIDC for all three clouds (no static secrets). Overrides the
-    # workflow-level permissions to grant id-token for the OIDC exchange.
     permissions:
-      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,48 +53,54 @@ jobs:
       - uses: "./.github/actions/setup-deps"
         with:
           checkout: "false"
-      - name: AWS — assume the integration role (OIDC)
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
-        with:
-          role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_INTEG_REGION }}
-      - name: Azure — login (OIDC federated, no secret)
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
-        with:
-          client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_INTEG_SUBSCRIPTION_ID }}
-      - name: GCS — Workload Identity Federation (sets ADC)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
-        with:
-          workload_identity_provider: ${{ vars.GCP_INTEG_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_INTEG_SA }}
-      - name: Azure — write the federated token file for obstore WI auth
-        run: |
-          set -euo pipefail
-          # Mint into a throwaway file and only publish it on success, so a failed
-          # mint/parse can't leave a zero-byte token that yields an opaque AAD
-          # error downstream instead of a clear "OIDC mint failed". --fail-with-body
-          # makes curl exit non-zero on a non-2xx (still printing the body to debug).
-          tmp="$(mktemp)"
-          curl --fail-with-body -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
-            | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
-            > "$tmp"
-          mv "$tmp" "${RUNNER_TEMP}/azure-federated-token"
-      - name: Run storage integration tests (keyless)
+      - name: Run storage load tests at smoke size
         env:
-          S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
-          AWS_DEFAULT_REGION: ${{ vars.AWS_INTEG_REGION }}
-          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_INTEG_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_INTEG_CONTAINER }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_INTEG_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_INTEG_TENANT_ID }}
-          AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
-          GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
-          GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
-        run: |
-          uv run pytest tests/integration/storage/ \
-            -m "s3_integration or azure_integration or gcs_integration" \
-            -v --timeout=60
+          ATLAN_LOAD_TEST_SIZE_MIB: "64"
+        run: uv run pytest tests/load -m load -v --timeout=600
+
+  # Nightly real-cloud storage integration tests against main (no PR context,
+  # so no change gate). Same job body as the PR run in pull_request.yaml:
+  # storage-integration-reusable.yaml (FND-4928).
+  storage-integration:
+    name: Storage Integration Tests — nightly
+    # Keyless OIDC: the reusable's job needs id-token, and a called workflow can
+    # only narrow what its caller grants. Overrides the workflow-level grant.
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/storage-integration-reusable.yaml
+
+  # Nightly TemporalAuthManager token-refresh tests against a real Temporal
+  # frontend that enforces RS256 JWT auth (local/temporal-auth/). They include
+  # the reproducer of the production worker crash on token expiry. Too slow for
+  # a PR (~4 min of real token expiry and grace periods) and need Docker, so
+  # they only skip in the PR integration job.
+  temporal-docker-auth:
+    name: Temporal Docker JWT-auth tests — nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: "./.github/actions/setup-deps"
+        with:
+          checkout: "false"
+      # Fresh key pair per run (gitignored; never stored as a secret).
+      - name: Generate the JWT signing key and JWKS
+        run: bash local/temporal-auth/scripts/gen_keys.sh
+      # --wait returns once Temporal's healthcheck sees the `default` namespace,
+      # and fails the step if any container never becomes healthy.
+      - name: Start the JWT-auth Temporal stack
+        run: docker compose -f local/temporal-auth/docker-compose.yml up -d --wait --wait-timeout 300
+      # TEMPORAL_DOCKER_AUTH_REQUIRED=1: a missing key or unreachable stack fails
+      # the tests instead of skipping them, so this job cannot pass on skips.
+      - name: Run Temporal Docker-auth tests
+        env:
+          TEMPORAL_DOCKER_AUTH_REQUIRED: "1"
+        run: uv run pytest tests/integration/test_temporal_docker_auth.py -m integration -v --timeout=180
+      - name: Temporal stack logs
+        if: failure()
+        run: docker compose -f local/temporal-auth/docker-compose.yml logs --no-color --tail=300

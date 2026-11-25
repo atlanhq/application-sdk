@@ -425,10 +425,6 @@ def lane_parent(repo: str, pr_number: int, head_sha: str, runner: Runner) -> str
     return parent_sha if ok else ""
 
 
-def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) -> bool:
-    return bool(lane_parent(repo, pr_number, head_sha, runner))
-
-
 def unchanged_pr_current(
     repo: str, parent_sha: str, pinned: str, runner: Runner
 ) -> tuple[bool, str]:

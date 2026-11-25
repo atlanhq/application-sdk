@@ -19,8 +19,8 @@ from pydantic import ConfigDict, Field, ValidationError
 from typing_extensions import TypeAliasType
 
 from application_sdk.contracts.base import (
+    ContractDeclarationError,
     ContractMetadata,
-    ContractValidationError,
     HeartbeatDetails,
     Input,
     Output,
@@ -602,7 +602,7 @@ class TestIsBackwardsCompatible:
         class V1(Input):
             name: str
 
-        with pytest.raises(ContractValidationError):
+        with pytest.raises(ContractDeclarationError):
             is_backwards_compatible(NotAContract, V1)
 
 
@@ -756,7 +756,7 @@ class TestGetContractFields:
         class NotDC:
             pass
 
-        with pytest.raises(ContractValidationError):
+        with pytest.raises(ContractDeclarationError):
             get_contract_fields(NotDC)
 
 

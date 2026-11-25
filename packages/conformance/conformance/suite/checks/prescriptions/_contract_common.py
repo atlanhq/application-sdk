@@ -21,21 +21,13 @@ from __future__ import annotations
 import ast
 from typing import Iterator
 
+from .._ast_common._names import leaf_name
 from ._constants import _SDK_MODULE_PREFIX
 
 _CONTRACT_BASE_NAMES: frozenset[str] = frozenset({"Input", "Output"})
 
 # Builtin bytes-like types that carry the same Temporal payload-size risk.
 _BYTES_LIKE_NAMES: frozenset[str] = frozenset({"bytes", "bytearray", "memoryview"})
-
-
-def _base_name(node: ast.expr) -> str | None:
-    """Return the terminal name of a base expression (``Input`` / ``mod.Output``)."""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
 
 
 def collect_foreign_contract_names(tree: ast.AST) -> frozenset[str]:
@@ -80,8 +72,7 @@ def is_contract_class(
 ) -> bool:
     """True if any base name is in :data:`_CONTRACT_BASE_NAMES` and not in *foreign_names*."""
     return any(
-        _base_name(base) in _CONTRACT_BASE_NAMES
-        and _base_name(base) not in foreign_names
+        leaf_name(base) in _CONTRACT_BASE_NAMES and leaf_name(base) not in foreign_names
         for base in node.bases
     )
 

@@ -35,8 +35,12 @@ from application_sdk.storage.ops import download_file
 _KIB = 1024
 _MIB = 1024 * _KIB
 
-#: Bound for any wait a regression could make endless.
-_TIMEOUT = 5.0
+#: Bound for any wait a regression could make endless. The passing path has to
+#: beat it too, and it covers obstore thread work and disk writes, so it sits at
+#: the 30s floor ``docs/agents/testing.md`` sets for waits that cover thread or
+#: pool work ("Timeouts a Passing Test Must Beat"); a loaded Windows runner
+#: missed the old 5s bar with nothing wrong.
+_TIMEOUT = 30.0
 
 
 @pytest.fixture(autouse=True)
@@ -376,7 +380,7 @@ class TestFourDirectoryRefs:
         monkeypatch.setattr(obstore, "get_async", ranges.get_async)
         monkeypatch.setattr(obstore, "get_range_async", ranges.get_range_async)
         materialized = await asyncio.wait_for(
-            materialize_file_refs(store, persisted), 30
+            materialize_file_refs(store, persisted), 2 * _TIMEOUT
         )
         for name in "abcd":
             local = Path(getattr(materialized, name).local_path)
@@ -431,7 +435,7 @@ class TestFourDirectoryRefs:
                     peak_writers = max(peak_writers, open_writers)
                     if open_writers >= 2:
                         both_open.set()
-                    await both_open.wait()
+                    await asyncio.wait_for(both_open.wait(), _TIMEOUT)
                     return inner
 
                 async def __aexit__(self, *exc: Any) -> Any:
@@ -443,7 +447,7 @@ class TestFourDirectoryRefs:
 
         monkeypatch.setattr(obstore, "open_writer_async", _counting_open)
         await asyncio.wait_for(
-            _persisted_dirs(create_memory_store(), tmp_path / "src"), 30
+            _persisted_dirs(create_memory_store(), tmp_path / "src"), 2 * _TIMEOUT
         )
         assert peak_writers == 2
         assert transfer_budget().peak <= budget

@@ -14,12 +14,9 @@ import re
 import sys
 from pathlib import Path
 
+import pkl_version as pv
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import pkl_version as pv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

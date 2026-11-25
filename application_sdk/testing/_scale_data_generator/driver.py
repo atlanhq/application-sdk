@@ -24,12 +24,12 @@ def driver(args: DriverArgs):
     if os.path.exists(args.output_dir):
         shutil.rmtree(args.output_dir)
 
-    start_time = time.time()
+    start_time = time.monotonic()
     config_loader = ConfigLoader(args.config_path)
     generator = DataGenerator(config_loader)
     generator.generate_data(args.output_format, args.output_dir)
     generator.generate_duckdb_tables(args.output_dir)
-    end_time = time.time()
+    end_time = time.monotonic()
     logger.info(
         "Data generated successfully format=%s dir=%s duration=%.1fs",
         args.output_format,

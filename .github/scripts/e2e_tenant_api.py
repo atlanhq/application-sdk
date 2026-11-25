@@ -84,10 +84,6 @@ RELEASE_SCAN_PATH = (
 #: so reading it needs no new Heracles rule.
 CONFIGMAP_PATH = f"{_SERVICE_PREFIX}/configmaps/{{name}}"
 
-#: AE submit / create. `submit=false` creates the workflow without executing it,
-#: which still drives Heracles' server-side manifest fetch from the deployed pod.
-PACKAGE_WORKFLOWS_PATH = f"{_SERVICE_PREFIX}/package-workflows"
-
 TOKEN_PATH = "/auth/realms/default/protocol/openid-connect/token"
 
 Method = Literal["GET", "POST", "PUT"]
@@ -202,6 +198,21 @@ def validate_app_id(app_id: str) -> str:
         raise TenantApiError(
             f"invalid app_id {app_id!r}: GM app ids are UUIDs (the app_id "
             "field in the app's atlan.yaml)."
+        )
+    return value
+
+
+def validate_version_id(version_id: str) -> str:
+    """Return ``version_id`` when it has the GM UUID shape, or raise.
+
+    The restore path sends it in an install body that re-points a shared pool
+    tenant, and it arrives through a step output, so it is checked with the
+    same rigour as ``app_id`` before any API call.
+    """
+    value = version_id.strip()
+    if not _APP_ID_RE.fullmatch(value):
+        raise TenantApiError(
+            f"invalid version_id {version_id!r}: GM version ids are UUIDs."
         )
     return value
 
@@ -325,10 +336,10 @@ class TenantClient:
             ) from exc
 
     def get(self, path: str, **kwargs: object) -> Response:
-        return self.request("GET", path, **kwargs)  # type: ignore[arg-type]
+        return self.request("GET", path, **kwargs)  # pyright: ignore[reportArgumentType]
 
     def post(self, path: str, **kwargs: object) -> Response:
-        return self.request("POST", path, **kwargs)  # type: ignore[arg-type]
+        return self.request("POST", path, **kwargs)  # pyright: ignore[reportArgumentType]
 
     # -- diagnostics ----------------------------------------------------
 

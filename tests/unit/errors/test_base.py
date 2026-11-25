@@ -328,6 +328,18 @@ def test_redacts_keyword_repr_entries(text: str, expected: str) -> None:
         "signature",
         "sharedaccesskey",
         "accountkey",
+        "access_key",
+        "accesskey",
+        "secret_key",
+        "account_key",
+        "sas_token",
+        "sastoken",
+        "sas_key",
+        "session_token",
+        "sessiontoken",
+        "security_token",
+        "bearer_token",
+        "encryption_key",
         "sig",
         "token",
         "auth",
@@ -372,6 +384,88 @@ def test_redaction_is_idempotent(text: str) -> None:
     once = redact_secrets(text)
     assert "FAKE" not in once
     assert redact_secrets(once) == once
+
+
+# Credential key names the object-store clients use (obstore's S3 / Azure / GCS
+# config, boto, minio, Azure SDKs). Each is suffix-matched, so a prefixed form
+# of a listed name is covered by that name.
+_OBJECT_STORE_SECRET_KEYS = [
+    "secret_access_key",
+    "aws_secret_access_key",
+    "SecretAccessKey",
+    "AWS_SECRET_ACCESS_KEY",
+    "access_key",
+    "azure_storage_access_key",
+    "secret_key",
+    "account_key",
+    "AccountKey",
+    "azure_storage_account_key",
+    "service_account_key",
+    "sas_token",
+    "SasToken",
+    "sas_key",
+    "session_token",
+    "aws_session_token",
+    "SessionToken",
+    "fabric_session_token",
+    "security_token",
+    "bearer_token",
+    "encryption_key",
+]
+
+
+@pytest.mark.parametrize("name", _OBJECT_STORE_SECRET_KEYS)
+def test_redacts_object_store_secret_as_a_bare_pair(name: str) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(f"upload failed: {name}=FAKEOS bucket=b")
+        == f"upload failed: {name}=*** bucket=b"
+    )
+
+
+@pytest.mark.parametrize("name", _OBJECT_STORE_SECRET_KEYS)
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_redacts_object_store_secret_as_a_quoted_key(name: str, quote: str) -> None:
+    """A dict repr (single quotes) and a JSON object (double quotes)."""
+    from application_sdk.errors import redact_secrets
+
+    q = quote
+    text = f"{{{q}{name}{q}: {q}FAKE OS,1{q}, {q}bucket{q}: {q}b{q}}}"
+    expected = f"{{{q}{name}{q}: {q}***{q}, {q}bucket{q}: {q}b{q}}}"
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize("name", _OBJECT_STORE_SECRET_KEYS)
+def test_redacts_object_store_secret_in_a_keyword_repr(name: str) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(f"S3Config(region='r', {name}='FAKE OS;1', bucket='b')")
+        == f"S3Config(region='r', {name}='***', bucket='b')"
+    )
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        # Pagination cursors and correlation ids.
+        "next_token=abc123 page_token=xyz continuation_token=c1",
+        "key_count=12 run_guid=0f1e2d",
+        # The AWS access-key *id* is an identifier: it stays visible so a
+        # wrong-key error is still diagnosable. Only ``access_key`` exactly
+        # (obstore's Azure account key) and longer names ending in it are masked.
+        "access_key_id=AKIAFAKEID aws_access_key_id=AKIAFAKEID",
+        "{'AWSAccessKeyId': 'AKIAFAKEID', 'sse_kms_key_id': 'k1'}",
+        # GCS service-account identifiers are not secrets.
+        "{'private_key_id': 'pk1', 'client_email': 'sa@example.com'}",
+        "S3Config(access_key_id='AKIAFAKEID', token_type='Bearer')",
+    ],
+)
+def test_object_store_identifiers_and_cursors_survive(diagnostic: str) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(diagnostic) == diagnostic
 
 
 def test_quoted_pass_keeps_pagination_cursors() -> None:
@@ -1083,3 +1177,151 @@ def test_redact_secrets_splits_query_params_on_semicolons() -> None:
         redact_secrets("https://h.example.com/p?page=2;owner=FAKE18&limit=5;sig=FAKE19")
         == "https://h.example.com/p?page=2;owner=***&limit=5;sig=***"
     )
+
+
+# ── _LegacyErrorCodeMixin: one error_code and one __str__ (FND-4917) ─────────
+
+# Every module whose error classes adopt the mixin. Imported so that walking
+# ``__subclasses__`` below sees all of them.
+import application_sdk._context_errors  # noqa: E402, F401
+import application_sdk.contracts.base  # noqa: E402, F401
+import application_sdk.credentials.errors  # noqa: E402, F401
+import application_sdk.discovery  # noqa: E402, F401
+import application_sdk.infrastructure.bindings  # noqa: E402, F401
+import application_sdk.infrastructure.credential_vault  # noqa: E402, F401
+import application_sdk.infrastructure.pubsub  # noqa: E402, F401
+import application_sdk.infrastructure.secrets  # noqa: E402, F401
+import application_sdk.infrastructure.state  # noqa: E402, F401
+import application_sdk.storage.errors  # noqa: E402, F401
+from application_sdk.errors.base import _LegacyErrorCodeMixin  # noqa: E402
+
+
+def _mixin_users() -> list[type]:
+    found: list[type] = []
+    stack = list(_LegacyErrorCodeMixin.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls not in found:
+            found.append(cls)
+            stack.extend(cls.__subclasses__())
+    return sorted(found, key=lambda c: f"{c.__module__}.{c.__qualname__}")
+
+
+def test_mixin_has_users() -> None:
+    names = {c.__name__ for c in _mixin_users()}
+    assert {"StorageError", "CredentialError", "SecretStoreError"} <= names
+
+
+@pytest.mark.parametrize("cls", _mixin_users(), ids=lambda c: c.__qualname__)
+def test_mixin_users_do_not_redefine_error_code_or_str(cls: type) -> None:
+    """A class that copies these drifts: most copies printed the cause raw."""
+    assert "error_code" not in vars(cls)
+    assert "__str__" not in vars(cls)
+
+
+@pytest.mark.parametrize("cls", _mixin_users(), ids=lambda c: c.__qualname__)
+def test_mixin_precedes_apperror_in_the_mro(cls: type) -> None:
+    """Behind ``AppError`` the mixin's ``__str__`` would never run."""
+    mro = cls.__mro__
+    assert mro.index(_LegacyErrorCodeMixin) < mro.index(AppError)
+
+
+def _redaction_cases() -> list[tuple[str, object]]:
+    from application_sdk.discovery import DiscoveryError
+    from application_sdk.infrastructure.bindings import BindingError
+    from application_sdk.infrastructure.credential_vault import CredentialVaultError
+    from application_sdk.infrastructure.pubsub import PubSubError
+    from application_sdk.infrastructure.secrets import SecretStoreError
+    from application_sdk.infrastructure.state import StateStoreError
+    from application_sdk.storage.errors import (
+        StorageBindingBrokenError,
+        StorageBindingNotFoundError,
+        StorageBucketRelocationError,
+        StorageDiskFullError,
+        StorageEmptyUploadError,
+        StorageError,
+        StorageHandoffIncompleteError,
+        StorageIntegrityError,
+        StorageNotFoundError,
+    )
+
+    # The classes whose own __str__ printed the cause unredacted.
+    return [
+        ("StorageError", lambda c: StorageError("m", cause=c)),
+        ("StorageNotFoundError", lambda c: StorageNotFoundError("m", cause=c)),
+        (
+            "StorageBucketRelocationError",
+            lambda c: StorageBucketRelocationError("m", cause=c),
+        ),
+        (
+            "StorageBindingNotFoundError",
+            lambda c: StorageBindingNotFoundError("m", cause=c),
+        ),
+        (
+            "StorageBindingBrokenError",
+            lambda c: StorageBindingBrokenError("m", cause=c),
+        ),
+        ("StorageEmptyUploadError", lambda c: StorageEmptyUploadError("m", cause=c)),
+        ("StorageIntegrityError", lambda c: StorageIntegrityError("m", cause=c)),
+        (
+            "StorageHandoffIncompleteError",
+            lambda c: StorageHandoffIncompleteError("m", cause=c),
+        ),
+        ("StorageDiskFullError", lambda c: StorageDiskFullError("m", cause=c)),
+        ("SecretStoreError", lambda c: SecretStoreError("m", cause=c)),
+        ("BindingError", lambda c: BindingError("m", cause=c)),
+        ("CredentialVaultError", lambda c: CredentialVaultError("m", cause=c)),
+        ("PubSubError", lambda c: PubSubError("m", cause=c)),
+        ("StateStoreError", lambda c: StateStoreError("m", cause=c)),
+        ("DiscoveryError", lambda c: DiscoveryError("m", cause=c)),
+    ]
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize(
+    "factory",
+    [f for _, f in _redaction_cases()],
+    ids=[n for n, _ in _redaction_cases()],
+)
+def test_str_redacts_the_cause(factory) -> None:
+    cause = ConnectionError(
+        "connect postgresql://svc:FAKE_PW_4917@db.internal/x failed"
+    )
+    text = str(factory(cause))
+    assert "FAKE_PW_4917" not in text
+    assert "caused_by=ConnectionError: connect postgresql://***@db.internal/x" in text
+
+
+def test_str_layout_prints_labelled_truthy_fields_in_order() -> None:
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    err = StorageIntegrityError(
+        "digest mismatch",
+        key="k",
+        check="digest",
+        expectation="aa",
+        observed="bb",
+    )
+    # local_path is None, so it is left out; ``expectation`` prints as ``expected``.
+    assert str(err) == (
+        "[AAF-STR-007] digest mismatch | key=k | check=digest | expected=aa | observed=bb"
+    )
+
+
+def test_error_code_falls_back_to_the_class_default() -> None:
+    from application_sdk.errors import STORAGE_CONFIG, STORAGE_OPERATION
+    from application_sdk.storage.errors import StorageError
+
+    assert StorageError("m").error_code is STORAGE_OPERATION
+    assert StorageError("m", error_code=STORAGE_CONFIG).error_code is STORAGE_CONFIG
+
+
+def test_error_code_is_not_wire_evidence() -> None:
+    from application_sdk.errors import STORAGE_CONFIG
+    from application_sdk.storage.errors import StorageError
+
+    evidence = (
+        StorageError("m", error_code=STORAGE_CONFIG).to_failure_details().evidence
+    )
+    assert "_error_code" not in evidence
+    assert "error_code" not in evidence

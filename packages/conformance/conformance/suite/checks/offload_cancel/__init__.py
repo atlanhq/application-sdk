@@ -40,12 +40,9 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     discover,
     make_cli_main,
+    read_source,
 )
-from conformance.suite.checks._version import (
-    locked_sdk_version,
-    parse_version,
-    version_reached,
-)
+from conformance.suite.checks._version import locked_sdk_reaches
 from conformance.suite.schema.findings import Finding
 
 from ._detect import check_p064, check_p065
@@ -75,11 +72,7 @@ def sdk_has_offload_cancel(root: Path) -> bool:
     Fails closed: prescribing an API the app's SDK does not have is a finding
     nobody can act on.
     """
-    locked = locked_sdk_version(root)
-    if locked is None:
-        return False
-    parsed = parse_version(locked)
-    return parsed is not None and version_reached(OFFLOAD_CANCEL_SDK_FLOOR, parsed)
+    return locked_sdk_reaches(root, OFFLOAD_CANCEL_SDK_FLOOR)
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
@@ -96,15 +89,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Scan one Python file, gated on *root*'s locked SDK version."""
     if not sdk_has_offload_cancel(root):
         return []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = str(path.relative_to(root))
-    except ValueError:
-        rel = str(path)
-    return scan_text(text, rel)
+    source = read_source(path, root)
+    return scan_text(*source) if source is not None else []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

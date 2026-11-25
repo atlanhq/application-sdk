@@ -49,6 +49,8 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import TimeoutType
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
+
 with workflow.unsafe.imports_passed_through():
     from application_sdk.constants import (
         APP_ID,
@@ -325,7 +327,7 @@ def _attributed_message(link: BaseException) -> str:
         return ""
     try:
         return FailureDetails.model_validate(details[0]).message
-    except Exception:
+    except Exception:  # noqa: BLE001 — workflow-frame reader that must never raise; an unreadable details[0] degrades to no message on the row the caller emits
         return ""
 
 
@@ -369,7 +371,7 @@ def _gate_failure_evidence(
             return None
         try:
             primary = FailureDetails.model_validate(details[0])
-        except Exception:
+        except Exception:  # noqa: BLE001 — workflow-frame reader that must never raise; no evidence makes the caller emit the GATE_BROKEN row with the stack trace
             return None
         envelope = details[1] if len(details) > 1 else None
         return primary, _readable_checks(envelope)
@@ -386,7 +388,7 @@ def _readable_checks(envelope: object) -> list[PreflightCheck]:
 def _readable_check(raw: object) -> PreflightCheck | None:
     try:
         return PreflightCheck.model_validate(raw)
-    except Exception:
+    except Exception:  # noqa: BLE001 — workflow-frame reader that must never raise; a handler-authored check that does not parse is dropped from the row, not the verdict
         return None
 
 
@@ -472,8 +474,7 @@ def _plumbing_evidence(exc: BaseException | None) -> FailureDetails | None:
             continue
         try:
             return FailureDetails.model_validate(details[0])
-        # conformance: ignore[E004] best-effort read of another link's envelope on a path that must never raise
-        except Exception:  # noqa: S112 — an unreadable envelope on one link is not a reason to stop reading the chain; the row simply has no sentence
+        except Exception:  # noqa: S112, BLE001 — an unreadable envelope on one link is not a reason to stop reading the chain; the row simply has no sentence; best-effort read of another link's envelope on a path that must never raise
             continue
     return None
 
@@ -774,7 +775,9 @@ class PreflightGateInput(BaseModel):
             try:
                 snapshot = input_data.model_dump(mode="json")
             except Exception:  # never raise — the gate must fail open before dispatch
-                logger.debug(
+                # WARNING, not DEBUG: the gate then runs without the form config
+                # the app's checks read, which changes what it can verify.
+                logger.warning(
                     "Could not snapshot extraction input; gate proceeds without form config",
                     exc_info=True,
                 )
@@ -1509,6 +1512,7 @@ def _activity_info() -> activity.Info | None:
         return activity.info()
     except RuntimeError:
         return None
+    # conformance: ignore[E004] telemetry read that must never break a run; the traceback is kept at DEBUG
     except Exception:
         logger.debug("Could not read activity.info()", exc_info=True)
         return None
@@ -1629,11 +1633,11 @@ def _deprecated_fail_open_leaf(exc: BaseException) -> AppError | None:
 def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
         f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
-        "is deprecated until application-sdk "
-        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; raise a retryable SourceUnavailableError "
+        "is deprecated; raise a retryable SourceUnavailableError "
         "leaf instead, which the gate reports as an unverifiable source and a "
         "hard gate retries, blocking only if it persists to the final attempt. "
-        f"From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
+        "Its fail-open treatment is removed in "
+        f"v{DEPRECATED_FAIL_OPEN_REMOVED_IN}: from then this raise "
         "is reported as an unverifiable source; it never blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)
@@ -1963,6 +1967,7 @@ async def _append_storage_checks(
                     app_owner=False,
                 )
             )
+        # conformance: ignore[E004] the storage-checker failure was already logged at WARNING above; only the advisory row is lost
         except Exception:
             logger.debug("Could not append the unverified-storage row", exc_info=True)
         return False
@@ -1992,13 +1997,13 @@ async def _resolve_named_refs(
     """Resolve the app's named credential guids, grouped by ref name.
 
     One fail-open taxonomy, drawn from the resolver's own typed errors: a
-    confirmed dependency outage (a ``CredentialVaultError`` wrapping a
+    confirmed dependency outage (a ``CredentialVaultUnavailableError`` wrapping a
     ``ColdStartRaceError``, or a ``DependencyUnavailableError``) propagates so
     the workflow fails open — a Dapr blip must never read as a bad credential and
     block a healthy run. Every other resolver failure becomes an empty group so
     the handler — not the gate — decides whether a missing credential is
     ``NOT_READY``: a genuine ``CredentialNotFoundError``, a plain
-    ``CredentialVaultError``, or any unexpected vault error (the resolver
+    ``CredentialVaultUnavailableError``, or any unexpected vault error (the resolver
     collapses the latter two into ``CredentialNotFoundError``).
     """
     grouped: dict[str, list[HandlerCredential]] = {
@@ -2420,6 +2425,7 @@ def build_preflight_gate_activity(
                 credentials, credentials_by_name = await asyncio.wait_for(
                     _resolve_gate_credentials(input), timeout=resolution_deadline
                 )
+            # conformance: ignore[E004] every path either returns the typed NO_VERDICT result or re-raises chained as a plumbing error
             except Exception as e:
                 # Resolution is gate plumbing, so the default here is the opposite of
                 # the handler path below: only a *provable* credential absence is a
@@ -2503,6 +2509,7 @@ def build_preflight_gate_activity(
                             lambda f: None if f.cancelled() else f.exception()
                         )
                         timed_out = True
+            # conformance: ignore[E004] every path either re-raises the block or returns the typed NO_VERDICT result
             except Exception as e:
                 # A handler that raises the deliberate block itself already carries a
                 # verdict and its own emitted row; pass it straight through rather
@@ -2780,7 +2787,7 @@ def build_preflight_warmup_activity(
                 observation=WarmupObservation(state=WarmupState.WARMING),
                 error=unverifiable_preflight_result(e.cause, app_name).checks[0].error,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — the failure is returned as the poll's typed error
             return WarmupPoll(
                 observation=WarmupObservation(state=WarmupState.WARMING),
                 error=unverifiable_preflight_result(e, app_name).checks[0].error,
@@ -3094,16 +3101,9 @@ if TYPE_CHECKING:
     UNVERIFIABLE_CHECK_NAME: str
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.40.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="3.40.0",
+    resolve=_deprecated_constant_value,
+)

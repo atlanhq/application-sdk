@@ -6,8 +6,8 @@ Detects misalignment between the entry-point names declared in the Pkl contract
 
 This is a **cross-file + cross-artifact** check: it scans all Python files to
 collect ``@entrypoint`` wire names, then inspects the ``app/generated/`` tree
-from the repo root.  Per-file scanning has no meaning here, so ``scan_path``
-is a no-op and ``scan_all`` does all the work.
+from the repo root.  Per-file scanning has no meaning here, so the module
+defines only ``scan_all``.
 
 Currently implemented:
 
@@ -31,12 +31,7 @@ from ._contract_entrypoints import scan_contract
 
 SERIES = "P"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: P016 requires cross-file + cross-artifact analysis; use :func:`scan_all`."""
-    return []
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

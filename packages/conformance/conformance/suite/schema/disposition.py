@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from conformance.suite.schema.sarif import Result
+
 # ---------------------------------------------------------------------------
 # Supporting enums (also used by extensions.py and catalog.py)
 # ---------------------------------------------------------------------------
@@ -161,7 +163,6 @@ class Disposition(str, Enum):
     signal (BLDX-1393): when it drops below threshold and stops growing, the
     rule can be promoted to ``BLOCK``.
     """
-
     SUPPRESSED = "suppressed"
     """Failed, but intentionally suppressed by an inline annotation in the
     monitored source code.  Reported as its own category — the fleet-wide
@@ -170,7 +171,7 @@ class Disposition(str, Enum):
     """
 
 
-def derive_disposition(result: Result) -> Disposition | None:  # type: ignore[name-defined]  # noqa: F821
+def derive_disposition(result: Result) -> Disposition | None:  # noqa: F821
     """Derive the :class:`Disposition` for a single SARIF result.
 
     Parameters
@@ -192,9 +193,6 @@ def derive_disposition(result: Result) -> Disposition | None:  # type: ignore[na
     inline justified suppressions are always counted in their own category
     regardless of the rule's enforcement tier.
     """
-    # Import here to avoid circular imports at module load time.
-    from conformance.suite.schema.sarif import Result
-
     if not isinstance(result, Result):
         raise TypeError(f"Expected Result, got {type(result)!r}")
 

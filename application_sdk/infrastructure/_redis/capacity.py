@@ -161,7 +161,7 @@ class RedisCapacityPool:
         holders_key = self._holders_key(pool_name)
         ttl_prefix = self._ttl_prefix(pool_name)
 
-        result = await self._redis.eval(  # type: ignore[misc]  # redis async stubs return union
+        result = await self._redis.eval(
             _ACQUIRE_SCRIPT,
             1,
             holders_key,
@@ -200,7 +200,7 @@ class RedisCapacityPool:
         holders_key = self._holders_key(pool_name)
         ttl_key = self._ttl_key(pool_name, holder_id)
 
-        await self._redis.eval(  # type: ignore[misc]  # redis async stubs return union
+        await self._redis.eval(
             _RELEASE_SCRIPT,
             1,
             holders_key,
@@ -217,7 +217,7 @@ class RedisCapacityPool:
         holders_key = self._holders_key(pool_name)
         ttl_key = self._ttl_key(pool_name, holder_id)
 
-        result = await self._redis.eval(  # type: ignore[misc]  # redis async stubs return union
+        result = await self._redis.eval(
             _RENEW_SCRIPT,
             1,
             holders_key,

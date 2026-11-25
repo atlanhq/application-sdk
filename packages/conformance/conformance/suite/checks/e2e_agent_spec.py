@@ -56,8 +56,10 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    discover_tree,
     make_cli_main,
     make_finding,
+    make_scan_path,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -73,10 +75,7 @@ __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
 def discover(root: Path) -> list[Path]:
     """Walk ``tests/`` for all Python source files."""
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return discover_tree(root, "tests")
 
 
 def _is_agentspec_call(node: ast.expr) -> bool:
@@ -185,17 +184,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single test file for T017 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(

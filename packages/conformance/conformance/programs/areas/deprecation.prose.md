@@ -20,10 +20,10 @@ remediability.
 The fingerprint-set of all unsuppressed FAILING B-series results in the current
 working tree, as reported by `suite.runner --series B`.
 
-B-series rules are WARN-tier, so in **default** mode this facet is typically
-empty (warnings do not fail the gate).  In **strict** mode the fingerprint-set
-includes unsuppressed WARNING results, which is where B-series remediation
-actually runs.
+Most B-series rules are WARN-tier, so in **default** mode this facet holds
+only the BLOCK-tier ones: B002 and B004 on the SDK (FND-4300), and B005/B006
+on contracts.  In **strict** mode the fingerprint-set includes unsuppressed
+WARNING results, which is where the rest of B-series remediation runs.
 
 The active scope decides which rules can appear: on a consumer app only
 B001/B007/B008/B009 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
@@ -338,6 +338,10 @@ human audit):
   - missing removal version → add `will be removed in v<N>`, choosing the next
     major unless the surrounding context names a version, and **state that
     assumption** in the edit.
+  Where the notice is a hand-written `warnings.warn(..., DeprecationWarning)`,
+  prefer rewriting it as `_deprecation.warn_deprecated(name, replacement,
+  remove_in)` (`application_sdk._deprecation`): the helper's fixed format
+  always names both, and `remove_in` must be a full `X.Y.Z`.
   `classification` is `"judgment"` (the wording and target need a human-level
   call); the recheck gate confirms the notice now parses as well-formed.
 

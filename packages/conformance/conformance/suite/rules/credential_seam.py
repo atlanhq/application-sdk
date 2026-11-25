@@ -83,7 +83,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -103,15 +102,13 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LocalCredentialRouting",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="credential-seam",
         autofixable=False,
         orthogonal_gate="tests",
         since="0.40.0",
         rule_interactions=(
             "P037 (SdrAgentJsonNotConsumed) predates this rule and names "
-            "`CredentialRef.resolve` as its agent-aware fix, citing a hand-rolled "
-            "`build_credential_ref` as its reference. On an SDK below 3.40.0 that is "
+            "`CredentialRef.resolve` as its agent-aware fix. On an SDK below 3.40.0 that is "
             "still the right fix and this rule is silent; from 3.40.0 this rule "
             "flags that call and P037 also accepts `route_credentials` as "
             "agent-aware, so migrating onto the seam clears both rather than trading "
@@ -200,7 +197,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "an object that is not the entry-point input — records that with a\n"
             "justified ``# conformance: ignore[P053] <reason>``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p053",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

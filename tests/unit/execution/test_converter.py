@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
+
+import pytest
 from temporalio.client import Client as _TemporalClientImpl
 from temporalio.client import WorkflowFailureError as _TemporalWorkflowFailureErrorImpl
-from temporalio.converter import DataConverter
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.converter import BinaryNullPayloadConverter, DataConverter
 from temporalio.exceptions import ActivityError as _TemporalActivityErrorImpl
 from temporalio.exceptions import ApplicationError as _TemporalApplicationErrorImpl
 from temporalio.exceptions import CancelledError as _TemporalCancelledErrorImpl
@@ -36,6 +40,16 @@ class _ConverterInput(Input):
 class _ConverterOutput(Output):
     result: str = ""
     success: bool = True
+
+
+def _assert_round_trips(converter: DataConverter) -> None:
+    """A dict and a contract survive to_payloads/from_payloads unchanged."""
+    contract = _ConverterInput(name="x", count=3)
+    payloads = converter.payload_converter.to_payloads([{"k": 1}, contract])
+    decoded = converter.payload_converter.from_payloads(
+        payloads, [dict, _ConverterInput]
+    )
+    assert decoded == [{"k": 1}, contract]
 
 
 class TestPublicSurface:
@@ -149,13 +163,26 @@ class TestCreateDataConverter:
         converter = create_data_converter()
         assert isinstance(converter, DataConverter)
 
-    def test_returns_data_converter_without_additional_converters(self) -> None:
-        converter = create_data_converter(additional_converters=None)
-        assert isinstance(converter, DataConverter)
+    def test_returns_pydantic_converter_without_warning(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            converter = create_data_converter(additional_converters=None)
+        assert converter is pydantic_data_converter
 
-    def test_returns_data_converter_with_empty_additional_converters(self) -> None:
-        converter = create_data_converter(additional_converters=[])
-        assert isinstance(converter, DataConverter)
+    def test_additional_converters_warn_and_still_round_trip(self) -> None:
+        # Before FND-4091 this raised AttributeError on temporalio >= 1.35
+        # (and "no known converter" on older releases) for any non-empty list.
+        with pytest.warns(DeprecationWarning, match=r"additional_converters.*v4\.0\.0"):
+            converter = create_data_converter(
+                additional_converters=[BinaryNullPayloadConverter()]
+            )
+        assert converter is pydantic_data_converter
+        _assert_round_trips(converter)
+
+    def test_empty_additional_converters_still_warn(self) -> None:
+        with pytest.warns(DeprecationWarning, match="additional_converters"):
+            converter = create_data_converter(additional_converters=[])
+        assert converter is pydantic_data_converter
 
     def test_two_calls_return_independent_instances(self) -> None:
         converter1 = create_data_converter()
@@ -170,42 +197,57 @@ class TestCreateDataConverterForApp:
 
     def test_returns_data_converter_for_app_without_custom_converters(self) -> None:
         from application_sdk.app.base import App
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
 
-        AppRegistry.reset()
-        TaskRegistry.reset()
+        class _SampleApp(App):
+            async def run(self, input: _ConverterInput) -> _ConverterOutput:
+                return _ConverterOutput()
 
-        try:
-
-            class _SampleApp(App):
-                async def run(self, input: _ConverterInput) -> _ConverterOutput:
-                    return _ConverterOutput()
-
-            converter = create_data_converter_for_app(_SampleApp)
-            assert isinstance(converter, DataConverter)
-        finally:
-            AppRegistry.reset()
-            TaskRegistry.reset()
+        converter = create_data_converter_for_app(_SampleApp)
+        assert isinstance(converter, DataConverter)
 
     def test_returns_data_converter_for_app_with_no_payload_converters_attr(
         self,
     ) -> None:
         from application_sdk.app.base import App
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
 
-        AppRegistry.reset()
-        TaskRegistry.reset()
+        class _PlainApp(App):
+            async def run(self, input: _ConverterInput) -> _ConverterOutput:
+                return _ConverterOutput()
 
-        try:
-
-            class _PlainApp(App):
-                async def run(self, input: _ConverterInput) -> _ConverterOutput:
-                    return _ConverterOutput()
-
-            # No payload_converters defined
-            assert not hasattr(_PlainApp, "payload_converters")
+        # No payload_converters defined
+        assert not hasattr(_PlainApp, "payload_converters")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             converter = create_data_converter_for_app(_PlainApp)
-            assert isinstance(converter, DataConverter)
-        finally:
-            AppRegistry.reset()
-            TaskRegistry.reset()
+        assert converter is pydantic_data_converter
+
+    def test_app_payload_converters_declared_none_still_warns(self) -> None:
+        from application_sdk.app.base import App
+
+        class _NoneConverterApp(App):
+            payload_converters = None
+
+            async def run(self, input: _ConverterInput) -> _ConverterOutput:
+                return _ConverterOutput()
+
+        with pytest.warns(DeprecationWarning, match=r"App\.payload_converters"):
+            converter = create_data_converter_for_app(_NoneConverterApp)
+        assert converter is pydantic_data_converter
+
+    def test_app_payload_converters_warn_and_still_round_trip(self) -> None:
+        from application_sdk.app.base import App
+
+        class _ConverterApp(App):
+            payload_converters = [BinaryNullPayloadConverter]
+
+            async def run(self, input: _ConverterInput) -> _ConverterOutput:
+                return _ConverterOutput()
+
+        # This is the production path (main.py builds the worker's converter
+        # here); before FND-4091 it raised AttributeError at worker startup.
+        with pytest.warns(
+            DeprecationWarning, match=r"App\.payload_converters.*v4\.0\.0"
+        ):
+            converter = create_data_converter_for_app(_ConverterApp)
+        assert converter is pydantic_data_converter
+        _assert_round_trips(converter)

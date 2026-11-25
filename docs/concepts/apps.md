@@ -31,6 +31,25 @@ class MyConnector(App):
 - Calling `await self.fetch_data(input)` inside `run()` routes through Temporal activities automatically -- no `execute_activity_method` needed.
 - `App.__init_subclass__` applies Temporal decorators under the hood. You never import from `temporalio`.
 
+### Configuration settings are checked at class definition
+
+The configuration settings in the table below are checked when the class is defined, and a bad value warns (a `DeprecationWarning` plus a logged WARNING naming the class, attribute and value). The readers still coerce it as before, so a run is never aborted by a typo, but the typo is no longer silent. In v4.0.0 each warning becomes an `EntryPointDeclarationError`.
+
+| Setting | Accepted |
+|---|---|
+| `preflight_gate_mode`, `artifact_validation_mode` | `"hard"` or `"soft"` (or `PreflightGateMode`). Anything else resolves to soft. |
+| `preflight_gate_timeout_seconds` | `int`, 5-300 |
+| `preflight_gate_max_attempts` | `int`, 1-3 |
+| `preflight_warmup_ceiling_seconds` | `int`, at least 30 |
+| `preflight_warmup_probe_timeout_seconds` | `int`, 1 up to the ceiling |
+| `preflight_verify_storage` | `bool` (`"no"` is truthy) |
+| `name` | `str` of letters, digits, `.`, `_`, `-` |
+| `version`, `description` | `str` |
+| `tags` | `dict[str, str]` or `None` |
+| `passthrough_modules` | a set of module names, never a bare `str` (`"pandas"` would read as five letters) |
+
+Other settings, such as `asset_validation_rules` and `preflight_warmup_mode`, are not checked. Only a class's own declarations are checked, so an inherited bad value is reported once, at the class that wrote it. A concrete `SqlApp` subclass also warns when `sql_client_class` is unset or not a `BaseSQLClient` subclass, unless it overrides client construction.
+
 ### Multiple Entry Points
 
 If your connector needs more than one independently-triggerable workflow (e.g. metadata extraction *and* query mining), decorate each entry method with `@entrypoint` instead of overriding `run()`:
@@ -265,6 +284,45 @@ class MyConnector(App):
         await super().on_complete()  # preserves built-in file/storage cleanup
 ```
 
+Whether the built-in cleanup runs is `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`, read once when the worker starts and pinned on each run at its first workflow task. A run keeps the value it started with wherever it continues or replays, so changing the variable on a rollout affects new runs only. The event interceptor's `APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR` is pinned the same way. Outside a workflow (a direct `on_complete()` call in a unit test), the variable is read at the call.
+
+### Run Scratch Directory (`self.run_scratch_dir`)
+
+`self.run_scratch_dir` is the run's local scratch directory, e.g.
+`./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456`
+(`{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`). Use it
+for files a run writes locally, instead of `tempfile.gettempdir()`:
+
+- It is the **same string in `run()` and in every `@task` of the run**, so a path
+  the workflow builds and passes to a task is the one the task writes to.
+- `cleanup_files` **removes it** when the run ends (the default `on_complete`), so
+  nothing is left on the worker's disk. The system temp dir is never cleaned.
+- It is **safe in workflow code**: it is computed from the run's identity with
+  string-only `os.path` calls. `tempfile` is refused by the workflow sandbox.
+- It sits under `TEMPORARY_PATH`, so a file under it maps to an object-store key
+  like every other `./local/tmp/...` path.
+
+```python
+async def run(self, input: MyInput) -> MyOutput:
+    output_dir = os.path.join(self.run_scratch_dir, "extract")  # string only
+    return await self.extract(ExtractInput(output_dir=output_dir))
+
+@task(timeout_seconds=600)
+async def extract(self, input: ExtractInput) -> ExtractOutput:
+    os.makedirs(input.output_dir, exist_ok=True)  # create it in the task
+    # A fresh directory per attempt, still removed with the run:
+    attempt_dir = tempfile.mkdtemp(prefix="extract-", dir=input.output_dir)
+    ...
+```
+
+The directory is not created for you. Create it in a task; never in `run()`,
+because workflow code must not touch the filesystem. Reading the property outside
+`run()` or a task raises `AppContextError`. A workflow ID that would place the
+directory outside `TEMPORARY_PATH` (`..` segments) raises `RunTempDirEscapeError`.
+
+Conformance rule P067 flags `tempfile.gettempdir()`, and `tempfile.mkdtemp` /
+`mkstemp` with no `dir=`, in app code.
+
 ### Built-in Cleanup Tasks
 
 Two cleanup tasks and two transfer tasks are available on every `App`:
@@ -321,7 +379,7 @@ Both transfer tasks validate the bytes they move. An upload confirms the local f
 **Writer output is staged, then published at `close()`.** A `Writer` (parquet, JSON) never writes into its output directory directly — it writes into a private staging tree (a sibling directory, not inside the output) and publishes into the output directory in one step when `close()` returns. Files produced by that writer are therefore absent from the output directory until `close()` completes; a writer that is cancelled or fails before `close()` publishes nothing. This is what stops a cancelled attempt's orphaned writer from colliding with, or being adopted into, a retry's output. The published filenames and object-store keys are unchanged — only the timing of when files appear in the output directory moves to `close()`. Note that publishing only *adds*: content already sitting in a reused output directory is left in place, and a deferred writer's `FileReference` walks the whole directory, so it adopts that content too.
 
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
-- `cleanup_storage()` — removes object store artifacts by tier:
+- `cleanup_storage()` — removes object store artifacts by tier. Its tracked refs are the ones the worker it runs on tracked, plus `StorageCleanupInput.file_refs`: the stored refs the workflow read off every task's input and result, which the default `on_complete()` fills in. A ref a task on another worker (another replica, a `pool=` queue) wrote is therefore cleaned up too, and a durable ref from another worker still protects its key. The workflow passes at most 2000 refs, durable ones first; in a run with more, a `TRANSIENT` ref left out is deleted only when the cleanup runs on the worker that tracked it.
   - `StorageTier.TRANSIENT` refs are always removed, except a key that a `RETAINED` or `PERSISTENT` ref in the same run also points at (the same file key, its `.sha256` sidecar, or a key under a durable directory ref). The durable tier wins: that key is counted in `skipped_count` and a WARNING names the clash.
   - `StorageTier.PERSISTENT` refs are always left untouched.
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
@@ -964,6 +1022,71 @@ This is not asset validation: [Asset-Validation Outcome](#asset-validation-outco
 the app *did* emit that look wrong; `skip_record` records what the app *chose not to* emit. See
 [ADR-0022](../adr/0022-skipped-record-capture.md).
 
+### Recording Per-Item Fetch Failures (`record_fetch_failure`)
+
+An app that fetches items in parallel — one request per report, page or dashboard — records each
+*expected* per-item failure where it happens, inside the per-item coroutine:
+
+```python
+import asyncio
+
+from application_sdk.outputs import FetchFailureReason, record_fetch_failure
+
+async def fetch_report(report_id: str) -> Report | None:
+    try:
+        return await client.get_report(report_id)
+    except ReportNotFound as exc:          # typed and expected: record it here
+        record_fetch_failure(
+            FetchFailureReason.NOT_FOUND,
+            entity_type="Report",
+            record_id=report_id,
+            endpoint="/reports/{id}",
+            http_status=404,
+            detail=str(exc),
+        )
+        return None
+
+@task
+async def extract(self, input: ExtractInput) -> ExtractOutput:
+    async with asyncio.TaskGroup() as tg:  # anything unexpected fails the task
+        tasks = [tg.create_task(fetch_report(r)) for r in report_ids]
+    reports = [t.result() for t in tasks if t.result() is not None]
+    if report_ids and not reports:          # every item failed: an outage, not a partial run
+        raise SourceUnavailableError(...)
+    ...
+```
+
+Three rules make the pattern work:
+
+- **Record at the item, not after the batch.** `gather(..., return_exceptions=True)` followed by an
+  `isinstance(result, Exception)` loop has lost which item failed. Catch inside the per-item
+  coroutine, where the id is in hand.
+- **Catch only typed, expected failures.** Anything else propagates — use `TaskGroup`, or `gather`
+  *without* `return_exceptions` — so the task fails and Temporal retries it.
+- **Raise past a threshold.** The SDK applies none, because only the app knows its denominator. A
+  run where every item failed is an outage and must fail, not end `PARTIAL_SUCCESS`.
+
+`reason` is a closed `FetchFailureReason`: `SOURCE_UNAVAILABLE`, `NOT_FOUND`, `FORBIDDEN`,
+`RATE_LIMITED`. Put specifics in `detail`, and give `endpoint` as a template (`/reports/{id}`), not
+a URL with ids or query strings; both reach the file only.
+
+`record_fetch_failure` is a plain function, not a coroutine. It is safe from the event loop, from
+`gather`/`TaskGroup` child tasks, and from a sync function run through `run_in_thread`, which
+copies the activity's context into the thread. (A thread started some other way does not see the
+activity's sink.) A line holds ids only, so the activity's lines stay in memory until it returns.
+
+When the task returns, the SDK adds `fetch-failures` and `fetch-failures-<reason>` to its metrics
+and uploads its lines. A task that raises records nothing: its retry records its own. After
+`run()` returns, the framework task `merge_fetch_failures` merges every task's lines into
+`{run prefix}/fetch-failures.ndjson`, adds the run artifact `fetch-failures`, and a `SUCCESS`
+result is marked `PARTIAL_SUCCESS`. A run that records nothing is unchanged. Bounding and
+fail-open storage are as for `skip_record`: `MAX_SKIPPED_RECORDS` caps the lines and warnings, and
+`fetch-failures-truncated` / `fetch-failures-unpersisted` account for every failure not in the file.
+
+Use `skip_record` for a record the app *received* and chose not to emit; use
+`record_fetch_failure` when there is no record because the fetch failed. See
+[ADR-0022](../adr/0022-skipped-record-capture.md).
+
 ### Asset-Validation Outcome
 
 `App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
@@ -980,8 +1103,11 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - Five scalar counts land as their own `LogAttributes`: `assets_total`, `assets_passed`,
   `assets_invalid`, `assets_orphaned`, `assets_undeserializable`.
 - Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
-  fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
-  logged as a WARNING body, but only for flagged runs.
+  fixed number of rows per axis so it can't grow unbounded); the human-readable report, capped to the
+  same number of rows per axis, is also logged as a WARNING body, but only for flagged runs.
+- The scan runs in an isolated child process, and the event and the capped report are built there:
+  only those come back to the worker, never the full list of failures. A batch where every record
+  fails costs the worker the same memory as a clean one.
 - Complete counts ride in `asset_validation_summary`: one row per `(kind, type_name, detail)` over
   **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_qualified_name`),
   so fleet-wide "which types fail which checks" queries are not limited by the matrix sample.
@@ -1027,9 +1153,9 @@ class MyApp(App):
 
 `App.asset_validation_rules` applies to both `upload()` and `upload_refs()`. The check stays
 warn-only. Rule messages use pyatlan's `"<field> is required for creation"` wording, so they land in
-`asset_validation_summary` under the same `required_for_creation:<field>` keys. Integration tests
-declare the same set on `BaseIntegrationTest.asset_validation_rules`, with a per-`Scenario`
-override. `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
+`asset_validation_summary` under the same `required_for_creation:<field>` keys. Suites still on the
+deprecated HTTP scenario framework declare the same set on `BaseIntegrationTest.asset_validation_rules`,
+with a per-`Scenario` override; both leave in v4.0.0 (FND-4659, FND-4911). `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
 as `creation_rules=`. The default is an empty set, which keeps the SDK aligned with pyatlan.
 
 ### Declaring artifact schemas
@@ -1212,17 +1338,28 @@ overrides the attribute at deploy time, and only the literal `hard` enforces. Se
 See [FileReference & App.upload()](file-reference.md) for what a `FileReference` is and how it moves,
 and the contract toolkit's `examples/artifact-schemas/` for a full worked contract.
 
-## Passthrough Modules
+## Workflow Sandbox and Passthrough Modules
 
-If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:
+Workflow code (`run()`, `@entrypoint` methods, `@signal` / `@query` / `@update` handlers, and the helpers in your app's package that they call) runs inside Temporal's workflow sandbox. For every workflow run the worker re-imports your app's own package in the sandbox, so Temporal checks that code for non-determinism. A call your code makes directly to a restricted standard-library function fails the **workflow task**: a wall-clock read (`datetime.now()`), a random UUID (`uuid.uuid4()`), `os.environ` / `os.getenv`, `tempfile`, `open()`, a filesystem probe such as `os.path.exists()`. Temporal retries a failed workflow task, so the run waits until a fixed build is deployed, then continues.
+
+The check covers your package's code, not the libraries it calls. Third-party libraries are passed through (see below) and run as ordinary host code, so a call into one is never checked: `httpx.get()` from `run()` makes the request instead of failing. Do not call a library from workflow code unless the call is deterministic; put network, file and database access in a `@task`.
+
+- Use the SDK's deterministic seam in workflow code: `self.now()`, `self.uuid()`, `from application_sdk.app import sleep`.
+- Read environment variables at module level. Import-time reads are allowed in the sandbox, and the value is fixed for the life of the process.
+- Do file and network I/O in a `@task`. Activities run outside the sandbox.
+- The string-only `os.path` functions (`join`, `dirname`, `basename`, `split`, `splitext`, `normpath`, `isabs`, ...) are allowed on every Python version. Functions that read the filesystem or working directory (`exists`, `isdir`, `getmtime`, `abspath`, `realpath`, ...) are not.
+
+Third-party libraries your app imports are passed through automatically: the worker passes through every library already imported when it starts, so they are not re-imported for each run. The SDK's own packages are passed through too, except `application_sdk.templates`, whose `run()` bodies are workflow code and are checked like yours.
+
+Declare `passthrough_modules` only for a library that workflow code imports lazily (inside a function) and that cannot be re-imported in the sandbox:
 
 ```python
 class MyConnector(App):
-    passthrough_modules = {"my_connector", "third_party_lib"}
+    passthrough_modules = {"third_party_lib"}
     ...
 ```
 
-The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`.
+The type is `ClassVar[set[str] | None]` — use a set literal, not a list. In v2, passthrough modules were passed to the `Worker` constructor. In v3, they live on the `App` subclass as a `ClassVar`. Do **not** pass `passthrough_modules` as a class-kwarg — it is not accepted by `App.__init_subclass__`. Do **not** list your app's own package: a passed-through module is never checked, so that turns the sandbox off for your workflow code.
 
 ## Customizing SQL Queries
 
@@ -1305,7 +1442,9 @@ calls = controller.get_heartbeat_calls()
 
 ## App State
 
-`app_state` is in-memory state scoped to the current workflow execution. Use it to pass values between tasks without encoding them in task contracts.
+`app_state` is in-memory state scoped to the current run (`workflow_id`, `run_id`) **on the current worker**. Use it to cache values between tasks on the same worker without encoding them in task contracts: a client, a lookup table.
+
+It is process-local. A task that Temporal schedules on another worker (another replica, a `pool=` queue, a restarted pod) sees an empty slot, so never rely on it for data a later task *needs*; pass that in the task contracts. Once the run has closed, every worker that holds a slot for it releases the slot within about a minute, and closes each value that has `aclose()` or `close()`. A cached client is therefore closed for you; do not store an object another run still uses. Whatever is left is released when the worker shuts down.
 
 ```python
 class MyConnector(App):
@@ -1367,21 +1506,28 @@ class MyConnector(App):
 **Queue resolution** (evaluated at workflow-run time):
 
 1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override. Hyphens in the pool name are normalised to underscores: `pool="cold-tier"` looks up `ATLAN_POOL_COLD_TIER_QUEUE`.
-2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent.
+2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent. Unless `ATLAN_TASK_QUEUE` is set, the base queue is the SDK's derived one: `atlan-{app}-{deployment}` in a deployed app, or the bare app name when `ATLAN_DEPLOYMENT_NAME` is unset (so `dbt-heavy` locally). See [Task-queue naming](../configuration.md#task-queue-naming). A pool queue inherits a pinned value too. Do not pin `ATLAN_TASK_QUEUE` in a deploy or pool env: the on-demand (`-od`) worker breaks (K031).
 3. If neither is set, a warning is emitted at startup and the activity falls back to the default queue.
 
-**Pkl contract:** every pool used in `@task` must be declared in the app contract so the contract-toolkit can generate the correct deployment manifest:
+**Pkl contract:** every pool used in `@task` must be declared in `deploy.pools` of the app contract, so the contract-toolkit deploys a worker pool that polls its queue. The **first** key is the app's main worker: it polls the base queue and runs every task without `pool=`. Only keys after the first get a dedicated worker pool, so a `pool=` must name one of those. The one exception is a pool you route with a non-empty `ATLAN_POOL_<POOL>_QUEUE` override (step 1 above) in the main worker's env (the first pool's `env`; the workflow runs there, so a dedicated pool's env never reaches it) to a queue a worker you deploy yourself polls; that pool needs no `deploy.pools` key:
 
 ```pkl
-pools {
-  ["heavy"] = new Pool {
-    keda { minReplicaCount = 2 }
-  }
-  ["cold-tier"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 600 }
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {   // main worker: tasks without pool=
+      keda { minReplicaCount = 1 }
+    }
+    ["heavy"] = new Pool {     // @task(pool="heavy")
+      keda { minReplicaCount = 2 }
+    }
+    ["cold-tier"] = new Pool { // @task(pool="cold-tier")
+      keda { minReplicaCount = 0; cooldownPeriod = 600 }
+    }
   }
 }
 ```
+
+Conformance checks the two sides agree. K032 (blocking) fails a `pool=` that names no dedicated pool (a typo, a removed pool, or the first key), because nothing polls its queue and the task's activities hang until they time out. K033 (warning) flags a dedicated pool that no `@task(pool=)` names.
 
 See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design including rollout-drain requirements.
 
@@ -1405,6 +1551,8 @@ class MyConnector(App):
     @task(retry_policy=RetryPolicy(max_attempts=10, backoff_coefficient=1.5))
     async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
 ```
+
+A `retry_policy` replaces the `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds` arguments: the task is dispatched with the policy and those three are never read. Put the values on the policy instead. Passing any of them together with `retry_policy` warns at decoration today and raises `TaskDeclarationError` from v4.0.0.
 
 `RetryPolicy` is a frozen dataclass with fluent builder methods:
 

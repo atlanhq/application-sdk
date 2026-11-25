@@ -7,8 +7,7 @@
 ///
 /// `AgentSelector` constrains `includeInManifest` to `true` (a `Boolean(this)`
 /// type), so setting it to `false` raises a constraint violation (proven by
-/// the negative test in `scripts/check-invariants.sh` §6) — only two guard
-/// branches remain:
+/// the last fact below) — only two guard branches remain:
 ///   1. app does NOT model `agent-json`       → guard emits the slot
 ///   2. app models `agent-json` (via AgentSelector) → loop emits it exactly once
 amends "pkl:test"
@@ -16,6 +15,7 @@ amends "pkl:test"
 import "pkl:json"
 import "fixtures/default_pipeline.pkl" as noAgentJsonApp
 import "../examples/agent-e2e/app.pkl" as modeledAgentJsonApp
+import "../src/Widgets.pkl"
 
 local function extractArgs(app) =
   let (text = app.output.files["app/generated/manifest.json"].text)
@@ -46,5 +46,12 @@ facts {
   // manifest — guard + loop must not both emit it.
   ["modeled agent-json emits the agent_json slot exactly once"] {
     modeledManifestText.split("\"agent_json\"").length == 2
+  }
+
+  // `includeInManifest = false` must be refused at eval time, not silently
+  // ignored: a missing agent_json slot breaks SDR credential routing.
+  ["AgentSelector.includeInManifest = false raises a type constraint violation"] {
+    module.catch(() -> new Widgets.AgentSelector { includeInManifest = false }.includeInManifest)
+      .contains("Type constraint")
   }
 }

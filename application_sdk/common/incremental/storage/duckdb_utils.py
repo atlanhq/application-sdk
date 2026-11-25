@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 try:
     import duckdb
 except ImportError:  # conformance: ignore[E008,E009] optional dep duckdb not installed; sentinel fallback
-    duckdb = None  # type: ignore[assignment]
+    duckdb = None
 
 
 class DuckDBResult(Protocol):
@@ -147,7 +147,7 @@ def default_duckdb_memory_limit(open_connections: int = 0) -> str:
 
 
 def _release_manager_slot() -> None:
-    global _open_managers  # noqa: PLW0603
+    global _open_managers
     with _open_managers_lock:
         _open_managers = max(0, _open_managers - 1)
 
@@ -180,7 +180,7 @@ class DuckDBConnectionManager:
         if duckdb is None:
             raise ImportError("duckdb is required for DuckDBConnectionManager")
 
-        global _open_managers  # noqa: PLW0603
+        global _open_managers
         with _open_managers_lock:
             if memory_limit is None:
                 memory_limit = default_duckdb_memory_limit(_open_managers)

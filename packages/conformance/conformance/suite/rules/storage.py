@@ -41,7 +41,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -58,7 +57,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="FrameworkTransferInsideTask",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -120,7 +118,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P008]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-storage",
@@ -136,7 +133,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManualObjectStoreConstruction",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -167,7 +163,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P009]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-storage",
@@ -185,7 +180,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManualFileReferenceConstruction",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -216,7 +210,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P010]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p010",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-storage",
@@ -232,7 +225,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="RawBytesInContract",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -260,7 +252,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P011]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p011",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-storage",
@@ -280,7 +271,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="FilePathStringInContract",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -311,7 +301,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "occasionally be flagged.  Suppress a genuine exception with an inline\n"
             "``# conformance: ignore[P012] <reason>``, which stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p012",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-storage",
@@ -330,7 +319,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DirectStoragePrefixTransfer",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="storage-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -409,7 +397,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "legitimate — ``persist_file_refs`` performs that transfer automatically —\n"
             "so the two shapes cannot share a tier.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p044",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-storage",

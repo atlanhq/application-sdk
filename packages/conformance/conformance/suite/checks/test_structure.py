@@ -65,6 +65,7 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     is_test_function,
@@ -91,7 +92,7 @@ _REQUIRED_TIERS: tuple[tuple[str, str], ...] = (
     (RULE_T012, "e2e"),
 )
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 # ---------------------------------------------------------------------------
@@ -106,15 +107,7 @@ def discover(root: Path) -> list[Path]:
     at all still triggers T010 (see :func:`scan_all`), which reads
     ``tests/`` presence directly rather than depending on this list.
     """
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    paths: list[Path] = []
-    for path in base.rglob("*.py"):
-        if "__pycache__" in path.parts:
-            continue
-        paths.append(path)
-    return sorted(paths)
+    return discover_tree(root, "tests")
 
 
 # ---------------------------------------------------------------------------
@@ -250,11 +243,6 @@ def _tier_missing_finding(rule_id: str, tier: str, root: Path) -> Finding:
         message=_tier_missing_message(rule_id, tier),
         suppressions=suppressions,
     )
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T010–T013 require cross-artifact analysis; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

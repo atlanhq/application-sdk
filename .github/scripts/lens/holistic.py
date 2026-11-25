@@ -31,6 +31,7 @@ from typing import Any
 from . import context, trace
 from .diff import FileDiff
 from .llm import BudgetExhausted, Client, LLMError, assistant_turn, estimate_tokens
+from .select import DEFAULT_EXCLUDE, model_visible
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 
 SYSTEM = """\
@@ -132,7 +133,7 @@ def build_input(
     syms: list[str] = []
     for f in files:
         seen: set[str] = set()
-        for line in sorted(f.added_lines):
+        for line in sorted(f.changed_lines):  # a deletion counts too
             s = ws.index.enclosing(f.path, line)
             if s and s.qualname not in seen:
                 seen.add(s.qualname)
@@ -196,14 +197,23 @@ def check(
     client: Client,
     ws: Workspace,
     files: list[FileDiff],
-    pr_meta: dict,
+    pr_meta: dict[str, Any],
     *,
-    max_input_tokens: int = 8000,
-    max_lookups: int = 4,
+    # Raised for review depth (FND-5316): an 8,000-token excerpt showed about 400
+    # changed lines of a 4,000-line pull request, and all 4 lookups were spent on
+    # a 42-file one. At 32,000 input tokens and 8 lookups a check costs about
+    # $0.02, well inside its 15% share of the round.
+    max_input_tokens: int = 32000,
+    max_lookups: int = 8,
     max_tokens: int = 16000,  # reasoning tokens count against this
     max_concerns: int = 2,
+    exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE,
 ) -> ApproachCheck:
     out = ApproachCheck()
+    # A later round hands over the whole PR's diff, which selection never
+    # filtered: a change that may hold secrets, or an excluded file, is dropped
+    # here, before anything of it is rendered into the prompt.
+    files = model_visible(files, exclude)
     if not files:
         return out
     messages: list[dict[str, Any]] = [
@@ -212,7 +222,9 @@ def check(
     ]
     try:
         for turn in range(max_lookups + 1):
-            last = turn == max_lookups
+            # The final turn: the turns are used up, or the lookups are (one
+            # response can ask for several, so turns alone do not bound them).
+            last = turn == max_lookups or out.lookups >= max_lookups
             if last:
                 messages.append(
                     {
@@ -239,7 +251,7 @@ def check(
                     _parse_verdict(out, args, max_concerns)
                     out.ran = True
                     return out
-                if name in _LOOKUPS and not last:
+                if name in _LOOKUPS and not last and out.lookups < max_lookups:
                     out.lookups += 1
                     reply = run_tool(ws, name, args)
                     trace.line(
@@ -261,6 +273,8 @@ def check(
                         "content": "Call a lookup tool or approach_verdict.",
                     }
                 )
+            if last:
+                break
     except (BudgetExhausted, LLMError) as e:
         out.error = str(e)
     return out

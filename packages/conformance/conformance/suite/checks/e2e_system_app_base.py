@@ -78,6 +78,7 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -105,7 +106,7 @@ _ATLAN_YAML_TYPE_RE = re.compile(r"^type:[ \t]*(.*)$", re.MULTILINE)
 
 _DOCS_LINK = "docs/standards/connector-ci-e2e.md#system-apps"
 
-__all__ = ["RULE_T026", "SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["RULE_T026", "SERIES", "discover", "main", "scan_all"]
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +120,7 @@ def discover(root: Path) -> list[Path]:
     Only classes under ``tests/e2e/`` are graded, but a shared harness base can
     live anywhere under ``tests/``, so the whole tree is indexed for resolution.
     """
-    base = root / "tests"
-    if not base.is_dir():
-        return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return discover_tree(root, "tests")
 
 
 # ---------------------------------------------------------------------------
@@ -350,11 +348,6 @@ def _connector_message(class_name: str, declared: str, bases: str) -> str:
 # ---------------------------------------------------------------------------
 # Scan
 # ---------------------------------------------------------------------------
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T026 resolves inheritance across files; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

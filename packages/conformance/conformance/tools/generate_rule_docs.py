@@ -153,7 +153,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/transform_templates.py, "
             "conformance/suite/rules/portability.py, "
             "conformance/suite/rules/atomic_publish.py, "
-            "conformance/suite/rules/retry_ladder.py"
+            "conformance/suite/rules/retry_ladder.py, "
+            "conformance/suite/rules/run_scratch.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -162,6 +163,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
+            "`suite.checks.httpx_proxy` (P066), "
             "`suite.checks.error_seam` (P043/P045, scans test files too), "
             "`suite.checks.determinism` (P020–P024, P031, P036, P054), "
             "`suite.checks.app_name_alignment` (P025), "
@@ -172,7 +174,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.retry_ladder` (P060), "
             "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
             "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), "
-            "`suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK) "
+            "`suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), "
+            "`suite.checks.run_scratch` (P067, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
@@ -571,6 +574,11 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
 # "# conformance: ignore[E012] intentional: stdlib interop".
 _SUPPRESSION_ID_RE = re.compile(r"^(.*?ignore\s*\[)[^\]]*\]")
 
+# Rules of a ``//``-directive series (K) whose findings anchor only on Python
+# source, where a ``//`` directive is a SyntaxError: their by-id example uses
+# ``#``.  A rule that anchors on both pkl and Python keeps the series form.
+_PYTHON_ANCHORED_RULES: frozenset[str] = frozenset({"K032"})
+
 
 def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
     """The series' suppression directive, re-pointed at exactly ``rule``.
@@ -589,7 +597,10 @@ def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
             f"series {meta.prefix} suppression_example has no ignore[...] id: "
             f"{meta.suppression_example!r}"
         )
-    return f"{m.group(1)}{rule.id}] intentional: <why this is deliberate here>"
+    prefix = m.group(1)
+    if rule.id in _PYTHON_ANCHORED_RULES:
+        prefix = re.sub(r"^//", "#", prefix)
+    return f"{prefix}{rule.id}] intentional: <why this is deliberate here>"
 
 
 def _render_rule_file(meta: SeriesMeta, rule: RuleDefinition) -> str:
@@ -811,7 +822,7 @@ def main(argv: list[str] | None = None) -> None:
         if stale:
             print(
                 f"\n{len(stale)} file(s) are stale, missing or orphaned. "
-                "Run `uv run poe generate-rule-docs` to update.",
+                "Run `uv run atlan-application-sdk-conformance gen-rule-docs` to update.",
                 file=sys.stderr,
             )
             sys.exit(1)

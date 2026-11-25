@@ -9,13 +9,10 @@ history is unrecoverable; leaving a dead row on a panel is cosmetic.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import sweep_dashboard_repos as sweep_module  # noqa: E402
-from sweep_dashboard_repos import (  # noqa: E402
+import sweep_dashboard_repos as sweep_module
+from sweep_dashboard_repos import (
     BUCKET,
     archived_state,
     list_slugs,

@@ -256,7 +256,7 @@ When reviewing code, check for:
       field="page_size", constraint="1 ≤ x ≤ 1000",
   )
   ```
-  The legacy `application_sdk/common/error_codes.py` `AAF-{COMP}-{ID:03d}` format is retained for backward compatibility only — do not use it in new code.
+  Two legacy code vocabularies are retained for backward compatibility only, and both are removed in v4.0: the `AAF-{COMP}-{ID:03d}` `ErrorCode` constants (`APP_ERROR`, `STORAGE_CONFIG`, …), which warn when read from `application_sdk.errors`, and the `Atlan-{Component}-{HTTP}-{ID}` codes of `application_sdk/common/error_codes.py`. Do not use either in new code, and never declare `DEFAULT_ERROR_CODE` on an error class (conformance E022): the `code` ClassVar is the one error vocabulary.
 
 - **`InvalidInputValueError` — compatibility subtype, not for new code**: `InvalidInputValueError(InvalidInputError, ValueError)` carries the same `INVALID_INPUT` / `USER` envelope as its parent but keeps builtin `ValueError` in the bases, and it owns the code `INVALID_INPUT_VALUE` so the shim stays countable apart from the bare leaf. Use it **only** to type a public entry point that already documented a bare `ValueError`, where switching to `InvalidInputError` alone would break every existing `except ValueError:` catch site. New APIs have no such contract to preserve — raise plain `InvalidInputError`.
 

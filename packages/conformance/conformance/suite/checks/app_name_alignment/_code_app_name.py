@@ -18,7 +18,7 @@ Name-resolution mirrors ``App.__init_subclass__`` in
 
 * Explicit ``name = "literal"`` or ``name: ClassVar[str] = "literal"`` in the
   class body → the literal.
-* No ``name`` attr → ``_pascal_to_kebab(class_name)``.
+* No ``name`` attr → ``pascal_to_kebab(class_name)``.
 * ``name = <non-literal>`` (variable, f-string, …) → *unverifiable*.
 
 Leaf detection
@@ -38,58 +38,16 @@ scanned class.
 from __future__ import annotations
 
 import ast
-import re
 from dataclasses import dataclass, field
 
-from conformance.suite.checks._ast_common import SDK_APP_BASE_NAMES
-
-_SDK_PREFIX = "application_sdk"
-
-
-# ---------------------------------------------------------------------------
-# Pascal → kebab  (copied verbatim from application_sdk/app/base.py)
-# ---------------------------------------------------------------------------
-
-
-def _pascal_to_kebab(name: str) -> str:
-    """Convert PascalCase to kebab-case.
-
-    Examples:
-        Greeter -> greeter
-        CsvPipeline -> csv-pipeline
-        MyAwesomeApp -> my-awesome-app
-        HTTPHandler -> http-handler
-        S3Loader -> s3-loader
-        MSSQLMetadataExtractor -> mssql-metadata-extractor
-    """
-    # Handle consecutive uppercase (like HTTP -> http-)
-    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", name)
-    # Handle lowercase followed by uppercase (like my -> my-)
-    s = re.sub(r"([a-z\d])([A-Z])", r"\1-\2", s)
-    return s.lower()
-
+from conformance.suite.checks._ast_common import (
+    pascal_to_kebab,
+    sdk_app_import_aliases,
+)
 
 # ---------------------------------------------------------------------------
 # Import-provenance helper
 # ---------------------------------------------------------------------------
-
-
-def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
-    """Return local names bound to SDK App-family base classes in this module.
-
-    Tracks any ``from application_sdk.<sub>... import <SDKBase> [as alias]``
-    where ``<SDKBase>`` is in :data:`~conformance.suite.checks._ast_common.SDK_APP_BASE_NAMES`.
-    """
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or node.level > 0:
-            continue
-        module = node.module or ""
-        if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
-            for alias in node.names:
-                if alias.name in SDK_APP_BASE_NAMES:
-                    bound.add(alias.asname or alias.name)
-    return frozenset(bound)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +105,7 @@ def _resolve_class_name(
             return None, True, stmt
 
     # No name attr (or empty-string literal) → derive from class name
-    return _pascal_to_kebab(class_def.name), False, class_def
+    return pascal_to_kebab(class_def.name), False, class_def
 
 
 def _has_body_name_attr(class_def: ast.ClassDef) -> bool:
@@ -335,7 +293,7 @@ def scan_file(
     Files without any SDK app-family import contribute no records (import-
     provenance guard: avoids false positives from coincidentally-named bases).
     """
-    sdk_aliases = _sdk_app_aliases(tree)
+    sdk_aliases = sdk_app_import_aliases(tree)
     if not sdk_aliases:
         return  # No SDK app-family import in this file — skip.
 

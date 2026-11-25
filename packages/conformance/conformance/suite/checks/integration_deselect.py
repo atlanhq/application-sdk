@@ -55,9 +55,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    discover_root_file,
     is_test_class,
     is_test_function,
     make_cli_main,
+    make_scan_path,
     make_toml_finding,
     parse_toml_suppressions,
 )
@@ -260,21 +262,10 @@ def scan_text(
     ]
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan the repo-root ``pyproject.toml`` for T018.
-
-    Resolves the ``tests/integration/`` collectables from *root* so the finding
-    reflects the real interaction between the app's ``addopts`` and its suite.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel), integration_tests=_integration_tests(root))
+scan_path = make_scan_path(
+    scan_text,
+    context=lambda path, root: {"integration_tests": _integration_tests(root)},
+)
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
@@ -288,8 +279,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
 def discover(root: Path) -> list[Path]:
     """Discover the repo-root ``pyproject.toml`` (``[]`` when absent → no-op)."""
-    pyproject = root / "pyproject.toml"
-    return [pyproject] if pyproject.is_file() else []
+    return discover_root_file(root, "pyproject.toml")
 
 
 main = make_cli_main(

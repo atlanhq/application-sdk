@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.task import (
-    TaskContractError,
+    TaskDeclarationError,
     TaskMetadata,
     get_task_metadata,
     is_task,
@@ -200,8 +200,10 @@ class TestTaskContractValidation:
     """Tests for task contract enforcement."""
 
     def test_task_contract_error_no_params(self) -> None:
-        """TaskContractError raised when task has no params."""
-        with pytest.raises(TaskContractError, match="must have exactly one parameter"):
+        """TaskDeclarationError raised when task has no params."""
+        with pytest.raises(
+            TaskDeclarationError, match="must have exactly one parameter"
+        ):
 
             class MyApp:
                 @task
@@ -209,8 +211,10 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_too_many_params(self) -> None:
-        """TaskContractError raised when task has more than one param."""
-        with pytest.raises(TaskContractError, match="must have exactly one parameter"):
+        """TaskDeclarationError raised when task has more than one param."""
+        with pytest.raises(
+            TaskDeclarationError, match="must have exactly one parameter"
+        ):
 
             class MyApp:
                 @task
@@ -220,8 +224,8 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_wrong_input_type(self) -> None:
-        """TaskContractError raised when input does not extend Input."""
-        with pytest.raises(TaskContractError, match="must extend Input base class"):
+        """TaskDeclarationError raised when input does not extend Input."""
+        with pytest.raises(TaskDeclarationError, match="must extend Input base class"):
 
             class MyApp:
                 @task
@@ -229,9 +233,9 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_no_return_annotation(self) -> None:
-        """TaskContractError raised when return type is missing."""
+        """TaskDeclarationError raised when return type is missing."""
         with pytest.raises(
-            TaskContractError, match="must have a return type annotation"
+            TaskDeclarationError, match="must have a return type annotation"
         ):
 
             class MyApp:
@@ -240,8 +244,8 @@ class TestTaskContractValidation:
                     return SimpleOutput()
 
     def test_task_contract_error_wrong_return_type(self) -> None:
-        """TaskContractError raised when return type does not extend Output."""
-        with pytest.raises(TaskContractError, match="must extend Output base class"):
+        """TaskDeclarationError raised when return type does not extend Output."""
+        with pytest.raises(TaskDeclarationError, match="must extend Output base class"):
 
             class MyApp:
                 @task
@@ -336,6 +340,137 @@ class TestTaskRetryPolicy:
         metadata = get_task_metadata(MyApp.my_task)
         assert metadata is not None
         assert metadata.retry_policy is None
+
+
+class TestTaskRetryPolicyConflict:
+    """retry_policy makes the three retry_* scalars dead; @task says so."""
+
+    def test_policy_with_max_attempts_warns_at_decoration(self) -> None:
+        """The author's retry_max_attempts=5 would vanish behind the policy's 2."""
+        from application_sdk.execution.retry import RetryPolicy
+
+        policy = RetryPolicy(max_attempts=2)
+
+        with pytest.warns(
+            DeprecationWarning,
+            match="with retry_policy and retry_max_attempts is deprecated",
+        ):
+
+            class MyApp:
+                @task(retry_policy=policy, retry_max_attempts=5)
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.retry_policy is policy
+
+    def test_warning_points_at_the_decorator_line(self) -> None:
+        from application_sdk.execution.retry import RetryPolicy
+
+        with pytest.warns(DeprecationWarning) as record:
+
+            @task(retry_policy=RetryPolicy(), retry_max_attempts=5)
+            async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        assert record[0].filename == __file__
+
+    def test_passing_the_default_value_explicitly_still_warns(self) -> None:
+        """A sentinel, not a compare against 3, decides whether it was passed."""
+        from application_sdk.execution.retry import RetryPolicy
+
+        with pytest.warns(DeprecationWarning, match="retry_max_attempts"):
+
+            @task(retry_policy=RetryPolicy(), retry_max_attempts=3)
+            async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+    def test_every_conflicting_argument_is_named(self) -> None:
+        from application_sdk.execution.retry import RetryPolicy
+
+        with pytest.warns(DeprecationWarning) as record:
+
+            @task(
+                name="fetch",
+                retry_policy=RetryPolicy(),
+                retry_initial_interval_seconds=5,
+                retry_max_interval_seconds=60,
+            )
+            async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        message = str(record[0].message)
+        assert "@task(name='fetch')" in message
+        assert (
+            "with retry_policy and retry_initial_interval_seconds, "
+            "retry_max_interval_seconds is deprecated" in message
+        )
+        assert "retry_max_attempts" not in message
+        assert "v4.0.0" in message
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"retry_policy": None}, id="policy-only-none"),
+            pytest.param(
+                {
+                    "retry_max_attempts": 5,
+                    "retry_initial_interval_seconds": 2,
+                    "retry_max_interval_seconds": 60,
+                },
+                id="scalars-only",
+            ),
+            pytest.param({}, id="nothing"),
+        ],
+    )
+    def test_no_conflict_no_warning(self, kwargs: dict[str, object]) -> None:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+
+            @task(**kwargs)  # pyright: ignore[reportArgumentType]
+            async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+    def test_policy_alone_does_not_warn(self) -> None:
+        import warnings
+
+        from application_sdk.execution.retry import RetryPolicy
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+
+            @task(retry_policy=RetryPolicy(max_attempts=2))
+            async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+    def test_unpassed_scalars_resolve_to_documented_defaults(self) -> None:
+        @task
+        async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+            return SimpleOutput()
+
+        metadata = get_task_metadata(my_task)
+        assert metadata is not None
+        assert metadata.retry_max_attempts == 3
+        assert metadata.retry_initial_interval_seconds == 1
+        assert metadata.retry_max_interval_seconds == 30
+
+    def test_passed_scalars_are_stored(self) -> None:
+        @task(
+            retry_max_attempts=7,
+            retry_initial_interval_seconds=4,
+            retry_max_interval_seconds=90,
+        )
+        async def my_task(self: object, input: SimpleInput) -> SimpleOutput:
+            return SimpleOutput()
+
+        metadata = get_task_metadata(my_task)
+        assert metadata is not None
+        assert metadata.retry_max_attempts == 7
+        assert metadata.retry_initial_interval_seconds == 4
+        assert metadata.retry_max_interval_seconds == 90
 
 
 # =============================================================================
@@ -508,7 +643,7 @@ class TestTaskProgressWatchdog:
         A typo in a deployment manifest must not stop a worker booting; a typo in
         an app's own source is a bug its author should see immediately.
         """
-        with pytest.raises(TaskContractError, match="not a valid mode"):
+        with pytest.raises(TaskDeclarationError, match="not a valid mode"):
 
             class MyApp:
                 @task(progress_watchdog="enfroce")
@@ -532,7 +667,7 @@ class TestTaskProgressWatchdog:
         In an enforcing task either one is a kill switch wearing a config knob's
         clothes, so neither is allowed to reach a decoration.
         """
-        with pytest.raises(TaskContractError, match="finite positive"):
+        with pytest.raises(TaskDeclarationError, match="finite positive"):
 
             class MyApp:
                 @task(max_no_progress_seconds=bad)
@@ -681,8 +816,8 @@ class TestTaskPool:
         assert "task_queue" not in mock_exec.call_args.kwargs
 
     def test_pool_uppercase_raises_error(self) -> None:
-        """@task(pool='HotPool') raises TaskContractError — pool must be lowercase kebab-case."""
-        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+        """@task(pool='HotPool') raises TaskDeclarationError — pool must be lowercase kebab-case."""
+        with pytest.raises(TaskDeclarationError, match="lowercase kebab-case"):
 
             class MyApp:
                 @task(pool="HotPool")
@@ -690,8 +825,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_empty_string_raises_error(self) -> None:
-        """@task(pool='') raises TaskContractError."""
-        with pytest.raises(TaskContractError, match="empty or whitespace"):
+        """@task(pool='') raises TaskDeclarationError."""
+        with pytest.raises(TaskDeclarationError, match="empty or whitespace"):
 
             class MyApp:
                 @task(pool="")
@@ -699,8 +834,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_whitespace_only_raises_error(self) -> None:
-        """@task(pool='  ') raises TaskContractError."""
-        with pytest.raises(TaskContractError, match="empty or whitespace"):
+        """@task(pool='  ') raises TaskDeclarationError."""
+        with pytest.raises(TaskDeclarationError, match="empty or whitespace"):
 
             class MyApp:
                 @task(pool="  ")
@@ -708,8 +843,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_trailing_dash_raises_error(self) -> None:
-        """@task(pool='pool-') raises TaskContractError — trailing dash is not kebab-case."""
-        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+        """@task(pool='pool-') raises TaskDeclarationError — trailing dash is not kebab-case."""
+        with pytest.raises(TaskDeclarationError, match="lowercase kebab-case"):
 
             class MyApp:
                 @task(pool="pool-")
@@ -717,8 +852,8 @@ class TestTaskPool:
                     return SimpleOutput()
 
     def test_pool_consecutive_dashes_raises_error(self) -> None:
-        """@task(pool='pool--name') raises TaskContractError — consecutive dashes rejected."""
-        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+        """@task(pool='pool--name') raises TaskDeclarationError — consecutive dashes rejected."""
+        with pytest.raises(TaskDeclarationError, match="lowercase kebab-case"):
 
             class MyApp:
                 @task(pool="pool--name")

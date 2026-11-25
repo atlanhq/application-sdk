@@ -1,10 +1,15 @@
 # Write Integration Tests
 
-You are helping a developer write integration tests for an Atlan connector using the `BaseIntegrationTest` framework from `application_sdk`.
+You are helping a developer **maintain** an existing integration suite built on the deprecated `BaseIntegrationTest` framework from `application_sdk`.
+
+> **Deprecated — removed in v4.0.0.** `BaseIntegrationTest` and every name this command imports alongside it (`Scenario`, the assertion predicates such as `equals` and `contains`, `lazy`, `IntegrationTestClient`, `compare_metadata`, the pandera validators) emit a `DeprecationWarning` and are flagged by conformance B001 (FND-4659, FND-4911). For a new suite, use the in-process fixture kit instead: see `docs/guides/integration-fixtures.md` and the "recommended pattern" in `docs/guides/integration-testing.md`. Use this command only to maintain a suite still migrating off the scenario framework.
 
 ## Your Job
 
-Generate a complete `tests/integration/test_{connector}_integration.py` file, plus `tests/integration/__init__.py` if it doesn't exist.
+**First, check whether the connector already has a `BaseIntegrationTest` suite** (a class subclassing it under `tests/integration/`).
+
+- **No such suite: stop.** Do not create one. Tell the developer that new integration suites use the in-process fixture kit, and point them to `docs/guides/integration-fixtures.md` and the "recommended pattern" in `docs/guides/integration-testing.md`. Use the `write-and-deploy-integration-tests` or `canonical-it` skill if one is available.
+- **A suite exists:** add or fix scenarios in that existing file only, while it migrates to the fixture kit. Do not create new `BaseIntegrationTest` files. The steps below describe the framework so you can edit the existing suite correctly.
 
 ## Step 1: Gather Context
 

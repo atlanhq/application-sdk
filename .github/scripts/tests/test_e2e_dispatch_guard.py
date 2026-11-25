@@ -19,18 +19,16 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
 from pathlib import Path
-
-import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from typing import cast
 
 # The gate is imported only so the drift test can hold its copy of
 # check_run_age_key against the guard's; production never imports across scripts.
-import poll_check_runs_gate as gate  # noqa: E402
-from e2e_dispatch_guard import (  # noqa: E402
+import poll_check_runs_gate as gate
+import pytest
+import yaml
+from _gh_refs import TransportError
+from e2e_dispatch_guard import (
     _CHECKS_MAX_PAGES,
     _PASSING_CONCLUSIONS,
     Claimant,
@@ -39,6 +37,7 @@ from e2e_dispatch_guard import (  # noqa: E402
     checks_state,
     claim_is_settled,
     claim_ref,
+    list_claims,
     main,
     open_pr_heads,
     prune,
@@ -78,13 +77,13 @@ class FakeHTTP:
     """
 
     def __init__(self) -> None:
-        self.routes: dict[tuple[str, str], list[tuple]] = {}
+        self.routes: dict[tuple[str, str], list[tuple[object, ...]]] = {}
         self.calls: list[tuple[str, str]] = []
         self.payloads: list[dict] = []
         self.cmds: list[list[str]] = []
         self.inputs: list[str | None] = []
 
-    def route(self, method: str, contains: str, *responses: tuple) -> None:
+    def route(self, method: str, contains: str, *responses: tuple[object, ...]) -> None:
         self.routes[(method, contains)] = list(responses)
 
     def __call__(self, cmd: list[str], **kwargs):
@@ -100,7 +99,7 @@ class FakeHTTP:
                 continue
             entry = responses[0] if len(responses) == 1 else responses.pop(0)
             status, body = entry[0], entry[1]
-            headers = entry[2] if len(entry) > 2 else {}
+            headers = cast(dict[str, str], entry[2]) if len(entry) > 2 else {}
             payload = "" if body is None else json.dumps(body)
             header_lines = "".join(f"\r\n{k}: {v}" for k, v in headers.items())
             return _completed(f"HTTP/2 {status}{header_lines}\r\n\r\n{payload}")
@@ -121,7 +120,7 @@ class _completed:
 def http(monkeypatch: pytest.MonkeyPatch) -> FakeHTTP:
     monkeypatch.setenv("GH_TOKEN", "x")
     fake = FakeHTTP()
-    monkeypatch.setattr("e2e_dispatch_guard.run", fake)
+    monkeypatch.setattr("_gh_refs.run", fake)
     return fake
 
 
@@ -185,7 +184,7 @@ def _resolve(**kwargs):
         clock=lambda: 1000.0,
     )
     defaults.update(kwargs)
-    return resolve(REPO, REF, **defaults)  # type: ignore[arg-type]
+    return resolve(REPO, REF, **defaults)  # pyright: ignore[reportArgumentType]
 
 
 # --- keying ----------------------------------------------------------------
@@ -207,7 +206,9 @@ def test_the_app_slug_cannot_produce_a_ref_git_rejects() -> None:
     assert slug("My App/Name") == "my-app-name"
     assert ".." not in slug("a..b")
     assert not slug("thing.lock").endswith(".lock")
-    assert slug("///") == "app"
+    # An app name with nothing left still names a component; the guard spells
+    # the fallback "app" rather than _gh_refs' "default".
+    assert claim_ref("///", SHA) == f"refs/e2e-dispatch/app/{SHA}"
 
 
 def test_sha_of_reads_the_last_component() -> None:
@@ -474,10 +475,11 @@ def test_an_unreadable_listing_never_reclaims(http: FakeHTTP) -> None:
 
 
 def test_the_guard_and_the_gate_order_check_runs_identically() -> None:
-    """The two copies of check_run_age_key must agree, or the guard would judge a
-    retry against a different attempt than the gate reports. Copies rather than a
-    shared import because nothing in .github/scripts imports a sibling script;
-    this is what stops them drifting."""
+    """check_run_age_key must agree between the two, or the guard would judge a
+    retry against a different attempt than the gate reports. One definition,
+    imported (FND-4925) — asserted by identity so a re-inlined copy fails here
+    rather than waiting to drift."""
+    assert check_run_age_key is gate.check_run_age_key
     table = [
         {"started_at": "2026-08-21T00:53:41Z", "id": 100},
         {"started_at": "2026-08-21T01:41:00Z", "id": 200},
@@ -802,13 +804,97 @@ def test_a_transport_failure_still_dispatches(
     monkeypatch.setenv("GH_TOKEN", "x")
     monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        "e2e_dispatch_guard.run",
+        "_gh_refs.run",
         lambda *_a, **_k: _completed("", returncode=60, stderr="SSL problem"),
     )
     out = _outputs(tmp_path, monkeypatch)
 
     assert main(_argv()) == 0
     assert _read(out)["claimed"] == "true"
+
+
+def test_an_unparseable_answer_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The shared transport raises ``TransportError`` — a ``SystemExit``, the
+    lease's posture — on an answer it cannot parse. Here that must still read as
+    "guard unavailable", not exit the step before the dispatch."""
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(
+        "_gh_refs.run", lambda *_a, **_k: _completed("<html>proxy error</html>")
+    )
+    out = _outputs(tmp_path, monkeypatch)
+
+    assert main(_argv()) == 0
+    assert _read(out)["claimed"] == "true"
+    assert _read(out)["state"] == "disabled"
+
+
+def test_a_transport_failure_in_the_prune_keeps_the_claim(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prune is housekeeping. A transport failure inside it must neither
+    exit the step nor undo the claim this run already holds."""
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+
+    def _unreachable(*_a, **_k):
+        raise TransportError("curl failed")
+
+    monkeypatch.setattr("e2e_dispatch_guard.list_claims", _unreachable)
+
+    assert main(_argv()) == 0
+    assert _read(out)["state"] == "claimed"
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        lambda *_a, **_k: _completed("", returncode=60, stderr="SSL problem"),
+        lambda *_a, **_k: _completed("<html>proxy error</html>"),
+    ],
+    ids=["curl-exhausted", "unparseable"],
+)
+def test_a_transport_failure_in_the_stale_head_check_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, transport
+) -> None:
+    """The PR-head read runs before the claim, outside main's fail-open
+    handler. A TransportError there must still read as "unknown head", not
+    abort the step before the dispatch."""
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr("_gh_refs.run", transport)
+    out = _outputs(tmp_path, monkeypatch)
+
+    assert main(_argv(**{"--pr-number": "42"})) == 0
+    assert _read(out)["claimed"] == "true"
+
+
+def test_a_missing_token_with_a_pr_number_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    out = _outputs(tmp_path, monkeypatch)
+
+    assert main(_argv(**{"--pr-number": "42"})) == 0
+    assert _read(out)["claimed"] == "true"
+
+
+def test_claims_are_listed_under_the_component_they_are_written_under(
+    http: FakeHTTP,
+) -> None:
+    """An app name that slugs to nothing is written under the guard's "app"
+    fallback; the prune must list that same prefix or never find the claim."""
+    http.route("GET", "/matching-refs/", (200, []))
+
+    list_claims(REPO, "///")
+
+    written = claim_ref("///", SHA)
+    listed = http.calls[0][1].split("/git/matching-refs/", 1)[1].split("?", 1)[0]
+    assert written.startswith(f"refs/{listed}/")
 
 
 def test_a_missing_token_still_dispatches(
@@ -1111,18 +1197,18 @@ def test_several_named_checks_are_only_done_when_all_are(http: FakeHTTP) -> None
 
 
 @pytest.fixture(scope="module")
-def action() -> dict:  # type: ignore[type-arg]
+def action() -> dict:
     return yaml.safe_load(_ACTION.read_text(encoding="utf-8"))
 
 
-def _step(action: dict, name_fragment: str) -> dict:  # type: ignore[type-arg]
+def _step(action: dict, name_fragment: str) -> dict:
     for step in action["runs"]["steps"]:
         if name_fragment in str(step.get("name", "")):
             return step
     raise AssertionError(f"e2e-apps has no step matching {name_fragment!r}")
 
 
-def test_the_guard_runs_before_the_check_run_is_created(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_runs_before_the_check_run_is_created(action: dict) -> None:
     """Order is the point. A duplicate run that created its own in_progress
     check on the SHA would leave a check nothing completes — the connector's
     callback completes the winner's — and it would hang until the watchdog."""
@@ -1135,13 +1221,13 @@ def test_the_guard_runs_before_the_check_run_is_created(action: dict) -> None:  
     assert guard < create < dispatch
 
 
-def test_the_guard_invokes_the_script_at_a_real_path(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_invokes_the_script_at_a_real_path(action: dict) -> None:
     step = _step(action, "Claim the dispatch slot")
     assert "e2e_dispatch_guard.py" in step["run"]
     assert (_REPO_ROOT / ".github/scripts/e2e_dispatch_guard.py").is_file()
 
 
-def test_the_guard_cannot_fail_the_dispatch(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_cannot_fail_the_dispatch(action: dict) -> None:
     """Both halves of failing open. `continue-on-error` keeps a crashed guard
     from ending the job before the dispatch, and `!= 'false'` keeps the empty
     output a crashed step leaves behind from reading as "somebody else has it"."""
@@ -1156,7 +1242,7 @@ def test_the_guard_cannot_fail_the_dispatch(action: dict) -> None:  # type: igno
         )
 
 
-def test_the_guard_is_callback_mode_only(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_is_callback_mode_only(action: dict) -> None:
     """Not a scope decision. In poll mode THIS job's conclusion is the verdict,
     so a skipped dispatch would be a vacuous green that can mask the winner's
     real result on the same SHA. In callback mode the verdict is the check run,
@@ -1167,7 +1253,7 @@ def test_the_guard_is_callback_mode_only(action: dict) -> None:  # type: ignore[
     )
 
 
-def test_the_guard_uses_this_repos_own_token(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_guard_uses_this_repos_own_token(action: dict) -> None:
     # The claim refs live in THIS repo, next to the SHA they key on. The fleet
     # App tokens are scoped for other jobs: github-token to the connector,
     # checks-app-token to check ownership.
@@ -1178,7 +1264,7 @@ def test_the_guard_uses_this_repos_own_token(action: dict) -> None:  # type: ign
     assert env["NAME"] == "${{ inputs.check-run-name }}"
 
 
-def test_the_pr_number_comes_from_the_event(action: dict) -> None:  # type: ignore[type-arg]
+def test_the_pr_number_comes_from_the_event(action: dict) -> None:
     """Two properties in one expression. It must come from the EVENT, not an
     input, or a caller could name a PR whose head has nothing to do with
     `check-sha` — and the guard would then skip against a stranger's commit. And

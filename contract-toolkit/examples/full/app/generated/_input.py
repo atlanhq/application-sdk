@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, ClassVar
 
 import orjson
-from application_sdk.contracts.types import MaxItems
+from application_sdk.contracts.types import FileReference, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts import ExtractionInput
@@ -42,6 +42,10 @@ class AppInputContract(ExtractionInput):
     """Only extract tables whose name starts with this prefix."""
     custom_attributes: str = ""
     """Extra attributes to attach to every asset, as a JSON object."""
+    modified_since: int = 0
+    """Only extract assets modified on or after this date."""
+    mapping_file: FileReference | None = None
+    """Optional CSV that maps source owners to Atlan users."""
     legacy_timeout: int = Field(
         default=60,
         deprecated="Use the standard pipeline timeout configuration instead.",
@@ -52,6 +56,8 @@ class AppInputContract(ExtractionInput):
     )
     """Sunset: no longer consumed by the extractor."""
     schemas: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
+    enable_dsn_mapping: str = "false"
+    dsn_mapping: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
     preflight_check: str = ""
 
     @field_validator("schemas", mode="before")
@@ -74,6 +80,29 @@ class AppInputContract(ExtractionInput):
             if isinstance(parsed, dict):
                 return parsed
         return value
+
+    @field_validator("dsn_mapping", mode="before")
+    @classmethod
+    def _coerce_string_maps(cls, value: Any) -> Any:
+        if value is None:
+            return {}
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = orjson.loads(stripped)
+        except orjson.JSONDecodeError:
+            logger.debug(
+                "String-map input was not valid JSON; using an empty map.",
+                exc_info=True,
+            )
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+        logger.debug("String-map input was not a JSON object; using an empty map.")
+        return {}
 
     full_featured_credential: CredentialRef | None = None
     output_dir: str = ""

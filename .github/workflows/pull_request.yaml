@@ -33,6 +33,7 @@ jobs:
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       container: ${{ steps.filter.outputs.container }}
       # 'sdk'  — changes that can alter SDK behaviour, so the unit + integration
@@ -113,6 +114,7 @@ jobs:
             storage:
               - 'application_sdk/storage/**'
               - 'tests/integration/storage/**'
+              - '.github/workflows/storage-integration-reusable.yaml'
 
       # paths-filter sdk=true is necessary but not sufficient: the broad
       # application_sdk/** pattern also matches .md files, so a PR that only
@@ -153,6 +155,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/docstring-coverage"
@@ -167,11 +170,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -193,6 +197,7 @@ jobs:
     name: Build Test Matrix
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -339,7 +344,7 @@ jobs:
           password: ${{ secrets.CHAINGUARD_PASSWORD }}
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -493,6 +498,9 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    # Dispatch only (wait-mode: callback): observed under 4 min. The wait for
+    # the connector's verdict is connector-gate's, not this job's.
+    timeout-minutes: 20
     # The check run is created + updated with the atlan-app-fleet App token
     # (scoped to application-sdk below), NOT github.token. A check run can only
     # be updated by the App that created it, and the connector's own callback
@@ -540,7 +548,7 @@ jobs:
       # triggers that repo's workflow).
       - name: Mint fleet App token (connector dispatch)
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -553,7 +561,7 @@ jobs:
       # versa.
       - name: Mint fleet App token (SDK checks)
         id: checks-app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -614,11 +622,15 @@ jobs:
       )
       )
     runs-on: ubuntu-latest
+    # Above poll_dispatched_run.py's own 120-min budget, so a slow run still
+    # reports `timeout` from the poller rather than a bare job kill. The
+    # one retry after an early failure (observed runs take ~10-12 min) fits too.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -721,6 +733,9 @@ jobs:
         needs.e2e-request.outputs.requested == 'true'
       )
     runs-on: ubuntu-latest
+    # Above poll_check_runs_gate.py's 130-min budget, so the poller's own
+    # timeout verdict is what a missing check produces.
+    timeout-minutes: 150
     permissions:
       contents: read
       checks: read
@@ -814,11 +829,10 @@ jobs:
           --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
           sdk-e2e-verdict --sdr-result "$SDR_RESULT"
 
-  # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
-  # create_store_from_binding + CloudStore against real buckets/vaults using the
-  # *_integration markers (excluded from default addopts; conftest skips when a
-  # cloud's creds are absent). Fork PRs are excluded (no secrets). Nightly
-  # counterpart lives in schedule.yaml.
+  # Real-cloud storage integration tests (S3 / Azure / GCS). The job body is
+  # storage-integration-reusable.yaml, shared with the nightly run in
+  # schedule.yaml (FND-4928); this job owns only when it runs. Fork PRs are
+  # excluded (no OIDC token for a fork).
   #
   # Runs on the PR when the storage layer or its suite changed, or when e2e was
   # requested (FND-3839) — no label to remember, and nothing runs for a PR that
@@ -837,7 +851,7 @@ jobs:
   #     parallel, so every queued PR would pay three cloud logins plus real
   #     S3 / Azure / GCS round trips whether or not it touched storage.
   storage-integration:
-    name: Storage Integration Tests (S3 / Azure / GCS)
+    name: Storage Integration Tests
     needs: [changes, e2e-request]
     # `always()` because e2e-request may be skipped, and a skipped need would
     # otherwise skip this job; `changes` is then required explicitly.
@@ -853,68 +867,12 @@ jobs:
       ) &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
-    # Resource identifiers are non-secret repo variables (vars.*_INTEG_*).
+    # Keyless OIDC: the reusable's job needs id-token, and a called workflow can
+    # only narrow what its caller grants.
     permissions:
       id-token: write
       contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: "./.github/actions/setup-deps"
-        with:
-          checkout: "false"
-      - name: AWS — assume the integration role (OIDC)
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
-        with:
-          role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_INTEG_REGION }}
-      - name: Azure — login (OIDC federated, no secret)
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
-        with:
-          client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_INTEG_SUBSCRIPTION_ID }}
-      - name: GCS — Workload Identity Federation (sets ADC)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
-        with:
-          workload_identity_provider: ${{ vars.GCP_INTEG_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_INTEG_SA }}
-      - name: Azure — write the federated token file for obstore WI auth
-        run: |
-          set -euo pipefail
-          # Mint into a throwaway file and only publish it on success, so a failed
-          # mint/parse can't leave a zero-byte token that yields an opaque AAD
-          # error downstream instead of a clear "OIDC mint failed". --fail-with-body
-          # makes curl exit non-zero on a non-2xx (still printing the body to debug).
-          tmp="$(mktemp)"
-          curl --fail-with-body -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
-            | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
-            > "$tmp"
-          mv "$tmp" "${RUNNER_TEMP}/azure-federated-token"
-      - name: Run storage integration tests (keyless)
-        env:
-          # AWS: ambient creds (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN) set by the OIDC step.
-          S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
-          AWS_DEFAULT_REGION: ${{ vars.AWS_INTEG_REGION }}
-          # Azure: federated workload identity (shared-key is disabled on the account).
-          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_INTEG_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_INTEG_CONTAINER }}
-          AZURE_CLIENT_ID: ${{ vars.AZURE_INTEG_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_INTEG_TENANT_ID }}
-          AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
-          # GCS: ADC (GOOGLE_APPLICATION_CREDENTIALS) set by the WIF step.
-          GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
-          GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
-        run: |
-          uv run pytest tests/integration/storage/ \
-            -m "s3_integration or azure_integration or gcs_integration" \
-            -v --timeout=60
+    uses: ./.github/workflows/storage-integration-reusable.yaml
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the e2e path in tests.yaml)

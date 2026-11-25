@@ -6,6 +6,44 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.39.1] - 2026-11-23
+
+### Bug fixes
+
+- add DAGSTER connector type, bump pyatlan to 11.8 [FND-5350] (#5050) ([148fe08](https://github.com/atlanhq/application-sdk/commit/148fe08))
+- log the JSON error in the generated stringMap validator [FND-5342] (#5039) ([39b912b](https://github.com/atlanhq/application-sdk/commit/39b912b))
+
+## [0.39.0] - 2026-11-22
+
+### Features
+
+- e2eOverrides on single-entrypoint apps + connectionType/connectionCategory (FND-1643) (#4938) ([f9a967e](https://github.com/atlanhq/application-sdk/commit/f9a967e))
+- add pyatlan's missing connector types and check Connectors.pkl against pyatlan [FND-4933] (#4946) ([a5b4b7b](https://github.com/atlanhq/application-sdk/commit/a5b4b7b))
+
+### Bug fixes
+
+- type a string-map ConditionalInput as dict[str, str] [CONNECT-4241] (#5017) ([cd59e78](https://github.com/atlanhq/application-sdk/commit/cd59e78))
+- stop claiming system caller nodes are synced into src/system/ [FND-4936] (#4945) ([d5f3512](https://github.com/atlanhq/application-sdk/commit/d5f3512))
+- guard the e2e and artifact names App.pkl copies from the SDK [FND-4934] (#4937) ([b3ba0dd](https://github.com/atlanhq/application-sdk/commit/b3ba0dd))
+
+## [0.38.1] - 2026-11-17
+
+### Bug fixes
+
+- move check-invariants.sh cases to pkl facts and delete the script [FND-4938] (#4934) ([4ee4b86](https://github.com/atlanhq/application-sdk/commit/4ee4b86))
+- type DateInput and FileUploader e2e substitutions to match _input.py [FND-4935] (#4928) ([6fc4a36](https://github.com/atlanhq/application-sdk/commit/6fc4a36))
+- rewrite the PKL guide around App.pkl and point toolkit AGENTS.md at CLAUDE.md [FND-4932] (#4926) ([63300b9](https://github.com/atlanhq/application-sdk/commit/63300b9))
+
+### Other changes
+
+- refactor(contract-toolkit): remove dead release template, deprecate resolveInputs, raise minPklVersion to the tested pin [FND-4939] (#4933) ([9d875cd](https://github.com/atlanhq/application-sdk/commit/9d875cd))
+
+## [0.38.0] - 2026-11-12
+
+### Features
+
+- support schedules and events triggers on system apps (#4866) ([d029a84](https://github.com/atlanhq/application-sdk/commit/d029a84))
+
 ## [0.37.2] - 2026-11-11
 
 ### Bug fixes

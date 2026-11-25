@@ -47,6 +47,46 @@ This document outlines the development standards for the Application SDK, includ
     - Fix technical debt early
     - Leave code cleaner than you found it
 
+- **No `Any` in a signature**
+    - `typing.Any` in a parameter or return annotation turns type checking off
+      exactly where a consumer types against the SDK. ruff's ANN401 flags it,
+      held to a per-file baseline that only shrinks
+      (see [ci.md](ci.md)).
+    - A value the function only passes on, stores or inspects with
+      `isinstance`: `object`.
+    - A value returned as the same class it came in: a `TypeVar`, but only for
+      the cases the code really preserves. `persist_file_refs` rebuilds a
+      changed model with `model_copy` (same class) but a changed container as
+      the built-in, so it is overloaded: `data: M -> M` for a `BaseModel`,
+      `object -> object` otherwise.
+    - A callable and its arguments, forwarded: `ParamSpec`
+      (`run_in_thread(func: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T`).
+    - `__exit__` / `__aexit__`: `type[BaseException] | None`,
+      `BaseException | None`, `TracebackType | None`.
+    - `**kwargs` forwarded to a typed API (pydantic's `__init_subclass__`): that
+      API's own type (`Unpack[ConfigDict]`), not `object`, which it rejects.
+    - A file's count may not rise; paying one down means running
+      `check_ann401_baseline.py --update` in the same change. The count is per
+      file, so do not trade one `Any` for another in the same file.
+
+- **Time and Clocks**
+    - A timestamp is timezone-aware UTC: `datetime.now(UTC)`,
+      `datetime.fromtimestamp(ts, UTC)`. A naive reading takes the host's zone;
+      pods run in UTC, so it only goes wrong on SDR hosts and laptops, where
+      nobody is looking. Ruff `DTZ` enforces this.
+    - Parsing: `strptime(s, fmt).replace(tzinfo=UTC)` only when `fmt` has no
+      `%z` and the string is known to be UTC (`replace` relabels, it does not
+      convert). When the string carries an offset, parse it with `%z` and
+      convert with `.astimezone(UTC)`; replacing the tzinfo there would shift
+      the instant by the offset.
+    - A duration is two `time.monotonic()` readings, never two `time.time()`
+      readings: the wall clock can step between them (NTP, VM resume) and the
+      difference comes out negative or hours long.
+      `tests/unit/test_no_wall_clock_elapsed.py` fails on
+      `time.time() - <name>` under `application_sdk/`.
+    - Inside `run()`, use `application_sdk.app.now()` instead; both of the
+      above are non-deterministic there and the workflow sandbox refuses them.
+
 - **Testing Standards**
     - Testing standards are defined in [testing.md](testing.md)
 

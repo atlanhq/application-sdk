@@ -45,7 +45,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -62,7 +61,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="AppNameContractCodeDrift",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="app-name-alignment",
         autofixable=False,
         since="0.9.0",
@@ -144,10 +142,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[P025] <reason>`` on the App"
             " class definition line (or the comment-only line directly above it)"
             " when a deliberate mismatch is justified.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p025"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.DECISION,

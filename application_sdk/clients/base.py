@@ -12,7 +12,9 @@ from httpx._types import (
     RequestFiles,
 )
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
+from application_sdk._proxy import environment_proxies, proxy_for
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
 from application_sdk.clients.sql_errors import AbstractClientLoadError
@@ -54,6 +56,80 @@ class _SharedTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         return None
+
+
+class _EnvProxyHTTPTransport(httpx.AsyncHTTPTransport):
+    """``AsyncHTTPTransport`` that applies the environment's proxy settings.
+
+    httpx only honors ``HTTP(S)_PROXY`` / ``ALL_PROXY`` / ``NO_PROXY`` when the
+    client builds its own transport (``allow_env_proxies = trust_env and
+    transport is None``). ``BaseClient`` always passes ``transport=``, so
+    without this every request connects directly, and on hosts whose egress
+    is proxy-only it times out with no HTTP response.
+
+    The proxy is chosen per request URL: hosts matching ``NO_PROXY`` (and
+    every request when no proxy is configured) go through this transport's
+    own pool, others through a lazily created proxied transport built with
+    the same keyword arguments (TLS context, pool limits, connect retries).
+    Proxy settings are read once, at construction, as httpx does.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._transport_kwargs = kwargs
+        self._env_proxies = environment_proxies()
+        self._proxied: dict[str, httpx.AsyncBaseTransport] = {}
+
+    def _proxy_for(self, url: httpx.URL) -> str | None:
+        if not url.host:
+            return None
+        return proxy_for(url.scheme, url.host, proxies=self._env_proxies)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        proxy = self._proxy_for(request.url)
+        if proxy is None:
+            return await super().handle_async_request(request)
+        transport = self._proxied.get(proxy)
+        if transport is None:
+            transport = self._make_proxied_transport(proxy)
+            self._proxied[proxy] = transport
+        return await transport.handle_async_request(request)
+
+    def _make_proxied_transport(self, proxy: str) -> httpx.AsyncBaseTransport:
+        return httpx.AsyncHTTPTransport(**self._transport_kwargs, proxy=proxy)
+
+    async def _close_proxied(self) -> BaseException | None:
+        """Close every proxied pool, even when one close raises or is cancelled.
+
+        The owning ``BaseClient`` drops its reference before closing, so a pool
+        skipped here would never be closed. Returns the first failure for the
+        caller to raise once the direct pool is closed too.
+        """
+        proxied, self._proxied = list(self._proxied.values()), {}
+        first_error: BaseException | None = None
+        for transport in proxied:
+            try:
+                await transport.aclose()
+            except BaseException as exc:  # noqa: BLE001 — includes CancelledError; the first close error is returned to __aexit__, which re-raises it
+                if first_error is None:
+                    first_error = exc
+        return first_error
+
+    async def __aexit__(self, *args: Any) -> None:
+        error = await self._close_proxied()
+        try:
+            await super().__aexit__(*args)
+        finally:
+            if error is not None:
+                raise error
+
+    async def aclose(self) -> None:
+        error = await self._close_proxied()
+        try:
+            await super().aclose()
+        finally:
+            if error is not None:
+                raise error
 
 
 class BaseClient(ClientInterface):
@@ -161,7 +237,9 @@ class BaseClient(ClientInterface):
         # TLS verification lives on the transport: httpx ignores
         # ``AsyncClient(verify=...)`` whenever ``transport=`` is also passed,
         # so the SDK context (default CAs plus SSL_CERT_DIR) must be set here.
-        self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
+        # Passing ``transport=`` also disables httpx's env-proxy handling, so
+        # the default transport applies HTTP(S)_PROXY / NO_PROXY itself.
+        self.http_retry_transport: httpx.AsyncBaseTransport = _EnvProxyHTTPTransport(
             verify=get_ssl_context(),
             limits=_HTTP_POOL_LIMITS,
             retries=_HTTP_CONNECT_RETRIES,
@@ -373,7 +451,7 @@ class BaseClient(ClientInterface):
                     auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
                 )
                 return response
-            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+            except Exception as exc:  # noqa: BLE001 — _request_failed logs with exc_info or raises typed
                 # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
                 return _request_failed("GET", url, exc, raise_on_error)
 
@@ -514,7 +592,7 @@ class BaseClient(ClientInterface):
                     follow_redirects=follow_redirects,
                 )
                 return response
-            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+            except Exception as exc:  # noqa: BLE001 — _request_failed logs with exc_info or raises typed
                 # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
                 return _request_failed("POST", url, exc, raise_on_error)
 
@@ -524,12 +602,13 @@ def _warn_if_raise_on_error_unset(
 ) -> None:
     """Warn a caller still relying on the deprecated ``None``-on-failure default."""
     if raise_on_error is None:
-        warnings.warn(
-            f"BaseClient.{method_name} returns None when a request fails unless "
-            "raise_on_error=True is passed, which raises SourceUnavailableError "
-            "instead. The default becomes raise_on_error=True in v4.0; pass "
-            "raise_on_error=True (or False to keep None) explicitly.",
-            DeprecationWarning,
+        _deprecation.warn_deprecated(
+            f"BaseClient.{method_name} without raise_on_error",
+            "raise_on_error=True, which raises SourceUnavailableError when a "
+            "request fails (or raise_on_error=False to keep None)",
+            "4.0.0",
+            note="it returns None when a request fails; the None default goes "
+            "and raise_on_error=True becomes the default",
             stacklevel=3,
         )
 

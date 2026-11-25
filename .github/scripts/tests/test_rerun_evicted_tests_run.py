@@ -18,17 +18,15 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+import rerun_evicted_tests_run
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import rerun_evicted_tests_run  # noqa: E402
-from rerun_evicted_tests_run import (  # noqa: E402
+from _bump_skip import without_bump_skip
+from _gha_expr import evaluate
+from rerun_evicted_tests_run import (
     is_repairable_eviction,
     newer_runs,
     repair,
@@ -36,11 +34,6 @@ from rerun_evicted_tests_run import (  # noqa: E402
     run_duration_seconds,
     select_candidate,
 )
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-from _gha_expr import evaluate  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "c55c9281dd792bda9601a3b1bcd936276ff7baa6"
@@ -173,7 +166,7 @@ def test_an_unfinished_run_is_left_to_post_its_own_verdict(status: str) -> None:
 
 def test_a_non_integer_attempt_is_treated_as_already_re_run() -> None:
     """Fail towards doing nothing when the payload is not the shape we expect."""
-    repairable, _ = is_repairable_eviction(_run(1, attempt="2"), 180)  # type: ignore[arg-type]
+    repairable, _ = is_repairable_eviction(_run(1, attempt="2"), 180)  # pyright: ignore[reportArgumentType]
     assert not repairable
 
 

@@ -269,42 +269,46 @@ class TestGuidResolutionPath:
         Mirrors how DaprCredentialVault.get_credentials() actually produces
         this: its catch-all wraps the surviving ColdStartRaceError (e.g.
         SecretStoreUnavailableError, from an exhausted retry_past_dapr_cold_start
-        budget) as `cause` on a generic CredentialVaultError — the resolver
-        must key off that `cause`, not just the CredentialVaultError type
+        budget) as `cause` on a generic CredentialVaultUnavailableError — the resolver
+        must key off that `cause`, not just the CredentialVaultUnavailableError type
         itself (see the sibling "genuinely missing config" test below).
         """
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError
+        from application_sdk.infrastructure.credential_vault import (
+            CredentialVaultUnavailableError,
+        )
         from application_sdk.infrastructure.secrets import SecretStoreUnavailableError
 
         p_vault, p_dapr, _ = _make_vault_patches(
-            vault_side_effect=CredentialVaultError(
-                "Failed to resolve credentials for abc-123: secret store unavailable",
+            vault_side_effect=CredentialVaultUnavailableError(
+                message="Failed to resolve credentials for abc-123: secret store unavailable",
                 credential_guid="abc-123",
                 cause=SecretStoreUnavailableError("abc-123"),
             )
         )
         with p_vault, p_dapr:
             ref = _guid_credential_ref("abc-123")
-            with pytest.raises(CredentialVaultError):
+            with pytest.raises(CredentialVaultUnavailableError):
                 await getattr(resolver, method)(ref)
 
     @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
     async def test_vault_genuinely_missing_config_collapses_to_not_found(
         self, store, resolver, method
     ):
-        """A CredentialVaultError raised directly for a genuinely-absent
+        """A CredentialVaultUnavailableError raised directly for a genuinely-absent
         credential config (no `cause` — e.g. DaprCredentialVault's
         "No credential config found for GUID ..." case) must still collapse
         to CredentialNotFoundError, exactly like any other definitive
         failure from the vault. This must NOT be swept up by the
         DependencyUnavailableError guard just because the deprecated
-        CredentialVaultError umbrella type happens to subclass it.
+        CredentialVaultUnavailableError umbrella type happens to subclass it.
         """
-        from application_sdk.infrastructure.credential_vault import CredentialVaultError
+        from application_sdk.infrastructure.credential_vault import (
+            CredentialVaultUnavailableError,
+        )
 
         p_vault, p_dapr, _ = _make_vault_patches(
-            vault_side_effect=CredentialVaultError(
-                "No credential config found for GUID abc-123 in upstream store",
+            vault_side_effect=CredentialVaultUnavailableError(
+                message="No credential config found for GUID abc-123 in upstream store",
                 credential_guid="abc-123",
             )
         )

@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 
+from application_sdk._env import env_str
+
 __all__ = ["load_build_info"]
 
 
@@ -35,7 +37,7 @@ def load_build_info(path: str | None = None) -> dict[str, str]:
         candidates = [path]
     else:
         override = os.getenv("ATLAN_BUILD_INFO_PATH", "")
-        generated_dir = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
+        generated_dir = env_str("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
         candidates = (
             [override]
             if override

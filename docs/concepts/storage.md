@@ -262,7 +262,9 @@ The ref `download()` returns gets its tier from `DownloadInput.tier`. When that 
 `App` runs two cleanup tasks in `on_complete()`:
 
 - **`cleanup_files()`** — removes local temp paths from tracked `FileReference` objects, then the run's scratch directory (`{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}/`), or instead the directories listed in `ATLAN_CLEANUP_BASE_PATHS` when that is set. A `download()` or materialise with no `local_path` lands in the run's scratch directory, so the default sweep removes it. `ATLAN_CLEANUP_BASE_PATHS` replaces that sweep rather than adding to it.
-- **`cleanup_storage()`** — deletes remote files according to their `StorageTier`.
+- **`cleanup_storage()`** — deletes remote files according to their `StorageTier`. It sees the refs tracked on the worker it runs on and the stored refs the workflow read off every task's input and result, so a `TRANSIENT` file uploaded by a task on another worker is deleted too. The workflow passes at most 2000 refs, durable ones first; in a run with more, a `TRANSIENT` ref left out is deleted only if the cleanup runs on the worker that tracked it, and otherwise stays until the store's own expiry.
+
+Tracked refs live in the run's in-memory app state on the worker that ran the task. Once the run has closed, each worker releases that state: it closes any cached client and, unless `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` is `false`, deletes the local files of the refs it tracked.
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — cleanup is tied to workflow completion, not mid-run state.
 
@@ -284,6 +286,8 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `CloudStore` byte APIs are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
+
+The `ATLAN_OBSTORE_*_TIMEOUT` values are durations such as `30s` or `1h 30m`. An empty value, or one that is not a duration (a bare `30` has no unit; `0` alone is accepted as zero), keeps the default; the second also logs a warning. Before, either one failed every object-store client construction with `failed to parse ... as Duration`.
 
 ---
 

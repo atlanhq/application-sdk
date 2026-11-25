@@ -27,11 +27,13 @@ from conformance.suite.checks.credential_seam import (
     scan_text,
 )
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import rule_help_uri
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
     RuleScope,
 )
+from tests._helpers import uv_lock
 
 
 def _p053(src: str, file: str = "app/credentials.py") -> list:
@@ -55,7 +57,7 @@ def test_p053_rule_metadata() -> None:
     assert rule.category == "credential-seam"
     assert rule.autofixable is False
     assert rule.since == "0.40.0"
-    assert rule.help_uri and rule.help_uri.endswith("prescriptions.md#p053")
+    assert rule.help_uri == rule_help_uri("P053")
     assert "route_credentials" in rule.full_description
 
 
@@ -425,24 +427,6 @@ def test_p053_other_rule_suppression_does_not_apply() -> None:
 # ── SDK-version gate (repo boundary) ────────────────────────────────────────
 
 
-def _uv_lock(sdk_version: str | None) -> str:
-    """A minimal uv.lock. ``None`` omits the atlan-application-sdk entry."""
-    other = (
-        "[[package]]\n"
-        'name = "some-dep"\n'
-        'version = "1.2.3"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-    if sdk_version is None:
-        return other
-    return (
-        f"{other}\n[[package]]\n"
-        'name = "atlan-application-sdk"\n'
-        f'version = "{sdk_version}"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-
-
 def _app(tmp_path: Path, lock: str | None) -> Path:
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "credentials.py").write_text(
@@ -455,7 +439,7 @@ def _app(tmp_path: Path, lock: str | None) -> Path:
 
 @pytest.mark.parametrize("version", ["3.40.0", "3.40.1", "3.41.0", "4.0.0"])
 def test_p053_fires_at_or_above_the_sdk_floor(tmp_path: Path, version: str) -> None:
-    root = _app(tmp_path, _uv_lock(version))
+    root = _app(tmp_path, uv_lock(version))
     fs = scan_all(discover(root), root)
     assert [(f.rule_id, f.file) for f in fs] == [("P053", "app/credentials.py")]
     assert len(scan_path(root / "app" / "credentials.py", root)) == 1
@@ -464,9 +448,9 @@ def test_p053_fires_at_or_above_the_sdk_floor(tmp_path: Path, version: str) -> N
 @pytest.mark.parametrize(
     "lock",
     [
-        _uv_lock("3.39.1"),
-        _uv_lock("3.28.0"),
-        _uv_lock(None),  # SDK not in the lock
+        uv_lock("3.39.1"),
+        uv_lock("3.28.0"),
+        uv_lock(None),  # SDK not in the lock
         "this is : not valid = toml [",
         "package = 1\n",  # valid TOML, but `package` is not a list
         None,  # no lock at all
@@ -487,7 +471,7 @@ def test_p053_silent_when_seam_not_confirmed(tmp_path: Path, lock: str | None) -
 
 
 def test_p053_skips_test_files(tmp_path: Path) -> None:
-    root = _app(tmp_path, _uv_lock("3.40.0"))
+    root = _app(tmp_path, uv_lock("3.40.0"))
     for rel in ("tests/unit/test_creds.py", "tests/conftest.py", "app/test_creds.py"):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -501,7 +485,7 @@ def test_p053_reaches_the_runner(tmp_path: Path) -> None:
 
     from conformance.suite.runner import main as runner_main
 
-    root = _app(tmp_path, _uv_lock("3.40.0"))
+    root = _app(tmp_path, uv_lock("3.40.0"))
     (root / "atlan.yaml").write_text("name: example\n", encoding="utf-8")
     out = tmp_path / "report.sarif"
     runner_main(["--repo", str(root), "--series", "P", "--output", str(out)])

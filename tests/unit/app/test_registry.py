@@ -5,11 +5,11 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.registry import (
-    AppAlreadyRegisteredError,
     AppMetadata,
-    AppNotFoundError,
+    AppNotRegisteredError,
     AppRegistry,
-    TaskNotFoundError,
+    AppVersionAlreadyRegisteredError,
+    TaskNotRegisteredError,
     TaskRegistry,
 )
 from application_sdk.app.task import task
@@ -47,14 +47,6 @@ class _FakeAppCls:
 class TestAppRegistry:
     """Tests for AppRegistry singleton."""
 
-    def setup_method(self) -> None:
-        """Reset registry before each test."""
-        AppRegistry.reset()
-
-    def teardown_method(self) -> None:
-        """Reset registry after each test."""
-        AppRegistry.reset()
-
     def test_singleton(self) -> None:
         """AppRegistry is a singleton."""
         r1 = AppRegistry.get_instance()
@@ -89,9 +81,9 @@ class TestAppRegistry:
         assert metadata.name == "my-app"
 
     def test_get_raises_app_not_found_error(self) -> None:
-        """get() raises AppNotFoundError if not found."""
+        """get() raises AppNotRegisteredError if not found."""
         registry = AppRegistry.get_instance()
-        with pytest.raises(AppNotFoundError):
+        with pytest.raises(AppNotRegisteredError):
             registry.get("nonexistent-app")
 
     def test_list_apps_returns_all_names(self) -> None:
@@ -149,7 +141,7 @@ class TestAppRegistry:
         assert registry.list_apps() == []
 
     def test_duplicate_raises_app_already_registered_error(self) -> None:
-        """AppAlreadyRegisteredError raised on duplicate without allow_override."""
+        """AppVersionAlreadyRegisteredError raised on duplicate without allow_override."""
         registry = AppRegistry.get_instance()
         registry.register(
             name="my-app",
@@ -158,7 +150,7 @@ class TestAppRegistry:
             input_type=TestInput,
             output_type=TestOutput,
         )
-        with pytest.raises(AppAlreadyRegisteredError):
+        with pytest.raises(AppVersionAlreadyRegisteredError):
             registry.register(
                 name="my-app",
                 version="1.0.0",
@@ -242,11 +234,11 @@ class TestAppRegistry:
         assert metadata.qualified_name == "my-app@1.0.0"
 
     def test_non_dataclass_input_raises(self) -> None:
-        """Non-dataclass input type raises ContractValidationError."""
-        from application_sdk.contracts.base import ContractValidationError
+        """Non-dataclass input type raises ContractDeclarationError."""
+        from application_sdk.contracts.base import ContractDeclarationError
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(ContractValidationError):
+        with pytest.raises(ContractDeclarationError):
             registry.register(
                 name="my-app",
                 version="1.0.0",
@@ -263,14 +255,6 @@ class TestAppRegistry:
 
 class TestTaskRegistry:
     """Tests for TaskRegistry singleton."""
-
-    def setup_method(self) -> None:
-        """Reset registry before each test."""
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        """Reset registry after each test."""
-        TaskRegistry.reset()
 
     def test_singleton(self) -> None:
         """TaskRegistry is a singleton."""
@@ -323,9 +307,9 @@ class TestTaskRegistry:
         assert tasks == []
 
     def test_get_raises_task_not_found(self) -> None:
-        """get() raises TaskNotFoundError if not found."""
+        """get() raises TaskNotRegisteredError if not found."""
         registry = TaskRegistry.get_instance()
-        with pytest.raises(TaskNotFoundError):
+        with pytest.raises(TaskNotRegisteredError):
             registry.get("my-app", "nonexistent-task")
 
     def test_get_activity_name_format(self) -> None:
@@ -351,3 +335,88 @@ class TestTaskRegistry:
 
         retrieved = registry.get("my-app", "my-task")
         assert retrieved.app_name == "my-app"  # type: ignore[union-attr]
+
+
+# =============================================================================
+# Sandbox re-import
+# =============================================================================
+
+
+class _SandboxInput(Input):
+    value: str = ""
+
+
+class _SandboxOutput(Output):
+    result: str = ""
+
+
+class TestSandboxReimport:
+    """Temporal's sandbox re-imports the app module for every workflow run.
+
+    That re-runs ``App.__init_subclass__`` on a fresh copy of each class. The
+    copy must not reach the host registries, and must carry its own generated
+    workflow classes, which the sandbox imports from the module by name.
+    """
+
+    @staticmethod
+    def _define_app() -> type:
+        from application_sdk.app.base import App
+
+        class SandboxReimportApp(App):
+            name = "sandbox-reimport-app"
+
+            @task
+            async def echo(self, input: _SandboxInput) -> _SandboxOutput:
+                return _SandboxOutput(result=input.value)
+
+            async def run(self, input: _SandboxInput) -> _SandboxOutput:
+                return await self.echo(input)
+
+        return SandboxReimportApp
+
+    @staticmethod
+    def _define_app_in_sandbox() -> type:
+        from temporalio import workflow
+
+        workflow.unsafe._set_in_sandbox(True)
+        try:
+            return TestSandboxReimport._define_app()
+        finally:
+            workflow.unsafe._set_in_sandbox(False)
+
+    def test_reimport_leaves_host_registries_alone(self) -> None:
+        host_cls = self._define_app()
+        tasks_before = TaskRegistry.get_instance().get_tasks_for_app(
+            "sandbox-reimport-app"
+        )
+
+        sandbox_cls = self._define_app_in_sandbox()
+
+        assert sandbox_cls is not host_cls
+        registered = AppRegistry.get_instance().get("sandbox-reimport-app")
+        assert registered.app_cls is host_cls
+        assert (
+            TaskRegistry.get_instance().get_tasks_for_app("sandbox-reimport-app")
+            == tasks_before
+        )
+        # The copy is stamped like a registered class, from metadata of its own.
+        assert sandbox_cls._app_metadata.app_cls is sandbox_cls
+        assert sandbox_cls._app_name == "sandbox-reimport-app"
+
+    def test_reimport_installs_workflow_classes_built_from_the_copy(self) -> None:
+        import sys
+
+        from application_sdk.app.base import _workflow_class_cache
+
+        self._define_app()
+        cache_before = dict(_workflow_class_cache)
+
+        sandbox_cls = self._define_app_in_sandbox()
+
+        wf_cls = getattr(sys.modules[__name__], "_Workflow_sandbox_reimport_app")
+        assert wf_cls.__module__ == __name__
+        # The generated __init__ builds the run's App instance from the copy,
+        # so run() executes as the sandbox's code, with restricted globals.
+        assert type(wf_cls()._app_instance) is sandbox_cls
+        # Host state keeps nothing from the run: an entry would pin the sandbox.
+        assert _workflow_class_cache == cache_before

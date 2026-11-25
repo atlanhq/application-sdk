@@ -6,6 +6,6 @@
 - Flag: the `[[tool.uv.index]]` pypi `default = true` pin removed, or a `uv.lock` whose sources were rewritten to a firewall/proxy host (a whole-lock source rewrite is a real finding, not noise).
 - Flag: weakened gates: lower `fail_under`, disabled ruff/pyright rules or pre-commit hooks, broader excludes; a pyright `exclude` that drops the defaults (D015 only warns).
 - Flag: extras/entry-point/package-data changes that drop a module or file consumers import.
-- Flag: for Dockerfile or dependency changes, no mention of the trivy/grype scan (`docs/standards/build-security.md`).
 - Don't flag (CI enforces): a restated Python/`pkl` version, CVEs Trivy blocks.
+- Don't flag: a trivy/grype scan missing from the description — lens adds that reminder to the summary itself, and no code change could close it.
 - Severity: critical for a published credential or a disabled security check; high for supply-chain risk or a weakened gate; medium otherwise.

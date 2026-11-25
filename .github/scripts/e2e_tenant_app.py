@@ -123,6 +123,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from _gha import set_outputs
 from e2e_tenant_api import (
     APP_EVENTS_PATH,
     APP_FAILURE_PATH,
@@ -140,6 +141,7 @@ from e2e_tenant_api import (
     validate_app_id,
     validate_tenant_base_url,
     validate_tenant_id,
+    validate_version_id,
 )
 from marketplace_publish_body import PublishBodyError, PublishRequest, build
 
@@ -485,6 +487,24 @@ _POD_TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
 #: derivation. Two different numbers for one physical event would only invite
 #: the question of which is right.
 DEFAULT_POD_WAIT_SECONDS = 300
+
+#: Restore re-installs a version the tenant already ran, so LM's catalog
+#: snapshot already holds it and the long post-publish catalog-lag retry
+#: (:data:`DEFAULT_INSTALL_RETRY_SECONDS`) has nothing to wait for. Two minutes
+#: covers a transient marketplace blip without stretching the job budget.
+DEFAULT_RESTORE_INSTALL_RETRY_SECONDS = 120
+
+#: How long restore waits for the pod to stop reporting the build under test.
+#: Shorter than :data:`DEFAULT_POD_WAIT_SECONDS` because it starts after LM's
+#: deployment poll has already returned, so the rollout is mostly done, and
+#: because retry + deployment poll + this must fit inside the restore step's
+#: own timeout (test_job_timeout_also_covers_the_restore holds that).
+DEFAULT_RESTORE_POD_WAIT_SECONDS = 120
+
+#: ``previous_version`` when LM's install record names a UUID but no version
+#: string can be read for it. Only ever a label for messages: the restore
+#: installs by UUID, and compares the pod against the build under test.
+UNRESOLVED_PREVIOUS_VERSION = "unresolved"
 _POD_POLL_SECONDS = 10
 
 #: Where the SDK's build-identity module lives, for the diagnostic probe in
@@ -1374,20 +1394,6 @@ def _looks_like_scan_gate_text(text: str) -> bool:
     lowered = text.lower()
     return any(
         marker in lowered
-        for marker in (_SCAN_PENDING, _SCAN_FAILED, "scan", "not active", "draft")
-    )
-
-
-def _looks_like_scan_gate(response: Response) -> bool:
-    """True when a failed install looks like GM's release-scan gate refusing.
-
-    Matched on the rendered body rather than a status code: GM does not document
-    a distinct status for this, and a false positive only changes the wording of
-    an error that is failing anyway.
-    """
-    rendered = json.dumps(response.body).lower() if response.body else ""
-    return any(
-        marker in rendered
         for marker in (_SCAN_PENDING, _SCAN_FAILED, "scan", "not active", "draft")
     )
 
@@ -2610,8 +2616,31 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         # so its suite cannot declare any. Should it happen anyway, the suite
         # fails closed with StoreAssertDisabledError, never a pass.
         return _converged_outcome(read_client, app_id, args.version, info, current)
+    # Recorded BEFORE anything is published, so a failure anywhere below still
+    # leaves the workflow what it needs to put the tenant back. Without it a
+    # failed prepare-tenant strands a broken build on a shared pool tenant until
+    # the next run happens to converge it — which is how an ai-memory build
+    # looped its Service on two pool tenants for hours.
+    #
+    # Keyed on the UUID, not on `current`: the version string is optional in LM
+    # (a "unknown" placeholder the catalog cannot resolve when it describes a
+    # newer version), but the UUID is what the restore installs, so a tenant
+    # with an unresolvable string is still a tenant that can be put back.
+    previous_id = installed_version_id(info)
+    if previous_id:
+        set_outputs(
+            {
+                "previous_version": current or UNRESOLVED_PREVIOUS_VERSION,
+                "previous_version_id": previous_id,
+            }
+        )
     if current:
         print(f"tenant runs {current}; installing {args.version}")
+    elif previous_id:
+        print(
+            f"tenant runs version_id {previous_id} (version string unresolved); "
+            f"installing {args.version}"
+        )
     else:
         print(f"{app_id} is not installed on this tenant; installing {args.version}")
 
@@ -2667,7 +2696,15 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         app_configs=args.app_configs,
         release_model=args.release_model,
         created_by=args.created_by,
-        commit_sha=args.commit_sha,
+        # commit_sha is the one release field left unset, deliberately. GM uses
+        # it to resolve a worker's baked commit_sha to a release, and an
+        # application-sdk PR dispatches e2e runs that build a connector at its
+        # unchanged HEAD — the very commit its release was published from — once
+        # per SDK commit. Sending it would register several tenant-scoped e2e
+        # versions under the release's commit_sha, making that lookup ambiguous.
+        # Nothing on the e2e side would read it either: the e2e image carries
+        # ATLAN_BUILD_ID, not app/atlan_build.json, so its worker reports no
+        # commit_sha to resolve.
     )
     version_id, release_id = _publish(
         publish_client, request, retry_seconds=args.publish_retry_seconds
@@ -2853,6 +2890,155 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     )
 
 
+def installed_version_id(payload: dict[str, object]) -> str:
+    """Return the version UUID LM's install record names, or "" when absent.
+
+    The UUID, not the version string: the string is an optional Atlas attribute
+    (see :func:`resolve_version_via_catalog`), while the install endpoint takes
+    the UUID, and it is the only identifier that round-trips into a restore.
+    """
+    raw = payload.get("installed")
+    installed: dict[str, object] = dict(raw) if isinstance(raw, dict) else {}
+    return str(installed.get("version_id") or "").strip()
+
+
+def _await_pod_off_build(
+    client: TenantClient, rolled_back_from: str, wait_seconds: int
+) -> PodIdentity:
+    """Ask the pod until it stops serving ``rolled_back_from``, or time runs out.
+
+    Waits through both shapes a rollout in flight takes: silence (the new pod
+    is not up yet) and the OLD pod still answering with the build being rolled
+    away from. Returns the last answer, which the caller judges. Never raises.
+    """
+    deadline = time.monotonic() + max(wait_seconds, 0)
+    while True:
+        identity = read_pod_build_identity(client)
+        still_old = identity.reachable and identity.build_id == rolled_back_from
+        if not (identity.transient or still_old) or time.monotonic() >= deadline:
+            return identity
+        _progress(
+            f"the app pod still reports build {identity.build_id}; waiting for the "
+            f"rollout to replace it. Retrying in {_POD_POLL_SECONDS}s"
+            if still_old
+            else f"the app pod is not answering the build-identity route yet "
+            f"({identity.detail}). Retrying in {_POD_POLL_SECONDS}s"
+        )
+        time.sleep(_POD_POLL_SECONDS)
+
+
+def _pod_names_another_build(client: TenantClient, build: str) -> PodIdentity | None:
+    """The pod's identity when it answers with a build id OTHER than ``build``.
+
+    One read, no wait. ``None`` for every other answer — silence, a rejection,
+    an empty build id, or ``build`` itself — because none of those shows the
+    pod has left ``build``, and an unreadable pod can still be serving it.
+    """
+    pod = read_pod_build_identity(client)
+    if pod.reachable and pod.build_id and pod.build_id != build:
+        return pod
+    return None
+
+
+def restore(args: argparse.Namespace) -> str:
+    """Force-install the version the tenant ran before this run's install.
+
+    Runs only when prepare-tenant failed after ``install`` recorded the prior
+    version. A pool tenant is shared, so a broken build left in place breaks
+    every later run against it and can misbehave on the tenant itself. Returns
+    the restored version.
+
+    Success needs two things. LM's install record must name the restored UUID,
+    and the pod must NOT still report the build under test
+    (``--rolled-back-from``). The record alone is not enough: it is written by
+    the install and never revisited, which is why :func:`install` asks the pod
+    too. A pod that names the restored version is proof. A pod that cannot
+    answer, or names some third build, falls back to the record with a warning,
+    because an older image may predate the build-identity route or stamp a
+    build id that is not its version string. LM's deployment verdict is
+    advisory only: it is namespace-scoped, and the failing pod may be the very
+    build being rolled away from.
+    """
+    app_id = validate_app_id(resolve_app_id(args.app_id))
+    base_url = validate_tenant_base_url(args.base_url)
+    version_id = validate_version_id(args.version_id)
+    rolled_back_from = str(args.rolled_back_from).strip()
+    publish_client, read_client = _clients(base_url)
+
+    if installed_version_id(_app_info(read_client, app_id)) == version_id:
+        # The no-op needs positive evidence the pod has left the build under
+        # test. Anything weaker — including a pod that cannot answer — force-
+        # installs anyway: re-installing the version the record already names is
+        # harmless, while skipping it can leave a broken build serving.
+        other = _pod_names_another_build(read_client, rolled_back_from)
+        if other is not None:
+            print(
+                f"tenant already runs {args.expected} ({version_id}) and the pod "
+                f"reports build {other.build_id}, not {rolled_back_from}; "
+                "nothing to restore"
+            )
+            return args.expected
+        print(
+            f"LM's install record already names {version_id}, but the pod did "
+            f"not show it has left {rolled_back_from}; force-installing anyway"
+        )
+
+    print(f"restoring {args.expected} (version_id={version_id})")
+    deployment_id = _install(
+        publish_client,
+        app_id,
+        version_id,
+        "",
+        retry_seconds=args.install_retry_seconds,
+    )
+    if deployment_id:
+        print(f"restore accepted, deployment_id={deployment_id}")
+        try:
+            _poll_deployment(read_client, deployment_id, args.timeout_seconds)
+        except DeploymentFailed as exc:
+            # The read-back below decides; LM's verdict is namespace-scoped and
+            # the failing pod may well be the build being rolled away from.
+            _dump_failure(read_client, app_id)
+            print(
+                f"::warning::restore deployment reported {exc}; checking the install record"
+            )
+    else:
+        print("no deployment started; relying on the install-record read-back")
+
+    now = installed_version_id(_app_info(read_client, app_id))
+    if now != version_id:
+        raise TenantAppError(
+            f"restore did not take: the tenant's install record names "
+            f"{now or '<nothing>'} rather than {version_id} ({args.expected}). "
+            "The tenant is still on the build under test — roll it back by hand "
+            "before releasing the lease to another run."
+        )
+
+    pod = _await_pod_off_build(read_client, rolled_back_from, args.pod_wait_seconds)
+    if pod.reachable and rolled_back_from and pod.build_id == rolled_back_from:
+        raise TenantAppError(
+            f"restore did not take: LM's install record names {version_id} "
+            f"({args.expected}), but after {args.pod_wait_seconds}s the running "
+            f"pod still reports build {pod.build_id}, the build under test. "
+            "The install record is written by the install and never revisited, "
+            "so it does not establish what the cluster serves. Roll the tenant "
+            "back by hand."
+        )
+    if pod.reachable and pod.build_id and pod.build_id == args.expected:
+        print(
+            f"tenant restored to {args.expected} ({version_id}): verified at the "
+            f"POD layer, the app pod reports build {pod.build_id}"
+        )
+    else:
+        print(f"::warning::{_unreadable_pod_hint(pod)}")
+        print(
+            f"tenant restored to {args.expected} ({version_id}) at the "
+            f"INSTALL-RECORD layer: the pod does not report {rolled_back_from}, "
+            "but it did not confirm the restored build either"
+        )
+    return args.expected
+
+
 def verify(args: argparse.Namespace) -> str:
     """Assert the tenant runs ``--expected``. Returns the installed version.
 
@@ -2971,19 +3157,15 @@ def verify(args: argparse.Namespace) -> str:
     )
 
 
-def _write_outputs(outputs: dict[str, str]) -> None:
-    """Append to ``$GITHUB_OUTPUT``, or print when running outside Actions.
+def _true_false(value: str) -> bool:
+    """Parse a ``true``/``false`` step output, refusing anything else.
 
-    No masking pass is needed here, unlike the tenant resolver: every value
-    written is an id, a version or a status. No credential reaches this function.
+    Strict on purpose: a ``True`` or ``yes`` read as false would register an SDR
+    app as not SDR-capable without a word.
     """
-    target = os.environ.get("GITHUB_OUTPUT")
-    lines = "".join(f"{k}={v}\n" for k, v in outputs.items())
-    if not target:
-        sys.stdout.write(lines)
-        return
-    with open(target, "a") as handle:
-        handle.write(lines)
+    if value not in ("true", "false"):
+        raise argparse.ArgumentTypeError(f"expected 'true' or 'false', got {value!r}")
+    return value == "true"
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
@@ -3017,22 +3199,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_install.add_argument("--repo-url", default="")
     p_install.add_argument("--deploy-config", default="")
-    p_install.add_argument("--self-deployed-runtime", action="store_true")
+    p_install.add_argument(
+        "--self-deployed-runtime",
+        type=_true_false,
+        nargs="?",
+        const=True,
+        default=False,
+        help=(
+            "atlan.yaml's enable_sdr as parse_atlan_yaml.py emits it ('true' or "
+            "'false'), so the workflow can pass it unconditionally. A bare flag "
+            "means true."
+        ),
+    )
     p_install.add_argument("--sdk-version", default="")
     p_install.add_argument("--entrypoints", default="")
     p_install.add_argument("--app-configs", default="")
     p_install.add_argument("--release-model", default="")
     p_install.add_argument("--created-by", default="")
-    p_install.add_argument(
-        "--commit-sha",
-        default="",
-        help=(
-            "Full git SHA the image was built from. Forwarded to GM so a "
-            "worker's baked commit_sha resolves to this version. Omit when "
-            "unknown — the field is absent rather than blank, matching the "
-            "release workflow."
-        ),
-    )
     p_install.add_argument(
         "--scan-wait-seconds",
         type=int,
@@ -3100,14 +3283,43 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    p_restore = sub.add_parser(
+        "restore", help="force-install the version the tenant ran before"
+    )
+    _add_common(p_restore)
+    p_restore.add_argument("--version-id", required=True)
+    p_restore.add_argument(
+        "--expected",
+        required=True,
+        help="The version string the UUID names, for messages and the output.",
+    )
+    p_restore.add_argument(
+        "--rolled-back-from",
+        required=True,
+        help="The build under test; the pod must stop reporting it.",
+    )
+    p_restore.add_argument(
+        "--pod-wait-seconds", type=int, default=DEFAULT_RESTORE_POD_WAIT_SECONDS
+    )
+    p_restore.add_argument(
+        "--install-retry-seconds",
+        type=int,
+        default=DEFAULT_RESTORE_INSTALL_RETRY_SECONDS,
+    )
+    p_restore.add_argument(
+        "--timeout-seconds", type=int, default=DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+    )
+
     args = parser.parse_args(argv)
 
     try:
         if args.command == "install":
             outcome = install(args)
-            _write_outputs(outcome.as_outputs())
+            set_outputs(outcome.as_outputs())
+        elif args.command == "restore":
+            set_outputs({"restored_version": restore(args)})
         else:
-            _write_outputs({"installed_version": verify(args)})
+            set_outputs({"installed_version": verify(args)})
     except (TenantAppError, TenantApiError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

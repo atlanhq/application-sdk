@@ -9,9 +9,25 @@ consume it without reaching into one another's private surface.
 
 from __future__ import annotations
 
+from ._bindings import (
+    UNTRUSTED,
+    ImportClassifier,
+    NameResolver,
+    attribute_root,
+    scope_bindings,
+    scoped_calls,
+)
 from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
-from ._discovery import EXCLUDE_DIRS, discover
+from ._directives_pkl import _make_pkl_finding_suppressed, _parse_pkl_directives
+from ._discovery import (
+    EXCLUDE_DIRS,
+    discover,
+    discover_contract_repo,
+    discover_root_file,
+    discover_tree,
+    discover_with_tests,
+)
 from ._exc_info import has_exc_info_traceback
 from ._findings import make_finding
 from ._imports import (
@@ -24,12 +40,16 @@ from ._imports import (
     register_alias_records,
 )
 from ._io import safe_read_json, safe_read_text
+from ._names import base_names, leaf_name, pascal_to_kebab
+from ._parse import ParseFailure, parse_failure, runtime_python
+from ._pkl import contract_files, pkl_code_lines
 from ._pytest_collection import (
     is_collectable_test_file,
     is_test_class,
     is_test_function,
 )
 from ._repo_modules import repo_module_file
+from ._scan_path import make_scan_path, read_source, relative_uri
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
 from ._sdk_app import (
     SDK_APP_BASE_NAMES,
@@ -37,6 +57,14 @@ from ._sdk_app import (
     non_sdk_import_bindings,
     non_sdk_import_roots,
     sdk_app_base_bindings,
+    sdk_app_import_aliases,
+)
+from ._sdr import is_sdr_app
+from ._source_cache import (
+    SourceFile,
+    load_source,
+    parse_module,
+    source_cache,
 )
 from ._toml_suppress import (
     SuppressionsMap,
@@ -44,13 +72,32 @@ from ._toml_suppress import (
     make_toml_finding,
     parse_toml_suppressions,
 )
+from ._values import iter_strings
+from ._yaml import YAML_KV_RE, strip_yaml_comment, yaml_comment_start
 
 __all__ = [
+    "UNTRUSTED",
+    "ImportClassifier",
+    "NameResolver",
+    "attribute_root",
+    "base_names",
+    "leaf_name",
+    "pascal_to_kebab",
+    "scope_bindings",
+    "scoped_calls",
+    "YAML_KV_RE",
+    "contract_files",
+    "pkl_code_lines",
+    "strip_yaml_comment",
+    "yaml_comment_start",
     "merge_alias_targets",
     "qualified_class_key",
     "qualified_rebound_imports",
     "safe_read_json",
     "safe_read_text",
+    "ParseFailure",
+    "parse_failure",
+    "runtime_python",
     "EXCLUDE_DIRS",
     "SDK_APP_BASE_NAMES",
     "SDK_PACKAGE_PREFIX",
@@ -58,12 +105,18 @@ __all__ = [
     "SuppressionsMap",
     "_IgnoreDirective",
     "_is_suppressed",
+    "_make_pkl_finding_suppressed",
     "_parse_directives",
+    "_parse_pkl_directives",
     "collect_import_origins",
     "collect_module_alias_targets",
     "detect_scope",
     "has_exc_info_traceback",
     "discover",
+    "discover_contract_repo",
+    "discover_root_file",
+    "discover_tree",
+    "discover_with_tests",
     "is_collectable_test_file",
     "is_sdk_package_name",
     "is_test_class",
@@ -80,4 +133,14 @@ __all__ = [
     "non_sdk_import_bindings",
     "non_sdk_import_roots",
     "sdk_app_base_bindings",
+    "sdk_app_import_aliases",
+    "is_sdr_app",
+    "iter_strings",
+    "make_scan_path",
+    "read_source",
+    "relative_uri",
+    "SourceFile",
+    "load_source",
+    "parse_module",
+    "source_cache",
 ]

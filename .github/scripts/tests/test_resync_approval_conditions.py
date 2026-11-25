@@ -12,15 +12,11 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import renovate_approval_conditions as gate  # noqa: E402
-import resync_approval_conditions as resync  # noqa: E402
+import renovate_approval_conditions as gate
+import resync_approval_conditions as resync
 
 REPO = "atlanhq/atlan-example-app"
 HEAD = "h" * 40
@@ -1215,6 +1211,13 @@ def test_refused_scaffolds_ignores_the_intentional_skips():
             "skipped: /w/CLAUDE.md has an unmarked block; the connector review"
             " kit was left untouched",
             "skipped: bootstrap is a no-op inside the application-sdk repo",
+            # Versions released between #5022 and the change that removes the
+            # whole folder leave a folder of real local review rules for a
+            # hand move (FND-5317). Reported as `kept:`, so it never holds the
+            # repo.
+            "kept: /w/.mothership/review-rulesets/connector-app  (it holds rules"
+            " that are not the placeholder: x.md; nothing in it was removed. Move"
+            " its rules to .github/connector-reviewer/principles/ by hand)",
             # Outside the render root, or escaping it: not a repo file.
             "skipped: /elsewhere/tests.yaml declares `x`; left untouched",
             "skipped: /w/../etc/passwd declares `x`; left untouched",

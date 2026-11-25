@@ -20,6 +20,7 @@ from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_WORKFLOWS,
+    RETIRED_ACTION_FILES,
     RETIRED_WORKFLOWS,
     SARIF_UPLOAD_WORKFLOW,
     render,
@@ -95,9 +96,14 @@ def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
     # managed shims + retired shims + the opt-in SARIF upload shim + managed
-    # action files + tests.yaml and renovate.json scaffolds.
+    # action files + retired action files + tests.yaml and renovate.json
+    # scaffolds.
     assert len(paths) == (
-        len(MANAGED_WORKFLOWS) + len(RETIRED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 3
+        len(MANAGED_WORKFLOWS)
+        + len(RETIRED_WORKFLOWS)
+        + len(MANAGED_ACTION_FILES)
+        + len(RETIRED_ACTION_FILES)
+        + 3
     )
     # None of them exist yet.
     assert all(not p.exists() for p in paths)

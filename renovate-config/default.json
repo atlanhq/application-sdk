@@ -113,9 +113,12 @@
       }
     },
     {
-      "description": "app-contract-toolkit: disable major bumps.",
+      "description": "app-contract-toolkit: disable major bumps — like the SDK's, these are opt-in manual migrations. Scoped to its depName (FND-4903): matching on custom.regex alone disabled majors for every regex-managed dependency, including a repo-local customManager and application-sdk's own pkl pin, and Renovate raised nothing for them because dependencyDashboard is false fleet-wide.",
       "matchManagers": [
         "custom.regex"
+      ],
+      "matchDepNames": [
+        "app-contract-toolkit"
       ],
       "matchUpdateTypes": [
         "major"

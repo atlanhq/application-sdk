@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.56.0
-source-sha:    25b9b4e82ddf78f9fbb3a9555bd4e900c9d01170
-source-date:   2026-11-12T13:07:25Z
+sdk-version:   3.58.1
+source-sha:    d5043463095a10dfa169004618140d9746959440
+source-date:   2026-11-24T12:10:31Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,23 +20,23 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 44 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 19 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 58 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 65 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 47 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 76 |
+| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 37 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 51 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 39 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 43 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 13 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 15 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 449 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 461 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 87 |
 
 ## Subpackage Details
 
@@ -122,8 +122,8 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import NonRetryableError`
 - **Also importable from:** `application_sdk.app.base`
-- **Signature:** `class NonRetryableError`
-- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
+- **Signature:** `class NonRetryableError(message: str, ...)`
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `Output`
@@ -151,8 +151,8 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 - **Import:** `from application_sdk.app import RetryableError`
 - **Also importable from:** `application_sdk.app.base`
-- **Signature:** `class RetryableError`
-- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
+- **Signature:** `class RetryableError(message: str, ...)`
+- **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.0.
 - **Defined in:** `application_sdk/app/base.py`
 
 #### `RetryPolicy`
@@ -233,7 +233,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `_safe_log`
 
 - **Import:** `from application_sdk.app.base import _safe_log`
-- **Signature:** `_safe_log(level: str, message: str, **attrs: Any) -> None`
+- **Signature:** `_safe_log(level: str, message: str, **attrs: object) -> None`
 - **Summary:** Log using Temporal's workflow logger.
 - **Defined in:** `application_sdk/app/base.py`
 
@@ -298,7 +298,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `_app_state`
 
 - **Import:** `from application_sdk.app.base import _app_state`
-- **Signature:** `_app_state: dict[str, dict[str, Any]]`
+- **Signature:** `_app_state: dict[tuple[str, str], dict[str, Any]]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
 
@@ -523,6 +523,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** What :func:`get_tables_needing_column_extraction` found.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
 
+#### `ConvertFile`
+
+- **Import:** `from application_sdk.common.file_converter import ConvertFile`
+- **Signature:** `class ConvertFile`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/file_converter.py`
+
 #### `DataframeType`
 
 - **Import:** `from application_sdk.common import DataframeType`
@@ -550,6 +557,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class EnvelopeShape`
 - **Summary:** Where relationship references live in the serialised entity.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `FileType`
+
+- **Import:** `from application_sdk.common.file_converter import FileType`
+- **Signature:** `class FileType`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/file_converter.py`
 
 #### `FilterPattern`
 
@@ -612,7 +626,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import TaskResult`
 - **Signature:** `class TaskResult`
-- **Summary:** _(no docstring)_
+- **Summary:** A ``{status, message, metadata}`` dict.
 - **Defined in:** `application_sdk/common/models.py`
 
 #### `TaskStatistics`
@@ -673,6 +687,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Return a typed error for a read-only / permission-denied local-write ``OSError``.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `convert_data_files`
+
+- **Import:** `from application_sdk.common.file_converter import convert_data_files`
+- **Signature:** `convert_data_files(input_file_paths: list[str], output_file_type: FileType) -> list[str]`
+- **Summary:** Convert the input files to the specified file type
+- **Defined in:** `application_sdk/common/file_converter.py`
+
+#### `convert_json_to_parquet`
+
+- **Import:** `from application_sdk.common.file_converter import convert_json_to_parquet`
+- **Signature:** `convert_json_to_parquet(file_path: str) -> str | None`
+- **Summary:** Convert the downloaded files from json to parquet
+- **Defined in:** `application_sdk/common/file_converter.py`
+
+#### `convert_parquet_to_json`
+
+- **Import:** `from application_sdk.common.file_converter import convert_parquet_to_json`
+- **Signature:** `convert_parquet_to_json(file_path: str) -> str | None`
+- **Summary:** Convert the downloaded files from parquet to json
+- **Defined in:** `application_sdk/common/file_converter.py`
+
 #### `create_next_marker`
 
 - **Import:** `from application_sdk.common.incremental import create_next_marker`
@@ -701,6 +736,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Serialise a mapper's return value to one Atlas wire-shape JSON line.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `enum_register`
+
+- **Import:** `from application_sdk.common.file_converter import enum_register`
+- **Signature:** `enum_register()`
+- **Summary:** Helps us register custom function for enum values
+- **Defined in:** `application_sdk/common/file_converter.py`
+
 #### `extract_epoch_id_from_qualified_name`
 
 - **Import:** `from application_sdk.common.incremental import extract_epoch_id_from_qualified_name`
@@ -721,6 +763,12 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
 - **Summary:** Fetch the marker as a ``(marker, next_marker)`` tuple.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
+
+#### `file_converter_registry`
+
+- **Import:** `from application_sdk.common.file_converter import file_converter_registry`
+- **Signature:** `file_converter_registry(...)`
+- **Summary:** _(no docstring)_
 
 #### `filter_matches`
 
@@ -748,7 +796,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import get_actual_cpu_count`
 - **Signature:** `get_actual_cpu_count()`
-- **Summary:** Get the actual number of CPUs available to the current process.
+- **Summary:** Whole CPUs this process may use: the tighter of affinity and the CPU limit.
 - **Defined in:** `application_sdk/common/concurrency.py`
 
 #### `get_backfill_tables`
@@ -760,10 +808,11 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 #### `get_logger`
 
-- **Import:** `from application_sdk.common.logger import get_logger`
+- **Import:** `from application_sdk.common.file_converter import get_logger`
+- **Also importable from:** `application_sdk.common.logger`
 - **Signature:** `get_logger(name: str | None = None)`
-- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
-- **Defined in:** `application_sdk/_logging.py`
+- **Summary:** Get or create an instance of AtlanLoggerAdapter.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `get_persistent_artifacts_path`
 
@@ -955,6 +1004,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Typed replacement for ``connection: dict[str, Any]`` in Temporal contracts.
 - **Defined in:** `application_sdk/contracts/types.py`
 
+#### `ContractDeclarationError`
+
+- **Import:** `from application_sdk.contracts import ContractDeclarationError`
+- **Signature:** `class ContractDeclarationError(*, ...)`
+- **Summary:** A class used as a contract is not one, or declares a field it may not.
+- **Defined in:** `application_sdk/contracts/base.py`
+
 #### `ContractMetadata`
 
 - **Import:** `from application_sdk.contracts import ContractMetadata`
@@ -966,7 +1022,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 - **Import:** `from application_sdk.contracts import ContractValidationError`
 - **Signature:** `class ContractValidationError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `DeclaredFile`
@@ -1170,7 +1226,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `canonical_type_str`
 
 - **Import:** `from application_sdk.contracts.compat import canonical_type_str`
-- **Signature:** `canonical_type_str(tp: Any) -> str`
+- **Signature:** `canonical_type_str(tp: object) -> str`
 - **Summary:** Return a normalized string representation of a type annotation.
 - **Defined in:** `application_sdk/contracts/compat.py`
 
@@ -1679,7 +1735,7 @@ Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SD
 
 ## `application_sdk.errors`
 
-Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.)
+Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary
 
 ### Classes
 
@@ -1770,9 +1826,9 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 #### `ErrorCode`
 
 - **Import:** `from application_sdk.errors import ErrorCode`
-- **Signature:** `class ErrorCode(component: str, id: int) -> None`
+- **Signature:** `class ErrorCode(component: str, id: int)`
 - **Summary:** Structured error code for monitoring and alerting.
-- **Defined in:** `application_sdk/errors/__init__.py`
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
 
 #### `FailureCategory`
 
@@ -1938,279 +1994,6 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Defined in:** `application_sdk/errors/base.py`
 
 ### Constants and Enums
-
-#### `APP_ALREADY_REGISTERED`
-
-- **Import:** `from application_sdk.errors import APP_ALREADY_REGISTERED`
-- **Signature:** `APP_ALREADY_REGISTERED`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `APP_CONTEXT_ERROR`
-
-- **Import:** `from application_sdk.errors import APP_CONTEXT_ERROR`
-- **Signature:** `APP_CONTEXT_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `APP_ERROR`
-
-- **Import:** `from application_sdk.errors import APP_ERROR`
-- **Signature:** `APP_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `APP_NON_RETRYABLE`
-
-- **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
-- **Signature:** `APP_NON_RETRYABLE`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `APP_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import APP_NOT_FOUND`
-- **Signature:** `APP_NOT_FOUND`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `BINDING_ERROR`
-
-- **Import:** `from application_sdk.errors import BINDING_ERROR`
-- **Signature:** `BINDING_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `CONTRACT_VALIDATION`
-
-- **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
-- **Signature:** `CONTRACT_VALIDATION`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `CREDENTIAL_ERROR`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
-- **Signature:** `CREDENTIAL_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `CREDENTIAL_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
-- **Signature:** `CREDENTIAL_NOT_FOUND`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `CREDENTIAL_PARSE_ERROR`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_PARSE_ERROR`
-- **Signature:** `CREDENTIAL_PARSE_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `CREDENTIAL_VALIDATION_ERROR`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_VALIDATION_ERROR`
-- **Signature:** `CREDENTIAL_VALIDATION_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `CREDENTIAL_VAULT_ERROR`
-
-- **Import:** `from application_sdk.errors import CREDENTIAL_VAULT_ERROR`
-- **Signature:** `CREDENTIAL_VAULT_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `DISCOVERY_ERROR`
-
-- **Import:** `from application_sdk.errors import DISCOVERY_ERROR`
-- **Signature:** `DISCOVERY_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `EVENT_BUS`
-
-- **Import:** `from application_sdk.errors import EVENT_BUS`
-- **Signature:** `EVENT_BUS`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `EVENT_PUBLISH`
-
-- **Import:** `from application_sdk.errors import EVENT_PUBLISH`
-- **Signature:** `EVENT_PUBLISH`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `EXECUTION_ACTIVITY_ERROR`
-
-- **Import:** `from application_sdk.errors import EXECUTION_ACTIVITY_ERROR`
-- **Signature:** `EXECUTION_ACTIVITY_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `EXECUTION_ERROR`
-
-- **Import:** `from application_sdk.errors import EXECUTION_ERROR`
-- **Signature:** `EXECUTION_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `EXECUTION_WORKER_ERROR`
-
-- **Import:** `from application_sdk.errors import EXECUTION_WORKER_ERROR`
-- **Signature:** `EXECUTION_WORKER_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `HANDLER_ERROR`
-
-- **Import:** `from application_sdk.errors import HANDLER_ERROR`
-- **Signature:** `HANDLER_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `PAYLOAD_SAFETY`
-
-- **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
-- **Signature:** `PAYLOAD_SAFETY`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `PUBSUB_ERROR`
-
-- **Import:** `from application_sdk.errors import PUBSUB_ERROR`
-- **Signature:** `PUBSUB_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `SECRET_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
-- **Signature:** `SECRET_NOT_FOUND`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `SECRET_STORE_ERROR`
-
-- **Import:** `from application_sdk.errors import SECRET_STORE_ERROR`
-- **Signature:** `SECRET_STORE_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `SEGMENT_ERROR`
-
-- **Import:** `from application_sdk.errors import SEGMENT_ERROR`
-- **Signature:** `SEGMENT_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STATE_STORE_ERROR`
-
-- **Import:** `from application_sdk.errors import STATE_STORE_ERROR`
-- **Signature:** `STATE_STORE_ERROR`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_AUTH`
-
-- **Import:** `from application_sdk.errors import STORAGE_AUTH`
-- **Signature:** `STORAGE_AUTH`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_CONFIG`
-
-- **Import:** `from application_sdk.errors import STORAGE_CONFIG`
-- **Signature:** `STORAGE_CONFIG`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_DISK_FULL`
-
-- **Import:** `from application_sdk.errors import STORAGE_DISK_FULL`
-- **Signature:** `STORAGE_DISK_FULL`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_EMPTY_UPLOAD`
-
-- **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
-- **Signature:** `STORAGE_EMPTY_UPLOAD`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_GATEWAY_AUTH`
-
-- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_AUTH`
-- **Signature:** `STORAGE_GATEWAY_AUTH`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_GATEWAY_NO_ROUTE`
-
-- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE`
-- **Signature:** `STORAGE_GATEWAY_NO_ROUTE`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_HANDOFF_INCOMPLETE`
-
-- **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
-- **Signature:** `STORAGE_HANDOFF_INCOMPLETE`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_INTEGRITY`
-
-- **Import:** `from application_sdk.errors import STORAGE_INTEGRITY`
-- **Signature:** `STORAGE_INTEGRITY`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
-- **Signature:** `STORAGE_NOT_FOUND`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_OPERATION`
-
-- **Import:** `from application_sdk.errors import STORAGE_OPERATION`
-- **Signature:** `STORAGE_OPERATION`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_PERMISSION`
-
-- **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
-- **Signature:** `STORAGE_PERMISSION`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_PREFLIGHT`
-
-- **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
-- **Signature:** `STORAGE_PREFLIGHT`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `STORAGE_RELOCATION`
-
-- **Import:** `from application_sdk.errors import STORAGE_RELOCATION`
-- **Signature:** `STORAGE_RELOCATION`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
-
-#### `TASK_NOT_FOUND`
-
-- **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
-- **Signature:** `TASK_NOT_FOUND`
-- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
-- **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `WORKER_EVICTED_TYPE`
 
@@ -2413,14 +2196,14 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 
 - **Import:** `from application_sdk.execution import create_data_converter`
 - **Signature:** `create_data_converter(additional_converters: list[EncodingPayloadConverter] | None = None)`
-- **Summary:** Create a data converter with Pydantic support.
+- **Summary:** Return the SDK's Temporal data converter: the official ``pydantic_data_converter``.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_data_converter_for_app`
 
 - **Import:** `from application_sdk.execution import create_data_converter_for_app`
 - **Signature:** `create_data_converter_for_app(app_class: type[App])`
-- **Summary:** Create a data converter for a specific app, including any app-specific converters.
+- **Summary:** Return the data converter for *app_class*.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_temporal_client`
@@ -2816,7 +2599,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import BindingError`
 - **Signature:** `class BindingError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.BindingUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `BindingRequest`
@@ -2831,6 +2614,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import BindingResponse`
 - **Signature:** `class BindingResponse(data: bytes | None = None, metadata: dict[str, str] = dict())`
 - **Summary:** Response from a binding invocation.
+- **Defined in:** `application_sdk/infrastructure/bindings.py`
+
+#### `BindingUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import BindingUnavailableError`
+- **Signature:** `class BindingUnavailableError(*, ...)`
+- **Summary:** A binding invocation failed: the sidecar or the bound resource did not answer.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
 
 #### `CapacityPool`
@@ -2851,7 +2641,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import CredentialVaultError`
 - **Signature:** `class CredentialVaultError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.CredentialVaultUnavailableError`` — removed in v4.0.
+- **Defined in:** `application_sdk/infrastructure/credential_vault.py`
+
+#### `CredentialVaultUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import CredentialVaultUnavailableError`
+- **Signature:** `class CredentialVaultUnavailableError(*, ...)`
+- **Summary:** Resolving a credential by GUID failed.
 - **Defined in:** `application_sdk/infrastructure/credential_vault.py`
 
 #### `DaprBinding`
@@ -2942,7 +2739,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import PubSubError`
 - **Signature:** `class PubSubError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.PubSubUnavailableError`` — removed in v4.0.
+- **Defined in:** `application_sdk/infrastructure/pubsub.py`
+
+#### `PubSubUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import PubSubUnavailableError`
+- **Signature:** `class PubSubUnavailableError(*, ...)`
+- **Summary:** Publishing to a pub/sub topic failed.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
 
 #### `SecretNotFoundError`
@@ -2998,7 +2802,14 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 - **Import:** `from application_sdk.infrastructure import StateStoreError`
 - **Signature:** `class StateStoreError(message: str, ...)`
-- **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.infrastructure.StateStoreUnavailableError`` — removed in v4.0.
+- **Defined in:** `application_sdk/infrastructure/state.py`
+
+#### `StateStoreUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import StateStoreUnavailableError`
+- **Signature:** `class StateStoreUnavailableError(*, ...)`
+- **Summary:** A state-store read, write or delete failed.
 - **Defined in:** `application_sdk/infrastructure/state.py`
 
 #### `Subscription`
@@ -3107,7 +2918,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 - **Import:** `from application_sdk.observability.traces_adaptor import AtlanTracesAdapter`
 - **Signature:** `class AtlanTracesAdapter()`
-- **Summary:** A traces adapter for Atlan that extends AtlanObservability.
+- **Summary:** Emit the spans ``@observability`` and app code record, through OpenTelemetry.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
 #### `CorrelationContext`
@@ -3329,6 +3140,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** A field the record's qualifiedName is built from is blank. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
+#### `FetchFailureReason`
+
+- **Import:** `from application_sdk.outputs import FetchFailureReason`
+- **Signature:** `class FetchFailureReason`
+- **Summary:** Why an item could not be fetched. A closed set, so failures aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
 #### `MalformedRecord`
 
 - **Import:** `from application_sdk.outputs import MalformedRecord`
@@ -3386,6 +3204,13 @@ Output collectors and record models for Automation Engine
 - **Signature:** `get_outputs() -> OutputCollector`
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
+
+#### `record_fetch_failure`
+
+- **Import:** `from application_sdk.outputs import record_fetch_failure`
+- **Signature:** `record_fetch_failure(reason: FetchFailureReason, *, ...)`
+- **Summary:** Record that one item could not be fetched, keeping its id for review after the run.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
 
 #### `skip_record`
 
@@ -4467,6 +4292,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How a condition tests a field.
 - **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
 
+#### `FieldRule`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import FieldRule`
+- **Signature:** `class FieldRule(path: str, ...)`
+- **Summary:** What one field of every record must satisfy.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `Finding`
 
 - **Import:** `from application_sdk.testing.harness.expectations import Finding`
@@ -4835,6 +4667,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/base.py`
 
+#### `OutputSchema`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import OutputSchema`
+- **Signature:** `class OutputSchema(typename: str, ...)`
+- **Summary:** The declared shape of one typename's output directory.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
+#### `OutputValidationReport`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import OutputValidationReport`
+- **Signature:** `class OutputValidationReport(typenames: tuple[TypenameReport, ...]) -> None`
+- **Summary:** The verdict across every declared typename.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
+#### `OutputViolation`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import OutputViolation`
+- **Signature:** `class OutputViolation(rule: RuleKind, field: str, message: str, file: str = '', line: int = 0) -> None`
+- **Summary:** One example of a broken rule.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `ParquetFormatHandler`
 
 - **Import:** `from application_sdk.testing.scale_data_generator.data_generator import ParquetFormatHandler`
@@ -4906,7 +4759,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing import PreflightOutcomeCapture`
 - **Signature:** `class PreflightOutcomeCapture()`
-- **Summary:** A stand-in for the gate's logger that keeps the rows it was handed.
+- **Summary:** The outcome rows a test captured, with the level each arrived at.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `Present`
@@ -5346,6 +5199,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The diff for a single typename, and whether it gates.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `TypenameReport`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import TypenameReport`
+- **Signature:** `class TypenameReport(typename: str, ...)`
+- **Summary:** The verdict for one :class:`OutputSchema`.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `TypenameRule`
 
 - **Import:** `from application_sdk.testing import TypenameRule`
@@ -5580,6 +5440,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert produced records match a golden fixture, per typename rules.
 - **Defined in:** `application_sdk/testing/golden.py`
 
+#### `assert_output_matches`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import assert_output_matches`
+- **Signature:** `assert_output_matches(output_root: str | Path, *, ...)`
+- **Summary:** :func:`validate_output`, raising ``AssertionError`` with the report on failure.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `assert_settled`
 
 - **Import:** `from application_sdk.testing.harness import assert_settled`
@@ -5636,7 +5503,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing import capture_preflight_outcomes`
 - **Signature:** `capture_preflight_outcomes(monkeypatch: pytest.MonkeyPatch)`
-- **Summary:** Patch the gate's logger with a :class:`PreflightOutcomeCapture` and yield it.
+- **Summary:** Capture the gate's outcome rows from the real log sink and yield them.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
 #### `check_no_stale_pollers`
@@ -5721,6 +5588,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Compare actual extracted metadata against an expected baseline.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `configuration_strategy`
+
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import configuration_strategy`
+- **Signature:** `configuration_strategy(draw) -> Dict[str, Any]`
+- **Summary:** Deprecated: build a strategy from your app's own config model.
+- **Defined in:** `application_sdk/testing/hypothesis/strategies/outputs/statestore.py`
+
 #### `connection_delete_task_queue`
 
 - **Import:** `from application_sdk.testing.harness.teardown import connection_delete_task_queue`
@@ -5783,6 +5657,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `create_connection(client: AsyncAtlanClient, *, ...)`
 - **Summary:** Create a Connection at an exact qualified name, and return that name.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
+#### `credentials_strategy`
+
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import credentials_strategy`
+- **Signature:** `credentials_strategy(draw) -> Dict[str, Any]`
+- **Summary:** Deprecated: build a strategy from your app's own credential model.
+- **Defined in:** `application_sdk/testing/hypothesis/strategies/outputs/statestore.py`
 
 #### `cursor_page`
 
@@ -6345,6 +6226,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Load expected metadata from a JSON file.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `load_pandera_schemas`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import load_pandera_schemas`
+- **Signature:** `load_pandera_schemas(schema_dir: str | Path) -> tuple[OutputSchema, ...]`
+- **Summary:** Read a directory of pandera YAML schemas into :class:`OutputSchema` values.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `locate_cards`
 
 - **Import:** `from application_sdk.testing.setup_routes import locate_cards`
@@ -6765,6 +6653,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `validate_output`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import validate_output`
+- **Signature:** `validate_output(output_root: str | Path, *, ...)`
+- **Summary:** Check ``<output_root>/<subdirectory>/<typename>`` against each schema.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
+#### `validate_paths`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import validate_paths`
+- **Signature:** `validate_paths(schema: OutputSchema, paths: Iterable[str | Path]) -> TypenameReport`
+- **Summary:** Check an explicit set of files or directories against one schema.
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `validate_resolved_spec`
 
 - **Import:** `from application_sdk.testing.harness.seed import validate_resolved_spec`
@@ -7073,6 +6975,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `RuleKind`
+
+- **Import:** `from application_sdk.testing.integration.output_schema import RuleKind`
+- **Signature:** `RuleKind`
+- **Summary:** Which rule a violation broke. The first three are about the artifact as a whole:
+- **Defined in:** `application_sdk/testing/integration/output_schema.py`
+
 #### `RUN_VOLATILE_FIELDS`
 
 - **Import:** `from application_sdk.testing import RUN_VOLATILE_FIELDS`
@@ -7218,6 +7127,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
 - **Signature:** `class AssetValidationFailure(file: str, ...)`
 - **Summary:** A single asset that failed per-asset (``.validate()``) checks.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `AssetValidationOutcome`
+
+- **Import:** `from application_sdk.validation import AssetValidationOutcome`
+- **Signature:** `class AssetValidationOutcome(event_fields: dict[str, ...)`
+- **Summary:** What an isolated upload-validation scan sends back to the worker: bounded.
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `AssetValidationReport`
@@ -7446,6 +7362,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `resolve_artifact_enforcement(app_cls: type | None)`
 - **Summary:** Resolve one app's artifact-validation posture. ``True`` = hard.
 - **Defined in:** `application_sdk/validation/interceptor.py`
+
+#### `summarize_asset_validation`
+
+- **Import:** `from application_sdk.validation import summarize_asset_validation`
+- **Signature:** `summarize_asset_validation(scan: Callable[..., ...)`
+- **Summary:** Run ``scan(*args, **kwargs)`` and reduce its report to the bounded outcome.
+- **Defined in:** `application_sdk/validation/assets.py`
 
 #### `supports_asset_model`
 
@@ -7847,7 +7770,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 #### `ContractValidationError`
 
 - **Import:** `from application_sdk.contracts import ContractValidationError`
-- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Summary:** Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0.
 - **Fields:**
   - `message: str`
   - `retryable: bool | None`
@@ -7864,8 +7787,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `field: str | None`
   - `constraint: str | None`
   - `value_summary: str | None`
-  - `DEFAULT_ERROR_CODE: ClassVar[ErrorCode]` `= CONTRACT_VALIDATION`
-  - `error_code: ErrorCode`
+  - `error_code: ErrorCode | None` — Deprecated legacy ``AAF-…`` code: the per-instance override, else the class's.
+  - `contract_type: str | None` `= contract_type`
+  - `field_name: str | None` `= field_name`
+  - `expected_type: str | None` `= expected_type`
+  - `actual_type: str | None` `= actual_type`
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `DeclaredFile`
@@ -8120,12 +8046,12 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import AuthInput`
 - **Summary:** Input for the test_auth handler operation.
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to authenticate with.
-  - `connection_id: str` `= ''` — Optional connection ID for context.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
   - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to authenticate with.
+  - `connection_id: str` `= ''` — Optional connection ID for context.
+  - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `AuthOutput`
@@ -8238,16 +8164,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import MetadataInput`
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
   - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets (e.g.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
   - `max_objects: int` `= 1000` — Maximum number of objects to return.
   - `timeout_seconds: int` `= 120` — Maximum seconds to wait for metadata fetch.
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataOutput`
@@ -8278,13 +8204,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightInput`
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
-  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `tiers: frozenset[CheckTier]` `= ALL_CHECK_TIERS` — Run only the checks in these tiers. The default, every tier, is for
   - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
@@ -8341,13 +8267,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import WarmupInput`
 - **Summary:** Input for the optional ``Handler.warmup`` probe: ``/check``'s body, plus
 - **Fields:**
-  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
-  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `probe_timeout_seconds: int` `= 10` — How long this probe may wait for the source to answer — the app's
 - **Defined in:** `application_sdk/handler/contracts.py`
 

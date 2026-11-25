@@ -8,3 +8,5 @@ class BehindTheScenesGeneratedE2EBase(BaseE2ETest):
     argo_package_name = "@atlan/behind-the-scenes"
     argo_template_name = "atlan-behind-the-scenes"
     app_service_url = "http://behind-the-scenes.behind-the-scenes-app.svc.cluster.local"
+    connection_type = "postgres"
+    connection_category = "database"

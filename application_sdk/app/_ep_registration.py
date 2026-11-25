@@ -10,14 +10,17 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, get_type_hints
 
+from temporalio import workflow
+
 from application_sdk.app._artifact_schema_guard import warn_undeclared_artifact_schemas
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointContractError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    EntryPointDeclarationError,
     EntryPointMetadata,
     get_entrypoint_metadata,
     is_entrypoint,
 )
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata, is_task
 from application_sdk.common.build_identity import build_identity
 from application_sdk.contracts.base import Input, Output
@@ -62,7 +65,7 @@ def _register_tasks(cls: type, app_name: str) -> None:
 
 def _collect_implicit_ep(
     cls: type,
-    app_run_stub: Any,
+    app_run_stub: object,
 ) -> EntryPointMetadata | None:
     """Collect the implicit run() entry point from an App class, if present.
 
@@ -76,7 +79,7 @@ def _collect_implicit_ep(
         abstract, or has unresolvable annotations.
 
     Raises:
-        EntryPointContractError: If run() annotations are present but invalid.
+        EntryPointDeclarationError: If run() annotations are present but invalid.
     """
     if "run" in cls.__dict__:
         run_method: Any = cls.__dict__["run"]
@@ -104,28 +107,28 @@ def _collect_implicit_ep(
     output_type = hints.get("return")
 
     if input_type is None or output_type is None:
-        raise EntryPointContractError(
-            f"run() on {cls.__name__} must have type annotations: "
+        raise EntryPointDeclarationError(
+            message=f"run() on {cls.__name__} must have type annotations: "
             f"async def run(self, input: <Input subclass>) -> <Output subclass>"
         )
     if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-        raise EntryPointContractError(
-            f"run() on {cls.__name__}: input type {input_type!r} must be "
+        raise EntryPointDeclarationError(
+            message=f"run() on {cls.__name__}: input type {input_type!r} must be "
             f"a subclass of Input."
         )
     if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-        raise EntryPointContractError(
-            f"run() on {cls.__name__}: output type {output_type!r} must be "
+        raise EntryPointDeclarationError(
+            message=f"run() on {cls.__name__}: output type {output_type!r} must be "
             f"a subclass of Output."
         )
     if input_type is Input:
-        raise EntryPointContractError(
-            f"run() on {cls.__name__}: input type must be a concrete subclass "
+        raise EntryPointDeclarationError(
+            message=f"run() on {cls.__name__}: input type must be a concrete subclass "
             f"of Input, not Input itself. Define a dedicated dataclass."
         )
     if output_type is Output:
-        raise EntryPointContractError(
-            f"run() on {cls.__name__}: output type must be a concrete subclass "
+        raise EntryPointDeclarationError(
+            message=f"run() on {cls.__name__}: output type must be a concrete subclass "
             f"of Output, not Output itself. Define a dedicated dataclass."
         )
 
@@ -193,7 +196,7 @@ def _build_entry_points(
         Combined ``{name: EntryPointMetadata}`` dict, empty when nothing to register.
 
     Raises:
-        EntryPointContractError: For invalid configurations.
+        EntryPointDeclarationError: For invalid configurations.
     """
     if not explicit_eps and implicit_ep is None:
         return {}
@@ -206,8 +209,8 @@ def _build_entry_points(
             # @entrypoint(default=True) alongside run() is prohibited.
             explicit_defaults = [ep.name for ep in explicit_eps.values() if ep.default]
             if explicit_defaults:
-                raise EntryPointContractError(
-                    f"{cls.__name__}: cannot use @entrypoint(default=True) when "
+                raise EntryPointDeclarationError(
+                    message=f"{cls.__name__}: cannot use @entrypoint(default=True) when "
                     f"run() is also implemented — run() always has default-precedence "
                     f"in mixed apps. Remove default=True from "
                     f"{sorted(explicit_defaults)} or remove the run() override."
@@ -220,15 +223,15 @@ def _build_entry_points(
     # Validate and add every explicit @entrypoint.
     for ep in explicit_eps.values():
         if not (isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)):
-            raise EntryPointContractError(
-                f"Entry point '{ep.name}' on {cls.__name__}: "
+            raise EntryPointDeclarationError(
+                message=f"Entry point '{ep.name}' on {cls.__name__}: "
                 f"input type {ep.input_type!r} must be a subclass of Input."
             )
         if not (
             isinstance(ep.output_type, type) and issubclass(ep.output_type, Output)
         ):
-            raise EntryPointContractError(
-                f"Entry point '{ep.name}' on {cls.__name__}: "
+            raise EntryPointDeclarationError(
+                message=f"Entry point '{ep.name}' on {cls.__name__}: "
                 f"output type {ep.output_type!r} must be a subclass of Output."
             )
         entry_points[ep.name] = ep
@@ -244,8 +247,8 @@ def _build_entry_points(
     # At most one entry point may be the default.
     defaults = [ep.name for ep in entry_points.values() if ep.default]
     if len(defaults) > 1:
-        raise EntryPointContractError(
-            f"{cls.__name__}: more than one default entry point "
+        raise EntryPointDeclarationError(
+            message=f"{cls.__name__}: more than one default entry point "
             f"({sorted(defaults)}). At most one entry point may be the default — "
             f"mark one @entrypoint(default=True) or let run() remain the default."
         )
@@ -298,6 +301,32 @@ def _apply_app_registration(
     cls._input_type = input_type
     cls._output_type = output_type
 
+    if workflow.unsafe.in_sandbox():
+        # Temporal's sandbox re-imports the app module for every workflow run,
+        # which runs this hook again on a fresh copy of the class. That copy
+        # exists only for the run: registering it would overwrite the host's
+        # registry entry with a class whose module dies with the sandbox, and
+        # would re-register its tasks. Stamp the copy with unregistered
+        # metadata so its generated workflow classes can be rebuilt from it
+        # (see App.__init_subclass__), and leave the host registries alone.
+        cls._app_metadata = AppMetadata(
+            name=name,
+            version=version,
+            app_cls=cls,
+            input_type=input_type,
+            output_type=output_type,
+            module_path=cls.__module__,
+            class_name=cls.__name__,
+            description=description,
+            tags=tags or {},
+            passthrough_modules=frozenset(passthrough_modules or set()),
+            entry_points=entry_points or {},
+            legacy_workflow_types=(
+                legacy_workflow_types if legacy_workflow_types is not None else {}
+            ),
+        )
+        return
+
     registry = AppRegistry.get_instance()
     metadata = registry.register(
         name=name,
@@ -321,5 +350,5 @@ def _apply_app_registration(
 
     # Boundary artifact-schema guard. Runs last so a missing declaration never
     # blocks registration: it is advisory in 3.x and becomes an
-    # EntryPointContractError in 4.0 (see _artifact_schema_guard).
+    # EntryPointDeclarationError in 4.0 (see _artifact_schema_guard).
     warn_undeclared_artifact_schemas(name, entry_points or {})

@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+from typing_extensions import deprecated
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -96,8 +97,16 @@ class EventMetadata(BaseModel):
     event_id: str | None = Field(init=True, default=None)
 
 
+@deprecated(
+    "application_sdk.contracts.events.EventFilter is deprecated; use "
+    "application_sdk.handler.contracts.EventFilterRule instead — will be removed in v4.0."
+)
 class EventFilter(BaseModel):
     """Filter for events.
+
+    .. deprecated:: 3.58.0
+        A v2 event-registration model; nothing reads it. Use
+        ``application_sdk.handler.contracts.EventFilterRule``. Will be removed in v4.0.
 
     Attributes:
         path: Path to filter on.
@@ -110,8 +119,16 @@ class EventFilter(BaseModel):
     value: str
 
 
+@deprecated(
+    "application_sdk.contracts.events.Consumes is deprecated; use "
+    "application_sdk.handler.contracts.EventTriggerConfig instead — will be removed in v4.0."
+)
 class Consumes(BaseModel):
     """Model for event consumption configuration.
+
+    .. deprecated:: 3.58.0
+        A v2 event-registration model; nothing reads it. Use
+        ``application_sdk.handler.contracts.EventTriggerConfig``. Will be removed in v4.0.
 
     Attributes:
         event_id: ID of the event.
@@ -128,8 +145,18 @@ class Consumes(BaseModel):
     filters: list[EventFilter] = Field(init=True, default=[])
 
 
+@deprecated(
+    "application_sdk.contracts.events.EventRegistration is deprecated; use "
+    "application_sdk.handler.contracts.EventTriggerConfig, one per consumed event, "
+    "instead — will be removed in v4.0."
+)
 class EventRegistration(BaseModel):
     """Model for event registration.
+
+    .. deprecated:: 3.58.0
+        A v2 event-registration model; nothing reads it. Use
+        ``application_sdk.handler.contracts.EventTriggerConfig``, one per consumed
+        event. Will be removed in v4.0.
 
     Attributes:
         consumes: List of events to consume.

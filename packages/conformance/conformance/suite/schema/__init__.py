@@ -19,6 +19,7 @@ from conformance.suite.schema.extensions import (
 from conformance.suite.schema.findings import Finding, findings_to_report
 from conformance.suite.schema.sarif import (
     Location,
+    Notification,
     PhysicalLocation,
     Region,
     ReportingDescriptor,
@@ -36,14 +37,14 @@ from conformance.suite.schema.validate import validate_sarif
 
 def load_catalog() -> list[RuleDefinition]:
     """Return all rules in definition order."""
-    from conformance.suite.rules import load_catalog as _load
+    from conformance.suite.rules import load_catalog as _load  # noqa: PLC0415 — circular: suite.rules imports suite.schema
 
     return _load()
 
 
 def get_rule(rule_id: str) -> RuleDefinition:
     """O(1) lookup by rule ID. Raises KeyError if not found."""
-    from conformance.suite.rules import get_rule as _get
+    from conformance.suite.rules import get_rule as _get  # noqa: PLC0415 — circular: suite.rules imports suite.schema
 
     return _get(rule_id)
 
@@ -65,6 +66,7 @@ __all__ = [
     "SafeSwap",
     "SafeSwapRequires",
     "Location",
+    "Notification",
     "PhysicalLocation",
     "Region",
     "ReportingDescriptor",

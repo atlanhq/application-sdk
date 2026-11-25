@@ -24,6 +24,7 @@ from conformance.suite.checks.deprecation._removed_imports import (
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import sdk_root
 
 _OWN = frozenset({"app", "tests", "local", "scripts"})
 
@@ -85,7 +86,7 @@ def test_b009_message_for_a_later_removal_names_its_version() -> None:
     [
         # Live modules, including ones that share a prefix with a removed one.
         "from application_sdk.testing.e2e import BaseE2ETest\n",
-        "from application_sdk.testing.integration import Scenario\n",
+        "from application_sdk.testing.integration import GoldenCorpus\n",
         "from application_sdk.outputs import get_outputs\n",
         "from application_sdk.handler import Handler\n",
         "import application_sdk.workflows_v2\n",
@@ -239,18 +240,9 @@ def test_registry_has_no_nested_entries() -> None:
     assert not nested, f"entries nested under another entry: {nested}"
 
 
-def _find_sdk_root() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "application_sdk" / "__init__.py").is_file():
-            return parent
-    return None
-
-
 def test_registry_names_only_modules_absent_from_the_sdk_tree() -> None:
     """A module that comes back must leave the registry, or B009 flags live code."""
-    root = _find_sdk_root()
-    if root is None:
-        pytest.skip("application_sdk/ source tree not available (installed wheel)")
+    root = sdk_root()
     present = []
     for module in REMOVED_SDK_MODULES:
         path = root.joinpath(*module.split("."))
@@ -260,9 +252,7 @@ def test_registry_names_only_modules_absent_from_the_sdk_tree() -> None:
 
 
 def test_registry_replacements_exist_in_the_sdk_tree() -> None:
-    root = _find_sdk_root()
-    if root is None:
-        pytest.skip("application_sdk/ source tree not available (installed wheel)")
+    root = sdk_root()
     missing = []
     for entry in REMOVED_SDK_MODULES.values():
         if entry.replacement is None:

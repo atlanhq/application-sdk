@@ -9,16 +9,12 @@ from __future__ import annotations
 
 import re
 import shutil
-import sys
 from pathlib import Path
 
+import check_conformance_lock as check
+import conformance_wheel_gate as gate
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import check_conformance_lock as check  # noqa: E402
-import conformance_wheel_gate as gate  # noqa: E402
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 

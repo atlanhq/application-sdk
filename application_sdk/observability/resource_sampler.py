@@ -27,6 +27,8 @@ import sys
 import threading
 from dataclasses import dataclass
 
+from typing_extensions import deprecated
+
 from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
@@ -146,6 +148,11 @@ def sample() -> ResourceSample | None:
         return None
 
 
+@deprecated(
+    "compute_deltas is deprecated; use ActivityShareLedger for per-activity "
+    "attribution — the whole-process delta has no caller in the SDK. Will be "
+    "removed in v4.0.0."
+)
 def compute_deltas(
     start: ResourceSample | None,
     end: ResourceSample | None,
@@ -162,6 +169,9 @@ def compute_deltas(
     :class:`ActivityShareLedger` for per-activity attribution.
 
     Returns (0.0, 0.0) if either sample is None.
+
+    .. deprecated:: 3.59
+        Use :class:`ActivityShareLedger`. Will be removed in v4.0.0.
     """
     if start is None or end is None:
         return 0.0, 0.0

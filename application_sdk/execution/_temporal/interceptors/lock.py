@@ -89,7 +89,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         super().__init__(next)
         self.activities = activities
 
-    async def start_activity(  # type: ignore[override]
+    async def start_activity(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: StartActivityInput
     ) -> workflow.ActivityHandle[Any]:
         """Start activity with distributed lock if required."""
@@ -166,7 +166,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
             # the handle rather than returning it immediately.
             handle = await self.next.start_activity(input)
             result = await handle
-            return result  # type: ignore[return-value]  # Returns awaited result, not handle — lock must be held until activity completion
+            return result
 
         finally:
             # Step 3: Release lock (fire-and-forget with short timeout)

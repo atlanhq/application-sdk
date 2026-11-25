@@ -23,7 +23,6 @@ import pytest
 from application_sdk.storage import batch, integrity, transfer
 from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageIntegrityError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import (
     _get_bytes,
     _put,
@@ -32,11 +31,6 @@ from application_sdk.storage.ops import (
     get_file_meta,
     upload_file,
 )
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -87,11 +81,12 @@ class TestStorageIntegrityErrorContract:
     """
 
     def test_error_code_and_classification(self) -> None:
-        from application_sdk.errors import STORAGE_INTEGRITY, Audience, FailureCategory
+        from application_sdk.errors import Audience, FailureCategory
 
         err = StorageIntegrityError("boom", key="a/b.json")
-        assert err.DEFAULT_ERROR_CODE is STORAGE_INTEGRITY
-        assert err.error_code.code == "AAF-STR-007"
+        assert err.code == "DATA_INTEGRITY_STORAGE_TRANSFER"
+        # The legacy AAF code survives only as the str() prefix (FND-4299).
+        assert str(err).startswith("[AAF-STR-007] boom")
         assert err.category is FailureCategory.DATA_INTEGRITY
         assert err.audience is Audience.APP_OWNER
         assert err.effective_retryable is False

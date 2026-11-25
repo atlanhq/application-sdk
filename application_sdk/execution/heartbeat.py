@@ -234,15 +234,15 @@ async def stop_heartbeat_task(
     try:
         await asyncio.wait_for(task, timeout=1.0)
         return
-    # conformance: ignore[E002] cleanup must never outrank the payload; a stuck loop is not the caller's failure
-    except BaseException:  # noqa: S110 — the cancel below is the handling
+    # conformance: ignore[E002,E004] cleanup must never outrank the payload; a stuck loop is not the caller's failure
+    except BaseException:  # the cancel below is the handling
         if _caller_is_being_cancelled():
             task.cancel()
             raise
     task.cancel()
     try:
         await task
-    # conformance: ignore[E002] the cancelled task's BaseException is the cleanup ending, not an error to act on
+    # conformance: ignore[E002,E004] the cancelled task's BaseException is the cleanup ending, not an error to act on
     except BaseException:
         if _caller_is_being_cancelled():
             raise

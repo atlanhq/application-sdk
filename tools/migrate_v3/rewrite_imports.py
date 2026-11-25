@@ -53,6 +53,7 @@ import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 
+from .codemods import _module_to_str
 from .import_mapping import DEPRECATED_MODULES, MODULE_MAP, SYMBOL_MAP, RewriteTarget
 
 logger = get_logger(__name__)
@@ -60,17 +61,6 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _module_to_str(node: cst.Attribute | cst.Name | None) -> str:
-    """Convert a libcst dotted-name node to a plain string like ``a.b.c``."""
-    if node is None:
-        return ""
-    if isinstance(node, cst.Name):
-        return node.value
-    if isinstance(node, cst.Attribute):
-        return f"{_module_to_str(node.value)}.{node.attr.value}"
-    return ""
 
 
 def _str_to_module(dotted: str) -> cst.Attribute | cst.Name:
@@ -151,7 +141,7 @@ class V3ImportRewriter(cst.CSTTransformer):
             return updated_node
 
         # ── named imports ────────────────────────────────────────────────
-        aliases: Sequence[cst.ImportAlias] = updated_node.names  # type: ignore[assignment]
+        aliases: Sequence[cst.ImportAlias] = updated_node.names
 
         # Resolve each symbol to its new (module, target).
         resolved: list[tuple[cst.ImportAlias, str, RewriteTarget]] = []

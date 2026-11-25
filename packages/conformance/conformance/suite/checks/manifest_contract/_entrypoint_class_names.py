@@ -34,10 +34,11 @@ from conformance.suite.checks._ast_common import (
     SDK_APP_BASE_NAMES,
     _IgnoreDirective,
     _parse_directives,
+    leaf_name,
+    load_source,
     make_finding,
 )
 from conformance.suite.checks._entrypoint_contract_classes import _extract_wire_name
-from conformance.suite.checks._entrypoint_contract_fields import _base_name
 from conformance.suite.checks.prescriptions._contract_common import (
     _unwrap_annotated,
     _unwrap_optional_node,
@@ -321,7 +322,7 @@ def _entrypoint_methods(
             if func.name != "run" or not isinstance(func, ast.AsyncFunctionDef):
                 continue
             for base in class_node.bases:
-                bname = _base_name(base)
+                bname = leaf_name(base)
                 if bname is None:
                     continue
                 bname = aliases.get(bname, bname)
@@ -374,11 +375,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     aliases_by_rel: dict[str, dict[str, str]] = {}
 
     for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-            tree = ast.parse(text, filename=str(path))
-        except (OSError, UnicodeDecodeError, SyntaxError):
+        source = load_source(path)
+        if source is None:
             continue
+        text, tree = source.text, source.tree
         try:
             rel = path.relative_to(root).as_posix()
         except ValueError:

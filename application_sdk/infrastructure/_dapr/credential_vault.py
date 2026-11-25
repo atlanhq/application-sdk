@@ -7,12 +7,14 @@ references via the Dapr secret store.
 import asyncio
 import copy
 import re
-import warnings
 from enum import Enum
 from typing import Any
 
 import orjson
+from typing_extensions import deprecated
 
+from application_sdk import _deprecation
+from application_sdk.common._env import env_str
 from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreachableError is a re-export kept for importers of this module (shipped surface)
     ColdStartRaceError,
     DaprSidecarUnreachableError,
@@ -29,7 +31,10 @@ from application_sdk.infrastructure._dapr.http import (
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
-from application_sdk.infrastructure.bindings import BindingError
+from application_sdk.infrastructure.bindings import (
+    BindingError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    BindingUnavailableError,
+)
 from application_sdk.infrastructure.secrets import (  # noqa: F401 — the two outage types are re-exports kept for importers of this module (shipped surface)
     SecretNotFoundError,
     SecretStoreUnavailableError,
@@ -137,16 +142,13 @@ class DaprCredentialVault:
             # store otherwise.  Heracles writes credential configs to whichever
             # store the app is pointed at; in non-SDR / local / CI environments
             # that is the deployment store.
-            import os  # noqa: PLC0415 — cold path
             from pathlib import Path  # noqa: PLC0415 — cold path
 
             from application_sdk.storage.binding import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                 is_binding_configured,
             )
 
-            components_dir = Path(
-                os.environ.get("DAPR_COMPONENTS_PATH", "./components")
-            )
+            components_dir = Path(env_str("DAPR_COMPONENTS_PATH", "./components"))
             upstream_configured = is_binding_configured(
                 UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
             )
@@ -168,11 +170,11 @@ class DaprCredentialVault:
         4. Returns the merged credential dict.
 
         Raises:
-            CredentialVaultError: If any step fails.
+            CredentialVaultUnavailableError: If any step fails.
         """
         # Deferred import: circular dependency
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            CredentialVaultError,
+            CredentialVaultUnavailableError,
         )
 
         try:
@@ -211,7 +213,7 @@ class DaprCredentialVault:
                 # absent bundle as {} (expected — not every credential has
                 # one); anything else (a cold-start race, a genuine store
                 # rejection) propagates to the except Exception below and
-                # becomes a typed CredentialVaultError, rather than being
+                # becomes a typed CredentialVaultUnavailableError, rather than being
                 # silently downgraded to "no secrets" the way it used to be.
                 secret_data = await self._get_secret(key_to_fetch)
             else:
@@ -223,12 +225,12 @@ class DaprCredentialVault:
             else:
                 return _resolve_credentials(credential_config, secret_data)
 
-        except CredentialVaultError:
+        except CredentialVaultUnavailableError:
             raise
-        # conformance: ignore[E004] outer re-raise wraps all failures into CredentialVaultError; no logging needed here
+        # conformance: ignore[E004] outer re-raise wraps all failures into CredentialVaultUnavailableError; no logging needed here
         except Exception as e:
-            raise CredentialVaultError(
-                f"Failed to resolve credentials for {credential_guid}: {e}",
+            raise CredentialVaultUnavailableError(
+                message=f"Failed to resolve credentials for {credential_guid}: {e}",
                 credential_guid=credential_guid,
                 cause=e,
             ) from e
@@ -257,7 +259,7 @@ class DaprCredentialVault:
         being retried for the cold-start budget.
 
         Raises:
-            CredentialVaultError: If the GUID contains unsafe characters or no
+            CredentialVaultUnavailableError: If the GUID contains unsafe characters or no
                 config is found in the upstream store.
         """
         import os  # noqa: PLC0415 — cold path: only on local dev path
@@ -273,7 +275,7 @@ class DaprCredentialVault:
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
             CredentialConfigNotFoundError,
-            CredentialVaultError,
+            CredentialVaultUnavailableError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
             normalize_key,
@@ -281,8 +283,8 @@ class DaprCredentialVault:
 
         # Validate before interpolation to prevent path traversal.
         if not _SAFE_GUID_RE.match(credential_guid):
-            raise CredentialVaultError(
-                "Invalid credential GUID — must match [a-zA-Z0-9_-]+: %r"
+            raise CredentialVaultUnavailableError(
+                message="Invalid credential GUID — must match [a-zA-Z0-9_-]+: %r"
                 % credential_guid,
                 credential_guid=credential_guid,
             )
@@ -308,7 +310,7 @@ class DaprCredentialVault:
             """Return ``None`` only for the object store's explicit not-found."""
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
-            except BindingError as exc:
+            except BindingUnavailableError as exc:
                 # The "no config" answer, re-read on the short ladder below
                 # rather than the cold-start budget, which would delay the
                 # failure and relabel it as an unreachable sidecar.
@@ -348,8 +350,8 @@ class DaprCredentialVault:
                 await asyncio.sleep(delay)
 
         if saw_empty_reply:
-            raise CredentialVaultError(
-                "No credential config read for GUID %s from upstream store "
+            raise CredentialVaultUnavailableError(
+                message="No credential config read for GUID %s from upstream store "
                 "(empty reply within %d attempts over %.0fs)"
                 % (
                     credential_guid,
@@ -359,7 +361,7 @@ class DaprCredentialVault:
                 credential_guid=credential_guid,
             )
         raise CredentialConfigNotFoundError(
-            "No credential config found for GUID %s in upstream store "
+            message="No credential config found for GUID %s in upstream store "
             "(object store answered not-found on %d attempts over %.0fs)"
             % (credential_guid, attempts, sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS)),
             credential_guid=credential_guid,
@@ -546,6 +548,10 @@ def _single_key_candidates(credential_config: dict[str, Any]) -> list[str]:
     return candidates
 
 
+@deprecated(
+    "create_dapr_credential_vault is deprecated; construct "
+    "DaprCredentialVault(client, ...) directly. Will be removed in v4.0.0."
+)
 def create_dapr_credential_vault(
     client: AsyncDaprClient,
     *,
@@ -583,20 +589,6 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-export once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — resolved on access only
-        DAPR_SECRET_STORE_COMPONENT,
-    )
-
-    return DAPR_SECRET_STORE_COMPONENT
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

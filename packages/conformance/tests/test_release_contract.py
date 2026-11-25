@@ -24,6 +24,7 @@ from conformance.suite.checks.release_contract import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding
+from tests._helpers import active_ids
 
 # A well-formed atlan.yaml fragment carrying the top-level app_id key.
 _ATLAN_WITH_APP_ID = (
@@ -60,11 +61,6 @@ def _app_repo(
     if pyproject is not None:
         (tmp_path / "pyproject.toml").write_text(pyproject, encoding="utf-8")
     return scan_all(discover(tmp_path), tmp_path)
-
-
-def _ids(findings: list[Finding]) -> list[str]:
-    """Rule IDs of unsuppressed findings (matching runner gate semantics)."""
-    return [f.rule_id for f in findings if not f.suppressed]
 
 
 # ---------------------------------------------------------------------------
@@ -115,18 +111,18 @@ def test_scan_all_noops_without_contract(tmp_path: Path) -> None:
 
 def test_k011_fires_when_app_id_missing(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, atlan=_ATLAN_WITHOUT_APP_ID)
-    assert "K011" in _ids(findings)
+    assert "K011" in active_ids(findings)
 
 
 def test_k011_silent_when_app_id_present(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, atlan=_ATLAN_WITH_APP_ID)
-    assert "K011" not in _ids(findings)
+    assert "K011" not in active_ids(findings)
 
 
 def test_k011_fires_when_top_level_app_id_is_absent(tmp_path: Path) -> None:
     atlan = "name: salesforce\nrelease_model: semver\n"
     findings = _app_repo(tmp_path, atlan=atlan)
-    assert "K011" in _ids(findings)
+    assert "K011" in active_ids(findings)
 
 
 def test_k011_silent_when_top_level_app_id_has_whitespace_before_colon(
@@ -134,7 +130,7 @@ def test_k011_silent_when_top_level_app_id_has_whitespace_before_colon(
 ) -> None:
     atlan = 'app_id : "019e0353-57c9-7070-81d5-5a48921f1c9c"\nrelease_model: semver\n'
     findings = _app_repo(tmp_path, atlan=atlan)
-    assert "K011" not in _ids(findings)
+    assert "K011" not in active_ids(findings)
 
 
 def test_k011_anchored_in_atlan_yaml(tmp_path: Path) -> None:
@@ -147,14 +143,14 @@ def test_k011_anchored_in_atlan_yaml(tmp_path: Path) -> None:
 def test_k011_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
     # A missing generated output is K004's concern, not K011's — no double-flag.
     findings = _app_repo(tmp_path, atlan=None)
-    assert "K011" not in _ids(findings)
+    assert "K011" not in active_ids(findings)
 
 
 def test_k011_nested_app_id_does_not_satisfy(tmp_path: Path) -> None:
     # An indented app_id under some other mapping is not the top-level identity.
     nested = "name: openapi\nmetadata:\n  app_id: nested\nrelease_model: semver\n"
     findings = _app_repo(tmp_path, atlan=nested)
-    assert "K011" in _ids(findings)
+    assert "K011" in active_ids(findings)
 
 
 def test_k011_fires_on_empty_or_null_value(tmp_path: Path) -> None:
@@ -167,7 +163,7 @@ def test_k011_fires_on_empty_or_null_value(tmp_path: Path) -> None:
         sub.mkdir()
         body = f"name: openapi\n{empty}\nrelease_model: semver\n"
         findings = _app_repo(sub, atlan=body)
-        assert "K011" in _ids(findings), empty
+        assert "K011" in active_ids(findings), empty
 
 
 def test_k011_suppressed_by_directive(tmp_path: Path) -> None:
@@ -176,7 +172,7 @@ def test_k011_suppressed_by_directive(tmp_path: Path) -> None:
     k011 = [f for f in findings if f.rule_id == "K011"]
     assert k011
     assert k011[0].suppressed is True
-    assert "K011" not in _ids(findings)
+    assert "K011" not in active_ids(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -186,17 +182,17 @@ def test_k011_suppressed_by_directive(tmp_path: Path) -> None:
 
 def test_k012_fires_when_generate_task_missing(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, pyproject=_PYPROJECT_WITHOUT_GENERATE)
-    assert "K012" in _ids(findings)
+    assert "K012" in active_ids(findings)
 
 
 def test_k012_silent_when_generate_task_present(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, pyproject=_PYPROJECT_WITH_GENERATE)
-    assert "K012" not in _ids(findings)
+    assert "K012" not in active_ids(findings)
 
 
 def test_k012_fires_when_no_poe_tasks_table(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, pyproject='[project]\nname = "openapi"\n')
-    assert "K012" in _ids(findings)
+    assert "K012" in active_ids(findings)
 
 
 def test_k012_anchored_on_poe_tasks_header(tmp_path: Path) -> None:
@@ -213,19 +209,19 @@ def test_k012_fires_on_empty_generate_command(tmp_path: Path) -> None:
     # generate' still fails, so K012 must fire.
     body = '[tool.poe.tasks]\nstart-deps = "echo none"\ngenerate = ""\n'
     findings = _app_repo(tmp_path, pyproject=body)
-    assert "K012" in _ids(findings)
+    assert "K012" in active_ids(findings)
 
 
 def test_k012_fires_on_malformed_pyproject(tmp_path: Path) -> None:
     # A malformed pyproject.toml is treated as "no tasks declared": the check
     # neither crashes nor false-negatives, so K012 fires.
     findings = _app_repo(tmp_path, pyproject="[tool.poe.tasks\nbroken = \n")
-    assert "K012" in _ids(findings)
+    assert "K012" in active_ids(findings)
 
 
 def test_k012_silent_when_no_pyproject(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, pyproject=None)
-    assert "K012" not in _ids(findings)
+    assert "K012" not in active_ids(findings)
 
 
 def test_k012_suppressed_by_directive(tmp_path: Path) -> None:
@@ -234,7 +230,7 @@ def test_k012_suppressed_by_directive(tmp_path: Path) -> None:
     k012 = [f for f in findings if f.rule_id == "K012"]
     assert k012
     assert k012[0].suppressed is True
-    assert "K012" not in _ids(findings)
+    assert "K012" not in active_ids(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -246,14 +242,14 @@ def test_both_fire_on_fully_broken_release_setup(tmp_path: Path) -> None:
     findings = _app_repo(
         tmp_path, atlan=_ATLAN_WITHOUT_APP_ID, pyproject=_PYPROJECT_WITHOUT_GENERATE
     )
-    assert set(_ids(findings)) == {"K011", "K012"}
+    assert set(active_ids(findings)) == {"K011", "K012"}
 
 
 def test_clean_setup_produces_no_findings(tmp_path: Path) -> None:
     findings = _app_repo(
         tmp_path, atlan=_ATLAN_WITH_APP_ID, pyproject=_PYPROJECT_WITH_GENERATE
     )
-    assert _ids(findings) == []
+    assert active_ids(findings) == []
 
 
 # ---------------------------------------------------------------------------
@@ -272,12 +268,12 @@ def test_k014_rule_metadata() -> None:
 def test_k014_fires_when_release_model_absent(tmp_path: Path) -> None:
     """The fleet-wide default case: no key at all, so the app inherits 'cd'."""
     findings = _app_repo(tmp_path, atlan="name: openapi\napp_id: abc\n")
-    assert "K014" in _ids(findings)
+    assert "K014" in active_ids(findings)
 
 
 def test_k014_silent_on_explicit_semver(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, atlan=_ATLAN_WITH_APP_ID)
-    assert "K014" not in _ids(findings)
+    assert "K014" not in active_ids(findings)
 
 
 def test_k014_silent_on_explicit_cd(tmp_path: Path) -> None:
@@ -285,12 +281,12 @@ def test_k014_silent_on_explicit_cd(tmp_path: Path) -> None:
     findings = _app_repo(
         tmp_path, atlan="name: openapi\napp_id: abc\nrelease_model: cd\n"
     )
-    assert "K014" not in _ids(findings)
+    assert "K014" not in active_ids(findings)
 
 
 def test_k014_fires_on_bare_key(tmp_path: Path) -> None:
     findings = _app_repo(tmp_path, atlan="name: openapi\napp_id: abc\nrelease_model:\n")
-    assert "K014" in _ids(findings)
+    assert "K014" in active_ids(findings)
 
 
 @pytest.mark.parametrize("null", ["null", "Null", "NULL", "~", '""', "''"])
@@ -298,7 +294,7 @@ def test_k014_fires_on_null_value(tmp_path: Path, null: str) -> None:
     findings = _app_repo(
         tmp_path, atlan=f"name: openapi\napp_id: abc\nrelease_model: {null}\n"
     )
-    assert "K014" in _ids(findings)
+    assert "K014" in active_ids(findings)
 
 
 def test_k014_fires_on_invalid_value(tmp_path: Path) -> None:
@@ -325,7 +321,7 @@ def test_k014_accepts_quoted_and_commented_value(tmp_path: Path) -> None:
         tmp_path,
         atlan='name: openapi\napp_id: abc\nrelease_model: "semver"  # deliberate\n',
     )
-    assert "K014" not in _ids(findings)
+    assert "K014" not in active_ids(findings)
 
 
 def test_k014_nested_release_model_does_not_satisfy(tmp_path: Path) -> None:
@@ -338,7 +334,7 @@ def test_k014_nested_release_model_does_not_satisfy(tmp_path: Path) -> None:
         tmp_path,
         atlan="name: openapi\napp_id: abc\ndeploy:\n  release_model: semver\n",
     )
-    assert "K014" in _ids(findings)
+    assert "K014" in active_ids(findings)
 
 
 def test_k014_anchored_in_atlan_yaml(tmp_path: Path) -> None:
@@ -351,7 +347,7 @@ def test_k014_anchored_in_atlan_yaml(tmp_path: Path) -> None:
 def test_k014_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
     """A missing atlan.yaml is K004's regeneration concern, not this rule's."""
     findings = _app_repo(tmp_path, atlan=None)
-    assert "K014" not in _ids(findings)
+    assert "K014" not in active_ids(findings)
 
 
 def test_k014_suppressed_by_directive(tmp_path: Path) -> None:
@@ -360,4 +356,4 @@ def test_k014_suppressed_by_directive(tmp_path: Path) -> None:
     k014 = [f for f in findings if f.rule_id == "K014"]
     assert k014
     assert k014[0].suppressed is True
-    assert "K014" not in _ids(findings)
+    assert "K014" not in active_ids(findings)

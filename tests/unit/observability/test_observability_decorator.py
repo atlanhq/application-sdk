@@ -10,10 +10,14 @@ threads, no real loops beyond pytest-asyncio's default.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.observability.decorators import observability_decorator
 from application_sdk.observability.decorators.observability_decorator import (
     FUNCTION_CALLS_METRIC,
     _record_error_observability,
@@ -21,11 +25,29 @@ from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
 from application_sdk.observability.metrics_adaptor import MetricType
+from tests.unit._doubles import FakeClock
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _mock_components():
     """Build a triple of (logger, metrics, traces) mocks."""
     return MagicMock(name="logger"), MagicMock(name="metrics"), MagicMock(name="traces")
+
+
+@contextmanager
+def _decorator_clock() -> Iterator[FakeClock]:
+    """Give the decorator module a clock the test advances by hand.
+
+    A real sleep measured against the real clock is not a lower bound on
+    Windows: the event loop runs a timer that is due within one tick of its
+    clock (15.6 ms there), so ``asyncio.sleep(0.02)`` has returned after 6 ms
+    in CI. The clock is patched on a private copy of ``time``, so the event
+    loop and every other thread keep the real one.
+    """
+    clock = FakeClock()
+    with private_stdlib(observability_decorator, "time") as local_time:
+        with patch.object(local_time, "monotonic", clock):
+            yield clock
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +109,53 @@ class TestSyncWrapper:
             "error_type": "ValueError",
         }
 
+    def test_failure_is_logged_once(self) -> None:
+        """FND-4913: the error path logged the same failure twice, before and
+        after recording it."""
+        logger, metrics, traces = _mock_components()
+
+        @observability(logger=logger, metrics=metrics, traces=traces)
+        def boom() -> None:
+            raise ValueError("kaput")
+
+        with pytest.raises(ValueError):
+            boom()
+
+        assert [c.args for c in logger.error.call_args_list] == [
+            ("Error in function: %s", "boom")
+        ]
+
+    def test_duration_covers_the_call(self) -> None:
+        logger, metrics, traces = _mock_components()
+
+        with _decorator_clock() as clock:
+
+            @observability(logger=logger, metrics=metrics, traces=traces)
+            def work() -> None:
+                clock.advance(0.02)
+
+            work()
+
+        duration_ms = traces.record_trace.call_args.kwargs["duration_ms"]
+        assert duration_ms == pytest.approx(20.0)
+
+    async def test_async_duration_covers_the_awaited_body(self) -> None:
+        """The clock moves only after the body has suspended and resumed, so a
+        wrapper that timed creating the coroutine, not awaiting it, records 0."""
+        logger, metrics, traces = _mock_components()
+
+        with _decorator_clock() as clock:
+
+            @observability(logger=logger, metrics=metrics, traces=traces)
+            async def work() -> None:
+                await asyncio.sleep(0)
+                clock.advance(0.02)
+
+            await work()
+
+        duration_ms = traces.record_trace.call_args.kwargs["duration_ms"]
+        assert duration_ms == pytest.approx(20.0)
+
     def test_one_metric_name_and_label_keys_across_functions_and_outcomes(
         self,
     ) -> None:
@@ -127,10 +196,10 @@ class TestSyncWrapper:
             return x * 2
 
         assert double(7) == 14
-        # Logger should record the failure (one of the .error() calls).
+        # Logger should record the failure at WARNING: the decorator swallows it.
         assert any(
             "Failed to record trace" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
     def test_sync_swallows_metric_exception_but_returns_result(self) -> None:
@@ -144,7 +213,7 @@ class TestSyncWrapper:
         assert echo("hi") == "hi"
         assert any(
             "Failed to record metric" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
 
@@ -200,7 +269,7 @@ class TestAsyncWrapper:
         # Error path's recorder failure was logged.
         assert any(
             "Failed to record error trace" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
     async def test_async_swallows_metric_failure_in_error_path(self) -> None:
@@ -215,7 +284,7 @@ class TestAsyncWrapper:
             await boom()
         assert any(
             "Failed to record error metric" in str(call.args[0])
-            for call in logger.error.call_args_list
+            for call in logger.warning.call_args_list
         )
 
 

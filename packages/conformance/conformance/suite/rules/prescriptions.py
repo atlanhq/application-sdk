@@ -29,7 +29,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -89,7 +88,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-payload-safety",
         # Removing the opt-out changes what a contract accepts on the wire, so each site needs the
         # app owner's decision on the payload shape, often with a ledger retirement: a migration.
@@ -201,7 +199,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``allow_unbounded_fields=True``, so a kept opt-out stays an open migration\n"
             "item, not an end state.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -217,7 +214,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="CategoryFieldOverride",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="category-immutability",
         autofixable=True,
         orthogonal_gate="tests",
@@ -256,7 +252,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "inline suppression ``# conformance: ignore[P002] <reason>`` at the\n"
             "declaration site — see BLDX-1432.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -283,7 +278,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ErrorCodePrefixMismatch",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="error-code-shape",
         autofixable=True,
         orthogonal_gate="tests",
@@ -323,7 +317,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "exception class.  Overriding ``qualified_code`` alone does NOT exempt:\n"
             "that is the log surface, and the wire code still collapses to the leaf.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -345,7 +338,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UntypedEntrypointBoundary",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="typed-contract-boundary",
         autofixable=False,
         orthogonal_gate="tests",
@@ -396,7 +388,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "fails the conformance gate — suppress with\n"
             "``# conformance: ignore[P013] <reason>`` at the method definition.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p013",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -414,7 +405,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UntypedTaskBoundary",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="typed-contract-boundary",
         autofixable=False,
         orthogonal_gate="tests",
@@ -459,7 +449,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "fails the conformance gate — suppress with\n"
             "``# conformance: ignore[P014] <reason>`` at the method definition.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p014",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -480,7 +469,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UnmodeledBoundedContractField",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-modeling",
         autofixable=False,
         orthogonal_gate="tests",
@@ -542,7 +530,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "guide, P001 step 6), or keep the bounded container and suppress this\n"
             "warning with that reason.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -560,7 +547,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="GetattrOnTypedContractField",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="typed-contract-boundary",
         autofixable=True,
         orthogonal_gate="tests",
@@ -594,7 +580,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P026] <reason>`` only when a value genuinely may\n"
             "be absent and the contract models it as ``Optional`` with a real default.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p026",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -611,7 +596,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="AppStateAsCrossTaskChannel",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="state-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -645,7 +629,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[P027] <reason>`` only when the\n"
             "writer is genuinely external to the scanned source.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p027",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -679,7 +662,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ManualQualifiedNameFString",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-modeling",
         autofixable=False,
         orthogonal_gate="tests",
@@ -755,7 +737,6 @@ RULES: tuple[RuleDefinition, ...] = (
             'Not a fix: ``"/".join(...)``, ``+``, ``.format()`` or ``%`` keep the\n'
             "hand-built grammar and only hide it from this check.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -780,7 +761,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="EntitySerializationBypass",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-modeling",
         autofixable=False,
         orthogonal_gate="tests",
@@ -839,7 +819,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P052] <reason>`` only for a genuine non-entity\n"
             "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -865,7 +844,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="OneToManyLinkFromParent",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-modeling",
         autofixable=False,
         orthogonal_gate="tests",
@@ -910,7 +888,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "RelatedProcess(qualified_name=process_qn)``.  Publish then sends the\n"
             "parent first and each child references a parent that already exists.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -918,8 +895,9 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P058",
-        # Pinned by tests/test_raw_dict_entity.py::test_silent_on_canonical_reference,
-        # which scans verbatim copies of both cited files (tests/fixtures/p058_openapi/).
+        # The cited files are checked against a live checkout by
+        # conformance.tools.verify_canonical_references; their shape is pinned by
+        # tests/test_raw_dict_entity.py::test_silent_on_canonical_reference_shape.
         canonical_reference=(
             "atlan-openapi-app app/asset_mapper.py — every mapper builds its "
             "entity with a `pyatlan_v9.model.assets` creator and "
@@ -938,7 +916,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="RawDictEntity",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-modeling",
         autofixable=False,
         orthogonal_gate="tests",
@@ -996,7 +973,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "release models the type, the app's pyatlan is raised to it, and the\n"
             "entity is built with that type's creator.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p058",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -1014,7 +990,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="JsonEncodedContractField",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="contract-modeling",
         autofixable=False,
         orthogonal_gate="tests",
@@ -1067,7 +1042,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "WARN tier.  Suppress with ``# conformance: ignore[P059] <reason>``\n"
             "only when a system outside the app needs the value as JSON text.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p059",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

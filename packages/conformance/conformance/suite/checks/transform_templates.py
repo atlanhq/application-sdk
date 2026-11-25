@@ -90,8 +90,10 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     make_cli_main,
+    make_scan_path,
     make_toml_finding,
     parse_toml_suppressions,
+    strip_yaml_comment,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -226,21 +228,6 @@ def _is_transform_template(text: str) -> bool:
     )
 
 
-def _strip_inline_comment(value: str) -> str:
-    """Drop a trailing YAML comment (`` # ...``) outside any quotes."""
-    in_single = False
-    in_double = False
-    for i, ch in enumerate(value):
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        elif ch == "#" and not in_single and not in_double:
-            if i == 0 or value[i - 1].isspace():
-                return value[:i].rstrip()
-    return value
-
-
 def _unquote_yaml_scalar(value: str) -> str:
     """Strip ONE layer of matching outer YAML quotes (the YAML syntax layer).
 
@@ -260,7 +247,7 @@ def _flagged_identifier(raw_value: str) -> str | None:
     SQL expressions rather than bare column references, non-identifier scalars,
     and anything not in the reserved set.
     """
-    value = _unquote_yaml_scalar(_strip_inline_comment(raw_value).strip())
+    value = _unquote_yaml_scalar(strip_yaml_comment(raw_value).strip())
     if not value:
         return None
     if value.startswith('"') and value.endswith('"'):
@@ -365,17 +352,7 @@ def discover(root: Path) -> list[Path]:
     return sorted(paths)
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single transform-template file for P040 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 main = make_cli_main(

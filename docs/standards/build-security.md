@@ -124,6 +124,16 @@ The other three emulator images (Azurite, storage-testbench, and the nginx proxy
 
 `.github/scripts/wait_for_emulators.py` waits for all three emulators and creates the buckets. The step fails if an emulator never answers or a bucket cannot be created. The test step sets `STORAGE_EMULATOR_REQUIRED=1`, so an unreachable emulator fails its tests instead of skipping them. Without the variable, as in a local run with no sidecar, they still skip.
 
+The real-cloud storage job (`storage-integration-reusable.yaml`, called as `storage-integration` from `pull_request.yaml` and nightly from `schedule.yaml`) sets `STORAGE_CLOUD_REQUIRED=1` the same way: a cloud whose bucket or credential variables are unset fails its tests instead of skipping them.
+
+## CI test images (Temporal JWT-auth stack)
+
+The nightly `temporal-docker-auth` job in `schedule.yaml` runs `tests/integration/test_temporal_docker_auth.py` against `local/temporal-auth/docker-compose.yml`: Temporal (`temporalio/auto-setup`), PostgreSQL, and an nginx container that serves the JWKS. All three are public images pinned as `tag@digest` in the compose file. The nginx pin uses the same digest as `NGINX_IMAGE`, under the patch tag `1.27.5-alpine` rather than `1.27-alpine`. Update the tag and the digest together.
+
+- **Keys:** the job runs `local/temporal-auth/scripts/gen_keys.sh` to make a fresh RSA key pair and JWKS each run. They are test-only and gitignored. Nothing is stored as a secret.
+- **Readiness:** `docker compose up --wait` returns once Temporal's healthcheck finds the `default` namespace, and fails the step if it never does.
+- **Fail, don't skip:** the test step sets `TEMPORAL_DOCKER_AUTH_REQUIRED=1`, so a missing key or an unreachable stack fails the tests. Without the variable, as in the PR integration job and local runs without Docker, they skip.
+
 ## Consuming Dapr components in an app repo
 
 App repos should **not** curl these files from `raw.githubusercontent.com` or the GitHub contents API pinned to a hardcoded SDK tag (that pattern hits GitHub's unauthenticated rate limit under CI concurrency and silently drifts from the app's actual `atlan-application-sdk` version). Instead, copy them out of the installed package, e.g. as the app's `download-components` poe task:

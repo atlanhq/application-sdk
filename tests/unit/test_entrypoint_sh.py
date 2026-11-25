@@ -88,6 +88,28 @@ def test_pins_internal_grpc_port_apart_from_api_port(
     assert _flag_value(args, "--dapr-grpc-port") == "50001"
 
 
+@pytest.mark.parametrize(
+    "flag", ["--dapr-listen-addresses", "--dapr-internal-grpc-listen-address"]
+)
+def test_dapr_apis_listen_on_loopback_only(
+    tmp_path: Path, shell: str, flag: str
+) -> None:
+    """Without these flags daprd binds its APIs on every interface, so anything
+    that can reach the pod IP can read the pod's secrets. ``[::1]`` must stay
+    out: with IPv6 disabled in the pod, daprd 1.18 fails that bind and its HTTP
+    API never serves."""
+    args = _daprd_args(tmp_path, shell)
+
+    assert _flag_value(args, flag) == "127.0.0.1"
+
+
+def test_metrics_listen_address_left_at_default(tmp_path: Path, shell: str) -> None:
+    """Prometheus scrapes daprd metrics from off the pod, so they stay on 0.0.0.0."""
+    args = _daprd_args(tmp_path, shell)
+
+    assert "--metrics-listen-address" not in args
+
+
 def test_internal_grpc_port_follows_overridden_api_port(
     tmp_path: Path, shell: str
 ) -> None:

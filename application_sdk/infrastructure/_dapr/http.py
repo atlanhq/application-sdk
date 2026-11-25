@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -23,7 +22,7 @@ from httpx_retries import Retry, RetryTransport
 from opentelemetry import metrics as _otel_metrics
 from pydantic import BaseModel
 
-from application_sdk.common._env import env_float
+from application_sdk.common._env import env_float, env_str
 from application_sdk.common.backoff import Backoff, Jitter, RetryExhausted, retry_async
 from application_sdk.constants import (
     _HTTP_POOL_LIMITS,
@@ -162,7 +161,7 @@ _DEFAULT_SIDECAR_POLL_INTERVAL = 0.5
 
 
 def _dapr_base_url() -> str:
-    port = os.environ.get("DAPR_HTTP_PORT", str(_DEFAULT_DAPR_HTTP_PORT))
+    port = env_str("DAPR_HTTP_PORT", str(_DEFAULT_DAPR_HTTP_PORT))
     return f"http://localhost:{port}"
 
 
@@ -308,7 +307,7 @@ async def wait_for_dapr_sidecar(
     finally:
         try:
             _sidecar_wait_duration().record(loop.time() - start, {"outcome": outcome})
-        except Exception:  # noqa: S110 — best-effort observability; never block startup on metric emission
+        except Exception:  # noqa: S110, BLE001 — best-effort observability; never block startup on metric emission; best-effort metric emission must never block sidecar startup
             pass
 
 

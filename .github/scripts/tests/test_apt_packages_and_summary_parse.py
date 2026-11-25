@@ -25,14 +25,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
+from _workflows import ACTIONS, load_workflow, step_named, steps, triggers
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-REUSABLE = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
-UNIT_ACTION = REPO_ROOT / ".github" / "actions" / "connector-unit-tests" / "action.yaml"
-INTEGRATION_ACTION = (
-    REPO_ROOT / ".github" / "actions" / "connector-integration-tests" / "action.yaml"
-)
+UNIT_ACTION = ACTIONS / "connector-unit-tests" / "action.yaml"
+INTEGRATION_ACTION = ACTIONS / "connector-integration-tests" / "action.yaml"
 
 APT_STEP_NAME = "Install system packages (apt-packages)"
 # Jobs that run `uv sync` on the RUNNER (the e2e image build is excluded by
@@ -41,17 +37,17 @@ RUNNER_SYNC_JOBS = ["unit", "integration", "e2e"]
 
 
 @pytest.fixture(scope="module")
-def workflow() -> dict:  # type: ignore[type-arg]
-    return yaml.safe_load(REUSABLE.read_text())
+def workflow() -> dict:
+    return load_workflow("tests-reusable.yaml")
 
 
 @pytest.fixture(scope="module")
-def jobs(workflow: dict) -> dict:  # type: ignore[type-arg]
+def jobs(workflow: dict) -> dict:
     return workflow["jobs"]
 
 
-def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
-    inputs = workflow[True]["workflow_call"]["inputs"]  # `on` parses as True
+def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:
+    inputs = triggers(workflow)["workflow_call"]["inputs"]
     assert "apt-packages" in inputs, "apt-packages input missing from tests-reusable"
     assert inputs["apt-packages"].get("default", "") == "", (
         "apt-packages must default to empty — the step must be a no-op for "
@@ -59,18 +55,12 @@ def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> No
     )
 
 
-def _apt_step(job: dict) -> dict:  # type: ignore[type-arg]
-    steps = [s for s in job["steps"] if s.get("name") == APT_STEP_NAME]
-    assert steps, f"missing '{APT_STEP_NAME}' step"
-    return steps[0]
-
-
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -> None:
     """The step exists, is gated on the input, and precedes any deps/composite
     step — a post-sync install would be dead code for the failure it fixes."""
     job = jobs[job_name]
-    step = _apt_step(job)
+    step = step_named(job, APT_STEP_NAME)
     assert "inputs.apt-packages != ''" in step.get("if", ""), (
         f"{job_name}: apt step must self-skip when the input is empty"
     )
@@ -88,10 +78,10 @@ def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_apt_step_routes_the_value_through_env(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_apt_step_routes_the_value_through_env(jobs: dict, job_name: str) -> None:
     """docs/standards/ci.md: caller-controlled values reach `run:` via env,
     never by direct ``${{ }}`` interpolation into the script text."""
-    step = _apt_step(jobs[job_name])
+    step = step_named(jobs[job_name], APT_STEP_NAME)
     assert step.get("env", {}).get("APT_PACKAGES") == "${{ inputs.apt-packages }}"
     assert "${{" not in step["run"], (
         f"{job_name}: apt step interpolates an expression into the shell script"
@@ -107,11 +97,14 @@ SCRIPT = ".sdk-apt/.github/scripts/install_apt_packages.py"
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_apt_step_runs_the_shared_script(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_apt_step_runs_the_shared_script(jobs: dict, job_name: str) -> None:
     """The step only hands the value to the script, under an explicit
     ``set -e`` so a later ``defaults: run: shell:`` cannot make a rejected
     list fall through, and removes the fetched copy before the app checkout."""
-    lines = [line.strip() for line in _apt_step(jobs[job_name])["run"].splitlines()]
+    lines = [
+        line.strip()
+        for line in step_named(jobs[job_name], APT_STEP_NAME)["run"].splitlines()
+    ]
     assert lines == [
         "set -euo pipefail",
         f"python3 {SCRIPT} --env APT_PACKAGES",
@@ -120,14 +113,14 @@ def test_apt_step_runs_the_shared_script(jobs: dict, job_name: str) -> None:  # 
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
-def test_the_script_is_fetched_at_this_workflows_sha(jobs: dict, job_name: str) -> None:  # type: ignore[type-arg]
+def test_the_script_is_fetched_at_this_workflows_sha(jobs: dict, job_name: str) -> None:
     """Fetched right before the install, under the same gate, at
     ``job.workflow_sha`` so an SDK PR's CI runs its own copy of the script."""
-    steps = jobs[job_name]["steps"]
-    names = [s.get("name") for s in steps]
-    fetch = steps[names.index(FETCH_STEP_NAME)]
+    job_steps = jobs[job_name]["steps"]
+    names = [s.get("name") for s in job_steps]
+    fetch = job_steps[names.index(FETCH_STEP_NAME)]
     assert names.index(FETCH_STEP_NAME) + 1 == names.index(APT_STEP_NAME)
-    assert fetch["if"] == _apt_step(jobs[job_name])["if"]
+    assert fetch["if"] == step_named(jobs[job_name], APT_STEP_NAME)["if"]
     assert fetch["with"] == {
         "repository": "atlanhq/application-sdk",
         "ref": "${{ job.workflow_sha }}",
@@ -148,9 +141,10 @@ COLORED = "\x1b[33m====== \x1b[32m874 passed\x1b[0m\x1b[33m, 11 warnings in 19.8
 
 def _extraction_lines(action_path: Path, source_file: str) -> str:
     """Pull the ESC=/SUMMARY= pipeline verbatim from the action's run script."""
-    doc = yaml.safe_load(action_path.read_text())
     scripts = [
-        s.get("run", "") for s in doc["runs"]["steps"] if "SUMMARY=" in s.get("run", "")
+        s.get("run", "")
+        for s in steps(load_workflow(action_path))
+        if "SUMMARY=" in s.get("run", "")
     ]
     assert scripts, f"{action_path.name}: no step extracts SUMMARY"
     script = scripts[0]

@@ -318,6 +318,7 @@ fix templates below, use this table:
 | L24 | L018 | KwargsInApplicationLogCalls |
 | L19 | L019 | DiscardedBindResult |
 | L23 | L020 | DeprecatedLoggingWarn |
+| L25 | L022 | HandledFailureLoggedAtError |
 | L12, L20, L21, L22 | — | not ported (%-style, propagate=False, loguru.remove, loguru kwargs) |
 
 Pattern catalogue, severity criteria, fix templates, and linting rules are in:
@@ -394,6 +395,7 @@ against `TARGET_PATH`. Use `LOGGER_VAR_PATTERN` in place of hardcoded `logger\.`
 | L12 %-style (non-stdlib only) | `LOGGER_VAR_PATTERN\.\w+\(["'].*%[sdfr]` — skip if `LOGGER_FRAMEWORK == stdlib` | heuristic |
 | L18 exception() outside except | `LOGGER_VAR_PATTERN\.exception\(` | heuristic |
 | L24 kwargs in application log calls | `LOGGER_VAR_PATTERN\.\w+\([^)]*,\s*\w+=` (non-stdlib only) — collect hits for Step 2.3 | heuristic |
+| L25 handled failure at ERROR | multiline: `except` block containing `LOGGER_VAR_PATTERN\.error\(` — collect hits for Step 2.3 | heuristic |
 
 **Framework-specific patterns (run only for the indicated framework):**
 
@@ -429,6 +431,7 @@ Classify each hit:
 - L6: if loop is clearly bounded to ≤10 items → ACCEPTABLE.
 - L18: read 5 lines before the `.exception()` call — if inside an `except` block → ACCEPTABLE.
 - L24: skip `exc_info=True/False`. Skip files that define the logging factory/adapter (the file containing `get_logger` or the logger adapter class). Flag all other kwargs as MEDIUM.
+- L25: read the whole `except` block. If it contains a `raise`, a `sys.exit`/`os._exit`, or returns a failure result (a call or dict with `success=False`, `status=<Enum>.FAILURE|FAILED|ERROR`, or a 5xx `status_code`) → ACCEPTABLE. Otherwise the failure was handled → MEDIUM. If the failure is in fact fatal later (collected and raised after other work) or loses data the run cannot recover → ACCEPTABLE with a `# conformance: ignore[L022] <reason>` directive.
 
 **Framework-specific classification rules:**
 - L13: Read the `extra={}` dict literal. Flag CRITICAL for each key that matches any of the 22 reserved LogRecord attributes. Keys not in the reserved list → ACCEPTABLE.
@@ -454,7 +457,7 @@ For each genuine finding, produce an entry:
 Group into priority tiers:
 - **P0** — Fix Immediately: CRITICAL — L10 (credential leak), L13 (reserved key crash), L14 (stdlib kwargs crash)
 - **P1** — Fix This Sprint: HIGH — L1, L2, L4, L15, L16, L17, L19, L20, L21
-- **P2** — Fix When Touching File: MEDIUM/LOW — L3, L5, L6, L7, L8, L9, L11, L12, L18, L22, L23, L24
+- **P2** — Fix When Touching File: MEDIUM/LOW — L3, L5, L6, L7, L8, L9, L11, L12, L18, L22, L23, L24, L25
 
 Also compute linting recommendations: read `pyproject.toml` for existing ruff or flake8 rule
 selections. List any missing rules from §Linting Rules in `logging-patterns.md`:
@@ -534,6 +537,7 @@ Apply the remediation plan that was approved. Only fix what was listed in the ap
 - **FT-L22:** loguru kwargs → %-style message body
 - **FT-L23:** `.warn(` → `.warning(`
 - **FT-L24:** Application kwargs → %-style message body (keep `exc_info=True`)
+- **FT-L25:** `.error(` → `.warning(` in an except block that handles the failure (keep `exc_info=True`)
 
 **Do not auto-fix L10 (credential leak)** — always flag for human review only.
 

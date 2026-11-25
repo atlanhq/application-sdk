@@ -41,25 +41,6 @@ credentials.yml
 service-account*.json
 *-sa-key.json
 
-# ─── Terraform ──────────────────────────────────────────────────────────────
-.terraform/
-.terraform.lock.hcl
-*.tfstate
-*.tfstate.*
-*.tfvars
-!*.tfvars.example            # Allow committed example tfvars
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-crash.log
-crash.*.log
-
-# ─── Ansible ────────────────────────────────────────────────────────────────
-*.retry
-vault-password*
-.vault_pass*
-
 # ─── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
@@ -71,13 +52,6 @@ env/
 *.egg-info/
 dist/
 build/
-
-# ─── Node.js ────────────────────────────────────────────────────────────────
-node_modules/
-npm-debug.log*
-yarn-error.log*
-.npm/
-.yarn/
 
 # ─── Logs & Temp Files ──────────────────────────────────────────────────────
 *.log
@@ -95,6 +69,3 @@ logs/
 *.tgz
 *.rar
 *.7z
-
-# ─── Test Generated Files ────────────────────────────────────────────────
-tests/fixtures/generated/

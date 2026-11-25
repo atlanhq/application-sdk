@@ -174,7 +174,7 @@ def validate_artifact(
             boundary=boundary,
             validator_broken=True,
         )
-    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+    except Exception as exc:  # a plug-in seam; nothing may escape
         logger.warning(
             "Artifact validation: %s source raised while resolving a declaration: %s",
             source_kind or type(source).__name__,
@@ -254,7 +254,7 @@ def validate_artifact(
 
     try:
         supported = validator.supports(declaration)
-    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+    except Exception as exc:  # a plug-in seam; nothing may escape
         logger.warning(
             "Artifact validation: %s validator raised from supports(): %s",
             artifact_format,
@@ -284,7 +284,7 @@ def validate_artifact(
 
     try:
         report = validator.validate(Path(path), declaration)
-    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+    except Exception as exc:  # a plug-in seam; nothing may escape
         # "Our validator broke" — a different axis from "the artifact is
         # unverifiable", and this one always fails open regardless of posture.
         logger.warning(
@@ -322,7 +322,7 @@ def validate_artifact(
             schema_source=source_kind,
             boundary=boundary,
         )
-    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+    except Exception as exc:  # a plug-in seam; nothing may escape
         # `_stamp` reads `artifact_format` and `unit` off the validator. They are
         # properties on a plug-in the SDK did not write, so the last two reads in
         # this function are inside the seam too — the report is complete and would
@@ -372,7 +372,7 @@ def _implements(candidate: object, protocol: type) -> bool:
     """
     try:
         return isinstance(candidate, protocol)
-    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+    except Exception as exc:  # a plug-in seam; nothing may escape
         logger.warning(
             "Artifact validation: %s raised while being checked against %s: %s",
             type(candidate).__name__,
@@ -394,8 +394,8 @@ def _safe_kind(source: object) -> str:
     try:
         # Deliberate: this probes a plug-in that may not have `kind` at all — that
         # is the case being handled, not a type the checker should have to accept.
-        kind = source.kind  # type: ignore[attr-defined]
-    except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+        kind = source.kind  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    except Exception as exc:  # a plug-in seam; nothing may escape
         logger.warning(
             "Artifact validation: schema source %s raised from .kind: %s",
             type(source).__name__,
@@ -429,7 +429,7 @@ def _select_validator(
             continue
         try:
             claimed = validator.artifact_format
-        except Exception as exc:  # noqa: BLE001 - a plug-in seam; nothing may escape
+        except Exception as exc:  # a plug-in seam; nothing may escape
             logger.warning(
                 "Artifact validation: ignoring %s — its artifact_format raised: %s",
                 type(validator).__name__,

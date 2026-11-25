@@ -14,7 +14,7 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
-from application_sdk.common._env import env_bool, env_float, env_int
+from application_sdk.common._env import env_bool, env_float, env_int, env_str
 from application_sdk.constants import load_shutdown_budget
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -107,7 +107,13 @@ class InterceptorSettings:
     """
 
     enable_event_interceptor: bool = True
-    """Enable lifecycle event publishing interceptor."""
+    """Enable lifecycle event publishing interceptor.
+
+    Read once at worker start. The workflow side of the interceptor is always
+    registered; this value is pinned on each run the worker starts, so a run
+    publishes (or not) according to the worker that started it, wherever it
+    continues or replays.
+    """
 
     enable_output_interceptor: bool = True
     """Enable structured output collection interceptor (metrics/artifacts)."""
@@ -133,9 +139,11 @@ class InterceptorSettings:
     .. deprecated::
         ``CleanupInterceptor`` is no longer registered by default. Post-run
         cleanup is now handled by ``App.on_complete()`` / ``App.cleanup_files()``.
-        This setting and the ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` env
-        var are still read by ``App.on_complete()`` to decide whether to run
-        cleanup, but the interceptor itself is no longer added to the worker.
+        This setting (``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``) still
+        decides whether ``App.on_complete()`` runs cleanup: the worker reads it
+        once at start and pins it on each run it starts, and ``on_complete``
+        reads the run's pinned value. The interceptor itself is no longer added
+        to the worker.
     """
 
 
@@ -201,13 +209,13 @@ def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
     # Prefer TEMPORAL_HOST (v3). Fall back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2).
-    _v2_host = os.environ.get("ATLAN_WORKFLOW_HOST", "")
-    _v2_port = os.environ.get("ATLAN_WORKFLOW_PORT", "7233")
+    _v2_host = env_str("ATLAN_WORKFLOW_HOST", "")
+    _v2_port = env_str("ATLAN_WORKFLOW_PORT", "7233")
     _v2_default = f"{_v2_host}:{_v2_port}" if _v2_host else "localhost:7233"
     return ExecutionSettings(
-        host=os.environ.get("TEMPORAL_HOST", _v2_default),
-        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
-        task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "application-sdk"),
+        host=env_str("TEMPORAL_HOST", _v2_default),
+        namespace=env_str("TEMPORAL_NAMESPACE", "default"),
+        task_queue=env_str("TEMPORAL_TASK_QUEUE", "application-sdk"),
         max_concurrent_activities=_load_max_concurrent_activities(),
         graceful_shutdown_timeout_seconds=_load_graceful_shutdown_timeout(),
         default_versioning_behavior=_load_versioning_behavior(

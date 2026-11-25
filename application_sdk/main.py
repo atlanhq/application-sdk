@@ -62,6 +62,7 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_bool as _env_bool
 from application_sdk.common._env import env_int as _env_int
+from application_sdk.common._env import env_str as _env_str
 from application_sdk.common.backoff import Backoff
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.discovery import (
@@ -272,7 +273,7 @@ class AppConfig:
         )
 
         def _env(key: str, default: str = "") -> str:
-            return os.environ.get(key, default)
+            return _env_str(key, default)
 
         mode = args.mode or _env("ATLAN_APP_MODE")
         if not mode:
@@ -720,18 +721,12 @@ def _deployment_object_store_missing(
     return DeploymentObjectStoreMissingError(message, binding_name=name, cause=cause)
 
 
-async def _create_infrastructure(
-    credential_stores: Mapping[str, SecretStore] | None = None,
-) -> InfrastructureContext:
+async def _create_infrastructure() -> InfrastructureContext:
     """Create infrastructure services based on environment.
 
     If ``DAPR_HTTP_PORT`` is set (Dapr sidecar present), creates Dapr-backed
     implementations. Otherwise raises ``RuntimeError`` — the Dapr sidecar is
     required for all runtime modes.
-
-    Args:
-        credential_stores: Optional mapping of store name → SecretStore.
-            Reserved for future use; currently unused.
 
     Returns:
         Configured InfrastructureContext.
@@ -780,7 +775,7 @@ async def _create_infrastructure(
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
-        components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
+        components_dir = Path(_env_str("DAPR_COMPONENTS_PATH", "./components"))
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
@@ -1072,7 +1067,7 @@ def _install_excepthook() -> None:
     """
     _orig = sys.excepthook
 
-    def _hook(exc_type, exc_value, exc_traceback):  # type: ignore[no-untyped-def]
+    def _hook(exc_type, exc_value, exc_traceback):
         logger.error(
             "Unhandled exception — flushing observability before exit",
             exc_info=(exc_type, exc_value, exc_traceback),
@@ -1080,7 +1075,7 @@ def _install_excepthook() -> None:
         try:
             asyncio.run(_flush_observability())
         # conformance: ignore[E002,E004] best-effort flush in unhandled-exception hook; must never mask the original crash
-        except Exception:  # noqa: S110 — best-effort flush; must never mask the original crash
+        except Exception:  # noqa: S110, BLE001 — best-effort flush; must never mask the original crash
             pass
         _orig(exc_type, exc_value, exc_traceback)
 
@@ -1997,12 +1992,12 @@ async def run_worker_mode(
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     logger.info(
         "Loaded app %s version %s",
         app_name,
-        app_class._app_version,  # type: ignore[attr-defined]
+        app_class._app_version,
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -2211,93 +2206,117 @@ async def run_worker_mode(
 def run_handler_mode(config: AppConfig) -> None:
     """Run in handler mode (HTTP FastAPI server).
 
-    Loads the handler class (or DefaultHandler) and runs the FastAPI
-    server via uvicorn. This is synchronous — uvicorn manages its own loop.
+    Synchronous entry point: runs :func:`_run_handler_mode` in a single
+    ``asyncio.run`` so the shared Dapr client is created, used by requests,
+    and closed on the same event loop.
     """
+    asyncio.run(_run_handler_mode(config))
+
+
+async def _run_handler_mode(config: AppConfig) -> None:
+    """Handler mode on one event loop: build, serve, close, flush.
+
+    The shared ``AsyncDaprClient`` keeps pooled keep-alive connections bound
+    to the loop that opened them. Creating infrastructure, serving requests
+    and closing the client must therefore all happen on this one loop, as
+    worker and combined mode already do. Splitting them across separate
+    ``asyncio.run`` calls makes the first Dapr call after start and the
+    shutdown ``close_infrastructure()`` fail with "Event loop is closed".
+    """
+    import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
+
     from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
     from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
         DefaultHandler,
-        run_app_handler_service,
+        create_app_handler_service,
     )
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
+        close_infrastructure,
         set_infrastructure,
     )
-
-    infra = asyncio.run(_create_infrastructure())
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
         verify_object_store_access,
     )
 
-    asyncio.run(verify_object_store_access(infra))
+    infra = await _create_infrastructure()
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
-
-    logger.info(
-        "Starting handler mode: app=%s host=%s port=%d",
-        config.app_module,
-        config.handler_host,
-        config.handler_port,
-    )
-    _log_process_memory_baseline()
-
-    app_class = load_app_class(config.app_module)
-    validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
-
-    handler_class = load_handler_class(
-        config.app_module,
-        handler_module_path=config.handler_module,
-    )
-    if handler_class is None:
-        handler_class = DefaultHandler
-        logger.info("Using DefaultHandler for %s", app_name)
-    else:
+    try:
         logger.info(
-            "Loaded custom handler %s for %s",
-            handler_class.__name__,
-            app_name,
+            "Starting handler mode: app=%s host=%s port=%d",
+            config.app_module,
+            config.handler_host,
+            config.handler_port,
+        )
+        _log_process_memory_baseline()
+
+        app_class = load_app_class(config.app_module)
+        validate_app_class(app_class)
+        app_name = app_class._app_name
+
+        handler_class = load_handler_class(
+            config.app_module,
+            handler_module_path=config.handler_module,
+        )
+        if handler_class is None:
+            handler_class = DefaultHandler
+            logger.info("Using DefaultHandler for %s", app_name)
+        else:
+            logger.info(
+                "Loaded custom handler %s for %s",
+                handler_class.__name__,
+                app_name,
+            )
+
+        handler = handler_class()
+        data_converter = create_data_converter_for_app(app_class)
+
+        fastapi_app = create_app_handler_service(
+            handler,
+            app_name=app_name,
+            app_class=app_class,
+            temporal_host=config.temporal_host,
+            temporal_namespace=config.temporal_namespace,
+            task_queue=config.task_queue,
+            data_converter=data_converter,
+            tls_enabled=config.tls_enabled,
+            tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
+            tls_client_cert_path=config.tls_client_cert_path,
+            tls_client_private_key_path=config.tls_client_private_key_path,
+            tls_domain=config.tls_domain,
+            auth_enabled=config.auth_enabled,
+            auth_client_id=config.auth_client_id,
+            auth_client_secret=config.auth_client_secret,
+            auth_token_url=config.auth_token_url,
+            auth_base_url=config.auth_base_url,
+            auth_scopes=config.auth_scopes,
+            enable_temporal_core_metrics=False,
+            prometheus_bind_address=config.prometheus_bind_address,
+            secret_store=infra.secret_store,
+            storage=infra.storage,
+            frontend_assets_path=config.frontend_assets_path,
+            workflow_max_timeout_hours=config.workflow_max_timeout_hours,
         )
 
-    handler = handler_class()
-    data_converter = create_data_converter_for_app(app_class)
-
-    run_app_handler_service(
-        handler,
-        host=config.handler_host,
-        port=config.handler_port,
-        log_level=config.log_level.lower(),
-        app_name=app_name,
-        app_class=app_class,
-        temporal_host=config.temporal_host,
-        temporal_namespace=config.temporal_namespace,
-        task_queue=config.task_queue,
-        data_converter=data_converter,
-        tls_enabled=config.tls_enabled,
-        tls_server_root_ca_cert_path=config.tls_server_root_ca_cert_path,
-        tls_client_cert_path=config.tls_client_cert_path,
-        tls_client_private_key_path=config.tls_client_private_key_path,
-        tls_domain=config.tls_domain,
-        auth_enabled=config.auth_enabled,
-        auth_client_id=config.auth_client_id,
-        auth_client_secret=config.auth_client_secret,
-        auth_token_url=config.auth_token_url,
-        auth_base_url=config.auth_base_url,
-        auth_scopes=config.auth_scopes,
-        enable_temporal_core_metrics=False,
-        prometheus_bind_address=config.prometheus_bind_address,
-        secret_store=infra.secret_store,
-        storage=infra.storage,
-        frontend_assets_path=config.frontend_assets_path,
-        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
-    )
-
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
-        close_infrastructure,
-    )
-
-    asyncio.run(close_infrastructure())
-    asyncio.run(_flush_observability())
+        uvicorn_server = uvicorn.Server(
+            uvicorn.Config(
+                fastapi_app,
+                host=config.handler_host,
+                port=config.handler_port,
+                log_level=config.log_level.lower(),
+                # Same as combined mode: skip uvicorn's dictConfig() so its
+                # logs flow through the root logger to the SDK's sink.
+                log_config=None,
+            )
+        )
+        await uvicorn_server.serve()
+    finally:
+        try:
+            await close_infrastructure()
+        finally:
+            await _flush_observability()
 
 
 async def run_combined_mode(
@@ -2360,12 +2379,12 @@ async def run_combined_mode(
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
-    app_name = app_class._app_name  # type: ignore[attr-defined]
+    app_name = app_class._app_name
 
     logger.info(
         "Loaded app %s version %s",
         app_name,
-        app_class._app_version,  # type: ignore[attr-defined]
+        app_class._app_version,
     )
 
     data_converter = create_data_converter_for_app(app_class)
@@ -2581,7 +2600,7 @@ async def run_combined_mode(
             stall_watchdog.on_shutdown_signal()
             uvicorn_handle_exit(sig, frame)
 
-        uvicorn_server.handle_exit = _handle_exit  # type: ignore[method-assign]
+        uvicorn_server.handle_exit = _handle_exit
     # uvicorn keeps serving while the worker is supervised and restarted
     # independently; a shutdown signal (which also sets should_exit) stops both.
     async with health_server:
@@ -2614,10 +2633,17 @@ async def run_combined_mode(
     logger.info("Combined mode stopped")
 
 
+#: Default for ``run_dev_combined(credential_stores=...)``. A sentinel rather
+#: than ``None`` so an explicit ``credential_stores=None`` also warns.
+_CREDENTIAL_STORES_UNSET = object()
+
+
 async def run_dev_combined(
     app_class: type[App],
     *,
-    credential_stores: Mapping[str, SecretStore] | None = None,
+    credential_stores: Mapping[str, SecretStore]
+    | None
+    | object = _CREDENTIAL_STORES_UNSET,  # deprecated — ignored, kept for back-compat
     credentials: dict[str, Any] | None = None,
     example_input: dict[str, Any] | None = None,
     host: str | None = None,
@@ -2650,9 +2676,15 @@ async def run_dev_combined(
     ignored — the SDK always boots its own in-process workflow runtime in
     this mode. Passing it emits a :class:`DeprecationWarning`.
 
+    ``credential_stores`` is likewise accepted but ignored: secrets resolve
+    through the embedded ``daprd``'s secret store, never through a store
+    passed here. Passing it, even as ``None``, emits a
+    :class:`DeprecationWarning`; use
+    ``credentials`` to provision a local credential instead.
+
     Args:
         app_class: The App class to serve (must already be imported).
-        credential_stores: Optional mapping of store name → SecretStore.
+        credential_stores: Deprecated and ignored. Use ``credentials``.
         credentials: Optional credential dict (host, port, username, password,
             authType, extra, etc.). If provided, credentials are auto-provisioned
             via ``POST /workflows/v1/dev/local-vault`` once the handler is ready, and the
@@ -2705,6 +2737,18 @@ async def run_dev_combined(
             stacklevel=2,
         )
 
+    if credential_stores is not _CREDENTIAL_STORES_UNSET:
+        import warnings  # noqa: PLC0415 — cold path: deprecation warning only
+
+        warnings.warn(
+            "`credential_stores` is deprecated and ignored and will be removed "
+            "in v4.0.0: `run_dev_combined` resolves secrets through the "
+            "embedded Dapr secret store, never through a store passed here. "
+            "Use `credentials=` to provision a local credential instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
 
     # ``embedded_dapr`` sets ``DAPR_HTTP_PORT`` / ``DAPR_GRPC_PORT`` /
@@ -2730,7 +2774,6 @@ async def run_dev_combined(
             print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
-            credential_stores=credential_stores,
             credentials=credentials,
             example_input=example_input,
             host=host,
@@ -2744,7 +2787,6 @@ async def run_dev_combined(
 async def _run_dev_combined_inner(
     *,
     app_class: type[App],
-    credential_stores: Mapping[str, SecretStore] | None,
     credentials: dict[str, Any] | None,
     example_input: dict[str, Any] | None,
     host: str | None,
@@ -2779,7 +2821,7 @@ async def _run_dev_combined_inner(
         set_infrastructure,
     )
 
-    infra = await _create_infrastructure(credential_stores=credential_stores)
+    infra = await _create_infrastructure()
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
         verify_object_store_access,
     )
@@ -3068,14 +3110,14 @@ def main() -> NoReturn:
             try:
                 asyncio.run(_flush_observability())
             # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
-            except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+            except Exception:  # noqa: S110, BLE001 — best-effort flush on fatal exit; error already logged above
                 pass
             sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
         # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
-        except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+        except Exception:  # noqa: S110, BLE001 — best-effort flush on fatal exit; error already logged above
             pass
         sys.exit(1)
 

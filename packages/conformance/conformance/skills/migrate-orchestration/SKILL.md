@@ -119,7 +119,7 @@ does not apply to it.
 | workflow-type rename alias | `legacy_workflow_types` on the App class | App | 3.29.0 |
 | client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalApplicationError` (not `ApplicationError` from the same module: that is a narrower subclass for raising, and an `isinstance` check on a failure read back from Temporal is False for it; it is the `.cause` of a `TemporalActivityError` when a task raised, and the direct `.cause` of the workflow failure when `run()` raised), `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | `TemporalClient` 3.20.0; the failure types 3.21.0; `TemporalApplicationError` 3.50.0 |
 | converters, backend | `create_data_converter_for_app`, `TemporalExecutorBackend` | `application_sdk.execution` | 3.20.0 |
-| dev boot | `run_dev_combined(app_class, *, credential_stores=, example_input=, task_queue=, ...)` | `application_sdk.main` | 3.0.0 |
+| dev boot | `run_dev_combined(app_class, *, credentials=, example_input=, task_queue=, ...)` (`credential_stores=` is deprecated and ignored) | `application_sdk.main` | 3.0.0 |
 | integration tests | `from application_sdk.testing.integration.fixtures import *` (the kit owns worker and client) | `application_sdk.testing.integration.fixtures` | — |
 
 **No public equivalent today** (justified ignore with a tracked

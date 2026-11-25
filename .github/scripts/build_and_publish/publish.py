@@ -13,10 +13,12 @@ Subcommands (each one is a former inline ``run:`` block):
     builds the ``POST /api/service/marketplace/publish`` body, sends it, and
     writes the run summary.
 
-The body is built here rather than by ``marketplace_publish_body.py`` on
-purpose: this is the path every app release goes through, and moving it out of
-YAML must not change a byte of what it sends. ``test_marketplace_publish_body``
-asserts the two builders keep the same field set.
+The body itself comes from ``marketplace_publish_body.build`` — the same
+builder the e2e path registers its per-PR versions with, so the two cannot send
+different shapes. This module only maps the publish job's env onto a
+``PublishRequest`` and resolves the release-specific ``version`` and ``image``.
+The golden bodies in ``tests/test_build_and_publish_publish.py`` pin the exact
+bytes every app release sends.
 """
 
 from __future__ import annotations
@@ -25,8 +27,18 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 import _bap
+
+# .github/scripts, which holds marketplace_publish_body.py (stdlib only). The
+# publish job's sparse checkout of .github/scripts brings it along.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from marketplace_publish_body import (  # noqa: E402
+    PublishBodyError,
+    PublishRequest,
+    build,
+)
 
 PUBLISH_PATH = "/api/service/marketplace/publish"
 
@@ -37,6 +49,29 @@ def _effective_channel(channel: str) -> str:
     return (channel or "all").lower()
 
 
+def tenant_ids(tenants: str) -> tuple[str, ...]:
+    """The tenant IDs in a comma-separated ``tenants`` input, blanks dropped."""
+    return tuple(t.strip() for t in tenants.split(",") if t.strip())
+
+
+def _refuse_tenants_without_ids(tenants: str) -> bool:
+    """Fail a ``tenants`` input that is set but names no tenant (``","``).
+
+    Every decision here keys off the parsed IDs, and with none the body falls
+    back to ``target_channel`` — ``all`` when no channel is given. So an input
+    like ``","`` would read as "targeted" to a human and publish to every tenant.
+    Refusing it is the only reading that cannot widen a publish.
+    """
+    if tenants.strip() and not tenant_ids(tenants):
+        print(
+            "::error title=Publish blocked::tenants is set but names no tenant "
+            f"({tenants!r}). Pass comma-separated tenant IDs, or leave it empty "
+            "to publish by channel."
+        )
+        return True
+    return False
+
+
 # ── channel-gate ──────────────────────────────────────────────────────────────
 
 
@@ -44,6 +79,9 @@ def channel_gate() -> int:
     ref = _bap.env("REF")
     tenants = _bap.env("TENANTS")
     release_tag = _bap.strip_crlf(_bap.env("RELEASE_TAG"))
+
+    if _refuse_tenants_without_ids(tenants):
+        return 1
 
     # Bypass only when the ref really is the matching tag ref: a non-empty
     # release_tag alone could be passed from any feature branch.
@@ -53,7 +91,7 @@ def channel_gate() -> int:
 
     # Mirrors the channel resolution at publish time:
     #   tenants -> specific (skip), ''/'all' -> all (enforce), other -> skip.
-    if tenants:
+    if tenant_ids(tenants):
         print(f"Tenants targeting ({tenants}) — main-branch gate skipped.")
         return 0
     channel = _effective_channel(_bap.env("CHANNEL"))
@@ -116,63 +154,47 @@ def build_body(environ: dict[str, str]) -> dict[str, object]:
     else:
         image = ghcr_image
 
-    body: dict[str, object] = {
-        "app_id": environ["APP_ID"],
-        "image": image,
-        "version": version,
-        "branch": environ["BRANCH"],
-        "repo": environ["REPO_URL"],
-        "source": "ci_publish",
-    }
-
-    # Full git SHA the image was built from. GM stores it on the version so a
-    # worker's baked commit_sha resolves to a release even for semver apps,
-    # whose `version`/`image` carry no SHA.
-    commit_sha = environ.get("COMMIT_SHA", "").strip()
-    if commit_sha:
-        body["commit_sha"] = commit_sha
-
-    config = environ.get("DEPLOY_CONFIG", "").strip()
-    # SDR capability rides inside the opaque config YAML — GM stores
-    # versions.config as raw TEXT and echoes it back in the tenant catalog, so
-    # LM can gate "Install on more environments" per app without a GM schema
-    # change. Only injected when true: absence means not SDR-capable (keeps
-    # non-SDR configs byte-identical).
-    if environ.get("ENABLE_SDR", "").strip() == "true":
-        config = f"self_deployed_runtime: true\n{config}".strip()
-    if config:
-        body["config"] = config
-
-    sdk = environ.get("SDK_VERSION", "").strip()
-    if sdk:
-        body["sdk_version"] = sdk
-
-    # Native multi-package declarations from atlan.yaml. Absent → GM falls
-    # back to App.argo_package_names for entrypoint expansion.
-    wp = environ.get("ENTRYPOINTS", "").strip()
-    if wp:
-        body["entrypoints"] = json.loads(wp)
-
-    tenants = environ.get("TENANTS", "").strip()
-    if tenants:
-        body["allowed_tenants"] = [t.strip() for t in tenants.split(",") if t.strip()]
-    else:
-        body["target_channel"] = environ.get("CHANNEL", "all") or "all"
-
-    created_by = environ.get("CREATED_BY", "").strip()
-    if created_by:
-        body["created_by"] = created_by
-
-    if release_model:
-        body["release_model"] = release_model
-
-    # Base64-encoded JSON blob of connector form files (see prepare job). GM's
-    # VersionBody validator decodes this back to the JSON string.
-    app_configs = environ.get("APP_CONFIGS", "").strip()
-    if app_configs:
-        body["app_configs"] = app_configs
-
-    return body
+    # Absent → all, as `${CHANNEL:-all}` did. Deliberately not lowered: GM owns
+    # channel names, and the gate above is the only place case is folded.
+    channel = environ.get("CHANNEL", "all") or "all"
+    tenants = environ.get("TENANTS", "")
+    allowed_tenants = tenant_ids(tenants)
+    # Set-but-empty must never fall through to the channel (see
+    # _refuse_tenants_without_ids); publish() refuses it first, and this keeps
+    # the builder from accepting it when called on its own.
+    if tenants.strip() and not allowed_tenants:
+        raise PublishBodyError(f"tenants is set but names no tenant ({tenants!r}).")
+    request = PublishRequest(
+        app_id=environ["APP_ID"],
+        image=image,
+        version=version,
+        branch=environ["BRANCH"],
+        # Always set by the workflow (server_url/repository), so always sent.
+        repo_url=environ["REPO_URL"],
+        allowed_tenants=allowed_tenants,
+        target_channel=channel,
+        deploy_config=environ.get("DEPLOY_CONFIG", ""),
+        # SDR capability rides inside the opaque config YAML — GM stores
+        # versions.config as raw TEXT and echoes it back in the tenant catalog,
+        # so LM can gate "Install on more environments" per app without a GM
+        # schema change. Only injected when true: absence means not SDR-capable
+        # (keeps non-SDR configs byte-identical).
+        self_deployed_runtime=environ.get("ENABLE_SDR", "").strip() == "true",
+        sdk_version=environ.get("SDK_VERSION", ""),
+        # Native multi-package declarations from atlan.yaml. Absent → GM falls
+        # back to App.argo_package_names for entrypoint expansion.
+        entrypoints=environ.get("ENTRYPOINTS", ""),
+        # Base64-encoded JSON blob of connector form files (see prepare job).
+        # GM's VersionBody validator decodes this back to the JSON string.
+        app_configs=environ.get("APP_CONFIGS", ""),
+        release_model=release_model,
+        created_by=environ.get("CREATED_BY", ""),
+        # Full git SHA the image was built from. GM stores it on the version so
+        # a worker's baked commit_sha resolves to a release even for semver
+        # apps, whose `version`/`image` carry no SHA.
+        commit_sha=environ.get("COMMIT_SHA", ""),
+    )
+    return build(request)
 
 
 def publish() -> int:
@@ -184,6 +206,8 @@ def publish() -> int:
     environ["RELEASE_MODEL"] = release_model
     tenants = environ.get("TENANTS", "")
     channel = environ.get("CHANNEL", "")
+    if _refuse_tenants_without_ids(tenants):
+        return 1
 
     # Semver-release gate: a release_model=semver app needs an explicit
     # release_tag for any channel='all' publish. Merge-to-main builds the image
@@ -192,7 +216,7 @@ def publish() -> int:
     if (
         release_model == "semver"
         and not release_tag
-        and not tenants
+        and not tenant_ids(tenants)
         and effective == "all"
     ):
         print(
@@ -217,7 +241,11 @@ def publish() -> int:
         )
         return 1
 
-    body = json.dumps(build_body(environ))
+    try:
+        body = json.dumps(build_body(environ))
+    except PublishBodyError as exc:
+        print(f"::error title=Publish blocked::{exc}")
+        return 1
     app_name = environ.get("APP_NAME", "")
     image_tag = environ.get("IMAGE_TAG", "")
     print(f"Publishing {app_name} ({image_tag}) to marketplace...", flush=True)

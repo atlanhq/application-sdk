@@ -79,7 +79,9 @@ from pathlib import Path
 # follow. ``test_bootstrap`` pins it to tests-reusable.yaml's real default.
 from conformance.bootstrap import extract as bootstrap_extract
 from conformance.suite.checks._ast_common import (
+    discover_root_file,
     make_cli_main,
+    make_scan_path,
     make_toml_finding,
     parse_toml_suppressions,
 )
@@ -130,8 +132,7 @@ def discover(root: Path) -> list[Path]:
     since it's cross-file context for a single ``pyproject.toml`` finding
     rather than an independently-scannable file.
     """
-    pyproject = root / "pyproject.toml"
-    return [pyproject] if pyproject.is_file() else []
+    return discover_root_file(root, "pyproject.toml")
 
 
 def _ci_declared_fail_under(root: Path) -> float | None:
@@ -376,17 +377,10 @@ def scan_text(
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single ``pyproject.toml`` file for T014–T015 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel), ci_fail_under=_ci_declared_fail_under(root))
+scan_path = make_scan_path(
+    scan_text,
+    context=lambda path, root: {"ci_fail_under": _ci_declared_fail_under(root)},
+)
 
 
 main = make_cli_main(

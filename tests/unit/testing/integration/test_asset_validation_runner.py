@@ -12,10 +12,13 @@ from unittest.mock import patch
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table
 
-from application_sdk.testing.integration import BaseIntegrationTest, Scenario, equals
 from application_sdk.testing.integration import runner as runner_module
-from application_sdk.testing.integration.models import APIType
-from application_sdk.testing.integration.runner import _needs_asset_validation
+from application_sdk.testing.integration.assertions import equals
+from application_sdk.testing.integration.models import APIType, Scenario
+from application_sdk.testing.integration.runner import (
+    BaseIntegrationTest,
+    _needs_asset_validation,
+)
 from application_sdk.validation import AssetCreationRules
 
 CONN = "default/snow/123"

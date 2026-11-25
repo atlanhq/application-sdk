@@ -26,7 +26,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -34,16 +33,16 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="S001",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — credentials arrive as a "
-            "`CredentialRef` built by `build_credential_ref`, or as an inline dict, and "
-            'the typed `MetabaseCredential` defaults `password` to "". No string literal '
-            "is assigned to a credential-named variable in any shipped app/ module of "
+            "atlan-metabase-app app/credentials.py — the typed `MetabaseCredential` "
+            'defaults `password` to "", and its values arrive at runtime: '
+            "app/connector.py `extract_metadata` routes the input through the SDK's "
+            "`route_credentials` into a credential ref or an inline dict. No string "
+            "literal is assigned to a credential-named variable in any shipped app/ module of "
             "the three reference apps."
         ),
         scope=RuleScope.BOTH,
         name="HardcodedCredential",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="credential-storage",
         autofixable=False,
         since="0.4.0",
@@ -89,10 +88,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppressed inline with a justification:\n"
             "``# conformance: ignore[S001] <reason>`` (BLDX-1419).\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/security.md#s001"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/security.prose.md",
@@ -101,11 +96,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="S002",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes the "
-            "input to a `CredentialRef` through the SDK's `CredentialRef.resolve` "
-            "(`credential_guid` or agent `agent_json`), and app/connector.py "
-            "`_build_client` fetches the secret with `self.context.resolve_credential_raw` "
-            "and parses it into the typed MetabaseCredential the API client consumes. No "
+            "atlan-metabase-app app/connector.py — `extract_metadata` routes the input "
+            "to a `CredentialRef` through the SDK's `route_credentials` (`credential_guid` "
+            "or agent `agent_json`), and `_build_client` fetches the secret with "
+            "`self.context.resolve_credential_raw_or_inline` and hands it to "
+            "app/credentials.py `parse_metabase_credentials` for the typed "
+            "MetabaseCredential the API client consumes. No "
             "credential-named environment variable is read in either module — resolution "
             "through the seam is what correct looks like, not a justified read."
         ),
@@ -131,7 +127,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="RawEnvCredentialAccess",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="credential-resolution",
         autofixable=False,
         since="0.4.0",
@@ -166,10 +161,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Not auto-applied: moving a read onto the seam changes where a production\n"
             "secret comes from, and no gate proves the store holds it under that name. The\n"
             "remediation lane routes S002 findings to a person (``security.prose.md``).\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/security.md#s002"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

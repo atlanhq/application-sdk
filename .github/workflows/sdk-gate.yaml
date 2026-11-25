@@ -206,6 +206,13 @@ jobs:
               # .github/scripts/tests/test_sdk_gate_filter_coverage.py.
               - 'application_sdk/testing/e2e/**'
               - 'application_sdk/observability/logger_adaptor.py'
+              # test-sdk-import.py compares src/SdkNames.pkl's artifact
+              # vocabulary with this module's constants (FND-4934).
+              - 'application_sdk/validation/artifacts.py'
+              # test-sdk-import.py compares src/Connectors.pkl with the locked
+              # pyatlan's AtlanConnectorType (FND-4933), so a pyatlan bump must
+              # run it. Enforced by test_sdk_gate_filter_coverage.py.
+              - 'uv.lock'
               - '.github/workflows/contract-toolkit-*.yml'
               - '.github/workflows/contract-toolkit-*.yaml'
             # Conformance RULE detection (C/E/P/O). Deliberately NOT triggered by
@@ -321,7 +328,7 @@ jobs:
       # the base, so a stale lock on main cannot redden unrelated PRs.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       - name: Check that uv.lock resolves
         env:

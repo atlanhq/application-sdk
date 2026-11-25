@@ -5,15 +5,17 @@ workflow outputs from activities.
 """
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 from unittest import mock
 
 import orjson
 import pytest
+from pydantic import BaseModel, Field
 
 import application_sdk.outputs as outputs_module
+from application_sdk.app.registry import _running_app_name
 from application_sdk.contracts.base import Output, OutputStatus
 from application_sdk.execution._temporal.interceptors.outputs import (
     OutputActivityInboundInterceptor,
@@ -23,20 +25,28 @@ from application_sdk.execution._temporal.interceptors.outputs import (
 from application_sdk.outputs import (
     Artifact,
     BlankIdentity,
+    FetchFailureReason,
     Metric,
     OutputCollector,
     RecordSkipped,
     SkipReason,
     current_outputs,
     get_outputs,
+    record_fetch_failure,
     skip_record,
+)
+from application_sdk.outputs.fetch_failures import (
+    FETCH_FAILURES_LAYOUT,
+    FETCH_FAILURES_METRIC,
 )
 from application_sdk.outputs.skipped import (
     SKIPPED_RECORDS_METRIC,
     SkippableRecord,
     SkippedRecordSink,
+    merge_run_log,
     merge_run_skips,
 )
+from tests.unit._doubles import ActivityInfo, ExecuteInput
 
 _RUN_PREFIX = "artifacts/apps/app/workflows/wf-1/run-1"
 
@@ -47,28 +57,32 @@ class _TaskOutput(Output):
     rows: int = 0
 
 
+class _AliasedOutput(Output):
+    """A workflow result with aliased fields and no ``populate_by_name``.
+
+    A required aliased field makes a ``model_dump()`` / ``model_validate()``
+    round trip raise; a defaulted one makes it silently reset to the default.
+    """
+
+    rows: int = 0
+    schema_name: str = Field(alias="schemaName")
+    table_name: str = Field(default="", alias="tableName")
+
+
+class _PlainModel(BaseModel):
+    """A model with no ``metrics`` / ``artifacts`` fields."""
+
+    name: str = ""
+
+
+class _IntMetricsModel(BaseModel):
+    """A model whose ``metrics`` field cannot hold the collector's map."""
+
+    metrics: int = 0
+
+
 @dataclass
-class MockExecuteWorkflowInput:
-    """Mock ExecuteWorkflowInput for testing."""
-
-    args: Sequence[Any] = field(default_factory=list)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class MockExecuteActivityInput:
-    """Mock ExecuteActivityInput for testing."""
-
-    fn: Any = None
-    args: Sequence[Any] = field(default_factory=list)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-    executor: Any = None
-
-
-@dataclass
-class MockActivityInfo:
-    """Mock activity.info() return value."""
-
+class MockActivityInfo(ActivityInfo):
     workflow_run_id: str = "test-workflow-run-id"
     activity_type: str = "test_activity"
     activity_id: str = "activity-123"
@@ -112,7 +126,7 @@ class TestOutputActivityInboundInterceptor:
             return {"status": "success"}
 
         mock_next_inbound.execute_activity.side_effect = capture_collector
-        input_data = MockExecuteActivityInput()
+        input_data = ExecuteInput()
 
         with mock.patch(
             "application_sdk.execution._temporal.interceptors.outputs.activity"
@@ -133,7 +147,7 @@ class TestOutputActivityInboundInterceptor:
         """Test that the original activity result is returned unchanged."""
         expected_result = {"status": "success", "data": [1, 2, 3]}
         mock_next_inbound.execute_activity.return_value = expected_result
-        input_data = MockExecuteActivityInput()
+        input_data = ExecuteInput()
 
         with mock.patch(
             "application_sdk.execution._temporal.interceptors.outputs.activity"
@@ -154,7 +168,7 @@ class TestOutputActivityInboundInterceptor:
 
         mock_next_inbound.execute_activity.side_effect = activity_with_outputs
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert result == {
             "status": "ok",
@@ -174,7 +188,7 @@ class TestOutputActivityInboundInterceptor:
 
         mock_next_inbound.execute_activity.side_effect = activity_with_outputs
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert isinstance(result, _TaskOutput)
         assert result.rows == 3
@@ -193,7 +207,7 @@ class TestOutputActivityInboundInterceptor:
         upstream = _TaskOutput(rows=1, metrics={"rows": 1}, artifacts={"a": "p"})
         mock_next_inbound.execute_activity.return_value = upstream
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert result.metrics is None
         assert result.artifacts is None
@@ -219,7 +233,7 @@ class TestOutputActivityInboundInterceptor:
             ) as mock_logger,
         ):
             mock_activity.info.return_value = MockActivityInfo()
-            result = await interceptor.execute_activity(MockExecuteActivityInput())
+            result = await interceptor.execute_activity(ExecuteInput())
 
         assert result is None
         mock_logger.warning.assert_called_once()
@@ -231,7 +245,7 @@ class TestOutputActivityInboundInterceptor:
         own = {"metrics": "not ours"}
         mock_next_inbound.execute_activity.return_value = own
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert result is own
 
@@ -295,7 +309,7 @@ class TestOutputWorkflowInboundInterceptor:
         expected_result = {"key": "value"}
         mock_next_inbound.execute_workflow.return_value = expected_result
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == expected_result
 
@@ -324,7 +338,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {
             "base": "data",
@@ -346,7 +360,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"early": 1}}
 
@@ -371,7 +385,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"local": 2}}
 
@@ -392,7 +406,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"locked": 1}}
 
@@ -412,7 +426,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"status": "recovered"}
 
@@ -434,7 +448,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"status": "done"}
 
@@ -455,7 +469,7 @@ class TestOutputWorkflowInboundInterceptor:
         activity_next.execute_activity.side_effect = activity_body
         carried = await OutputActivityInboundInterceptor(
             activity_next
-        ).execute_activity(MockExecuteActivityInput())
+        ).execute_activity(ExecuteInput())
 
         mock_next_outbound.start_activity.return_value = self._completed(carried)
 
@@ -465,7 +479,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result["connection_qualified_name"] == "default/redshift/prod"
         assert result["metrics"] == {"tables": 100}
@@ -483,7 +497,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"status": "ok", "metrics": {"rows": 2}}
 
@@ -498,7 +512,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"m": 1}}
 
@@ -514,10 +528,88 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = workflow_with_outputs
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result["metrics"]["workflow-metric"] == 999
         assert result["status"] == "done"
+
+    async def test_aliased_output_keeps_its_fields_when_outputs_merge(
+        self, interceptor, mock_next_inbound
+    ):
+        """An Output with an aliased field keeps every field and gains the outputs.
+
+        ``model_dump()`` emits field names, which a model without
+        ``populate_by_name`` rejects on ``model_validate``; the merge must not
+        depend on that round trip.
+        """
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return _AliasedOutput(rows=3, schemaName="sales", tableName="orders")
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(ExecuteInput())
+
+        assert isinstance(result, _AliasedOutput)
+        assert result.schema_name == "sales"
+        assert result.table_name == "orders"
+        assert result.rows == 3
+        assert result.status == OutputStatus.SUCCESS
+        assert result.metrics == {"count": 7}
+
+    async def test_aliased_output_marked_partial_keeps_its_fields(
+        self, interceptor, mock_next_inbound
+    ):
+        """A run that skipped records is PARTIAL_SUCCESS without losing fields."""
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name=SKIPPED_RECORDS_METRIC, value=2))
+            return _AliasedOutput(rows=3, schemaName="sales", tableName="orders")
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(ExecuteInput())
+
+        assert isinstance(result, _AliasedOutput)
+        assert result.schema_name == "sales"
+        assert result.table_name == "orders"
+        assert result.rows == 3
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics == {SKIPPED_RECORDS_METRIC: 2}
+
+    async def test_model_without_output_fields_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A model that cannot carry outputs is returned as-is, never replaced."""
+        original = _PlainModel(name="x")
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(ExecuteInput())
+
+        assert result is original
+
+    async def test_model_whose_output_field_rejects_the_map_is_returned_unchanged(
+        self, interceptor, mock_next_inbound
+    ):
+        """A ``metrics`` field of another type is never set to the collector map."""
+        original = _IntMetricsModel(metrics=1)
+
+        async def run(input):
+            get_outputs().add_metric(Metric(name="count", value=7))
+            return original
+
+        mock_next_inbound.execute_workflow.side_effect = run
+
+        result = await interceptor.execute_workflow(ExecuteInput())
+
+        assert result is original
+        assert result.metrics == 1
 
 
 class TestOutputInterceptor:
@@ -660,7 +752,7 @@ class TestSkippedRecordsThroughInterceptors:
         nxt = mock.AsyncMock()
         nxt.execute_activity.side_effect = body
         return await OutputActivityInboundInterceptor(nxt).execute_activity(
-            MockExecuteActivityInput()
+            ExecuteInput()
         )
 
     @staticmethod
@@ -686,7 +778,7 @@ class TestSkippedRecordsThroughInterceptors:
             return result
 
         nxt.execute_workflow.side_effect = run
-        return await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        return await interceptor.execute_workflow(ExecuteInput())
 
     async def test_skips_reach_workflow_output(self, uploads, tmp_path):
         async def extract(input):
@@ -810,3 +902,208 @@ class TestSkippedRecordsThroughInterceptors:
         with pytest.raises(ValueError, match="creator rejects"):
             await self._run_activity(transform)
         assert uploads == {}
+
+
+class TestFetchFailuresThroughInterceptors:
+    """FND-5294: fetch failures reach the workflow output as metric, artifact and status."""
+
+    _run_activity = staticmethod(TestSkippedRecordsThroughInterceptors._run_activity)
+    _run_workflow = staticmethod(TestSkippedRecordsThroughInterceptors._run_workflow)
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state(self):
+        current_outputs.set(None)
+        yield
+        current_outputs.set(None)
+
+    @pytest.fixture
+    def uploads(self, tmp_path):
+        store: dict[str, bytes] = {}
+
+        async def upload_file(key, local_path):
+            store[key] = Path(local_path).read_bytes()
+
+        async def list_data_keys(prefix):
+            return sorted(k for k in store if k.startswith(prefix))
+
+        async def download_file(key, local_path):
+            Path(local_path).write_bytes(store[key])
+
+        parts = iter(range(1000))
+        with (
+            mock.patch.multiple(
+                "application_sdk.storage",
+                upload_file=upload_file,
+                list_data_keys=list_data_keys,
+                download_file=download_file,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.build_output_path",
+                return_value=_RUN_PREFIX,
+            ),
+            mock.patch(
+                "application_sdk.outputs.fetch_failures._part_location",
+                side_effect=lambda: (
+                    tmp_path / "scratch" / f"{(n := next(parts))}.ndjson",
+                    f"act-{n}.ndjson",
+                ),
+            ),
+        ):
+            yield store
+
+    async def test_failures_from_gather_reach_workflow_output(self, uploads, tmp_path):
+        async def fetch(report_id: str) -> str | None:
+            if report_id.endswith("x"):
+                record_fetch_failure(
+                    FetchFailureReason.NOT_FOUND,
+                    entity_type="Report",
+                    record_id=report_id,
+                    http_status=404,
+                )
+                return None
+            return report_id
+
+        async def extract(input):
+            got = await asyncio.gather(*(fetch(r) for r in ["a", "bx", "c", "dx"]))
+            return _TaskOutput(rows=len([g for g in got if g]))
+
+        extracted = await self._run_activity(extract)
+        (part_key,) = uploads
+        assert part_key.startswith(f"{_RUN_PREFIX}/fetch-failures/parts/")
+
+        async def merge(input):
+            await merge_run_log(_RUN_PREFIX, str(tmp_path), FETCH_FAILURES_LAYOUT)
+            return Output()
+
+        merged = await self._run_activity(merge)
+        result = await self._run_workflow([extracted, merged], Output())
+
+        assert result.status == OutputStatus.PARTIAL_SUCCESS
+        assert result.metrics[FETCH_FAILURES_METRIC] == 2
+        assert result.metrics["fetch-failures-not-found"] == 2
+        merged_key = f"{_RUN_PREFIX}/fetch-failures.ndjson"
+        assert result.artifacts == {
+            "fetch-failures": {"path": merged_key, "display_name": "Fetch failures"}
+        }
+        ids = sorted(
+            orjson.loads(x)["record_id"] for x in uploads[merged_key].splitlines()
+        )
+        assert ids == ["bx", "dx"]
+
+    async def test_no_failures_means_no_artifact_metric_or_status_change(self, uploads):
+        async def extract(input):
+            get_outputs().add_metric(Metric(name="reports", value=3))
+            return _TaskOutput(rows=3)
+
+        extracted = await self._run_activity(extract)
+        result = await self._run_workflow([extracted], Output())
+
+        assert uploads == {}
+        assert result.status == OutputStatus.SUCCESS
+        assert result.artifacts is None
+        assert result.metrics == {"reports": 3}
+
+    async def test_failed_activity_records_nothing(self, uploads):
+        async def extract(input):
+            record_fetch_failure(
+                FetchFailureReason.SOURCE_UNAVAILABLE,
+                entity_type="Report",
+                record_id="r",
+            )
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await self._run_activity(extract)
+        assert uploads == {}
+
+    async def test_failure_status_is_never_downgraded(self, uploads):
+        async def extract(input):
+            record_fetch_failure(
+                FetchFailureReason.FORBIDDEN, entity_type="Report", record_id="r"
+            )
+            return _TaskOutput()
+
+        extracted = await self._run_activity(extract)
+        result = await self._run_workflow(
+            [extracted], Output(status=OutputStatus.FAILURE)
+        )
+
+        assert result.status == OutputStatus.FAILURE
+        assert result.metrics[FETCH_FAILURES_METRIC] == 1
+
+
+class TestSkippedPartsUseTheRunningApp:
+    """FND-4921: a skipped-records part uploads under the App that ran the task.
+
+    The task wrapper records the App's name in ``_running_app_name`` inside the
+    activity body; the part is persisted after the body returns. With no single
+    registered App and ``ATLAN_APPLICATION_NAME`` naming neither, the part must
+    still land under the App's run prefix, which is where
+    ``merge_skipped_records`` lists. Concurrent activities keep their own names.
+    """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_state(self):
+        current_outputs.set(None)
+        yield
+        current_outputs.set(None)
+
+    @pytest.fixture
+    def uploaded(self, tmp_path):
+        keys: list[str] = []
+
+        async def upload_file(key, _local_path):
+            keys.append(key)
+
+        with (
+            mock.patch("application_sdk.storage.upload_file", upload_file),
+            mock.patch(
+                "application_sdk.app.registry.AppRegistry.list_apps", return_value=[]
+            ),
+            mock.patch("application_sdk.constants.APPLICATION_NAME", "env-app"),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_id",
+                return_value="wf-1",
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.activity_utils.get_workflow_run_id",
+                return_value="run-1",
+            ),
+            mock.patch(
+                "application_sdk.outputs.skipped._new_sink",
+                side_effect=lambda: SkippedRecordSink(
+                    tmp_path / f"{id(object())}.ndjson"
+                ),
+            ),
+        ):
+            yield keys
+
+    @staticmethod
+    async def _run_activity(app_name: str) -> None:
+        async def body(_input):
+            _running_app_name.set(app_name)  # what the task wrapper does
+            await asyncio.sleep(0)  # let a concurrent activity interleave
+            await skip_record(
+                {"name": "t", "schema": ""},
+                SkipReason.BLANK_IDENTITY,
+                record_id="t",
+                entity_type="Table",
+            )
+            return {"status": "success"}
+
+        nxt = mock.AsyncMock()
+        nxt.execute_activity = mock.AsyncMock(side_effect=body)
+        await OutputActivityInboundInterceptor(nxt).execute_activity(ExecuteInput())
+
+    async def test_part_uploads_under_the_app_not_the_env_name(self, uploaded):
+        await self._run_activity("my-app")
+
+        assert len(uploaded) == 1
+        assert uploaded[0].startswith("artifacts/apps/my-app/workflows/wf-1/run-1/")
+        # Scoped to the activity: nothing leaks to the caller once it returns.
+        assert _running_app_name.get() == ""
+
+    async def test_concurrent_activities_keep_their_own_app(self, uploaded):
+        await asyncio.gather(*(self._run_activity(n) for n in ("app-a", "app-b")))
+
+        assert sorted(k.split("/")[2] for k in uploaded) == ["app-a", "app-b"]

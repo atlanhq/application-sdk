@@ -56,6 +56,14 @@ What this means in practice:
   A consumer may group by `code` and read `evidence` for context, but must not
   assume a key holds the same *kind* of value across every producer of that
   code. If you need one that does, say so here and make it so at both sites.
+- **Merging or re-categorising a code is a wire change too.** FND-4298 retired
+  four codes: `INVALID_INPUT_CREDENTIALS_PARSE` (SQL) and
+  `INVALID_INPUT_AZURE_CREDENTIALS_PARSE` now arrive as
+  `INVALID_INPUT_CREDENTIAL_PARSE`; `TIMEOUT_SQL_CLIENT_CONNECT` and
+  `TIMEOUT_SQL_PROBE` now arrive as `SOURCE_UNAVAILABLE_SQL_CLIENT_CONNECT_TIMEOUT`
+  and `SOURCE_UNAVAILABLE_SQL_PROBE_TIMEOUT`, category `SOURCE_UNAVAILABLE`.
+  `retryable` and `audience` did not change. A board keyed on an old code
+  should add the new one.
 - **Adding an `evidence` key is safe; repurposing one is not.** Evidence is the
   producing dataclass's fields, so a new field appears automatically — but a
   field that changes meaning silently changes what a consumer reads. Note that
@@ -250,6 +258,20 @@ no metric, no file. Consumers must treat a missing `skipped-records` metric as 0
 rather than as "unknown". Renaming a `SkipReason` value or a metric breaks
 fleet-wide aggregation across SDK versions, so add new members rather than
 renaming existing ones.
+
+## The fetch-failures artifact, layout and metrics
+
+| | |
+|---|---|
+| **Produced by** | `record_fetch_failure` and `persist_activity_fetch_failures` in `application_sdk/outputs/fetch_failures.py`, merged by `merge_run_log`; scheduled by `App.merge_fetch_failures` ([ADR-0022](../adr/0022-skipped-record-capture.md)) |
+| **Layout** | `{run prefix}/fetch-failures.ndjson` (merged, one per run) and `{run prefix}/fetch-failures/parts/{activity_id}.ndjson`, where the run prefix is `WORKFLOW_OUTPUT_PATH_TEMPLATE` |
+| **Line shape** | `{"record_id", "entity_type", "reason", "endpoint", "http_status", "detail"}`; `reason` is a `FetchFailureReason` value (`source_unavailable`, `not_found`, `forbidden`, `rate_limited`) |
+| **Run outputs** | artifact `fetch-failures`; metrics `fetch-failures`, `fetch-failures-<reason>` (kebab-case), `fetch-failures-truncated`, `fetch-failures-unpersisted`; status `partial_success` |
+| **Read by** | Run-output consumers (the Automation Engine UI) and anyone aggregating extraction gaps across the fleet |
+| **Pinned by** | `tests/unit/outputs/test_fetch_failures.py`, `TestFetchFailuresThroughInterceptors` in `tests/unit/execution/_temporal/interceptors/test_output_interceptor.py`, `tests/unit/app/test_merge_fetch_failures.py` |
+
+**Absence means zero**, as for skipped records: a run that recorded no fetch failure has no
+artifact, metric or file. Add `FetchFailureReason` members rather than renaming existing ones.
 
 ## The connection-scoped `persistent-artifacts` layout
 
@@ -508,7 +530,7 @@ produces the event shape an app's DAG reads through paths the toolkit renders.
 | **Key (toolkit → AE)** | `streaming_enabled`, `ack_paths`; `max_retries` is deliberately **not** rendered under streaming |
 | **Key (AE → app)** | Exactly four: `batch_key` (always set), `batch` (the events inline, or `null` above AE's inline cap), `event_count`, `topic` |
 | **Read by** | The Automation Engine, which registers the trigger and picks a dispatch shell from `streaming_enabled`; every streaming consumer app, whose extract-node args resolve `$.event.batch` / `$.event.batch_key` |
-| **Pinned by** | `contract-toolkit/tests/streaming_trigger_config_test.pkl` (render shape, both schemas, and every refusal) and the streaming section of `contract-toolkit/scripts/check-invariants.sh` (the eval-failure cases facts cannot express) |
+| **Pinned by** | `contract-toolkit/tests/streaming_trigger_config_test.pkl` (render shape, both schemas, and every eval-time refusal, asserted with `module.catch`) |
 | **Owner (AE side)** | Anurag Badoni — change `event_context` or the `TriggerConfig` keys through this entry |
 | **Design record** | DISTR-973 |
 

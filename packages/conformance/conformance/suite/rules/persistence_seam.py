@@ -102,7 +102,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -118,7 +117,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="AppDerivedPersistentArtifactPrefix",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="persistence-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -184,7 +182,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "justified ``# conformance: ignore[P048] <reason>``, which stays visible in\n"
             "SARIF and turns a silent fork into a reviewed decision.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p048",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -195,15 +192,14 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app app/connector.py — `_extract_spec_async(spec_url, "
             "connection_qualified_name, ...)` passes the value straight through to "
-            "`build_api_spec_qn` and on to `APISpec.creator()`; it never splits or parses "
-            "it. The "
-            "SDK warns and proceeds on a malformed value; an app that parses and raises "
-            "turns a recoverable run into a failed one."
+            "app/asset_mapper.py `build_api_spec_qn` and on to `APISpec.creator()`; it "
+            "never splits or parses it. The SDK warns and proceeds on a malformed "
+            "value; an app that parses and raises turns a recoverable run into a "
+            "failed one."
         ),
         scope=RuleScope.APP,
         name="StrictConnectionQualifiedNameParse",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="persistence-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -287,7 +283,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "stricter contract is still expressible with a justified\n"
             "``# conformance: ignore[P049] <reason>``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p049",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

@@ -18,6 +18,7 @@ from conformance.suite.checks.prescriptions import main, scan_all, scan_text
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition, EnforcementTier
+from tests._helpers import scan_files
 
 
 def _ids(src: str) -> list[str]:
@@ -29,17 +30,6 @@ def _scan_one(tmp_path: Path, src: str) -> list:
     p = tmp_path / "m.py"
     p.write_text(src)
     return scan_all([p], tmp_path)
-
-
-def _scan_files(tmp_path: Path, files: dict[str, str]) -> list:
-    """Write each *files* entry and run the cross-file scanner over all of them."""
-    paths: list[Path] = []
-    for name, src in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(src)
-        paths.append(path)
-    return scan_all(paths, tmp_path)
 
 
 # ── P001 UnboundedContractFields ───────────────────────────────────────────────
@@ -282,7 +272,7 @@ def test_p003_resolves_transitive_inheritance_across_files(tmp_path: Path) -> No
             '    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SQL_BAD"\n'
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     rule_ids = [f.rule_id for f in findings]
     assert rule_ids == ["P003"]
     assert "AUTH_" in findings[0].message
@@ -305,7 +295,7 @@ def test_p003_resolves_transitive_chain_with_intermediate_in_separate_file(
             '    code: ClassVar[str] = "AUTH_MIXED_UP"\n'
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings] == ["P003"]
 
 
@@ -428,7 +418,8 @@ def test_p003_silent_on_cross_file_code_constant(tmp_path: Path) -> None:
     """The fleet's connector apps keep codes in their own module and
     reference them as ``codes.X.code``. That indirection is a declaration —
     with the prescribed prefix it must be silent."""
-    findings = _scan_files(
+    findings = scan_files(
+        scan_all,
         tmp_path,
         {
             "app/errors/codes.py": _CODES_MODULE_OK,
@@ -445,7 +436,8 @@ def test_p003_fires_on_cross_file_code_constant_with_wrong_prefix(
     code, so the app can see what to rename. Live: atlan-fivetran-app, 23
     findings that all read 'does not declare' while every class declared
     one."""
-    findings = _scan_files(
+    findings = scan_files(
+        scan_all,
         tmp_path,
         {
             "app/errors/codes.py": _CODES_MODULE_LEGACY,
@@ -489,7 +481,7 @@ def test_p003_handles_cycle_without_recursion_error(tmp_path: Path) -> None:
         "b.py": "class B(A): pass\n",
     }
     # Should resolve to None for both (cycle, no leaf reached) and emit nothing.
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert findings == []
 
 
@@ -501,7 +493,7 @@ def test_p003_first_wins_on_global_class_name_collision(tmp_path: Path) -> None:
         "a.py": "class _Pivot(AuthError):\n    pass\n",
         "b.py": "class _Pivot(InternalError):\n    pass\n",
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     # Both _Pivot definitions are intermediates without code — both flagged.
     assert all(f.rule_id == "P003" for f in findings)
     assert len(findings) == 2
@@ -520,7 +512,7 @@ def test_p003_collision_concrete_child_resolves_to_first_seen_prefix(
             '    code: ClassVar[str] = "INTERNAL_CONCRETE"\n'
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     concrete = [f for f in findings if "Concrete" in f.message]
     assert len(concrete) == 1
     # First-seen _Pivot is from a.py (AuthError) — INTERNAL_ prefix is wrong
@@ -593,7 +585,7 @@ def test_p003_silent_when_a_mixin_ancestor_overrides_emission(tmp_path: Path) ->
             "    pass\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings] == []
 
 
@@ -620,7 +612,7 @@ def test_p003_still_fires_when_apperror_is_in_the_scanned_tree(tmp_path: Path) -
             "    pass\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings] == ["P003"]
 
 
@@ -691,7 +683,7 @@ def test_p003_recognises_leaf_via_init_reexport(tmp_path: Path) -> None:
             '    code: ClassVar[str] = "INTERNAL_BAD"\n'
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings] == ["P003"]
     assert "AUTH_" in findings[0].message
 
@@ -869,7 +861,7 @@ _NOOP_OPTOUT = (
 def _optout_swap(tmp_path: Path, files: dict[str, str]) -> dict | None:
     p001 = [
         f
-        for f in _scan_files(tmp_path, files)
+        for f in scan_files(scan_all, tmp_path, files)
         if f.rule_id == "P001" and f.file == "m.py"
     ]
     assert len(p001) == 1
@@ -998,7 +990,9 @@ def test_p001_no_safe_swap_in_a_generated_or_input_contract_file(
     tmp_path: Path, path: str
 ) -> None:
     p001 = [
-        f for f in _scan_files(tmp_path, {path: _NOOP_OPTOUT}) if f.rule_id == "P001"
+        f
+        for f in scan_files(scan_all, tmp_path, {path: _NOOP_OPTOUT})
+        if f.rule_id == "P001"
     ]
     assert len(p001) == 1 and not p001[0].properties
 
@@ -1818,111 +1812,72 @@ _TYPED_CONTRACTS = (
 _APP_IMPORTS = "from application_sdk.app import App, entrypoint, task, signal, query\n"
 
 
-def test_p013_fires_on_untyped_dict_input(tmp_path: Path) -> None:
-    """@entrypoint with dict input → P013."""
+def _boundary_connector(
+    decorator: str, method: str, imports: str, signature: str
+) -> str:
+    """One-method ``App`` subclass for the P013/P014 boundary tables."""
+    return (
+        _APP_IMPORTS + imports + "class MyApp(App):\n"
+        f"    @{decorator}\n"
+        f"    async def {method}{signature}:\n"
+        "        ...\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("imports", "signature", "message_fragment"),
+    [
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict) -> FetchOutput",
+            "input",
+            id="untyped_dict_input",
+        ),
+        # Even if bounded, a dict is not a typed contract.
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict[str, str]) -> FetchOutput",
+            None,
+            id="subscripted_dict_input",
+        ),
+        pytest.param(
+            "from typing import Any\nfrom contracts import FetchOutput\n",
+            "(self, input: Any) -> FetchOutput",
+            None,
+            id="any_input",
+        ),
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input) -> FetchOutput",
+            "missing",
+            id="missing_input_annotation",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput) -> dict",
+            "output",
+            id="untyped_return",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput)",
+            "missing",
+            id="missing_return_annotation",
+        ),
+    ],
+)
+def test_p013_fires_on_untyped_boundary(
+    tmp_path: Path, imports: str, signature: str, message_fragment: str | None
+) -> None:
     files = {
         "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: dict) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
+        "connector.py": _boundary_connector("entrypoint", "run_it", imports, signature),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
-    assert "input" in p013[0].message
-
-
-def test_p013_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
-    """@entrypoint with dict[str,str] input — 'even if bounded' → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: dict[str, str]) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-
-
-def test_p013_fires_on_any_input(tmp_path: Path) -> None:
-    """@entrypoint with Any input → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from typing import Any\n"
-            "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: Any) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-
-
-def test_p013_fires_on_missing_input_annotation(tmp_path: Path) -> None:
-    """@entrypoint with unannotated input param → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "missing" in p013[0].message.lower()
-
-
-def test_p013_fires_on_untyped_return(tmp_path: Path) -> None:
-    """@entrypoint with dict return type → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: FetchInput) -> dict:\n"
-            "        return {}\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "output" in p013[0].message
-
-
-def test_p013_fires_on_missing_return_annotation(tmp_path: Path) -> None:
-    """@entrypoint with no return annotation → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: FetchInput):\n"
-            "        pass\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "missing" in p013[0].message.lower()
+    if message_fragment is not None:
+        assert message_fragment in p013[0].message
 
 
 def test_p013_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
@@ -1948,7 +1903,7 @@ def test_p013_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "FetchInput" in p013[0].message
@@ -1966,7 +1921,7 @@ def test_p013_silent_on_correctly_typed_entrypoint(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert p013 == []
 
@@ -1994,7 +1949,7 @@ def test_p013_silent_on_subclass_of_a_rebound_generated_contract(
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
@@ -2032,7 +1987,7 @@ def test_p013_silent_on_third_party_unresolvable_annotation(tmp_path: Path) -> N
             "        return SomeOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert p013 == []
 
@@ -2084,7 +2039,7 @@ def test_p013_implicit_run_fires_on_app_subclass(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
@@ -2106,7 +2061,7 @@ def test_p013_implicit_run_fires_on_sdk_template_subclass(
             "        return FetchOutput()\n"
         ),
     }
-    p013 = [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+    p013 = [f for f in scan_files(scan_all, tmp_path, files) if f.rule_id == "P013"]
     assert len(p013) == 1
 
 
@@ -2140,7 +2095,7 @@ def _p013_for_app_prelude(tmp_path: Path, prelude: str) -> list:
         "contracts.py": _TYPED_CONTRACTS,
         "connector.py": prelude + _RUN_ON_APP_SUBCLASS,
     }
-    return [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+    return [f for f in scan_files(scan_all, tmp_path, files) if f.rule_id == "P013"]
 
 
 @pytest.mark.parametrize(
@@ -2263,57 +2218,42 @@ def test_p013_result_is_failing_disposition(tmp_path: Path) -> None:
 # ── P014 UntypedTaskBoundary ──────────────────────────────────────────────────
 
 
-def test_p014_fires_on_untyped_dict_input(tmp_path: Path) -> None:
-    """@task with dict input → P014."""
+@pytest.mark.parametrize(
+    ("imports", "signature", "message_fragment"),
+    [
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict) -> FetchOutput",
+            "input",
+            id="untyped_dict_input",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput) -> dict",
+            "output",
+            id="untyped_return",
+        ),
+        # Bounded containers are still untyped.
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict[str, str]) -> FetchOutput",
+            None,
+            id="subscripted_dict_input",
+        ),
+    ],
+)
+def test_p014_fires_on_untyped_boundary(
+    tmp_path: Path, imports: str, signature: str, message_fragment: str | None
+) -> None:
     files = {
         "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: dict) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
+        "connector.py": _boundary_connector("task", "fetch", imports, signature),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
-    assert "input" in p014[0].message
-
-
-def test_p014_fires_on_untyped_return(tmp_path: Path) -> None:
-    """@task with dict return → P014."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: FetchInput) -> dict:\n"
-            "        return {}\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p014 = [f for f in findings if f.rule_id == "P014"]
-    assert len(p014) == 1
-    assert "output" in p014[0].message
-
-
-def test_p014_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
-    """@task with dict[str,str] input → P014 (bounded containers still untyped)."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: dict[str, str]) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = _scan_files(tmp_path, files)
-    p014 = [f for f in findings if f.rule_id == "P014"]
-    assert len(p014) == 1
+    if message_fragment is not None:
+        assert message_fragment in p014[0].message
 
 
 def test_p014_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
@@ -2339,7 +2279,7 @@ def test_p014_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "FetchInput" in p014[0].message
@@ -2357,7 +2297,7 @@ def test_p014_silent_on_correctly_typed_task(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert p014 == []
 
@@ -2382,7 +2322,7 @@ def test_p014_silent_on_task_input_derived_from_sdk_template_contract(
             "        return Output()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P014"] == []
 
 
@@ -2409,7 +2349,7 @@ def test_p014_fires_on_task_input_derived_from_local_extraction_task_input(
             "        return Output()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "SynapseTaskInput" in p014[0].message
@@ -2456,7 +2396,7 @@ def test_p014_silent_on_third_party_unresolvable_annotation(tmp_path: Path) -> N
             "        return SomeOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert p014 == []
 
@@ -2533,7 +2473,7 @@ def test_p013_silent_on_multi_hop_valid_base(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P013"] == []
 
 
@@ -2564,7 +2504,7 @@ def test_p013_fires_on_multi_hop_invalid_base(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "FetchInput" in p013[0].message
@@ -2592,7 +2532,7 @@ def test_p013_fires_on_local_subclass_of_non_sdk_base(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P013"]
 
 
@@ -2619,7 +2559,7 @@ def test_p013_silent_on_local_subclass_of_sdk_template_contract(tmp_path: Path) 
             "        return OracleIncrementalExtractionOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P013"] == []
 
 
@@ -2708,7 +2648,7 @@ def test_p013_silent_on_arity_zero_entrypoint(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P013"] == []
 
 
@@ -2728,7 +2668,7 @@ def test_p013_silent_on_optional_valid_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P013"] == []
 
 
@@ -2745,7 +2685,7 @@ def test_p013_fires_on_optional_dict_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
@@ -2767,7 +2707,7 @@ def test_p014_silent_on_optional_valid_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f for f in findings if f.rule_id == "P014"] == []
 
 
@@ -2784,7 +2724,7 @@ def test_p014_fires_on_optional_dict_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "input" in p014[0].message
@@ -2805,7 +2745,7 @@ def test_p013_fires_on_none_return_annotation(tmp_path: Path) -> None:
             "        pass\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "output" in p013[0].message
@@ -2823,7 +2763,7 @@ def test_p014_fires_on_none_return_annotation(tmp_path: Path) -> None:
             "        pass\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "output" in p014[0].message
@@ -3055,7 +2995,7 @@ def test_p013_fires_on_optional_annotated_dict_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
@@ -3076,7 +3016,7 @@ def test_p014_fires_on_optional_annotated_dict_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "input" in p014[0].message
@@ -3097,7 +3037,7 @@ def test_p013_fires_on_annotated_optional_dict_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
@@ -3120,7 +3060,7 @@ def test_p013_fires_on_aliased_sdk_entrypoint_decorator(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
@@ -3140,7 +3080,7 @@ def test_p014_fires_on_aliased_sdk_task_decorator(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "input" in p014[0].message
@@ -3161,7 +3101,7 @@ def test_p014_fires_on_kwonly_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
     assert "input" in p014[0].message
@@ -3179,7 +3119,7 @@ def test_p013_fires_on_kwonly_input(tmp_path: Path) -> None:
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
@@ -3359,7 +3299,7 @@ def test_p027_resolves_key_constant_across_files(tmp_path: Path) -> None:
             "        return self.get_app_state(AUTH_KEY)\n"
         ),
     }
-    assert _p027_ids(_scan_files(tmp_path, files)) == ["P027"]
+    assert _p027_ids(scan_files(scan_all, tmp_path, files)) == ["P027"]
 
 
 def test_p027_suppressed_inline(tmp_path: Path) -> None:
@@ -3858,7 +3798,7 @@ def test_p014_silent_when_a_same_named_class_lives_in_another_file(
             "        return LineageOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
@@ -3887,7 +3827,7 @@ def test_p014_still_fires_when_the_local_class_is_the_untyped_one(
             "        return LineageOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id == "P014"] == ["P014"]
 
 
@@ -3930,7 +3870,7 @@ def test_p013_silent_when_a_class_shadows_its_own_generated_base(
             "        return AppOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
@@ -4012,7 +3952,9 @@ def test_aliased_same_named_contracts_across_boundary_shapes(
         ),
     }
     findings = [
-        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+        f
+        for f in scan_files(scan_all, tmp_path, files)
+        if f.rule_id in ("P013", "P014")
     ]
     assert [f.rule_id for f in findings] == expected
     if expected:
@@ -4038,7 +3980,7 @@ def test_p013_silent_on_the_rebinding_alias_itself(tmp_path: Path) -> None:
             "        return AppOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
@@ -4062,7 +4004,9 @@ def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_cla
         ),
     }
     findings = [
-        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+        f
+        for f in scan_files(scan_all, tmp_path, files)
+        if f.rule_id in ("P013", "P014")
     ]
     assert [f.rule_id for f in findings] == ["P013"]
     assert "'Foo'" in findings[0].message
@@ -4124,7 +4068,7 @@ def test_p013_fires_on_alias_over_a_same_named_non_contract_base(
             "        return AppOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
@@ -4188,7 +4132,7 @@ def test_p013_same_named_base_resolves_by_import_provenance(
             "        return O()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
 
 
@@ -4210,7 +4154,7 @@ def test_p013_unrelated_same_named_input_elsewhere_still_fires(
             "        return O()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
@@ -4350,7 +4294,7 @@ def test_p013_same_named_base_never_resolves_through_another_module(
             "        return O()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
@@ -4407,7 +4351,7 @@ def test_p013_same_named_base_resolves_across_module_layouts(
             "        return O()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
@@ -4457,7 +4401,7 @@ def test_p013_nested_scope_store_keeps_base_provenance(
     """Only module-scope bindings make a base import ambiguous; a store in a
     nested scope does not."""
     files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, reverse_order)
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
 
 
@@ -4476,7 +4420,7 @@ def test_p013_global_store_in_nested_scope_rebinds_the_base(
         "    _G = None\n" + _WRAPPER_SUB
     )
     files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, False)
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
@@ -4529,7 +4473,9 @@ def test_p013_same_named_walk_follows_provenance_below_the_base(
 ) -> None:
     """Below the selected same-named base, each parent resolves to the class its
     import names, never to the first-wins record of that bare name."""
-    findings = _scan_files(tmp_path, _subclass_entrypoint(files, reverse_order))
+    findings = scan_files(
+        scan_all, tmp_path, _subclass_entrypoint(files, reverse_order)
+    )
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
 
 
@@ -4566,7 +4512,7 @@ def test_p014_same_named_walk_does_not_poison_the_shared_cache(
             "        return O()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
@@ -4586,7 +4532,7 @@ def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None
             "        return FetchOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id == "P013"] == ["P013"]
 
 
@@ -4725,7 +4671,7 @@ def test_p059_fires_on_list_of_json_strings_across_files(tmp_path: Path) -> None
             "    return [json.loads(s) for s in result.descriptors_json]\n"
         ),
     }
-    hits = _p059(_scan_files(tmp_path, files))
+    hits = _p059(scan_files(scan_all, tmp_path, files))
     assert [(f.file, f.line) for f in hits] == [("app/contracts.py", 4)]
     assert "descriptors_json" in hits[0].message
     assert "app/extractor.py" in hits[0].message
@@ -4740,7 +4686,7 @@ def test_p059_fires_on_str_field_decoded(tmp_path: Path) -> None:
             "    return json.loads(input.credentials_json)\n"
         ),
     }
-    hits = _p059(_scan_files(tmp_path, files))
+    hits = _p059(scan_files(scan_all, tmp_path, files))
     assert [f.line for f in hits] == [7]
 
 
@@ -4756,7 +4702,7 @@ def test_p059_fires_on_str_field_decoded(tmp_path: Path) -> None:
 )
 def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
     files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [7]
 
 
 @pytest.mark.parametrize(
@@ -4784,7 +4730,7 @@ def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
 )
 def test_p059_receiver_and_value_forms(tmp_path: Path, code: str) -> None:
     files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [7]
 
 
 @pytest.mark.parametrize(
@@ -4813,7 +4759,7 @@ def test_p059_receiver_and_value_forms(tmp_path: Path, code: str) -> None:
 )
 def test_p059_silent_on_untyped_or_foreign_receiver(tmp_path: Path, code: str) -> None:
     files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
-    assert _p059(_scan_files(tmp_path, files)) == []
+    assert _p059(scan_files(scan_all, tmp_path, files)) == []
 
 
 def test_p059_self_in_contract_method(tmp_path: Path) -> None:
@@ -4827,7 +4773,7 @@ def test_p059_self_in_contract_method(tmp_path: Path) -> None:
             "        return json.loads(self.blob) if self.blob else {}\n"
         ),
     }
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [4]
 
 
 def test_p059_field_validator_that_dumps(tmp_path: Path) -> None:
@@ -4848,7 +4794,7 @@ def test_p059_field_validator_that_dumps(tmp_path: Path) -> None:
             "        return v\n"
         ),
     }
-    hits = _p059(_scan_files(tmp_path, files))
+    hits = _p059(scan_files(scan_all, tmp_path, files))
     assert [f.line for f in hits] == [5, 6]
     assert "encoded as JSON at app/contracts.py:12" in hits[0].message
 
@@ -4865,7 +4811,7 @@ def test_p059_attributes_evidence_to_the_receivers_class(tmp_path: Path) -> None
         ),
         "app/x.py": "import json\ndef f(b: B):\n    return json.loads(b.blob)\n",
     }
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [5]
 
 
 def test_p059_receiver_typed_as_subclass_flags_base_field(tmp_path: Path) -> None:
@@ -4879,7 +4825,7 @@ def test_p059_receiver_typed_as_subclass_flags_base_field(tmp_path: Path) -> Non
         ),
         "app/x.py": "import json\ndef f(c: Child):\n    return json.loads(c.blob)\n",
     }
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [3]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [3]
 
 
 def test_p059_map_loads_over_list_field(tmp_path: Path) -> None:
@@ -4887,7 +4833,7 @@ def test_p059_map_loads_over_list_field(tmp_path: Path) -> None:
         "app/contracts.py": _P059_CONTRACTS,
         "app/x.py": "import json\ndef f(r: DiscoverOutput):\n    return list(map(json.loads, r.descriptors_json))\n",
     }
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [4]
 
 
 def test_p059_silent_on_plain_text_fields(tmp_path: Path) -> None:
@@ -4901,7 +4847,7 @@ def test_p059_silent_on_plain_text_fields(tmp_path: Path) -> None:
             "    return json.loads(blob)\n"
         ),
     }
-    assert _p059(_scan_files(tmp_path, files)) == []
+    assert _p059(scan_files(scan_all, tmp_path, files)) == []
 
 
 def test_p059_silent_on_non_text_field(tmp_path: Path) -> None:
@@ -4913,7 +4859,7 @@ def test_p059_silent_on_non_text_field(tmp_path: Path) -> None:
         ),
         "app/x.py": "import json\nx = I(payload=json.dumps({}))\n",
     }
-    assert _p059(_scan_files(tmp_path, files)) == []
+    assert _p059(scan_files(scan_all, tmp_path, files)) == []
 
 
 def test_p059_silent_on_non_contract_class(tmp_path: Path) -> None:
@@ -4921,7 +4867,7 @@ def test_p059_silent_on_non_contract_class(tmp_path: Path) -> None:
         "app/models.py": "class Row:\n    blob: str = ''\n",
         "app/x.py": "import json\ndef f(r):\n    return json.loads(r.blob)\n",
     }
-    assert _p059(_scan_files(tmp_path, files)) == []
+    assert _p059(scan_files(scan_all, tmp_path, files)) == []
 
 
 def test_p059_suppressed_with_reason(tmp_path: Path) -> None:
@@ -4932,7 +4878,7 @@ def test_p059_suppressed_with_reason(tmp_path: Path) -> None:
         ),
         "app/x.py": "import json\ndef f(i: ExtractInput):\n    return json.loads(i.credentials_json)\n",
     }
-    hits = _p059(_scan_files(tmp_path, files))
+    hits = _p059(scan_files(scan_all, tmp_path, files))
     assert hits and all(f.suppressed for f in hits)
 
 
@@ -4949,7 +4895,7 @@ def test_p059_silent_on_same_named_keyword_of_other_call(tmp_path: Path) -> None
             "    return requests.post('u', data=json.dumps(x))\n"
         ),
     }
-    assert _p059(_scan_files(tmp_path, files)) == []
+    assert _p059(scan_files(scan_all, tmp_path, files)) == []
 
 
 def test_p059_aliased_json_module(tmp_path: Path) -> None:
@@ -4957,7 +4903,7 @@ def test_p059_aliased_json_module(tmp_path: Path) -> None:
         "app/contracts.py": _P059_CONTRACTS,
         "app/x.py": "import json as j\ndef f(i: ExtractInput):\n    return j.loads(i.credentials_json)\n",
     }
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [7]
 
 
 @pytest.mark.parametrize(
@@ -4982,7 +4928,7 @@ def test_p059_text_field_forms(tmp_path: Path, annotation: str) -> None:
         ),
         "app/x.py": "import json\ndef f(i: I):\n    return json.loads(i.blob)\n",
     }
-    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
+    assert [f.line for f in _p059(scan_files(scan_all, tmp_path, files))] == [5]
 
 
 def _p015_on(annotation: str) -> list[str]:

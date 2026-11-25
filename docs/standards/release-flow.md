@@ -136,6 +136,18 @@ branch as well as the `release` label, because the label is added after the PR o
 `opened` payload can lack it. Labels never pass the gate any more, and Release Gate no longer
 subscribes to `labeled`/`unlabeled`.
 
+**Release Gate also refuses a release PR that is pinned to an unreleased SDK**, whatever its
+`gate-check` status says. Pinning an SDK branch is how an SDK change is tried on one app before
+the SDK releases it; that is fine on a feature branch, but a release built on it ships SDK code
+no SDK release contains. The gate reads the checked-out `uv.lock` and `pyproject.toml` (no
+network) and fails when an `atlan-application-sdk*` package is locked from anything but a
+package index (a git ref, a path, a URL), is locked to a pre-release (`rc`, `a`, `b`, `.dev`),
+or is redirected by `[tool.uv.sources]` to anything but a named index. It is scoped to the SDK's
+own distributions: another dependency pinned to a git tag is not this gate's business. The check
+runs before the status is read, so the author sees it without running `/gate-check`. Ordinary
+PRs are unaffected. A `uv.lock` that cannot be parsed fails a release PR; a repo with no
+`uv.lock` has nothing to check.
+
 **Recovering from one failed leg: re-run it, don't restart the gate** (FND-4331). When a
 `/gate-check` fails on one job (typically a single cloud's `End-to-end` leg), open that
 dispatched run and choose **Re-run failed jobs**. That re-runs the failed job and the jobs that
@@ -323,6 +335,15 @@ released commit itself. `app_version` still matches the release exactly.
 worker's self-report matches `versions.version` byte for byte. The publish job
 also sends `commit_sha`, which GM stores on the version — the only handle that
 resolves a semver image to its release, since `:0.3.0` carries no SHA.
+
+The publish body is built by `.github/scripts/marketplace_publish_body.py`, the
+same builder the e2e install path registers its per-PR versions with;
+`build_and_publish/publish.py` only resolves `version` and `image` and maps the
+job's env onto a `PublishRequest`. Golden bodies in
+`.github/scripts/tests/test_build_and_publish_publish.py` pin the exact bytes a
+release sends, key order included. The e2e path deliberately omits `commit_sha`
+so its versions cannot be mistaken for the release that shares the commit — see
+[`connector-ci-e2e.md`](connector-ci-e2e.md#what-the-e2e-registration-sends).
 
 The SDK reads the file at startup (`application_sdk.constants.load_build_info`)
 and reports `app_version` and `commit_sha` on `worker_start` and on every

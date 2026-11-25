@@ -16,31 +16,27 @@ backlog is worth its own ticket, not a guard that has to be born disabled.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
-import yaml
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW = _REPO_ROOT / ".github/workflows/e2e-tenant-install.yaml"
+from _workflows import load_workflow
 
 #: Any `${{ inputs.* }}` reference, which is what must not appear inside `run:`.
 _INPUT_REF = re.compile(r"\$\{\{\s*inputs\.[A-Za-z0-9_-]+\s*\}\}")
 
 
 @pytest.fixture(scope="module")
-def workflow() -> dict:  # type: ignore[type-arg]
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+def workflow() -> dict:
+    return load_workflow("e2e-tenant-install.yaml")
 
 
-def _steps(workflow: dict) -> list[dict]:  # type: ignore[type-arg]
-    steps: list[dict] = []  # type: ignore[type-arg]
+def _steps(workflow: dict) -> list[dict]:
+    steps: list[dict] = []
     for job in workflow["jobs"].values():
         steps.extend(job.get("steps") or [])
     return steps
 
 
-def test_no_dispatch_input_is_interpolated_into_a_run_block(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_no_dispatch_input_is_interpolated_into_a_run_block(workflow: dict) -> None:
     offenders: list[str] = []
     for step in _steps(workflow):
         script = step.get("run")
@@ -81,7 +77,7 @@ def test_inputs_used_by_scripts_arrive_through_env(workflow: dict) -> None:
         assert not missing, f"{step_name} no longer exports {sorted(missing)} via env:"
 
 
-def test_install_requires_explicit_confirmation(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_install_requires_explicit_confirmation(workflow: dict) -> None:
     """Installing onto a tenant is a deployment; it must not run by default."""
     triggers = workflow.get("on", workflow.get(True))
     confirm = triggers["workflow_dispatch"]["inputs"]["confirm"]
@@ -93,7 +89,7 @@ def test_install_requires_explicit_confirmation(workflow: dict) -> None:  # type
     )
 
 
-def test_the_ghcr_check_can_actually_read_packages(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_the_ghcr_check_can_actually_read_packages(workflow: dict) -> None:
     """The pre-publish image check needs a token with package scope.
 
     `docker manifest inspect` runs against GHCR, and the login falls back to
@@ -130,7 +126,7 @@ def test_the_ghcr_check_can_actually_read_packages(workflow: dict) -> None:  # t
     )
 
 
-def test_job_timeout_stays_above_the_two_waits_it_defaults_to(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_job_timeout_stays_above_the_two_waits_it_defaults_to(workflow: dict) -> None:
     """The runner's timeout must not be able to fire before the script's.
 
     Both waits are dispatch inputs here, so the budget is read off their own
@@ -154,7 +150,7 @@ def test_job_timeout_stays_above_the_two_waits_it_defaults_to(workflow: dict) ->
     )
 
 
-def test_concurrency_is_per_cloud_and_does_not_cancel(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_concurrency_is_per_cloud_and_does_not_cancel(workflow: dict) -> None:
     concurrency = workflow["concurrency"]
     assert "inputs.cloud" in concurrency["group"]
     # Cancelling mid-install leaves the tenant in whatever state LM reached.

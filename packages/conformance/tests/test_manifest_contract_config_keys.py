@@ -39,38 +39,16 @@ import pytest
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import extract_node, write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
-        paths.append(p)
-    return paths
-
-
 def _write_manifest(path: Path, dag: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"dag": dag}), encoding="utf-8")
-
-
-def _extract_node(args: dict) -> dict:
-    return {
-        "activity_name": "execute_workflow",
-        "app_name": "myapp",
-        "inputs": {
-            "workflow_type": "MyWorkflow",
-            "app_name": "myapp",
-            "task_queue": "q",
-            "args": args,
-        },
-    }
 
 
 def _only(findings: list, rule_id: str) -> list:
@@ -140,10 +118,10 @@ def test_k018_rule_metadata() -> None:
 
 def test_k018_fires_when_flat_arg_not_declared(tmp_path: Path) -> None:
     """Flat filter args, contract declares neither — keys drop before model_dump."""
-    paths = _write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
+    paths = write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _flagged(scan_all(paths, tmp_path), "K018") == {
         "include_filter",
@@ -157,10 +135,10 @@ def test_k018_silent_when_every_arg_declared(tmp_path: Path) -> None:
         "    include_filter: str = ''\n"
         "    exclude_filter: str = ''\n"
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -173,12 +151,12 @@ def test_k018_silent_when_fields_come_from_sdk_extraction_input(
     Without ``ExtractionInput`` in ``SDK_CONTRACT_BASE_FIELDS`` this case
     false-positives on every SQL connector in the fleet.
     """
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app.py": _app_src("    pass\n", bases="(ExtractionInput)")}
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -206,10 +184,10 @@ def test_k018_fires_despite_a_flat_to_metadata_folding_validator(
         "    def _fold_flat_config_into_metadata(cls, data):\n"
         "        return data\n"
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _flagged(scan_all(paths, tmp_path), "K018") == {
         "connection",
@@ -227,10 +205,10 @@ def test_k018_still_fires_for_after_mode_validator(tmp_path: Path) -> None:
         "    def _check(self):\n"
         "        return self\n"
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _unsuppressed(scan_all(paths, tmp_path), "K018")
 
@@ -246,7 +224,7 @@ def test_k018_allow_unbounded_fields_does_not_satisfy(tmp_path: Path) -> None:
     ``ExtractionInput`` (so the filter fields *are* covered) while an app-specific
     arg is not. Without the base the test would pass for the wrong reason.
     """
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app.py": _app_src(
@@ -257,7 +235,7 @@ def test_k018_allow_unbounded_fields_does_not_satisfy(tmp_path: Path) -> None:
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {**_FLAT_FILTER_ARGS, "fetch_partitions": "{{fetch-partitions}}"}
             )
         },
@@ -285,22 +263,22 @@ def test_k018_silent_when_contract_sets_pydantic_extra_allow(tmp_path: Path) -> 
         "from pydantic import model_validator",
         "from pydantic import ConfigDict, model_validator",
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+        {"extract": extract_node({"anything_at_all": "{{anything-at-all}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
 
 def test_k018_silent_for_extra_allow_class_keyword(tmp_path: Path) -> None:
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {"app.py": _app_src("    pass\n", bases="(ExtractionInput, extra='allow')")},
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+        {"extract": extract_node({"anything_at_all": "{{anything-at-all}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -311,12 +289,12 @@ def test_k018_counts_fields_inherited_through_an_sdk_base(tmp_path: Path) -> Non
     The registry stores each SDK base's *own* fields, so without the parent map
     this reports ``app_name`` on every SQL connector in the fleet.
     """
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app.py": _app_src("    pass\n", bases="(ExtractionInput)")}
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"app_name": "myapp", "workflow_id": "{{wf}}"})},
+        {"extract": extract_node({"app_name": "myapp", "workflow_id": "{{wf}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -327,12 +305,12 @@ def test_k018_ignores_platform_injected_credential_arg(tmp_path: Path) -> None:
     Every fleet manifest carries it and no contract declares it, so reporting it
     would put an unactionable finding on every app.
     """
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app.py": _app_src("    pass\n", bases="(ExtractionInput)")}
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"credential": "{{credential}}"})},
+        {"extract": extract_node({"credential": "{{credential}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -365,12 +343,12 @@ def _write_config(directory: Path, properties: dict) -> None:
 
 
 def _preflight_app(tmp_path: Path, properties: dict | None) -> list:
-    paths = _write_py(
+    paths = write_py(
         tmp_path, {"app.py": _app_src("    pass\n", bases="(ExtractionInput)")}
     )
     generated = tmp_path / "app" / "generated"
     _write_manifest(
-        generated / "manifest.json", {"extract": _extract_node(_PREFLIGHT_ARGS)}
+        generated / "manifest.json", {"extract": extract_node(_PREFLIGHT_ARGS)}
     )
     if properties is not None:
         _write_config(generated, properties)
@@ -522,7 +500,7 @@ class MyApp(App):
 
 def _write_bundle(tmp_path: Path, *, miner_args: dict) -> list[Path]:
     """A two-entrypoint app, both entrypoints' contracts named the same."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/generated/crawler/_input.py": _generated_input(
@@ -538,11 +516,11 @@ def _write_bundle(tmp_path: Path, *, miner_args: dict) -> list[Path]:
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "crawler" / "manifest.json",
-        {"extract": _extract_node({"output_dir": "{{output-dir}}"})},
+        {"extract": extract_node({"output_dir": "{{output-dir}}"})},
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "miner" / "manifest.json",
-        {"extract": _extract_node(miner_args)},
+        {"extract": extract_node(miner_args)},
     )
     return paths
 
@@ -594,7 +572,7 @@ def test_k018_silent_when_the_losing_declaration_sets_extra_allow(
     away. An ambiguous name that any declaration opens is treated as open: the
     false-negative direction this check already prefers over guessing.
     """
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/generated/crawler/_input.py": _generated_input(
@@ -613,11 +591,11 @@ def test_k018_silent_when_the_losing_declaration_sets_extra_allow(
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "crawler" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "miner" / "manifest.json",
-        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+        {"extract": extract_node({"anything_at_all": "{{anything-at-all}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -660,7 +638,7 @@ def test_k018_silent_when_a_directly_bound_contract_sibling_sets_extra_allow(
     starting the walk at the name unions both. Same hazard as the base-chain
     case above, one level up.
     """
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/generated/crawler/_input.py": _generated_input(
@@ -679,11 +657,11 @@ def test_k018_silent_when_a_directly_bound_contract_sibling_sets_extra_allow(
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "crawler" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "miner" / "manifest.json",
-        {"extract": _extract_node({"anything_at_all": "{{anything-at-all}}"})},
+        {"extract": extract_node({"anything_at_all": "{{anything-at-all}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -695,11 +673,11 @@ def test_k018_silent_when_a_directly_bound_contract_sibling_sets_extra_allow(
 
 def test_k018_ignores_cross_node_wiring(tmp_path: Path) -> None:
     """``$.<node>.outputs.<field>`` slots are platform-filled, not caller input."""
-    paths = _write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
+    paths = write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {
                     "connection": "{{connection}}",
                     "upstream_prefix": "$.other.outputs.some_prefix",
@@ -712,13 +690,13 @@ def test_k018_ignores_cross_node_wiring(tmp_path: Path) -> None:
 
 def test_k018_silent_when_ancestor_unresolvable(tmp_path: Path) -> None:
     """An unknown base means an incomplete picture — stay silent, don't guess."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {"app.py": _app_src("    pass\n", bases="(SomeUnknownThirdPartyBase)")},
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -731,10 +709,10 @@ def test_k018_suppression(tmp_path: Path) -> None:
         "class ExtractInput:",
         "# conformance: ignore[K018] filters intentionally deferred\nclass ExtractInput:",
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     findings = _only(scan_all(paths, tmp_path), "K018")
     assert findings, "the finding should still be emitted, just suppressed"
@@ -777,10 +755,10 @@ _APP_SPECIFIC_ARGS = {
 def test_k018_fires_without_entrypoint_decorator(tmp_path: Path) -> None:
     """The BaseMetadataExtractor family must be covered, not skipped."""
     src = _INHERITED_ENTRYPOINT_APP.format(body="    pass\n")
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
+        {"extract": extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
         "fetch_partitions",
@@ -794,10 +772,10 @@ def test_k018_fallback_also_anchors_on_tree_selection_extraction_input(
     src = _INHERITED_ENTRYPOINT_APP.format(body="    pass\n").replace(
         "ExtractionInput", "TreeSelectionExtractionInput"
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
+        {"extract": extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
         "fetch_partitions",
@@ -817,10 +795,10 @@ def test_k018_fires_on_inherited_entrypoint_with_folding_validator(
             "        return data\n"
         )
     )
-    paths = _write_py(tmp_path, {"app.py": src})
+    paths = write_py(tmp_path, {"app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
+        {"extract": extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _flagged(scan_all(paths, tmp_path), "K018") == {
         "fetch_partitions",
@@ -843,7 +821,7 @@ def test_k018_dead_generated_contract_does_not_block_resolution(
         "class AppInputContract(ExtractionInput):\n"
         "    pass\n"
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app.py": _INHERITED_ENTRYPOINT_APP.format(body="    pass\n"),
@@ -852,7 +830,7 @@ def test_k018_dead_generated_contract_does_not_block_resolution(
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
+        {"extract": extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _unsuppressed(scan_all(paths, tmp_path), "K018"), (
         "the unreferenced generated contract must not create false ambiguity"
@@ -869,7 +847,7 @@ def test_k018_silent_when_two_live_contracts_are_ambiguous(tmp_path: Path) -> No
         "\n"
         "USED: OtherInput = OtherInput()\n"
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app.py": _INHERITED_ENTRYPOINT_APP.format(body="    pass\n"),
@@ -878,7 +856,7 @@ def test_k018_silent_when_two_live_contracts_are_ambiguous(tmp_path: Path) -> No
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
+        {"extract": extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -915,7 +893,7 @@ class AppInputContract(ExtractionInput):
 def test_k018_pairs_run_override_on_sdk_template_with_its_own_input(
     tmp_path: Path, base: str
 ) -> None:
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/workflow.py": _TEMPLATE_RUN_OVERRIDE_APP.format(base=base),
@@ -925,7 +903,7 @@ def test_k018_pairs_run_override_on_sdk_template_with_its_own_input(
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {
                     "connection": "{{connection}}",
                     "workspace_id": "{{workspace-id}}",
@@ -959,7 +937,7 @@ class MyApp({base}):
 def test_k018_pairs_run_override_typed_with_an_sdk_template_input(
     tmp_path: Path, base: str, alias: str, name: str
 ) -> None:
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/workflow.py": _TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP.format(
@@ -971,7 +949,7 @@ def test_k018_pairs_run_override_typed_with_an_sdk_template_input(
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {"connection": "{{connection}}", "not_on_input": "{{not-on-input}}"}
             )
         },
@@ -996,13 +974,13 @@ def test_k018_run_override_anchors_on_the_entrypoint_class_not_a_helper(
         "# conformance: ignore[K018] tracked elsewhere\n"
         "class MyApp(",
     )
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {"app/workflow.py": src, "app/generated/_input.py": _GENERATED_INPUT_STUB},
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"not_on_input": "{{not-on-input}}"})},
+        {"extract": extract_node({"not_on_input": "{{not-on-input}}"})},
     )
     findings = _only(scan_all(paths, tmp_path), "K018")
     assert findings and all(f.suppressed for f in findings)
@@ -1039,7 +1017,7 @@ def _generated_extraction_input(fields: str = "    pass\n") -> str:
 def test_k018_pairs_inherited_template_run_with_the_template_input(
     tmp_path: Path, base: str
 ) -> None:
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base=base),
@@ -1051,7 +1029,7 @@ def test_k018_pairs_inherited_template_run_with_the_template_input(
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {
                     "include_filter": "{{include-filter}}",
                     "fetch_partitions": "{{fetch-partitions}}",
@@ -1069,7 +1047,7 @@ def test_k018_inherited_template_run_names_an_unwired_tree_selection_declarer(
 ) -> None:
     """SqlApp's Input is ExtractionInput, so a TreeSelectionExtractionInput
     contract is reached only through the extraction-input anchors."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base="SqlApp"),
@@ -1080,7 +1058,7 @@ def test_k018_inherited_template_run_names_an_unwired_tree_selection_declarer(
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+        {"extract": extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
     )
     findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
     assert _flagged(findings, "K018") == {"fetch_partitions"}
@@ -1091,7 +1069,7 @@ def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(
     tmp_path: Path,
 ) -> None:
     """The template's own Input decides, not the ExtractionInput anchor."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base="SqlQueryExtractor"),
@@ -1101,7 +1079,7 @@ def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {
                     "include_filter": "{{include-filter}}",
                     "lookback_days": "{{lookback-days}}",
@@ -1115,7 +1093,7 @@ def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(
 
 
 def test_k018_inherited_template_run_through_an_in_repo_base(tmp_path: Path) -> None:
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/base.py": (
@@ -1137,7 +1115,7 @@ def test_k018_inherited_template_run_through_an_in_repo_base(tmp_path: Path) -> 
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+        {"extract": extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
     )
     findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
     assert _flagged(findings, "K018") == {"fetch_partitions"}
@@ -1146,7 +1124,7 @@ def test_k018_inherited_template_run_through_an_in_repo_base(tmp_path: Path) -> 
 
 def test_k018_in_repo_run_on_a_base_is_not_the_template_run(tmp_path: Path) -> None:
     """A run() on an in-repo base is not inherited from the template."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/app.py": (
@@ -1166,14 +1144,14 @@ def test_k018_in_repo_run_on_a_base_is_not_the_template_run(tmp_path: Path) -> N
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+        {"extract": extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
 
 def test_k018_inherited_run_follows_the_mro_not_depth_first(tmp_path: Path) -> None:
     """``MyApp(A, B)`` takes ``run`` from ``B``'s mixin before the template both share."""
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/app.py": (
@@ -1199,7 +1177,7 @@ def test_k018_inherited_run_follows_the_mro_not_depth_first(tmp_path: Path) -> N
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+        {"extract": extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
     )
     assert not any(
         "inherits run()" in f.message for f in _only(scan_all(paths, tmp_path), "K018")
@@ -1209,7 +1187,7 @@ def test_k018_inherited_run_follows_the_mro_not_depth_first(tmp_path: Path) -> N
 def test_k018_local_class_named_like_a_template_keeps_the_fallback(
     tmp_path: Path,
 ) -> None:
-    paths = _write_py(
+    paths = write_py(
         tmp_path,
         {
             "app/app.py": (
@@ -1222,7 +1200,7 @@ def test_k018_local_class_named_like_a_template_keeps_the_fallback(
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+        {"extract": extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
@@ -1233,10 +1211,10 @@ def test_k018_inherited_template_run_suppressed_on_the_app_class(
     src = _INHERITED_TEMPLATE_RUN_APP.format(base="SqlApp").replace(
         "class MyApp(", "# conformance: ignore[K018] tracked elsewhere\nclass MyApp("
     )
-    paths = _write_py(tmp_path, {"app/app.py": src})
+    paths = write_py(tmp_path, {"app/app.py": src})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+        {"extract": extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
     )
     findings = _only(scan_all(paths, tmp_path), "K018")
     assert findings and all(f.suppressed for f in findings)
@@ -1315,11 +1293,11 @@ _TWO_WIDGETS = (
 
 def test_k019_fires_when_form_key_has_no_placeholder(tmp_path: Path) -> None:
     """The WARE-1323 shape: a regex form key exists but was never plumbed."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(tmp_path, _TWO_WIDGETS)
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"include_filter": "{{include-filter}}"})},
+        {"extract": extract_node({"include_filter": "{{include-filter}}"})},
     )
     findings = _only(scan_all(paths, tmp_path), "K019")
     assert len(findings) == 1
@@ -1328,12 +1306,12 @@ def test_k019_fires_when_form_key_has_no_placeholder(tmp_path: Path) -> None:
 
 
 def test_k019_silent_when_every_form_key_is_wired(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(tmp_path, _TWO_WIDGETS)
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {
                     "include_filter": "{{include-filter}}",
                     "include_database_regex": "{{include-database-regex}}",
@@ -1350,7 +1328,7 @@ def test_k019_accepts_placeholder_on_downstream_node(tmp_path: Path) -> None:
     athena wires ``{{connection}}`` into the publish node's ``connection_entity``;
     reporting that as missing would be a false positive.
     """
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(
         tmp_path,
         '        ["connection"] = new Config.ConnectionInput {\n'
@@ -1360,7 +1338,7 @@ def test_k019_accepts_placeholder_on_downstream_node(tmp_path: Path) -> None:
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node({}),
+            "extract": extract_node({}),
             "publish": {
                 "activity_name": "execute_workflow",
                 "app_name": "publish",
@@ -1373,7 +1351,7 @@ def test_k019_accepts_placeholder_on_downstream_node(tmp_path: Path) -> None:
 
 def test_k019_ignores_system_placeholders_without_form_keys(tmp_path: Path) -> None:
     """``{{credential}}`` / ``{{agent-json}}`` are SDK-injected, not form fields."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(
         tmp_path,
         '        ["include-filter"] = new Config.SqlTree {\n'
@@ -1383,7 +1361,7 @@ def test_k019_ignores_system_placeholders_without_form_keys(tmp_path: Path) -> N
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
-            "extract": _extract_node(
+            "extract": extract_node(
                 {
                     "include_filter": "{{include-filter}}",
                     "credential": "{{credential}}",
@@ -1397,7 +1375,7 @@ def test_k019_ignores_system_placeholders_without_form_keys(tmp_path: Path) -> N
 
 def test_k019_ignores_ui_rule_references(tmp_path: Path) -> None:
     """``rules { whenInputs { ["x"] = "y" } }`` names keys but declares no widget."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     pkl = (
         'amends "@app-contract-toolkit/App.pkl"\n'
         "uiConfig {\n"
@@ -1422,7 +1400,7 @@ def test_k019_ignores_ui_rule_references(tmp_path: Path) -> None:
     p.write_text(pkl, encoding="utf-8")
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({"include_filter": "{{include-filter}}"})},
+        {"extract": extract_node({"include_filter": "{{include-filter}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K019") == []
 
@@ -1435,7 +1413,7 @@ def test_k019_ignores_non_value_widgets(tmp_path: Path) -> None:
     several UIRule-selected variants that share it. Counting either as unwired
     produced 8 by-design findings across the fleet.
     """
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(
         tmp_path,
         '        ["sql-connection-info-note"] = new Config.InfoBanner {\n'
@@ -1450,14 +1428,14 @@ def test_k019_ignores_non_value_widgets(tmp_path: Path) -> None:
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     assert _only(scan_all(paths, tmp_path), "K019") == []
 
 
 def test_k019_still_fires_for_real_value_widgets(tmp_path: Path) -> None:
     """The exclusion must not swallow ordinary config controls beside them."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(
         tmp_path,
         '        ["sql-connection-info-note"] = new Config.InfoBanner {\n'
@@ -1469,26 +1447,26 @@ def test_k019_still_fires_for_real_value_widgets(tmp_path: Path) -> None:
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     findings = _only(scan_all(paths, tmp_path), "K019")
     assert [f.discriminator for f in findings] == ["use-source-schema-filtering"]
 
 
 def test_k019_silent_without_ui_config(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     p = tmp_path / "contract" / "app.pkl"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('amends "@app-contract-toolkit/App.pkl"\nname = "myapp"\n', "utf-8")
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     assert _only(scan_all(paths, tmp_path), "K019") == []
 
 
 def test_k019_suppression(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(
         tmp_path,
         "        // conformance: ignore[K019] frontend-only control\n"
@@ -1498,7 +1476,7 @@ def test_k019_suppression(tmp_path: Path) -> None:
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     findings = _only(scan_all(paths, tmp_path), "K019")
     assert findings, "the finding should still be emitted, just suppressed"
@@ -1508,11 +1486,11 @@ def test_k019_suppression(tmp_path: Path) -> None:
 
 def test_k019_finding_carries_discriminator(tmp_path: Path) -> None:
     """Multiple missing keys must stay distinct for per-key suppression."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_pkl(tmp_path, _TWO_WIDGETS)
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node({})},
+        {"extract": extract_node({})},
     )
     findings = _only(scan_all(paths, tmp_path), "K019")
     assert {f.discriminator for f in findings} == {
@@ -1554,11 +1532,11 @@ def test_k020_rule_metadata() -> None:
 
 def test_k020_fires_on_explicit_opt_out(tmp_path: Path) -> None:
     """flatManifestArgs = false is a deliberate legacy choice — nudge to flat."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_bare_pkl(tmp_path, "\nflatManifestArgs = false\n")
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_NESTED_ARGS)},
+        {"extract": extract_node(_NESTED_ARGS)},
     )
     findings = _only(scan_all(paths, tmp_path), "K020")
     assert len(findings) == 1
@@ -1569,11 +1547,11 @@ def test_k020_fires_on_explicit_opt_out(tmp_path: Path) -> None:
 
 def test_k020_fires_on_stale_artifact_when_flag_unset(tmp_path: Path) -> None:
     """Flag unset means the contract renders flat today — the manifest is stale."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_bare_pkl(tmp_path, "")
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_NESTED_ARGS)},
+        {"extract": extract_node(_NESTED_ARGS)},
     )
     findings = _only(scan_all(paths, tmp_path), "K020")
     assert len(findings) == 1
@@ -1583,7 +1561,7 @@ def test_k020_fires_on_stale_artifact_when_flag_unset(tmp_path: Path) -> None:
 
 def test_k020_calls_out_manifest_metadata_args(tmp_path: Path) -> None:
     """manifestMetadataArgs pins keys into the envelope and must be unpicked too."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_bare_pkl(
         tmp_path,
         "\nflatManifestArgs = false\nmanifestMetadataArgs {\n"
@@ -1591,7 +1569,7 @@ def test_k020_calls_out_manifest_metadata_args(tmp_path: Path) -> None:
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_NESTED_ARGS)},
+        {"extract": extract_node(_NESTED_ARGS)},
     )
     findings = _only(scan_all(paths, tmp_path), "K020")
     assert findings and "manifestMetadataArgs" in findings[0].message
@@ -1599,28 +1577,28 @@ def test_k020_calls_out_manifest_metadata_args(tmp_path: Path) -> None:
 
 def test_k020_warns_about_the_republish_transition(tmp_path: Path) -> None:
     """The migration is also the moment config gets dropped — say so."""
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_bare_pkl(tmp_path, "\nflatManifestArgs = false\n")
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_NESTED_ARGS)},
+        {"extract": extract_node(_NESTED_ARGS)},
     )
     msg = _only(scan_all(paths, tmp_path), "K020")[0].message
     assert "Verify published workflows" in msg
 
 
 def test_k020_silent_on_a_flat_manifest(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_bare_pkl(tmp_path, "")
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_FLAT_FILTER_ARGS)},
+        {"extract": extract_node(_FLAT_FILTER_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K020") == []
 
 
 def test_k020_suppression(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _MINIMAL_APP})
+    paths = write_py(tmp_path, {"app.py": _MINIMAL_APP})
     _write_bare_pkl(
         tmp_path,
         "\n// conformance: ignore[K020] migration scheduled for next quarter\n"
@@ -1628,7 +1606,7 @@ def test_k020_suppression(tmp_path: Path) -> None:
     )
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_NESTED_ARGS)},
+        {"extract": extract_node(_NESTED_ARGS)},
     )
     findings = _only(scan_all(paths, tmp_path), "K020")
     assert findings and all(f.suppressed for f in findings)
@@ -1641,9 +1619,9 @@ def test_k018_ignores_keys_still_inside_the_metadata_envelope(tmp_path: Path) ->
     Demanding flat declarations of nested keys would false-positive on every app
     that has not migrated yet — K020 is the one finding for those instead.
     """
-    paths = _write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
+    paths = write_py(tmp_path, {"app.py": _app_src("    connection: str = ''\n")})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
-        {"extract": _extract_node(_NESTED_ARGS)},
+        {"extract": extract_node(_NESTED_ARGS)},
     )
     assert _flagged(scan_all(paths, tmp_path), "K018") == set()

@@ -29,6 +29,10 @@ lens reviews only when asked — a push never spends money on its own:
   claim: the model checks it against the evidence, never follows it.
   `verify-budget` right after `recheck` gives that call verify's larger output
   budget, as on a round; a re-check that runs out says so and names it.
+- Any other word on the `/lens` line (a typo of `force`, a command that does
+  not exist) gets a usage reply and starts nothing: a full review costs money,
+  and a mistyped command must not buy one. A note on the lines below still
+  reviews.
 - `workflow_dispatch` with a PR number: run (maintainers, from the Actions tab).
 - Anything else, including every `pull_request*` event: do not run.
 """
@@ -66,7 +70,14 @@ _FINDING_ID = re.compile(r"^F-[0-9a-f]{6}$")
 VERIFY_BUDGET = "verify-budget"
 DISMISS_USAGE = "usage: `/lens dismiss F-1a2b3c [F-…] <reason>` — at least one finding id and a reason"
 RECHECK_USAGE = "usage: `/lens recheck [verify-budget] F-1a2b3c [F-…] [reason]` — at least one finding id"
-USAGE_ERRORS = (DISMISS_USAGE, RECHECK_USAGE)
+LENS_USAGE = (
+    "usage: `/lens [force] [verify-budget]` to review, or "
+    "`/lens dismiss|recheck …` — that command is not one of these, "
+    "so nothing was started"
+)
+USAGE_ERRORS = (DISMISS_USAGE, RECHECK_USAGE, LENS_USAGE)
+# What may follow `/lens` in a plain review request.
+LENS_OPTIONS = ("force", VERIFY_BUDGET)
 
 
 def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
@@ -81,7 +92,9 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
         comment = event.get("comment") or {}
         if event.get("action") != "created" or "pull_request" not in issue:
             return Decision(False, reason="not a new PR comment")
-        words = (comment.get("body") or "").strip().split()
+        # str() only types it: a body that is not a string fails on .strip() first.
+        body = str((comment.get("body") or "").strip())
+        words = body.split()
         if not words or words[0].lower() != "/lens":
             return Decision(False, reason="comment is not addressed to /lens")
         if comment.get("author_association") not in TRUSTED:
@@ -125,7 +138,18 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 actor=str((comment.get("user") or {}).get("login") or ""),
                 pr_author=str((issue.get("user") or {}).get("login") or ""),
             )
-        options = [w.lower() for w in words[1:3]]
+        # Options come from the command's own line only: a note on the lines
+        # below a bare `/lens` ("/lens\nplease look at the retry") is a
+        # message to the reviewers, not an option, and still reviews.
+        options = [w.lower() for w in body.splitlines()[0].split()[1:]]
+        if any(w not in LENS_OPTIONS for w in options):
+            # Not a word this command knows: tell the commenter, review nothing.
+            return Decision(
+                False,
+                int(issue["number"]),
+                reason=LENS_USAGE,
+                comment_id=int(comment.get("id") or 0),
+            )
         force = bool(options) and options[0] == "force"
         return Decision(
             True,

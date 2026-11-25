@@ -22,14 +22,10 @@ from __future__ import annotations
 import ast
 import json
 import subprocess
-import sys
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import check_symbol_removals as mod
+import pytest
 import release as release_mod  # the real parser, to pin the two predicates together
 
 # ---------------------------------------------------------------------------
@@ -166,6 +162,50 @@ def test_pep562_constant_alias_clears_the_finding():
         "_DEPRECATED_CONSTANTS = {'CLASSIFICATION_VERDICT': ('X.VERDICT', 'note')}\n"
         "def __getattr__(name):\n"
         "    return _DEPRECATED_CONSTANTS[name]\n"
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_factory_built_getattr_alias_clears_the_finding():
+    """`__getattr__ = deprecated_module_getattr(...)` is the shared shim (FND-4300)."""
+    base = snap("CLASSIFICATION_VERDICT = 'verdict'")
+    head = snap(
+        "from application_sdk import _deprecation\n"
+        "_DEPRECATED_CONSTANTS = {'CLASSIFICATION_VERDICT': ('X.VERDICT', 'note')}\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+        "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0'\n"
+        ")\n"
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_an_unrelated_callable_assigned_to_getattr_serves_no_alias():
+    """Only the shared factory is known to serve its table."""
+    base = snap("OLD = 1")
+    head = snap(
+        "_DEPRECATED_CONSTANTS = {'OLD': ('NEW', 'moved')}\n"
+        "__getattr__ = make_getter()\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:OLD"}
+
+
+def test_factory_fallback_helper_serves_its_allowlist():
+    """A factory getter handed `fallback=_lazy` serves what `_lazy` reads."""
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "_SERVICE_NAMES = frozenset({'create_service'})\n"
+        "_DEPRECATED_CONSTANTS = {'OLD': ('X', 'y')}\n"
+        "def _lazy(name):\n"
+        "    if name in _SERVICE_NAMES:\n"
+        "        from application_sdk.thing import service\n"
+        "        return getattr(service, name)\n"
+        "    raise AttributeError(name)\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+        "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0', fallback=_lazy\n"
+        ")\n"
+        "__all__ = ['create_service']\n"
     )
     assert mod.compare(base, head) == []
 
@@ -881,3 +921,148 @@ def test_narrowing_a_moved_class_method_is_still_caught(tmp_path: Path):
         },
     )
     assert "application_sdk.old:Thing.run" in blocking(mod.compare(base, head))
+
+
+# ---------------------------------------------------------------------------
+# Inherited methods (FND-4917)
+# ---------------------------------------------------------------------------
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> mod.Snapshot:
+    """Build a snapshot from ``{relative path under application_sdk/: source}``."""
+    root = tmp_path / "application_sdk"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text("")
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.parent != root and not (path.parent / "__init__.py").exists():
+            (path.parent / "__init__.py").write_text("")
+        path.write_text(text)
+    return mod.build_snapshot(tmp_path)
+
+
+_BASE_ERRORS = """
+class Base:
+    pass
+
+class StoreError(Base):
+    @property
+    def error_code(self): ...
+    def describe(self, verbose=False): ...
+
+class NotFound(StoreError):
+    @property
+    def error_code(self): ...
+"""
+
+
+def test_method_moved_to_a_shared_base_in_another_module_is_not_a_removal(
+    tmp_path: Path,
+):
+    """The FND-4917 shape: copies replaced by one mixin the classes inherit."""
+    base = _tree(tmp_path / "base", {"errors.py": _BASE_ERRORS})
+    head = _tree(
+        tmp_path / "head",
+        {
+            "mixins.py": "class _Mixin:\n    @property\n    def error_code(self): ...\n",
+            "errors.py": (
+                "from application_sdk.mixins import _Mixin\n\n"
+                "class Base:\n    pass\n\n"
+                "class StoreError(_Mixin, Base):\n"
+                "    def describe(self, verbose=False): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            ),
+        },
+    )
+    assert mod.compare(base, head) == []
+    assert "application_sdk.errors:NotFound.describe" in head.symbols
+
+
+def test_inherited_method_carries_the_definers_signature(tmp_path: Path):
+    """Narrowing the base's method still narrows every subclass that inherits it."""
+    base = _tree(tmp_path / "base", {"errors.py": _BASE_ERRORS})
+    head = _tree(
+        tmp_path / "head",
+        {
+            "errors.py": (
+                "class Base:\n    pass\n\n"
+                "class StoreError(Base):\n"
+                "    @property\n    def error_code(self): ...\n"
+                "    def describe(self): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            )
+        },
+    )
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.errors:StoreError.describe",
+        "application_sdk.errors:NotFound.describe",
+    }
+
+
+def test_method_gone_from_class_and_bases_is_still_a_removal(tmp_path: Path):
+    base = _tree(tmp_path / "base", {"errors.py": _BASE_ERRORS})
+    head = _tree(
+        tmp_path / "head",
+        {
+            "errors.py": (
+                "class Base:\n    pass\n\n"
+                "class StoreError(Base):\n"
+                "    def describe(self, verbose=False): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            )
+        },
+    )
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.errors:StoreError.error_code",
+        "application_sdk.errors:NotFound.error_code",
+    }
+
+
+def test_an_init_dropped_in_favour_of_the_bases_is_still_a_finding(tmp_path: Path):
+    """The AST cannot see a generated ``__init__`` earlier in the MRO, so it never assumes one is inherited."""
+    base = _tree(
+        tmp_path / "base",
+        {
+            "errors.py": (
+                "class StoreError:\n    def __init__(self, message, *, key=None): ...\n\n"
+                "class NotFound(StoreError):\n"
+                "    def __init__(self, message, *, key=None): ...\n"
+            )
+        },
+    )
+    head = _tree(
+        tmp_path / "head",
+        {
+            "errors.py": (
+                "class StoreError:\n    def __init__(self, message, *, key=None): ...\n\n"
+                "class NotFound(StoreError):\n    pass\n"
+            )
+        },
+    )
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.errors:NotFound.__init__"
+    }
+
+
+def test_inherited_methods_follow_a_reexported_class(tmp_path: Path):
+    """``from application_sdk.pkg import NotFound`` keeps the inherited members too."""
+    files = {
+        "pkg/errors.py": (
+            "class StoreError:\n    def describe(self): ...\n\n"
+            "class NotFound(StoreError):\n    pass\n"
+        ),
+        "pkg/__init__.py": "from application_sdk.pkg.errors import NotFound\n",
+    }
+    head = _tree(tmp_path, files)
+    assert "application_sdk.pkg:NotFound.describe" in head.symbols
+
+
+def test_linearize_follows_c3_for_a_diamond():
+    parents = {"D": ["B", "C"], "B": ["A"], "C": ["A"], "A": []}
+    assert mod._linearize("D", parents, {}) == ["D", "B", "C", "A"]
+
+
+def test_linearize_survives_a_cycle():
+    parents = {"A": ["B"], "B": ["A"]}
+    assert mod._linearize("A", parents, {})[0] == "A"

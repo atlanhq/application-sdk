@@ -8,7 +8,7 @@ declares — directly, or via an inherited base/mixin (e.g.
 
 Test helpers
 ------------
-``_write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
+``write_py``: writes ``{relative_path: source_text}`` under ``tmp_path``.
 ``_write_manifest``: writes a ``manifest.json`` with a given ``dag`` dict at a
 given path — richer than the ``{"dag": {}}`` placeholder P016's tests use,
 since K006 needs real ``inputs.args`` JSONPath strings.
@@ -47,20 +47,11 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import active_ids, write_py
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _write_py(tmp_path: Path, py_files: dict[str, str]) -> list[Path]:
-    paths: list[Path] = []
-    for name, src in py_files.items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
-        paths.append(p)
-    return paths
 
 
 def _write_manifest(path: Path, dag: dict) -> None:
@@ -99,11 +90,6 @@ def _publish_node(fields: list[str]) -> dict:
 
 def _k006(findings: list) -> list:
     return [f for f in findings if f.rule_id == "K006"]
-
-
-def _ids(findings: list) -> list[str]:
-    """Rule IDs of unsuppressed findings (matching runner gate semantics)."""
-    return [f.rule_id for f in findings if not f.suppressed]
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +134,7 @@ _PUBLISH_FIELDS = [
 
 
 def test_k006_fires_when_referenced_field_missing_from_output(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(), "publish": _publish_node(_PUBLISH_FIELDS)},
@@ -168,7 +154,7 @@ def test_k006_fires_when_referenced_field_missing_from_output(tmp_path: Path) ->
 
 
 def test_k006_finding_anchored_on_output_class(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
@@ -210,13 +196,13 @@ def test_k006_silent_when_field_provided_via_sdk_mixin(tmp_path: Path) -> None:
     ``resolve_contract_fields`` (BLDX-1528) — a same-body-only field scan would
     false-positive here.
     """
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_WITH_MIXIN})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_WITH_MIXIN})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(), "publish": _publish_node(_PUBLISH_FIELDS)},
     )
     findings = scan_all(paths, tmp_path)
-    assert "K006" not in _ids(findings)
+    assert "K006" not in active_ids(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -243,13 +229,13 @@ class MyApp(App):
 
 
 def test_k006_silent_when_field_declared_on_own_body(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_OWN_BODY_FIELDS})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_OWN_BODY_FIELDS})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(), "publish": _publish_node(_PUBLISH_FIELDS)},
     )
     findings = scan_all(paths, tmp_path)
-    assert "K006" not in _ids(findings)
+    assert "K006" not in active_ids(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +246,7 @@ def test_k006_silent_when_field_declared_on_own_body(tmp_path: Path) -> None:
 def test_k006_ignores_refs_to_a_different_node(tmp_path: Path) -> None:
     """A '$.qi.outputs.*' ref (not '$.extract.outputs.*') is never K006's concern,
     even when ExtractOutput plainly lacks a matching field."""
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
     other_node = {
         "activity_name": "execute_workflow",
         "app_name": "query-intelligence",
@@ -277,12 +263,12 @@ def test_k006_ignores_refs_to_a_different_node(tmp_path: Path) -> None:
         {"extract": _extract_node(), "qi": other_node},
     )
     findings = scan_all(paths, tmp_path)
-    assert "K006" not in _ids(findings)
+    assert "K006" not in active_ids(findings)
 
 
 def test_k006_ignores_workflow_and_failure_refs(tmp_path: Path) -> None:
     """'$.workflow.*' / '$.failure.*' (AE run/failure context) never match 'outputs'."""
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
     notifications_node = {
         "activity_name": "execute_workflow",
         "app_name": "notification-app",
@@ -304,7 +290,7 @@ def test_k006_ignores_workflow_and_failure_refs(tmp_path: Path) -> None:
         {"extract": _extract_node(), "notifications": notifications_node},
     )
     findings = scan_all(paths, tmp_path)
-    assert "K006" not in _ids(findings)
+    assert "K006" not in active_ids(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +326,7 @@ class MyApp(App):
 
 
 def test_k006_multi_entrypoint_maps_subdir_to_wire_name(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _BUNDLE_APP})
+    paths = write_py(tmp_path, {"app.py": _BUNDLE_APP})
     _write_manifest(
         tmp_path / "app" / "generated" / "crawler" / "manifest.json",
         {
@@ -402,7 +388,7 @@ def test_k006_multi_entrypoint_with_attribute_style_decorator(tmp_path: Path) ->
     attribute-form decorators, so wire-name extraction must too — otherwise
     the entrypoint resolves with ``wire_name=None``, never matches its manifest
     subdir, and K006 silently skips it (a false negative)."""
-    paths = _write_py(tmp_path, {"app.py": _BUNDLE_APP_ATTRIBUTE_DECORATOR})
+    paths = write_py(tmp_path, {"app.py": _BUNDLE_APP_ATTRIBUTE_DECORATOR})
     _write_manifest(
         tmp_path / "app" / "generated" / "crawler" / "manifest.json",
         {
@@ -434,12 +420,12 @@ def test_k006_multi_entrypoint_with_attribute_style_decorator(tmp_path: Path) ->
 
 
 def test_k006_noop_when_app_generated_absent(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_MISSING_PUBLISH_FIELDS})
     assert scan_all(paths, tmp_path) == []
 
 
 def test_k006_noop_when_no_entrypoints_in_code(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": "x = 1\n"})
+    paths = write_py(tmp_path, {"app.py": "x = 1\n"})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(), "publish": _publish_node(_PUBLISH_FIELDS)},
@@ -478,7 +464,7 @@ def test_k006_skips_single_manifest_when_code_has_multiple_entrypoints(
 ) -> None:
     """Ambiguous mapping (single-EP manifest, >1 entrypoint in code) is skipped
     rather than guessed — conservative, matches P016's own-mode semantics."""
-    paths = _write_py(tmp_path, {"app.py": _TWO_ENTRYPOINTS_SINGLE_MANIFEST})
+    paths = write_py(tmp_path, {"app.py": _TWO_ENTRYPOINTS_SINGLE_MANIFEST})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(), "publish": _publish_node(["missing_field"])},
@@ -504,7 +490,7 @@ def test_k006_skips_when_output_class_not_resolvable_in_repo(tmp_path: Path) -> 
     """An Output class not defined anywhere in the scanned source (e.g. imported
     from a third-party package) cannot be resolved — skip conservatively rather
     than false-positive on every field."""
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_OUTPUT_NOT_IN_REPO})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_OUTPUT_NOT_IN_REPO})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
@@ -537,7 +523,7 @@ class MyApp(App):
 
 
 def test_k006_suppression_directive_on_output_class(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _EXTRACT_MISSING_FIELD_SUPPRESSED})
+    paths = write_py(tmp_path, {"app.py": _EXTRACT_MISSING_FIELD_SUPPRESSED})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {
@@ -549,7 +535,7 @@ def test_k006_suppression_directive_on_output_class(tmp_path: Path) -> None:
     k006 = _k006(findings)
     assert k006
     assert all(f.suppressed for f in k006)
-    assert "K006" not in _ids(findings)
+    assert "K006" not in active_ids(findings)
 
 
 # ---------------------------------------------------------------------------
@@ -776,7 +762,7 @@ _P013_INPUT = re.compile(r"input annotation '(\w+)'")
 
 def _p013_entrypoint_inputs(root: Path, files: dict[str, str]) -> set[str]:
     """Entrypoint Inputs P013 sees; it reports only violations, so MyInput is untyped."""
-    paths = _write_py(
+    paths = write_py(
         root,
         {
             name: src.replace("class MyInput(Input):", "class MyInput:")
@@ -796,7 +782,7 @@ def _entrypoint_inputs_by_scan(
     """Resolve the entrypoint Input names of *src* through every shared scan."""
     files = {"app.py": src} if isinstance(src, str) else src
     scan_root = tmp_path / "scan"
-    paths = _write_py(scan_root, files)
+    paths = write_py(scan_root, files)
     trees: dict[Path, ast.Module] = {p: ast.parse(p.read_text()) for p in paths}
     aliases = {p: collect_import_aliases(t) for p, t in trees.items()}
     by_name: dict[str, ClassRecord] = {}
@@ -879,7 +865,7 @@ def test_implicit_run_on_in_repo_base_near_misses_are_not_entrypoints(
 
 
 def test_k006_resolves_output_of_run_on_sdk_template_base(tmp_path: Path) -> None:
-    paths = _write_py(tmp_path, {"app.py": _template_run_app("BaseMetadataExtractor")})
+    paths = write_py(tmp_path, {"app.py": _template_run_app("BaseMetadataExtractor")})
     _write_manifest(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(), "publish": _publish_node(["bar", "missing"])},

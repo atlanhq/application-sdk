@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from application_sdk._install import lazy_getattr
 from application_sdk.contracts.base import (
+    ContractDeclarationError,
     ContractMetadata,
     ContractValidationError,
     HeartbeatDetails,
@@ -109,6 +110,7 @@ __all__ = [
     "ConnectionRef",
     "ContractMetadata",
     "DeclaredFile",
+    "ContractDeclarationError",
     "ContractValidationError",
     "DownloadInput",
     "DownloadOutput",

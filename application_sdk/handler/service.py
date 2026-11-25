@@ -35,7 +35,7 @@ import json
 import os
 import tempfile
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -48,8 +48,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
-from temporalio.client import WorkflowFailureError
+from temporalio.client import (
+    WorkflowExecutionDescription,
+    WorkflowFailureError,
+    WorkflowHandle,
+)
 
+from application_sdk import _deprecation
 from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
     run_in_thread,
 )
@@ -143,13 +148,13 @@ from application_sdk.handler.contracts import (  # noqa: E402
     normalize_credentials as _contracts_normalize_credentials,
 )
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
-from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
+from application_sdk.handler.request_contract import (  # noqa: E402 — re-exported
     RequestContractError as _RequestContractError,
 )
 from application_sdk.handler.request_contract import (  # noqa: E402
     read_json_object as _read_json_object,
 )
-from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
+from application_sdk.handler.request_contract import (  # noqa: E402 — re-exported
     validate_request as _validate_request,
 )
 from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
@@ -209,7 +214,9 @@ class _GatePreflightObserver:
     def __init__(self, app_name: str) -> None:
         self._app_name = app_name
 
-    def outcome(self, result: Any, *, entrypoint: str, request_id: str) -> None:
+    def outcome(
+        self, result: PreflightOutput, *, entrypoint: str, request_id: str
+    ) -> None:
         emit_preflight_check_outcome(
             logger,
             self._app_name,
@@ -266,6 +273,7 @@ if TYPE_CHECKING:
     from temporalio.converter import DataConverter
 
     from application_sdk.app.base import App
+    from application_sdk.app.entrypoint import EntryPointMetadata
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.server.health import WorkerHealthServer
 
@@ -279,9 +287,15 @@ async def _get_workflow_result(
     client: Client,
     *,
     workflow_id: str,
+    run_id: str,
     output_type: type | None,
 ) -> dict[str, Any]:
     """Fetch and normalise a completed workflow result.
+
+    *run_id* pins the read to the run whose ownership the caller checked. A
+    handle resolved by ID alone follows whichever run holds the ID now, which
+    after a failed run can be a different app's workflow started under the
+    same ID (FND-5215).
 
     Attempts typed deserialization first (so the OutputContract dataclass is
     reconstructed properly). Falls back to untyped if that fails, logging a
@@ -295,7 +309,7 @@ async def _get_workflow_result(
     """
     try:
         result = await client.get_workflow_handle(
-            workflow_id, result_type=output_type
+            workflow_id, run_id=run_id, result_type=output_type
         ).result()
     except Exception:
         logger.warning(
@@ -304,7 +318,7 @@ async def _get_workflow_result(
             output_type,
             exc_info=True,
         )
-        result = await client.get_workflow_handle(workflow_id).result()
+        result = await client.get_workflow_handle(workflow_id, run_id=run_id).result()
 
     if isinstance(result, PydanticBaseModel):
         return result.model_dump()
@@ -327,27 +341,34 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     app's workflow, or an external one); the caller falls back to untyped
     deserialisation via ``_get_workflow_result``'s own fallback path.
     """
-    if _workflow_config.app_class is None:
-        return None
-    app_cls_name = _workflow_config.app_name
-    if not app_cls_name:
-        return None
+    workflow_types = _registered_workflow_types(_workflow_config)
+    ep = workflow_types.get(workflow_type_name)
+    return ep.output_type if ep else None
+
+
+def _registered_workflow_types(
+    workflow_config: WorkflowClientConfig,
+) -> Mapping[str, EntryPointMetadata]:
+    """Every Temporal workflow type the configured app registers, or an empty
+    mapping when no app is configured or it is not in the registry."""
+    if workflow_config.app_class is None or not workflow_config.app_name:
+        return {}
 
     from application_sdk.app.registry import (  # noqa: PLC0415
-        AppNotFoundError,
+        AppNotRegisteredError,
         AppRegistry,
     )
 
     try:
-        app_meta = AppRegistry.get_instance().get(app_cls_name)
-    except AppNotFoundError:
+        app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
+    except AppNotRegisteredError:
         logger.warning(
-            "App %r not found in registry; returning None", app_cls_name, exc_info=True
+            "App %r not found in registry; no workflow types resolved",
+            workflow_config.app_name,
+            exc_info=True,
         )
-        return None
-
-    ep = app_meta.workflow_types.get(workflow_type_name)
-    return ep.output_type if ep else None
+        return {}
+    return app_meta.workflow_types
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +418,50 @@ _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
 _secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
+
+
+def _workflow_not_found(workflow_id: str) -> HTTPException:
+    """The 404 every workflow-lifecycle route answers for an ID it will not act on."""
+    return HTTPException(status_code=404, detail=f"Workflow not found: {workflow_id}")
+
+
+async def _describe_owned_workflow(
+    handle: WorkflowHandle[Any, Any],
+    workflow_config: WorkflowClientConfig,
+    workflow_id: str,
+) -> WorkflowExecutionDescription:
+    """Describe *handle*, refusing a workflow that does not belong to this app.
+
+    The Temporal namespace is shared across apps, so a bare workflow ID can
+    name another app's run. A run is this app's only when both hold:
+
+    - it is on ``workflow_config.task_queue``, where ``/start`` dispatches
+      every workflow (``continue_as_new`` keeps the queue, and worker pools
+      route activities, not workflows);
+    - its type is one this app registers. Workflow types carry the app name,
+      so this separates two apps that were configured onto the same queue.
+
+    Any other run gets the same 404 as a missing workflow, so the route does
+    not confirm that the ID exists elsewhere. Callers act on ``desc.run_id``
+    (or a handle already pinned to a run) so that the run checked here is
+    the run acted on.
+    """
+    desc = await handle.describe()
+    if (
+        not workflow_config.task_queue
+        or desc.task_queue != workflow_config.task_queue
+        or desc.workflow_type not in _registered_workflow_types(workflow_config)
+    ):
+        logger.warning(
+            "Refusing workflow %s: type %s on task queue %s is not this app's (queue %s)",
+            workflow_id,
+            desc.workflow_type,
+            desc.task_queue,
+            workflow_config.task_queue,
+        )
+        raise _workflow_not_found(workflow_id)
+    return desc
+
 
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
@@ -516,7 +581,9 @@ def warn_on_warmup_flag_drift(
 # separate, deliberate decision).
 
 
-from application_sdk.handler.metadata_routes import (  # noqa: E402
+# ``decode_fe_inputs`` has no caller here; it stays imported so the name remains
+# importable from this module.
+from application_sdk.handler.metadata_routes import (  # noqa: E402,F401
     MAX_FE_INPUTS_BYTES,
     MetadataSource,
     decode_fe_inputs,
@@ -613,12 +680,6 @@ def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
 # forms. Anything materially larger should move to a POST body (tracked
 # follow-up) rather than grow the query string.
 _MAX_FE_INPUTS_BYTES = MAX_FE_INPUTS_BYTES
-
-
-def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
-    """Decode the ``fe_inputs`` query payload (see
-    :func:`application_sdk.handler.metadata_routes.decode_fe_inputs`)."""
-    return decode_fe_inputs(raw, _MAX_FE_INPUTS_BYTES)
 
 
 # Allowed characters for config_id and config_type path components: one
@@ -746,13 +807,13 @@ def _resolve_app_entrypoint(
         _resolve_default_entrypoint,
     )
     from application_sdk.app.registry import (  # noqa: PLC0415
-        AppNotFoundError,
+        AppNotRegisteredError,
         AppRegistry,
     )
 
     try:
         app_meta = AppRegistry.get_instance().get(app_name)
-    except AppNotFoundError:
+    except AppNotRegisteredError:
         raise HTTPException(
             status_code=404, detail=f"App {app_name!r} not registered"
         ) from None
@@ -803,7 +864,7 @@ def _resolve_app_entrypoint(
     return app_meta, ep
 
 
-def _published_input_contract(ep: Any) -> Any:
+def _published_input_contract(ep: EntryPointMetadata) -> type[PydanticBaseModel]:
     """Resolve the entry point's *published* input contract.
 
     Apps generated by the contract-toolkit ship a rich, declarative
@@ -816,19 +877,20 @@ def _published_input_contract(ep: Any) -> Any:
     credential fields by their ``CredentialRef``/``AgentCredentialSpec`` ``$ref``.
 
     Prefer that generated contract by convention; fall back to the entry point's
-    runtime ``input_type`` when no generated contract is importable (so apps that
-    don't use the contract-toolkit keep working unchanged).
+    runtime ``input_type`` when no generated contract module exists (so apps that
+    don't use the contract-toolkit keep working unchanged). A generated module
+    that exists but fails to import raises rather than falling back.
     """
-    import importlib  # noqa: PLC0415 — cold path: only on /input-contract
-
     ep_module = ep.name.replace("-", "_")
     for module_path in (
         f"app.generated.{ep_module}._input",
         "app.generated._input",
     ):
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
+        # Absent module → next candidate. A generated module that exists but
+        # fails to import raises: serving the thin contract instead would hide
+        # its CredentialRef fields from Heracles.
+        module = _import_optional_app_module(module_path)
+        if module is None:
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):
@@ -847,7 +909,9 @@ def _published_input_contract(ep: Any) -> Any:
     return ep.input_type
 
 
-def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
+def _marketplace_entrypoint_contract(
+    entrypoint_name: str,
+) -> type[PydanticBaseModel] | None:
     """Resolve a *marketplace* entry point's published input contract from disk.
 
     Bundle ("uber") apps expose marketplace entry points as generated contract
@@ -867,11 +931,9 @@ def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
     path.
 
     Returns ``None`` when the entry point has no generated contract dir or no
-    importable ``AppInputContract`` — callers fall back to their existing
-    behavior.
+    ``AppInputContract`` module — callers fall back to their existing
+    behavior. A contract module that exists but fails to import raises.
     """
-    import importlib  # noqa: PLC0415 — cold path: only on /input-contract
-
     from application_sdk.app.entrypoint import (  # noqa: PLC0415 — circular at module import time
         entrypoint_module_segment,
     )
@@ -895,9 +957,11 @@ def _marketplace_entrypoint_contract(entrypoint_name: str) -> Any | None:
         f"app.generated.{ep_module}._input",
         f"app.{ep_module}._input",
     ):
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
+        # Absent module → next candidate. A generated module that exists but
+        # fails to import raises: serving the thin contract instead would hide
+        # its CredentialRef fields from Heracles.
+        module = _import_optional_app_module(module_path)
+        if module is None:
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):
@@ -1274,7 +1338,7 @@ def _register_workflow_routes(
 
     @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")
     async def stop_workflow(workflow_id: str, run_id: str) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503, detail="Workflow execution not configured."
             )
@@ -1282,18 +1346,19 @@ def _register_workflow_routes(
         client = await _get_temporal_client()
         try:
             handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+            await _describe_owned_workflow(handle, workflow_config, workflow_id)
             await handle.terminate(reason="Stopped via handler API")
             return JSONResponse(
                 content={"success": True, "message": "Workflow terminated successfully"}
             )
+        except HTTPException:
+            raise
         except Exception as e:
             if (
                 isinstance(e, temporalio.service.RPCError)
                 and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
             ):
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow not found: {workflow_id}"
-                ) from None
+                raise _workflow_not_found(workflow_id) from None
             logger.error(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
@@ -1307,7 +1372,7 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/result/{workflow_id}")
     async def get_result(workflow_id: str, wait: bool = False) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503, detail="Workflow execution not configured."
             )
@@ -1315,10 +1380,10 @@ def _register_workflow_routes(
         client = await _get_temporal_client()
         try:
             handle = client.get_workflow_handle(workflow_id)
+            desc = await _describe_owned_workflow(handle, workflow_config, workflow_id)
 
             if wait:
                 try:
-                    desc = await handle.describe()
                     output_type = _resolve_output_type_for_workflow(desc.workflow_type)
                     if output_type is None:
                         logger.warning(
@@ -1327,7 +1392,10 @@ def _register_workflow_routes(
                             desc.workflow_type,
                         )
                     result_data = await _get_workflow_result(
-                        client, workflow_id=workflow_id, output_type=output_type
+                        client,
+                        workflow_id=workflow_id,
+                        run_id=desc.run_id,
+                        output_type=output_type,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1376,7 +1444,6 @@ def _register_workflow_routes(
                         )
                     )
 
-            desc = await handle.describe()
             status = desc.status.name if desc.status else "UNKNOWN"
 
             if status == "RUNNING":
@@ -1400,7 +1467,10 @@ def _register_workflow_routes(
                             desc.workflow_type,
                         )
                     result_data = await _get_workflow_result(
-                        client, workflow_id=workflow_id, output_type=output_type
+                        client,
+                        workflow_id=workflow_id,
+                        run_id=desc.run_id,
+                        output_type=output_type,
                     )
                     return JSONResponse(
                         content=_wrap_response(
@@ -1472,14 +1542,14 @@ def _register_workflow_routes(
                     )
                 )
 
+        except HTTPException:
+            raise
         except Exception as e:
             if (
                 isinstance(e, temporalio.service.RPCError)
                 and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
             ):
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow not found: {workflow_id}"
-                ) from None
+                raise _workflow_not_found(workflow_id) from None
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow result for %s: %s",
@@ -1493,7 +1563,7 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
     async def get_workflow_status(workflow_id: str, run_id: str) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503, detail="Workflow execution not configured."
             )
@@ -1501,7 +1571,7 @@ def _register_workflow_routes(
         client = await _get_temporal_client()
         try:
             handle = client.get_workflow_handle(workflow_id, run_id=run_id)
-            desc = await handle.describe()
+            desc = await _describe_owned_workflow(handle, workflow_config, workflow_id)
             status = desc.status.name if desc.status else "UNKNOWN"
 
             execution_duration_seconds = 0
@@ -1525,14 +1595,14 @@ def _register_workflow_routes(
                     message=f"Workflow status: {status}",
                 )
             )
+        except HTTPException:
+            raise
         except Exception as e:
             if (
                 isinstance(e, temporalio.service.RPCError)
                 and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
             ):
-                raise HTTPException(
-                    status_code=404, detail=f"Workflow not found: {workflow_id}"
-                ) from None
+                raise _workflow_not_found(workflow_id) from None
             # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow status for %s run %s: %s",
@@ -1556,6 +1626,13 @@ def _register_workflow_routes(
 
         await _upload_file(key, local_path, _storage)
 
+    def _stored_upload_key(key: str) -> str:
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+            normalize_key,
+        )
+
+        return normalize_key(key)
+
     # Every operation reads this module's _storage per request.
     register_object_routes(
         app,
@@ -1568,6 +1645,7 @@ def _register_workflow_routes(
                 _config_save_to_objectstore(config_id, body, config_type=config_type)
             ),
             upload_file=_upload_to_storage,
+            stored_key=_stored_upload_key,
         ),
     )
 
@@ -1644,6 +1722,9 @@ def _register_workflow_routes(
 
         try:
             body = await request.json()
+        except HTTPException:
+            # The body-size cap's 413: already the answer, nothing to log.
+            raise
         except Exception:
             # Log details server-side; the HTTPException intentionally hides the
             # parse internals from the client (avoid leaking file/line/offset).
@@ -1764,13 +1845,13 @@ def _register_workflow_routes(
         # gets run() forced as its default, but run() has no generated manifest
         # dir — so the explicit ones, alphabetically, are the fallback.
         from application_sdk.app.registry import (  # noqa: PLC0415
-            AppNotFoundError,
+            AppNotRegisteredError,
             AppRegistry,
         )
 
         try:
             app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
-        except AppNotFoundError:
+        except AppNotRegisteredError:
             return []
         return [
             ep.name
@@ -1778,7 +1859,7 @@ def _register_workflow_routes(
             if not ep.implicit
         ]
 
-    def _registry_input_contract(entrypoint: str | None) -> Any:
+    def _registry_input_contract(entrypoint: str | None) -> type[PydanticBaseModel]:
         try:
             _, ep = _resolve_app_entrypoint(
                 workflow_config.app_name, entrypoint, unknown_ep_status=404
@@ -1887,7 +1968,7 @@ def create_app_handler_service(
     # Deprecated: state_store is no longer used. Credential resolution now
     # goes through DaprCredentialVault exclusively. Passing this parameter
     # emits a DeprecationWarning. Will be removed in v3.2.0.
-    state_store: Any = None,
+    state_store: object = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -2032,7 +2113,7 @@ def create_app_handler_service(
         _mcp_server = MCPServer(application_name=app_name)
 
         @asynccontextmanager
-        async def _mcp_lifespan(fastapi_app: FastAPI):  # type: ignore[type-arg]
+        async def _mcp_lifespan(fastapi_app: FastAPI):
             await _mcp_server.register_tools_from_registry(app_name)
             mcp_http = _mcp_server.server.http_app()
             async with mcp_http.lifespan(mcp_http):
@@ -2063,7 +2144,17 @@ def create_app_handler_service(
         LogMiddleware,
     )
 
-    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # The SDK owns the HTTP metric contract: the documented series is the
+    # stable-semconv http.server.request.duration (seconds), exported as
+    # http_server_request_duration_seconds. Without this opt-in the
+    # instrumentor emits the legacy http.server.duration (milliseconds), so
+    # the documented PromQL returns nothing on any runtime whose environment
+    # does not set it. setdefault keeps an operator's explicit value. The
+    # instrumentation library reads the variable once per process, on the
+    # first instrument call, so it must be set before instrument_app.
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
+
+    # Auto-instrument HTTP server with OTel: emits http.server.request.duration,
     # http.server.active_requests, etc. with route-templated http.route labels
     # (no raw-path cardinality blowup). Metrics flow through the global
     # MeterProvider configured in observability/metrics_adaptor.py and land in
@@ -2248,6 +2339,11 @@ def create_app_handler_service(
     return app
 
 
+@_deprecation.deprecated(
+    "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with "
+    "your own uvicorn.run instead — the consolidated host owns the run loop. "
+    "Will be removed in v4.0.0."
+)
 def run_app_handler_service(
     handler: Handler,
     *,
@@ -2261,7 +2357,7 @@ def run_app_handler_service(
     .. deprecated:: 3.37
         Use :func:`server_sdk.build_asgi_app` with your own ``uvicorn.run``. The
         consolidated host owns the run loop, so ``atlan-application-sdk-server``
-        ships no blocking entry point. Removed in v4.0.
+        ships no blocking entry point. Removed in v4.0.0.
 
     Convenience wrapper around ``create_app_handler_service()`` that blocks
     until the server is stopped. All keyword arguments are forwarded to
@@ -2274,6 +2370,24 @@ def run_app_handler_service(
         log_level: Uvicorn log level (default: "info").
         **kwargs: Additional keyword arguments forwarded to
             ``create_app_handler_service()``.
+    """
+    _run_app_handler_service(
+        handler, host=host, port=port, log_level=log_level, **kwargs
+    )
+
+
+def _run_app_handler_service(
+    handler: Handler,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    log_level: str = "info",
+    **kwargs: Any,
+) -> None:
+    """The SDK's own handler-mode run loop (``application_sdk.main``).
+
+    The body of the deprecated :func:`run_app_handler_service`, kept apart so
+    starting handler mode does not warn about a deprecation the app cannot act on.
     """
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 

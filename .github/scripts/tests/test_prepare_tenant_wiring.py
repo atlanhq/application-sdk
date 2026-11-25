@@ -12,27 +12,23 @@ grouping) and cannot be exercised without a runner.
 from __future__ import annotations
 
 import re
-import sys
-from pathlib import Path
+from dataclasses import fields
+from typing import cast
 
+import e2e_tenant_app as app
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
-
-import e2e_tenant_app as app  # noqa: E402
-from _bump_skip import without_bump_skip  # noqa: E402
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+from _bump_skip import without_bump_skip
+from _gha_expr import evaluate, evaluate_operand
+from _workflows import ACTIONS, WORKFLOWS, job, load_workflow, triggers
 
 # The lease knobs used to live on a composite action's `inputs:`; the driver's own
 # defaults are the single source now that the action is gone (FND-2674), so the
 # sizing assertions below read them from there.
-from e2e_tenant_lease import DEFAULT_TTL_SECONDS, DEFAULT_WAIT_SECONDS  # noqa: E402
+from e2e_tenant_lease import DEFAULT_TTL_SECONDS, DEFAULT_WAIT_SECONDS
+from marketplace_publish_body import PublishRequest
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
-_SDR_ACTION = _REPO_ROOT / ".github/actions/sdr-e2e/action.yaml"
+_WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
+_SDR_ACTION = ACTIONS / "sdr-e2e" / "action.yaml"
 
 #: How much job budget the script's own two waits may account for. At 1/2, both
 #: waits can run to completion and the rest of the job still has as long again —
@@ -43,19 +39,19 @@ _MAX_WAIT_SHARE = 0.5
 
 
 @pytest.fixture(scope="module")
-def workflow() -> dict:  # type: ignore[type-arg]
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+def workflow() -> dict:
+    return load_workflow(_WORKFLOW)
 
 
 @pytest.fixture(scope="module")
-def jobs(workflow: dict) -> dict:  # type: ignore[type-arg]
+def jobs(workflow: dict) -> dict:
     return workflow["jobs"]
 
 
 # ── On by default, with a working opt-out ────────────────────────────────────
 
 
-def test_install_is_on_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
+def test_install_is_on_by_default(workflow: dict) -> None:
     # Flipped by FND-128. This assertion was `is False`, guarding the opposite
     # property: the install could not resolve a tenant without
     # E2E_TENANT_MATRIX_JSON, which was shared with a handful of repos, so
@@ -68,18 +64,13 @@ def test_install_is_on_by_default(workflow: dict) -> None:  # type: ignore[type-
     # Kept as an assertion rather than deleted, pointing the other way: a silent
     # revert to opt-in would restore three-clouds-of-wrong-version green, which
     # no other test in this file would notice.
-    #
-    # `workflow[True]`: YAML 1.1 resolves the bare key `on` to the boolean true,
-    # so safe_load never yields the string "on". Both spellings are accepted here
-    # so the guard survives a future quoted `"on":`.
-    triggers = workflow.get("on", workflow.get(True))
-    spec = triggers["workflow_call"]["inputs"]["install-app-to-tenant"]
+    spec = triggers(workflow)["workflow_call"]["inputs"]["install-app-to-tenant"]
     assert spec["default"] is True
     assert spec["type"] == "boolean"
 
 
 @pytest.mark.parametrize("job", ["build-e2e-image", "lease-tenant", "prepare-tenant"])
-def test_new_jobs_are_gated_on_the_input(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_new_jobs_are_gated_on_the_input(jobs: dict, job: str) -> None:
     # Still gated, and it matters more now that the default is on: the gate is
     # what makes `install-app-to-tenant: false` a real opt-out for an app that
     # cannot be installed onto the e2e tenants, rather than a flag that reds the
@@ -93,12 +84,12 @@ def test_new_jobs_are_gated_on_the_input(jobs: dict, job: str) -> None:  # type:
 # ── A failed prepare-tenant must STOP the legs ───────────────────────────────
 
 
-def test_e2e_needs_prepare_tenant(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_e2e_needs_prepare_tenant(jobs: dict) -> None:
     needs = jobs["e2e"]["needs"]
     assert "prepare-tenant" in needs and "build-e2e-image" in needs
 
 
-def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:
     """The e2e legs must run when the new jobs are SKIPPED, and not when FAILED.
 
     Both halves are load-bearing and it is easy to get exactly one of them:
@@ -140,13 +131,13 @@ def test_e2e_tolerates_skipped_but_not_failed_prepare(jobs: dict) -> None:  # ty
     #    single-arch image against a tenant prepare-tenant never updated, with
     #    `expected-app-version` empty so the version check self-skips. Every job in
     #    the chain has to be named, not just the last one.
-    for job in ("prepare-tenant", "build-e2e-image", "merge-e2e-image"):
+    for needed in ("prepare-tenant", "build-e2e-image", "merge-e2e-image"):
         for result in ("success", "skipped"):
-            expected = f"needs.{job}.result == '{result}'"
+            expected = f"needs.{needed}.result == '{result}'"
             assert expected in condition, (
                 f"missing `{expected}`. With a status-check override present, "
                 "these gates are the only thing stopping the legs from running "
-                f"after a FAILED {job}."
+                f"after a FAILED {needed}."
             )
 
 
@@ -159,7 +150,7 @@ _MATRIX_JOBS = ("prepare-tenant", "build-e2e-image")
 
 
 @pytest.mark.parametrize("key", ["expected-app-version", "prebuilt-image"])
-def test_the_legs_read_the_image_from_the_non_matrix_job(jobs: dict, key: str) -> None:  # type: ignore[type-arg]
+def test_the_legs_read_the_image_from_the_non_matrix_job(jobs: dict, key: str) -> None:
     """Both values must come from merge-e2e-image, the only non-matrix source.
 
     Matrix job outputs are last-writer-wins in GitHub Actions. `prepare-tenant`
@@ -171,14 +162,14 @@ def test_the_legs_read_the_image_from_the_non_matrix_job(jobs: dict, key: str) -
     """
     value = _sdr_step(jobs)["with"][key]
     assert "needs.merge-e2e-image.outputs." in value
-    for job in _MATRIX_JOBS:
-        assert job not in value, (
-            f"{key} reads {job}, a matrix job whose outputs are "
+    for matrix_job in _MATRIX_JOBS:
+        assert matrix_job not in value, (
+            f"{key} reads {matrix_job}, a matrix job whose outputs are "
             "last-writer-wins with different values per leg"
         )
 
 
-def _sdr_step(jobs: dict) -> dict:  # type: ignore[type-arg]
+def _sdr_step(jobs: dict) -> dict:
     for step in jobs["e2e"]["steps"]:
         if "sdr-e2e" in str(step.get("uses", "")):
             return step
@@ -188,7 +179,7 @@ def _sdr_step(jobs: dict) -> dict:  # type: ignore[type-arg]
 # ── Tenant-scoped concurrency ────────────────────────────────────────────────
 
 
-def test_prepare_tenant_leaves_tenant_exclusion_to_the_lease(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_prepare_tenant_leaves_tenant_exclusion_to_the_lease(jobs: dict) -> None:
     """Tenant exclusion moved from this group to the (app, cloud) lease (FND-250).
 
     A tenant-keyed group here would now be actively harmful, not merely
@@ -219,7 +210,7 @@ def test_prepare_tenant_leaves_tenant_exclusion_to_the_lease(jobs: dict) -> None
 _LEASE_DRIVER = "application-sdk-scripts/.github/scripts/e2e_tenant_lease.py"
 
 
-def _lease_step(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
+def _lease_step(jobs: dict, job: str) -> dict:
     """The step that drives the lease — all three modes run the CHECKED-OUT
     driver, never an action reference."""
     for step in jobs[job]["steps"]:
@@ -228,7 +219,7 @@ def _lease_step(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
     raise AssertionError(f"{job} no longer invokes the lease driver")
 
 
-def _lease_env(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
+def _lease_env(jobs: dict, job: str) -> dict:
     return _lease_step(jobs, job)["env"]
 
 
@@ -236,7 +227,7 @@ def _lease_env(jobs: dict, job: str) -> dict:  # type: ignore[type-arg]
     ("job", "mode"), [("lease-tenant", "acquire"), ("release-tenant", "release")]
 )
 def test_the_lease_jobs_run_their_own_checked_out_driver(
-    jobs: dict,  # type: ignore[type-arg]
+    jobs: dict,
     job: str,
     mode: str,
 ) -> None:
@@ -269,7 +260,7 @@ def test_the_lease_jobs_run_their_own_checked_out_driver(
     assert "${{" not in step["run"]
 
 
-def test_the_release_keys_on_app_and_cloud(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_release_keys_on_app_and_cloud(jobs: dict) -> None:
     """Acquire and release must name the same tenants, or every run leaks its
     ticket and the next contender waits for a holder that has already gone."""
     env = _lease_env(jobs, "release-tenant")
@@ -277,7 +268,7 @@ def test_the_release_keys_on_app_and_cloud(jobs: dict) -> None:  # type: ignore[
     assert env["CLOUD"] == "${{ matrix.cloud }}"
 
 
-def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:
     """The deadlock fix, asserted as shape (FND-646).
 
     A per-cloud matrix acquires in PARALLEL and holds each lease while blocking
@@ -303,7 +294,7 @@ def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:  
 
 
 @pytest.mark.parametrize("job", ["lease-tenant", "release-tenant"])
-def test_the_lease_jobs_can_write_refs_and_read_runs(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_the_lease_jobs_can_write_refs_and_read_runs(jobs: dict, job: str) -> None:
     # contents: write creates and deletes the ticket; actions: read tells a live
     # holder from a dead one. Scoped to these two jobs so the long-running legs
     # that execute test code keep read-only contents.
@@ -312,13 +303,13 @@ def test_the_lease_jobs_can_write_refs_and_read_runs(jobs: dict, job: str) -> No
     assert permissions["actions"] == "read"
 
 
-def test_the_legs_do_not_get_ref_write(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_legs_do_not_get_ref_write(jobs: dict) -> None:
     # Least privilege: the lease's write capability must not leak into the job
     # that runs connector test code.
     assert jobs["e2e"]["permissions"]["contents"] == "read"
 
 
-def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:
     # Installing without the lease is precisely the race the lease closes, so
     # this is a gate and not merely an ordering edge.
     assert "lease-tenant" in jobs["prepare-tenant"]["needs"]
@@ -326,7 +317,7 @@ def test_prepare_tenant_is_gated_on_the_lease(jobs: dict) -> None:  # type: igno
 
 
 def test_prepare_tenant_confirms_its_own_clouds_lease_before_installing(
-    jobs: dict,  # type: ignore[type-arg]
+    jobs: dict,
 ) -> None:
     """The job's `if:` can only see the lease matrix AGGREGATE, so it cannot tell
     "my cloud's lease succeeded" from "some cloud's did". Observed live: one
@@ -356,7 +347,7 @@ def test_prepare_tenant_confirms_its_own_clouds_lease_before_installing(
         )
 
 
-def test_prepare_tenant_verifies_with_its_own_driver_not_mains(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_prepare_tenant_verifies_with_its_own_driver_not_mains(jobs: dict) -> None:
     """`uses:` cannot take an expression, so an action reference is always @main.
 
     That opens a stale window in both directions: a PR adding a mode to the driver
@@ -380,7 +371,7 @@ def test_prepare_tenant_verifies_with_its_own_driver_not_mains(jobs: dict) -> No
     assert _LEASE_DRIVER in steps[verify_at]["run"]
 
 
-def _index_of(steps: list, needle: str) -> int | None:  # type: ignore[type-arg]
+def _index_of(steps: list, needle: str) -> int | None:
     for index, step in enumerate(steps):
         haystack = (
             f"{step.get('uses', '')} {step.get('run', '')} {step.get('with', {})}"
@@ -390,7 +381,7 @@ def _index_of(steps: list, needle: str) -> int | None:  # type: ignore[type-arg]
     return None
 
 
-def test_prepare_tenant_overrides_the_implicit_success_over_needs(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_prepare_tenant_overrides_the_implicit_success_over_needs(jobs: dict) -> None:
     """Without a status-check function the widened gate below is INERT.
 
     GitHub applies an implicit success() over every `needs` entry and skips the
@@ -410,14 +401,14 @@ def test_prepare_tenant_overrides_the_implicit_success_over_needs(jobs: dict) ->
     )
 
 
-def test_prepare_tenant_names_every_need_it_requires(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_prepare_tenant_names_every_need_it_requires(jobs: dict) -> None:
     """always() lifts the implicit success() over ALL needs, so anything that must
     have succeeded has to be named — otherwise widening the lease gate silently
     also stopped requiring discovery and the image."""
     condition = " ".join(jobs["prepare-tenant"]["if"].split())
-    for job in ("discover-e2e", "merge-e2e-image"):
-        assert f"needs.{job}.result == 'success'" in condition, (
-            f"missing `needs.{job}.result == 'success'`. With always() present, "
+    for needed in ("discover-e2e", "merge-e2e-image"):
+        assert f"needs.{needed}.result == 'success'" in condition, (
+            f"missing `needs.{needed}.result == 'success'`. With always() present, "
             "this is the only thing still requiring it."
         )
 
@@ -439,7 +430,7 @@ def test_install_runs_whenever_the_lease_job_ran(
     """Note the limit of this test, which is why the two above it exist: the
     evaluator models the `if:` expression only, not GitHub's needs-level skip. It
     passed on a gate that could never actually run."""
-    expression = _load_gate("prepare-tenant")
+    expression = job(load_workflow(_WORKFLOW), "prepare-tenant")["if"]
     contexts = {
         "inputs": {"install-app-to-tenant": True},
         "needs": {
@@ -454,7 +445,7 @@ def test_install_runs_whenever_the_lease_job_ran(
 @pytest.mark.parametrize("blocker", ["discover-e2e", "merge-e2e-image"])
 def test_install_does_not_run_without_its_upstreams(blocker: str) -> None:
     # always() would otherwise let the install proceed with no image to install.
-    expression = _load_gate("prepare-tenant")
+    expression = job(load_workflow(_WORKFLOW), "prepare-tenant")["if"]
     contexts = {
         "inputs": {"install-app-to-tenant": True},
         "needs": {
@@ -467,7 +458,7 @@ def test_install_does_not_run_without_its_upstreams(blocker: str) -> None:
     assert evaluate(expression, contexts) is False
 
 
-def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:
     """A failed lease leaves prepare-tenant SKIPPED, and 'skipped' is benign in
     the legs' gate — so without lease-tenant named here the legs would run
     against a tenant nobody installed onto, with expected-app-version empty so
@@ -479,7 +470,7 @@ def test_the_legs_refuse_to_run_on_a_failed_lease(jobs: dict) -> None:  # type: 
     assert "needs.lease-tenant.result == 'skipped'" in gate
 
 
-def test_the_lease_is_released_even_when_the_legs_fail(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_lease_is_released_even_when_the_legs_fail(jobs: dict) -> None:
     # A failed leg must still hand the tenant back, so the release is gated on
     # having taken the lease — not on the outcome of anything after it.
     gate = jobs["release-tenant"]["if"]
@@ -510,7 +501,7 @@ def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
     GitHub expressions, so a gate that merely *mentions* the right terms can
     still be wrong. Widening this is only safe because the release driver checks
     ownership before deleting, so a leg that never acquired no-ops."""
-    expression = _load_gate("release-tenant")
+    expression = job(load_workflow(_WORKFLOW), "release-tenant")["if"]
     assert (
         evaluate(
             without_bump_skip(expression),
@@ -520,11 +511,7 @@ def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
     )
 
 
-def _load_gate(job: str) -> str:
-    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][job]["if"]
-
-
-def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:
     """If the runner's timeout fires first, a bare "job cancelled after Nm"
     replaces the script's error — which is the one place the holding run is
     named, and therefore the only actionable output this job produces."""
@@ -540,7 +527,7 @@ def test_the_lease_wait_fits_inside_the_job_timeout(jobs: dict) -> None:  # type
 _LEASE_HELD_ACROSS = ("prepare-tenant", "e2e")
 
 
-def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:
     """The TTL breaking a LIVE holder's lease puts a second installer on the
     tenant — the exact race the lease exists to close — so it has to clear the
     longest legitimate hold with room to spare.
@@ -566,7 +553,7 @@ def test_the_lease_ttl_cannot_fire_on_a_healthy_holder(jobs: dict) -> None:  # t
     )
 
 
-def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None:
     """The TTL is deliberately generous, so it must not be what tells a human the
     tenant is stuck — the wait budget has to fail long before it, or a blocked run
     sits silently for hours instead of reporting who holds the tenant."""
@@ -575,7 +562,7 @@ def test_the_lease_wait_budget_is_the_operator_facing_signal(jobs: dict) -> None
     assert wait_seconds < ttl_seconds
 
 
-def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:
     # A cloud the lease missed and the install then ran against is an
     # unserialised install, not a visible failure.
     assert (
@@ -585,16 +572,14 @@ def test_the_lease_and_install_fan_out_over_the_same_clouds(jobs: dict) -> None:
 
 
 def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
-    jobs: dict,  # type: ignore[type-arg]
+    jobs: dict,
 ) -> None:
     """The acquire takes a LIST and the install fans out over a MATRIX, so they
     can no longer be compared string-for-string. They are pinned to the same
     discovery STEP instead — `discover-clouds`, the clouds-only call — because
     that removes the possibility of disagreement rather than testing for it.
     """
-    outputs = yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))["jobs"][
-        "discover-e2e"
-    ]["outputs"]
+    outputs = job(load_workflow(_WORKFLOW), "discover-e2e")["outputs"]
     assert outputs["cloud-list"] == "${{ steps.discover-clouds.outputs.clouds }}"
     assert outputs["cloud-matrix"] == "${{ steps.discover-clouds.outputs.matrix }}"
 
@@ -605,7 +590,7 @@ def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
     assert "cloud-matrix" in jobs["prepare-tenant"]["strategy"]["matrix"]
 
 
-def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) -> None:
     """Load-bearing in the opposite direction to how it reads.
 
     Acquisition is all-or-nothing, so a failed lease means the run holds nothing
@@ -616,7 +601,7 @@ def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) ->
     """
     assert (
         evaluate(
-            _load_gate("prepare-tenant"),
+            job(load_workflow(_WORKFLOW), "prepare-tenant")["if"],
             {
                 "inputs": {"install-app-to-tenant": True},
                 "needs": {
@@ -642,7 +627,7 @@ def test_the_gate_is_told_about_the_lease() -> None:
 # ── The two cloud fan-outs must agree ────────────────────────────────────────
 
 
-def test_suite_and_cloud_discovery_use_the_same_clouds_expression(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_suite_and_cloud_discovery_use_the_same_clouds_expression(jobs: dict) -> None:
     """A prepare-tenant that missed a cloud the legs then ran against is a
     silent coverage hole, not a visible failure — so the two `clouds:` inputs
     are asserted identical rather than merely both present.
@@ -667,7 +652,7 @@ def test_suite_and_cloud_discovery_use_the_same_clouds_expression(jobs: dict) ->
     )
 
 
-def test_the_cloud_fallback_is_guarded_on_the_count_not_the_string(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_cloud_fallback_is_guarded_on_the_count_not_the_string(jobs: dict) -> None:
     """An empty cloud list must yield ONE leg, never zero.
 
     A repo without the tenant-matrix secret resolves to `--clouds none`, which
@@ -693,7 +678,7 @@ def test_the_cloud_fallback_is_guarded_on_the_count_not_the_string(jobs: dict) -
     )
 
 
-def test_cloud_matrix_output_is_exposed(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_cloud_matrix_output_is_exposed(jobs: dict) -> None:
     outputs = jobs["discover-e2e"]["outputs"]
     # Both, and both from the same step: the matrix says which clouds, the count
     # says whether there is a cloud dimension at all, and the consumer needs the
@@ -711,7 +696,7 @@ def test_cloud_matrix_output_is_exposed(jobs: dict) -> None:  # type: ignore[typ
 
 
 @pytest.mark.parametrize("job", ["build-e2e-image", "prepare-tenant"])
-def test_new_jobs_route_values_through_env_not_into_run(jobs: dict, job: str) -> None:  # type: ignore[type-arg]
+def test_new_jobs_route_values_through_env_not_into_run(jobs: dict, job: str) -> None:
     """`github.head_ref` is attacker-controlled on a fork PR; `deploy_config` is
     multi-line YAML that would break the command outright. Both must arrive as
     env vars and be referenced as quoted shell variables."""
@@ -734,7 +719,7 @@ def test_new_jobs_route_values_through_env_not_into_run(jobs: dict, job: str) ->
 
 def test_a_missing_tenant_id_is_rejected_before_anything_is_published(
     jobs: dict,
-) -> None:  # type: ignore[type-arg]
+) -> None:
     """The gate must sit between tenant resolution and the atlan.yaml parse.
 
     The resolver exports ``E2E_TENANT_ID`` only from a matrix entry carrying
@@ -794,7 +779,7 @@ _LATE_CHECK = "Require a tenant ID before publishing anything"
 _DISTINCT_ID_BREADCRUMB = "distinct-id ${{ inputs.distinct-id }}"
 
 
-def _named_step(jobs: dict, job: str, name: str) -> dict:  # type: ignore[type-arg]
+def _named_step(jobs: dict, job: str, name: str) -> dict:
     matches = [s for s in jobs[job]["steps"] if str(s.get("name", "")) == name]
     assert len(matches) == 1, (
         f"expected exactly one {name!r} step in {job}, found {len(matches)}"
@@ -802,7 +787,7 @@ def _named_step(jobs: dict, job: str, name: str) -> dict:  # type: ignore[type-a
     return matches[0]
 
 
-def test_both_install_preconditions_are_checked(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_both_install_preconditions_are_checked(jobs: dict) -> None:
     """Neither check subsumes the other, so removing either is a regression.
 
     ``HAS_TENANT_MATRIX`` proves the secret *exists*; it says nothing about
@@ -819,7 +804,7 @@ def test_both_install_preconditions_are_checked(jobs: dict) -> None:  # type: ig
     _named_step(jobs, "prepare-tenant", _LATE_CHECK)
 
 
-def test_the_install_path_precondition_is_checked_at_discovery(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_install_path_precondition_is_checked_at_discovery(jobs: dict) -> None:
     step = _named_step(jobs, "discover-e2e", _EARLY_CHECK)
     condition = " ".join(str(step["if"]).split())
 
@@ -841,7 +826,7 @@ def test_the_install_path_precondition_is_checked_at_discovery(jobs: dict) -> No
 @pytest.mark.parametrize("install", [True, False])
 @pytest.mark.parametrize("signal", ["", "true"])
 def test_the_early_check_fires_only_on_the_install_path_without_a_matrix(
-    jobs: dict,  # type: ignore[type-arg]
+    jobs: dict,
     install: bool,
     signal: str,
 ) -> None:
@@ -863,7 +848,7 @@ def test_the_early_check_fires_only_on_the_install_path_without_a_matrix(
     assert fires is (install and signal == "")
 
 
-def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> None:
     """Placement is the entire value: a correct check in the wrong place saves
     nothing. It must precede the checkout and both discovery invocations, so the
     job fails in seconds rather than after the tree is fetched and globbed.
@@ -904,7 +889,7 @@ def test_the_early_check_precedes_every_step_that_costs_anything(jobs: dict) -> 
     ],
 )
 def test_the_early_checks_signal_is_empty_exactly_when_the_secret_is(
-    jobs: dict,  # type: ignore[type-arg]
+    jobs: dict,
     secret: str,
     expected: str,
 ) -> None:
@@ -933,7 +918,7 @@ def test_the_early_checks_signal_is_empty_exactly_when_the_secret_is(
     [("failure", False), ("success", True)],
 )
 def test_a_failed_discovery_skips_the_image_builds(
-    jobs: dict,  # type: ignore[type-arg]
+    jobs: dict,
     discovery: str,
     builds: bool,
 ) -> None:
@@ -954,7 +939,7 @@ def test_a_failed_discovery_skips_the_image_builds(
     assert ran is builds
 
 
-def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:
     """The runner's timeout must not be able to fire before the script's.
 
     The publish retries while the marketplace service is not answering, then the
@@ -999,7 +984,7 @@ def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:  # t
         )
 
 
-def test_install_step_does_not_thread_app_id(jobs: dict) -> None:  # type: ignore[type-arg]
+def test_install_step_does_not_thread_app_id(jobs: dict) -> None:
     """app_id has one source: atlan.yaml, read (and validated) by the script.
 
     Threading it through a step output as well would give the value two sources
@@ -1024,7 +1009,7 @@ def test_verify_step_self_skips_when_no_version_expected() -> None:
     deliberately left alone for now, so the verify must be inert for them
     rather than reding their e2e.
     """
-    action = yaml.safe_load(_SDR_ACTION.read_text(encoding="utf-8"))
+    action = load_workflow(_SDR_ACTION)
     assert action["inputs"]["expected-app-version"]["default"] == ""
 
     steps = action["runs"]["steps"]
@@ -1039,3 +1024,164 @@ def test_verify_step_self_skips_when_no_version_expected() -> None:
     assert names.index(str(verify[0]["name"])) < names.index(
         "Run SDR integration tests"
     ), "the version check must run before pytest, not after"
+
+
+# ── The e2e registers every field a release does (FND-4909) ─────────────────
+#
+# e2e_tenant_app.py accepted --self-deployed-runtime, --app-configs and
+# --commit-sha that no workflow passed, so every e2e version was registered
+# without three fields a release sends. The builder's own tests could not see
+# it: the gap was between the script's flags and this step's argv. So the guard
+# lives here, keyed off the request type itself, so a field added to it later
+# fails this test until the step passes it or the exemption says why not.
+
+#: PublishRequest fields prepare-tenant deliberately does not pass, and why.
+_NOT_PASSED: dict[str, str] = {
+    "app_id": "the script reads it from atlan.yaml (one source)",
+    "target_channel": "an e2e version is always tenant-scoped via --tenant",
+    "commit_sha": "would collide with the release's commit_sha; see install()",
+}
+#: Fields whose flag is not the field name dashed.
+_FLAG_FOR = {"allowed_tenants": "--tenant"}
+
+
+_Step = dict[str, object]
+_Jobs = dict[str, dict[str, list[_Step]]]
+
+
+def _prepare_steps(jobs: _Jobs) -> list[_Step]:
+    return jobs["prepare-tenant"]["steps"]
+
+
+def _install_step(jobs: _Jobs) -> _Step:
+    (step,) = [
+        s
+        for s in _prepare_steps(jobs)
+        if str(s.get("name", "")) == "Install the app under test"
+    ]
+    return step
+
+
+def test_install_step_passes_every_release_field(jobs: _Jobs) -> None:
+    names = {f.name for f in fields(PublishRequest)}
+    assert set(_NOT_PASSED) <= names, "an exemption names a field that is gone"
+    run = str(_install_step(jobs)["run"])
+    unpassed = sorted(
+        name
+        for name in names - set(_NOT_PASSED)
+        if _FLAG_FOR.get(name, "--" + name.replace("_", "-")) not in run
+    )
+    assert not unpassed, (
+        f"prepare-tenant registers the e2e version without {unpassed}, which a "
+        "release sends — the e2e would validate a shape that does not ship. Pass "
+        "it, or add it to _NOT_PASSED with the reason."
+    )
+
+
+def test_sdr_and_app_configs_come_from_the_release_paths_producers(
+    jobs: _Jobs,
+) -> None:
+    steps = _prepare_steps(jobs)
+    install = _install_step(jobs)
+    env = cast("dict[str, str]", install["env"])
+    assert env["ENABLE_SDR"] == "${{ steps.atlan_yaml.outputs.enable_sdr }}"
+    assert '--self-deployed-runtime "$ENABLE_SDR"' in str(install["run"])
+    assert env["APP_CONFIGS"] == "${{ steps.app_configs.outputs.app_configs }}"
+    (producer,) = [s for s in steps if s.get("id") == "app_configs"]
+    assert str(producer["run"]).endswith("build_and_publish/prepare.py app-configs")
+    ids = [s.get("id") for s in steps]
+    assert ids.index("app_configs") < ids.index("install")
+
+
+# ── A failed install puts the previous version back (CONAT-7994) ─────────────
+
+
+def _restore_step(jobs: _Jobs) -> _Step:
+    steps = [
+        s
+        for s in _prepare_steps(jobs)
+        if str(s.get("name", "")) == "Restore the previous version"
+    ]
+    assert len(steps) == 1, "prepare-tenant must restore the prior version on failure"
+    return steps[0]
+
+
+def test_restore_runs_only_after_a_failure_with_a_prior_version(jobs: _Jobs) -> None:
+    condition = " ".join(str(_restore_step(jobs)["if"]).split())
+    assert "failure()" in condition
+    assert "steps.install.outputs.previous_version_id != ''" in condition
+
+
+def test_restore_names_the_build_it_rolls_away_from(jobs: _Jobs) -> None:
+    """The pod check needs the build under test, from the same output install used."""
+    step = _restore_step(jobs)
+    assert '--rolled-back-from "$VERSION"' in str(step["run"])
+    assert "'VERSION': '${{ needs.merge-e2e-image.outputs.version }}'" in str(
+        step.get("env")
+    )
+
+
+def test_restore_runs_before_the_summary(jobs: _Jobs) -> None:
+    names = [str(s.get("name", "")) for s in _prepare_steps(jobs)]
+    assert (
+        names.index("Install the app under test")
+        < names.index("Restore the previous version")
+        < names.index("Summarise")
+    )
+
+
+def test_job_timeout_also_covers_the_restore(jobs: _Jobs) -> None:
+    """The restore sits on top of the install budget, so the job must hold both."""
+    step = _restore_step(jobs)
+    restore_waits = (
+        app.DEFAULT_RESTORE_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_RESTORE_POD_WAIT_SECONDS
+    ) // 60
+    assert int(str(step["timeout-minutes"])) > restore_waits, (
+        "the restore step's own timeout must clear the script's waits"
+    )
+    install_waits = (
+        app.DEFAULT_PUBLISH_RETRY_SECONDS
+        + app.DEFAULT_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
+    ) // 60
+    required = round(install_waits / _MAX_WAIT_SHARE) + int(
+        str(step["timeout-minutes"])
+    )
+    assert int(str(jobs["prepare-tenant"]["timeout-minutes"])) >= required
+
+
+#: Minutes the steps before the install (script fetch, lease check, tenant
+#: resolve, atlan.yaml and app_configs reads) may take before the install starts.
+_PRE_INSTALL_MINUTES = 5
+
+
+def test_install_step_timeout_leaves_room_for_the_restore(jobs: _Jobs) -> None:
+    """A hung install must fail its step, not time out the job.
+
+    A job timeout cancels the job, `failure()` is then false, and the restore
+    is skipped — on exactly the slow path most likely to strand a broken build.
+    So the install step carries its own timeout: above the script's own waits,
+    and low enough that the restore still fits inside the job after it.
+    """
+    install = next(s for s in _prepare_steps(jobs) if s.get("id") == "install")
+    assert "timeout-minutes" in install, (
+        "the install step needs its own timeout, or a hung install cancels the "
+        "job and the restore never runs"
+    )
+    install_minutes = int(str(install["timeout-minutes"]))
+    install_waits = (
+        app.DEFAULT_PUBLISH_RETRY_SECONDS
+        + app.DEFAULT_INSTALL_RETRY_SECONDS
+        + app.DEFAULT_DEPLOYMENT_TIMEOUT_SECONDS
+        + app.DEFAULT_SETTLE_SECONDS
+    ) // 60
+    assert install_minutes > install_waits, (
+        "the install step's timeout must clear the script's own waits, or a slow "
+        "sync reads as a step timeout instead of the script's error"
+    )
+    restore_minutes = int(str(_restore_step(jobs)["timeout-minutes"]))
+    job_minutes = int(str(jobs["prepare-tenant"]["timeout-minutes"]))
+    assert _PRE_INSTALL_MINUTES + install_minutes + restore_minutes <= job_minutes

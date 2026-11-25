@@ -34,7 +34,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -52,7 +51,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="TransformTemplateReservedKeyword",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="transform-templates",
         autofixable=False,
         orthogonal_gate="tests",
@@ -142,10 +140,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "silent missing attribute in place of a loud ``ParserException``.\n"
             "From 3.28.0 both spellings resolve and render identically, so the\n"
             "upgrade is the fix and the template edit is unnecessary.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p040"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

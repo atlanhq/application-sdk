@@ -36,7 +36,9 @@ Usage::
     class MySQLClient(BaseSQLClient):
         DB_CONFIG = DatabaseConfig(
             template="mysql+pymysql://{username}:{password}@{host}:{port}/{database}",
-            required=["username", "password", "host", "port"],
+            # Every required value is URL-encoded (host and port are
+            # validated) before it fills the template; pass raw values.
+            required=["username", "password", "host", "port", "database"],
         )
 
     class MySQLApp(SqlApp):
@@ -78,7 +80,6 @@ import asyncio
 import dataclasses
 import os
 import time
-import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
@@ -88,8 +89,10 @@ from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.app._app_config_validation import warn_config_problem
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
@@ -111,7 +114,7 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
     strip_sql_block_comments,
 )
-from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import TEMPORARY_PATH, _run_prefix
 from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -177,7 +180,10 @@ _EXTRACT_BATCH_SIZE: int = 10_000
 #: rebuild the typed error on the far side of the activity boundary, where only
 #: the ``FailureDetails`` envelope survives. The base ``TIMEOUT`` code is
 #: accepted alongside the probe-specific one so a verdict from any other
-#: producer still rebuilds as a timeout rather than degrading to internal.
+#: producer still rebuilds as a timeout rather than degrading to internal. A
+#: verdict recorded before FND-4298 carries ``TIMEOUT_SQL_PROBE``, which has no
+#: leaf any more; it rebuilds through ``_EnvelopeError`` with the category the
+#: envelope recorded.
 _PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
     AuthError.code: AuthError,
     SqlProbeTimeoutError.code: SqlProbeTimeoutError,
@@ -223,15 +229,15 @@ class _EnvelopeError(AppError):
     evidence: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
-    def category(self) -> FailureCategory:  # type: ignore[override]
+    def category(self) -> FailureCategory:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.category_override
 
     @property
-    def audience(self) -> Audience:  # type: ignore[override]
+    def audience(self) -> Audience:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.audience_override
 
     @property
-    def code(self) -> str:  # type: ignore[override]
+    def code(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
         return self.code_override or super().code
 
     def to_failure_details(self) -> FailureDetails:
@@ -439,6 +445,47 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     )
 
 
+def _check_sql_client_class(cls: type[SqlApp]) -> None:
+    """Warn at class definition when a concrete ``SqlApp`` has no usable client.
+
+    ``_init_sql_client`` checks ``sql_client_class`` only inside a running
+    task, so a subclass that forgets it otherwise fails in the worker, not at
+    import or in unit tests. Skipped for a template (``_app_registered`` set
+    on the class itself), an abstract base, and a class that overrides
+    ``_init_sql_client`` and so never reads the attribute. Warn-only until
+    ``APP_CONFIG_ERROR_VERSION``.
+    """
+    if (
+        cls.__dict__.get("_app_registered", False)
+        or _temporal_workflow.unsafe.in_sandbox()
+    ):
+        return
+    # ABCMeta fills __abstractmethods__ only after __init_subclass__ runs, so
+    # scan the way App.__init_subclass__ does.
+    if any(
+        getattr(getattr(cls, m, None), "__isabstractmethod__", False) for m in dir(cls)
+    ):
+        return
+    if cls._init_sql_client is not SqlApp._init_sql_client:
+        return
+    client_class = cls.sql_client_class
+    if client_class is None:
+        problem = (
+            "on a concrete SqlApp means every extract task fails in the "
+            "worker with SqlClientClassNotSetError; set it to your "
+            "BaseSQLClient subclass"
+        )
+    else:
+        from application_sdk.clients.sql import (  # noqa: PLC0415 — only for a declared client; keeps template import light
+            BaseSQLClient,
+        )
+
+        if isinstance(client_class, type) and issubclass(client_class, BaseSQLClient):
+            return
+        problem = "is not a BaseSQLClient subclass"
+    warn_config_problem(cls, "sql_client_class", client_class, problem)
+
+
 class SqlApp(App):
     """Consolidated SQL metadata extraction App.
 
@@ -506,6 +553,12 @@ class SqlApp(App):
 
     # ── SQL client ──────────────────────────────────────────────────────
     sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # Before super(): App registration sets _app_registered on cls,
+        # which would make every concrete app read as a template.
+        _check_sql_client_class(cls)
+        super().__init_subclass__(**kwargs)
 
     # ── SQL templates (set in subclass) ─────────────────────────────────
     fetch_database_sql: ClassVar[str] = ""
@@ -681,8 +734,7 @@ class SqlApp(App):
                 await client.get_results("SELECT 1")
             finally:
                 await client.close()
-        # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
             duration_ms = (time.perf_counter() - start) * 1000.0
             # Report the ROOT cause, not whatever wrapper reached this
             # clause. ``BaseSQLClient.get_results`` rewraps every driver
@@ -841,10 +893,10 @@ class SqlApp(App):
         - ``SqlProbeTimeoutError`` for probe timeouts (``TimeoutError`` /
           ``asyncio.TimeoutError`` / message contains ``timed out``, and the
           ODBC login-timeout shape ``HYT00`` / ``login timeout`` /
-          ``timeout expired``). It overrides ``AppTimeoutError``'s
-          ``APP_OWNER`` default to USER: the only timeouts that can reach here
-          are the driver's and the socket's, so the clock always ran out
-          waiting for the customer's source.
+          ``timeout expired``). A ``SourceUnavailableError`` (USER): the
+          only timeouts that can reach here are the driver's and the
+          socket's, so the clock always ran out waiting for the customer's
+          source.
         - ``SourceUnavailableError`` for network / DNS / TLS /
           connection-refused failures — the customer-owned source is
           presumed reachable but didn't respond cleanly, so the failure
@@ -946,10 +998,15 @@ class SqlApp(App):
     # ``transform_*`` so the activity boundary is a durable retry point
     # and so future change-detection can compare raw streams between runs
     # before paying mapper cost.
+    #
+    # The ``extract_*`` / ``transform_*`` tasks declare no timing values on
+    # purpose: their runtime scales with source size, so any number here is a
+    # guess (ADR-0018). They take the process-wide defaults —
+    # ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` (24 h backstop) and
+    # ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` — which operators tune per app.
+    # tests/unit/templates/test_template_task_literals.py pins this.
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_databases(
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
@@ -960,9 +1017,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_schemas(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream schema rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -971,9 +1026,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_tables(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream table rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -982,9 +1035,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_columns(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream column rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -993,9 +1044,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_views(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream view rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -1004,9 +1053,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_procedures(
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
@@ -1033,9 +1080,7 @@ class SqlApp(App):
     # Activity boundary keeps transform retry-able without re-running the
     # SQL extraction.
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_databases(self, input: TransformInput) -> TransformOutput:
         """Map raw database records to Atlan assets via ``map_database``."""
         return await self._transform_entity(
@@ -1044,9 +1089,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_schemas(self, input: TransformInput) -> TransformOutput:
         """Map raw schema records to Atlan assets via ``map_schema``."""
         return await self._transform_entity(
@@ -1055,9 +1098,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_tables(self, input: TransformInput) -> TransformOutput:
         """Map raw table records to Atlan assets via ``map_table``."""
         return await self._transform_entity(
@@ -1066,9 +1107,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_columns(self, input: TransformInput) -> TransformOutput:
         """Map raw column records to Atlan assets via ``map_column``."""
         return await self._transform_entity(
@@ -1077,9 +1116,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_views(self, input: TransformInput) -> TransformOutput:
         """Map raw view records to Atlan assets via ``map_table``.
 
@@ -1093,9 +1130,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_procedures(self, input: TransformInput) -> TransformOutput:
         """Map raw procedure records to Atlan assets via ``map_procedure``."""
         return await self._transform_entity(
@@ -1196,7 +1231,7 @@ class SqlApp(App):
     # run() — default orchestration
     # =====================================================================
 
-    async def run(  # type: ignore[override]
+    async def run(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: ExtractionInput
     ) -> ExtractionOutput:
         """Default extraction orchestration.
@@ -1319,12 +1354,10 @@ class SqlApp(App):
             info = _temporal_workflow.info()
             resolved_base = os.path.join(
                 TEMPORARY_PATH,
-                WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=AppRegistry.resolve_running_app_name(
-                        prefer=self._app_name
-                    ),
-                    workflow_id=info.workflow_id,
-                    run_id=info.run_id,
+                _run_prefix(
+                    AppRegistry.resolve_running_app_name(prefer=self._app_name),
+                    info.workflow_id,
+                    info.run_id,
                 ),
             )
 
@@ -2079,26 +2112,20 @@ class SqlApp(App):
 #: until FND-4691 switched it to the private GUID constructor, which left the
 #: name importable from here only by accident of that import. Served once more
 #: by ``__getattr__`` below (PEP 562) so the removal waits for v4.0.0.
+#: ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` likewise, since FND-4921 composes the run
+#: prefix through ``application_sdk.constants._run_prefix``.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "legacy_credential_ref": (
         "application_sdk.credentials.ref.legacy_credential_ref",
         "it was only ever re-exported here as a side effect of an import",
     ),
+    "WORKFLOW_OUTPUT_PATH_TEMPLATE": (
+        "application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from application_sdk.credentials import ref as _ref  # noqa: PLC0415
-
-    return getattr(_ref, name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

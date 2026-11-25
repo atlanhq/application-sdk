@@ -20,14 +20,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 import types
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import renovate_pkl_sync as mod
 
 STALE_MANIFEST = '{"app_name": "{app_name}"}\n'
@@ -40,19 +36,42 @@ TOOLKIT_CONNECTOR_CONFIG = '{"credential": "toolkit-default"}\n'
 CANONICAL_CONNECTOR_CONFIG = '{"credential": "hand-maintained"}\n'
 
 
+def _git_out(repo: Path, *args: str) -> str:
+    """Run git in *repo* and return its stdout; on failure, fail with git's
+    own stderr. `check=True` reported only the exit status, which left a CI
+    failure of `git add -A` (exit 128) with no stated cause."""
+    result = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, (
+        f"git {' '.join(args)} exited {result.returncode} in {repo}\n"
+        f"stderr:\n{result.stderr}\nstdout:\n{result.stdout}"
+    )
+    return result.stdout
+
+
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    _git_out(repo, *args)
 
 
 def _commit_count(repo: Path) -> int:
-    out = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return int(out.stdout.strip())
+    return int(_git_out(repo, "rev-list", "--count", "HEAD").strip())
+
+
+def test_a_failed_git_call_reports_gits_stderr(tmp_path: Path) -> None:
+    """A fixture git failure must name its cause: FND-5416's CI failure gave
+    only `exit status 128`. A stale index.lock is a real exit-128 failure."""
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".git" / "index.lock").write_text("")
+    (tmp_path / "f").write_text("x")
+
+    with pytest.raises(AssertionError) as exc:
+        _git(tmp_path, "add", "-A")
+
+    message = str(exc.value)
+    assert "git add -A exited 128" in message
+    assert "index.lock" in message
+    assert "File exists" in message
 
 
 @pytest.fixture
@@ -553,6 +572,31 @@ def test_restore_tree_restores_the_mode_of_a_file_dirty_before(repo: Path) -> No
     assert script.stat().st_mode & 0o777 == 0o755
 
 
+def test_dirty_tree_records_a_path_that_vanishes_after_listing_as_deleted(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file another process deletes after ``git status`` lists it — even after
+    the snapshot has seen it exist — is recorded as deleted (None), not a
+    FileNotFoundError. A stray writer in the working tree can create and remove
+    files at any time. The file is removed at the moment its bytes are read: the
+    window an existence check before the read cannot close."""
+    transient = repo / "transient.json.gz"
+    transient.write_bytes(b"metrics")
+    real_read_bytes = Path.read_bytes
+
+    def unlink_then_read(self: Path) -> bytes:
+        if self.name == transient.name:
+            transient.unlink(missing_ok=True)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", unlink_then_read)
+
+    state = mod.dirty_tree()
+
+    assert "transient.json.gz" in state
+    assert state["transient.json.gz"] is None
+
+
 def test_git_queries_go_through_the_run_capture_seam(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -999,6 +1043,8 @@ def test_file_filters_match_the_renovate_preset() -> None:
         r
         for r in preset["packageRules"]
         if r.get("matchDepNames") == ["app-contract-toolkit"]
+        # The major-disable rule shares the depName (FND-4903) and sets no tasks.
+        and "postUpgradeTasks" in r
     ]
     assert len(rules) == 1
     assert rules[0]["postUpgradeTasks"]["fileFilters"] == mod.renovate_file_filters()

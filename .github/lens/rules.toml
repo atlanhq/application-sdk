@@ -93,10 +93,6 @@ glob = ".github/workflows/**"
 cards = ["github-actions", "security"]
 
 [[path]]
-glob = ".github/workflow-templates/**"
-cards = ["github-actions", "security"]
-
-[[path]]
 glob = ".github/actions/**"
 cards = ["github-actions", "security"]
 
@@ -155,10 +151,6 @@ cards = ["conformance-rules", "tests"]
 [[path]]
 glob = "packages/api/**"
 cards = ["api-distribution", "build-config"]
-
-[[path]]
-glob = "packages/conformance/conformance/package*.json"
-cards = ["build-config"]
 
 [[path]]
 glob = "packages/conformance/conformance/renovate/**"

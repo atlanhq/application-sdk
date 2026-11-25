@@ -35,7 +35,8 @@ seven-interceptor stack on the Temporal worker:
   HTTP metrics now use the **stable** OTel HTTP semantic conventions
   (`http.request.method`, `http.route`, `server.address`,
   `network.protocol.version`, `http.response.status_code`) — opt-in via
-  `OTEL_SEMCONV_STABILITY_OPT_IN=http`. The metric `http_server_duration_milliseconds`
+  `OTEL_SEMCONV_STABILITY_OPT_IN=http`, which the SDK sets as a process
+  default before instrumenting (an explicit value wins). The metric `http_server_duration_milliseconds`
   is renamed to `http_server_request_duration_seconds` (unit corrected
   from ms → seconds; matches the upstream-recommended base unit). Route
   templating eliminates the path-cardinality blow-up.
@@ -81,6 +82,12 @@ match the rest of the surface.
   (`temporal.workflow.executions`, `temporal.workflow.duration`,
   `temporal.activity.executions`, `temporal.activity.duration`,
   `temporal.activity.errors`) via the global `MeterProvider`.
+  Workflow-level samples are per *run*, not per workflow-instance
+  lifetime: the interceptor instruments every lifetime (including one
+  that enters replaying after an eviction or worker change), emits only
+  when the run finishes live (`is_replaying()` false at exit, which
+  excludes eviction teardown), and measures duration on the run's
+  history clock (FND-5217).
 - `TraceInterceptor` — thin wrapper around
   `temporalio.contrib.opentelemetry.TracingInterceptor`, gated on
   `ATLAN_ENABLE_OTLP_TRACES` (default off, since production doesn't
@@ -88,6 +95,13 @@ match the rest of the surface.
   `TracerProvider` (OTLP only; a console exporter only behind the
   dev-only `ATLAN_ENABLE_TRACES_CONSOLE`) the upstream interceptor emits
   through.
+- `@observability` and `AtlanTracesAdapter` stay, because about 20
+  connector apps decorate functions with them. Since FND-4913 the
+  adapter is a thin span emitter. Each `record_trace` becomes one span on
+  that same global provider, timed from the operation's start to its
+  end and parented to the current span. Nothing is buffered, flushed or
+  written to the object store: those trace files had no reader, and
+  building the adapter started a flush task on whatever loop built it.
 - Product-feature interceptors stay separate — `OutputInterceptor` (UI
   artifacts merged into workflow output) and `EventInterceptor` (v3
   audit / dashboard event bus) are not observability and remain their
@@ -313,6 +327,17 @@ Tasks stop in stages: the periodic flushes first, then the Segment worker, so
 the metrics final flush drains the Segment queue through an HTTP client that
 is still open. A cancel that arrives before a task's first step is deferred
 until the task has started, so its final flush still runs.
+
+The metrics and sizing sinks each run one periodic flush per class, and so
+does the logs sink when the object-store sink is on
+(`ATLAN_ENABLE_OBSERVABILITY_STORE_SINK`, default true). The first sink of the
+class starts it through `AtlanObservability._ensure_periodic_flush()`. The
+"flush started" guard is one per-class registry on the base, and
+`_stop_class_flushes_for_testing()` is the one test reset: it stops the
+periodic flush and every batch flush of every sink of the class, and releases
+the class (FND-4918). The logs, metrics and sizing sinks used to copy this
+bookkeeping each, and the logs copy's reset cleared the guard without stopping
+the flush.
 
 After `fork()`, the child replaces the loop's lock, forgets the parent's
 loop, drops each Segment client's worker, and restarts every sink's periodic

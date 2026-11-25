@@ -74,6 +74,8 @@ import tomllib
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    base_names,
+    discover_tree,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -92,7 +94,7 @@ RULE_T025 = "T025"
 # speak of should not then be asked for one suite per entrypoint.
 _E2E_TIER = "e2e"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 # ---------------------------------------------------------------------------
@@ -108,10 +110,7 @@ def discover(root: Path) -> list[Path]:
     covered entrypoint would make this rule wrong; the flat-layout requirement is
     a separate concern with its own signal.
     """
-    base = root / "tests" / "e2e"
-    if not base.is_dir():
-        return []
-    return sorted(p for p in base.rglob("*.py") if "__pycache__" not in p.parts)
+    return discover_tree(root, "tests", "e2e")
 
 
 # ---------------------------------------------------------------------------
@@ -143,17 +142,6 @@ def _class_string_attrs(cls: ast.ClassDef, wanted: str) -> list[str]:
                 if value is not None:
                     found.append(value)
     return found
-
-
-def _base_names(cls: ast.ClassDef) -> set[str]:
-    """Bare names of *cls*'s bases, including the tail of dotted ones."""
-    names: set[str] = set()
-    for base in cls.bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
 
 
 def _generated_base_entrypoints(
@@ -195,7 +183,7 @@ def _entrypoints_covered_by_class(
             if f"/generated/{ep}/" in manifest_path:
                 covered.add(ep)
 
-    covered |= _generated_base_entrypoints(_base_names(cls), candidates)
+    covered |= _generated_base_entrypoints(set(base_names(cls)), candidates)
     return covered
 
 
@@ -267,11 +255,6 @@ def _message(entrypoint: str, all_names: frozenset[str], covered: set[str]) -> s
 # ---------------------------------------------------------------------------
 # Scan API
 # ---------------------------------------------------------------------------
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: T025 compares the contract against the whole tier; use scan_all."""
-    return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:

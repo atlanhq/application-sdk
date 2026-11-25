@@ -2,9 +2,14 @@ amends "pkl:test"
 
 import "../src/App.pkl" as App
 import "../src/Connectors.pkl"
+import "../src/SdkNames.pkl"
 import "../examples/full/app.pkl" as fullExampleApp
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
+
+// Renders every output file, as `pkl eval -m` does, and returns the refusal message.
+local function err(m: Module): String =
+  module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text))
 
 // Minimal uiConfig used by fixtures that only need the base file (no custom subs).
 local minimalUiConfig = new App.UIConfig {
@@ -14,6 +19,18 @@ local minimalUiConfig = new App.UIConfig {
         ["connection"] = new App.ConnectionCreator { placeholderText = "Connection" }
       }
     }
+  }
+}
+
+// A contract whose only uiConfig property is the given DropDown.
+local function withScopeDropDown(dd: App.DropDown) = (App) {
+  name = "dropdown-default-app"
+  displayName = "DropDown Default"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks { ["Configuration"] { inputs { ["asset_scope"] = dd } } }
   }
 }
 
@@ -74,6 +91,50 @@ local overrideApp = (App) {
   uiConfig = minimalUiConfig
 }
 
+local rootOvrPlainApp = (App) {
+  name = "query-miner"
+  displayName = "Query Miner"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = new Connectors.Type { value = "query-miner"; category = "custom" }
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+local rootOvrApp = (rootOvrPlainApp) {
+  e2eOverrides {
+    connectionType = "postgres"
+    connectionCategory = "database"
+  }
+}
+
+local rootOvrAliasApp = (rootOvrPlainApp) {
+  e2eOverrides { connectorShortName = "miner-alias" }
+}
+
+local rootOvrSystemAliasApp = (App) {
+  name = "sys-miner"
+  displayName = "Sys Miner"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  type = "system"
+  e2eOverrides { connectorShortName = "sys-alias" }
+}
+
+local rootOvrRefusedFields: Mapping<String, App.E2EOverrides> = new {
+  ["argoPackageName"] = new { argoPackageName = "@csa/query-miner" }
+  ["argoTemplateName"] = new { argoTemplateName = "csa-query-miner" }
+  ["connectorConfigName"] = new { connectorConfigName = "atlan-connectors-x" }
+}
+
+local bundleRootFields: Mapping<String, App.E2EOverrides> = new {
+  ["connectorShortName"] = new { connectorShortName = "x" }
+  ["argoPackageName"] = new { argoPackageName = "@atlan/x" }
+  ["argoTemplateName"] = new { argoTemplateName = "atlan-x" }
+  ["connectorConfigName"] = new { connectorConfigName = "atlan-connectors-x" }
+  ["connectionType"] = new { connectionType = "snowflake" }
+  ["connectionCategory"] = new { connectionCategory = "warehouse" }
+}
+
 // App with diverse widget types for getSubsFieldLine coverage.
 local widgetApp = (App) {
   name = "widget-test"
@@ -130,6 +191,8 @@ local widgetApp = (App) {
             credentialType = "test-cred"
           }
           ["text_field"] = new App.TextInput { title = "Text"; default = "hello" }
+          ["date_field"] = new App.DateInput { title = "Date" }
+          ["file_field"] = new App.FileUploader { title = "File"; fileTypes { "text/csv" } }
           ["connection"] = new App.ConnectionCreator { placeholderText = "Conn" }
         }
       }
@@ -524,6 +587,8 @@ local e2eOverridesApp = (App) {
         argoPackageName = "@atlan/alpha"
         argoTemplateName = "atlan-alpha"
         connectorConfigName = "atlan-connectors-alpha"
+        connectionType = "databricks"
+        connectionCategory = "lake"
       }
     }
     new App.Entrypoint {
@@ -531,6 +596,23 @@ local e2eOverridesApp = (App) {
       source = "snowflake"
       sourceCategory = "database"
       contract = bundleCrawlerContract
+    }
+  }
+}
+
+local function bundleRootWith(o: App.E2EOverrides) = (e2eOverridesPlainApp) {
+  e2eOverrides = o
+}
+
+local e2eOverridesOnSubContractApp = (e2eOverridesPlainApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint {
+      name = "cloud"
+      source = "snowflake"
+      sourceCategory = "database"
+      contract = (bundleCrawlerContract) {
+        e2eOverrides { connectionType = "databricks" }
+      }
     }
   }
 }
@@ -554,6 +636,8 @@ local ovrCloudBase: String =
   e2eOverridesApp.output.files["app/generated/cloud/_e2e_base.py"].text
 local ovrSelfhostedBase: String =
   e2eOverridesApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
+local sysAliasBase: String =
+  rootOvrSystemAliasApp.output.files["app/generated/_e2e_base.py"].text
 local plainSelfhostedBase: String =
   e2eOverridesPlainApp.output.files["app/generated/selfhosted/_e2e_base.py"].text
 
@@ -563,6 +647,20 @@ local warehouseBase: String = warehouseApp.output.files["app/generated/_e2e_base
 local selfNamedBase: String = selfNamedApp.output.files["app/generated/_e2e_base.py"].text
 local overrideBase: String = overrideApp.output.files["app/generated/_e2e_base.py"].text
 local widgetSubs: String = widgetApp.output.files["app/generated/_e2e_substitutions.py"].text
+
+// Every generated e2e base in this file: single-entrypoint and bundle, SQL and
+// not, with and without overrides.
+local allE2EBases: List<String> = List(
+  apiBase, postgresBase, warehouseBase, selfNamedBase, overrideBase,
+  bundleCrawlerBase, bundleMinerBase, suffixCrawlerBase, suffixMinerBase,
+  apiBundleBase, explicitCrawlerBase, explicitMinerBase,
+  ovrCloudBase, ovrSelfhostedBase, plainSelfhostedBase
+)
+
+// Class attributes a generated base assigns (`    name = ...` in the class body).
+local assignedE2EAttrs: Set<String> = allE2EBases
+  .flatMap((text) -> Regex(#"(?m)^    ([a-z_]+) = "#).findMatchesIn(text).map((m) -> m.groups[1]!!.value))
+  .toSet()
 
 // Substitution fields too long for one line, in each layout ruff gives them.
 // Every expected string below is what ruff 0.17.3 (default settings) leaves
@@ -676,7 +774,20 @@ facts {
   }
 
   ["connection_category omitted when category is warehouse (SDK default)"] {
+    SdkNames.e2eConnectionCategoryDefault == "warehouse"
     !warehouseBase.contains("connection_category =")
+  }
+
+  // ── _e2e_base.py: every assigned attribute comes from SdkNames ───────────────
+  // scripts/test-sdk-import.py checks each SdkNames.e2eBaseAttributes name is
+  // declared on BaseE2ETest, so a base may assign only listed names.
+
+  ["a generated e2e base assigns only SdkNames.e2eBaseAttributes"] {
+    assignedE2EAttrs.difference(SdkNames.e2eBaseAttributes).isEmpty
+  }
+
+  ["every SdkNames.e2eBaseAttributes name is assigned by some generated base"] {
+    SdkNames.e2eBaseAttributes.difference(assignedE2EAttrs).isEmpty
   }
 
   // ── _e2e_base.py: pascalCase name → class name ───────────────────────────────
@@ -734,6 +845,16 @@ facts {
 
   ["BooleanInput with default=true emits bool field with True default"] {
     widgetSubs.contains("bool_field: bool = Field(default=True, alias=\"{{bool_field}}\")")
+  }
+
+  // DateInput and FileUploader follow `_input.py` (`int` / `FileReference | None`):
+  // the `str` fallback's `""` default failed the app's own input validation.
+  ["DateInput emits int field with 0 default, matching _input.py"] {
+    widgetSubs.contains("date_field: int = Field(default=0, alias=\"{{date_field}}\")")
+  }
+
+  ["FileUploader emits nullable dict field with None default, matching _input.py"] {
+    widgetSubs.contains("file_field: dict[str, Any] | None = Field(default=None, alias=\"{{file_field}}\")")
   }
 
   ["NumericInput emits int field with numeric default"] {
@@ -1064,6 +1185,94 @@ facts {
     ovrCloudBase.contains("argo_package_name = \"@atlan/alpha\"")
     ovrCloudBase.contains("argo_template_name = \"atlan-alpha\"")
     ovrCloudBase.contains("connector_config_name = \"atlan-connectors-alpha\"")
+    ovrCloudBase.contains("connection_type = \"databricks\"")
+    ovrCloudBase.contains("connection_category = \"lake\"")
+    !ovrCloudBase.contains("connection_type = \"snowflake\"")
+  }
+
+  ["root e2eOverrides set connection_type and category on a single-entrypoint base"] {
+    let (b = rootOvrApp.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connection_type = \"postgres\"")
+        && b.contains("connection_category = \"database\"")
+        && b.contains("class QueryMinerGeneratedE2EBase(BaseE2ETest):")
+        && b.contains("connector_short_name = \"query-miner\"")
+  }
+
+  ["a root connectorShortName alias pins connector_config_name to the app's primary credential config"] {
+    let (b = (singleAuthApp) { e2eOverrides { connectorShortName = "auth-alias" } }.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"auth-alias\"")
+        && b.contains("connector_config_name = \"atlan-connectors-single-auth\"")
+  }
+
+  ["a root connectorShortName alias names no connector config when the app generates none"] {
+    let (b = rootOvrAliasApp.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"miner-alias\"")
+        && !b.contains("connector_config_name =")
+        && b.contains("argo_package_name = \"@atlan/query-miner\"")
+  }
+
+  ["an alias on an app with empty credentialAuthOptions still pins its written configmap"] {
+    let (b = (singleAuthApp) {
+      credentialAuthOptions = new Mapping {}
+      e2eOverrides { connectorShortName = "auth-alias" }
+    }.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"auth-alias\"")
+        && b.contains("connector_config_name = \"atlan-connectors-single-auth\"")
+  }
+
+  ["an alias on an app with no uiConfig names no connector config"] {
+    let (b = (singleAuthApp) {
+      uiConfig = null
+      e2eOverrides { connectorShortName = "auth-alias" }
+    }.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connector_short_name = \"auth-alias\"") && !b.contains("connector_config_name =")
+  }
+
+  ["an alias on an app whose only credential configs are additional ones is refused"] {
+    err((rootOvrPlainApp) {
+      e2eOverrides { connectorShortName = "miner-alias" }
+      additionalCredentialConfigs {
+        new App.CredentialConfig {
+          name = "atlan-connectors-query-miner-objectstore"
+          authOptions { ["basic"] = new App.AuthOption { label = "Basic"; fields {} } }
+        }
+      }
+    }).contains("`e2eOverrides.connectorShortName` is set on an app whose only credential configs are `additionalCredentialConfigs`")
+  }
+
+  ["a system app's root connectorShortName names no connector config"] {
+    let (b = sysAliasBase)
+      b.contains("connector_short_name = \"sys-alias\"") && !b.contains("connector_config_name =")
+  }
+
+  ["root argo and connector-config overrides are refused"] {
+    for (field, o in rootOvrRefusedFields) {
+      err((rootOvrPlainApp) { e2eOverrides = o }).contains("`e2eOverrides.argoPackageName`, `argoTemplateName` and `connectorConfigName` are bundle-entrypoint overrides")
+    }
+  }
+
+  ["root e2eOverrides change only _e2e_base.py"] {
+    let (a = rootOvrApp.output.files.toMap().filter((k, _) -> k != "app/generated/_e2e_base.py").mapValues((_, f) -> f.text))
+    let (p = rootOvrPlainApp.output.files.toMap().filter((k, _) -> k != "app/generated/_e2e_base.py").mapValues((_, f) -> f.text))
+      a == p
+  }
+
+  ["without e2eOverrides a single-entrypoint base keeps the derived values"] {
+    let (b = rootOvrPlainApp.output.files["app/generated/_e2e_base.py"].text)
+      b.contains("connection_type = \"query-miner\"")
+        && b.contains("connection_category = \"custom\"")
+        && !b.contains("connector_config_name =")
+  }
+
+  ["e2eOverrides on a bundle root is refused for every field"] {
+    for (field, o in bundleRootFields) {
+      err(bundleRootWith(o)).contains("`e2eOverrides` is declared on a multi-entrypoint bundle root")
+    }
+    e2eOverridesPlainApp.output.files.containsKey("app/generated/cloud/_e2e_base.py")
+  }
+
+  ["e2eOverrides on an entrypoint's contract is refused"] {
+    err(e2eOverridesOnSubContractApp).contains("`e2eOverrides` is declared on an entrypoint's `contract`")
   }
 
   ["an entrypoint without e2eOverrides is generated exactly as before"] {
@@ -1127,4 +1336,45 @@ facts {
     !bundleMinerBase.contains("connection_category = \"warehouse\"")
   }
 
+  // ── multiSelect DropDown `default` is generated from `defaultSelection` ──────
+  // Hand-writing the JSON-stringified `default` is refused: an unescaped quote in it
+  // used to emit invalid Python into _e2e_substitutions.py (FND-1980). The control
+  // is "defaultSelection renders the JSON-stringified array into the workflow config".
+  ["a hand-written multiSelect DropDown default is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      default = "[\"S3Bucket\",\"S3Object\"]"
+      multiSelect = true
+    })).contains("cannot be set by hand")
+  }
+
+  // Without a guard the hand-written value overrides the generated one and
+  // `defaultSelection` is ignored in silence — the case a `default == null` check misses.
+  ["a hand-written default alongside defaultSelection is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket"; "S3Object" }
+      default = "SILENTLY-WINS"
+      multiSelect = true
+    })).contains("generated from `defaultSelection`")
+  }
+
+  ["defaultSelection on a single-select DropDown is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket" }
+    })).contains("multi-select only")
+  }
+
+  ["defaultSelection with a key absent from possibleValues is refused"] {
+    err(withScopeDropDown(new App.DropDown {
+      title = "Asset scope"
+      possibleValues { ["S3Bucket"] = "Bucket"; ["S3Object"] = "Object" }
+      defaultSelection { "S3Bucket"; "S3Nonsense" }
+      multiSelect = true
+    })).contains("Unknown: S3Nonsense")
+  }
 }

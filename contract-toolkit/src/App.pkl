@@ -25,7 +25,7 @@
 /// **Multi-entrypoint apps**: set `entrypoints` with `contract` references on
 /// each `Entrypoint`. The bundle-level file owns `atlan.yaml`/`app.yaml` and
 /// re-exports per-entrypoint artifacts into `app/generated/{name}/`.
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl" as ConnectorsPkg
@@ -587,10 +587,12 @@ inputContractClassName: InputsPkg.ClassName =
 /// Where the generated caller node is written, relative to the repo root.
 ///
 /// A system app with `inputs` renders the Pkl class its callers add to their
-/// `extraNodes`, with one typed property per input. The file is synced into
-/// the toolkit as `src/system/<name>.pkl`, so every connector (internal,
-/// public or partner-built) imports it through the toolkit dependency it
-/// already has:
+/// `extraNodes`, with one typed property per input. Its planned home is the
+/// toolkit, as `src/system/<name>.pkl`, so every connector (internal, public
+/// or partner-built) could import it through the toolkit dependency it
+/// already has. That directory and the sync that would fill it do not exist
+/// yet: no published toolkit version contains a `system/` module, so the
+/// import below is the intended shape, not one that resolves today:
 ///
 /// ```pkl
 /// import "@app-contract-toolkit/system/popularity.pkl" as Popularity
@@ -599,10 +601,10 @@ inputContractClassName: InputsPkg.ClassName =
 inputContractPath: String = "contract/generated/input.pkl"
 
 /// How the generated caller node imports the toolkit. The default,
-/// `../App.pkl`, resolves from the file's synced home in the toolkit,
-/// `src/system/<name>.pkl`. The copy left in the app's own repo is only the
-/// sync source and is not evaluated there. Only a contract that evaluates the
-/// file in place (as the toolkit's own example does) sets this.
+/// `../App.pkl`, would resolve from the file's planned home in the toolkit,
+/// `src/system/<name>.pkl`, which does not exist yet. The copy in the app's
+/// own repo is not evaluated there. Only a contract that evaluates the file in
+/// place (as the toolkit's own example does) sets this.
 inputContractToolkitImport: String = "../App.pkl"
 
 /// (Set by a bundle root) The `appName` the caller node defaults to. A
@@ -846,6 +848,27 @@ artifactSchemas: Mapping<ContractFieldName, ArtifactSchema> = new Mapping {}
 /// For the single-pool case, use the key `"default"`. See `examples/deploy/` for
 /// a full example with Dapr, KEDA, resources, env, and overrides.
 deploy: DeployConfig? = null
+
+/// E2E-harness-only overrides for a single-entrypoint app. See [E2EOverrides].
+///
+/// Default: `{}` — the generated `app/generated/_e2e_base.py` is byte-identical
+/// to an app that does not declare it. Each set field replaces one derived
+/// value in that file and changes no other generated file.
+///
+/// Only `connectorShortName`, `connectionType` and `connectionCategory` apply
+/// here; `argoPackageName`, `argoTemplateName` and `connectorConfigName` are
+/// refused, because the root `argoPackageNames`, `argoTemplateName` and
+/// `connectorConfigName` already drive the same lines. Setting
+/// `connectorShortName` changes which app the run targets, because the harness
+/// fills the manifest's `{app_name}` token from it. With a primary credential
+/// config it also emits `connector_config_name` (the root `connectorConfigName`),
+/// so the harness does not derive a config name from the alias. A system app's
+/// base never names a connector config.
+///
+/// Refused on a multi-entrypoint bundle root, which renders no `_e2e_base.py` of
+/// its own, and on an entrypoint's `contract`, whose base the bundle replaces:
+/// declare `Entrypoint.e2eOverrides` there instead.
+e2eOverrides: E2EOverrides = new E2EOverrides {}
 
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 
@@ -2472,18 +2495,26 @@ class Pipeline {
 
 // ── E2E harness overrides ─────────────────────────────────────────────────────
 
-/// Optional overrides for the generated e2e test harness of one bundle entrypoint.
+/// Optional overrides for a generated e2e test harness.
 ///
-/// Affects only `app/generated/<entrypoint>/_e2e_base.py` — never `atlan.yaml`,
-/// the manifests, the marketplace card or any runtime artifact. Every field is
-/// optional; an unset field keeps exactly the value the generator derives today.
+/// Declared on a bundle entrypoint (`Entrypoint.e2eOverrides`) it affects only
+/// `app/generated/<entrypoint>/_e2e_base.py`; declared on a single-entrypoint
+/// app's root (`App.e2eOverrides`) it affects only `app/generated/_e2e_base.py`.
+/// Never `atlan.yaml`, the manifests, the marketplace card or any runtime
+/// artifact. Every field is optional; an unset field keeps exactly the value the
+/// generator derives today.
 ///
-/// Use it when a bundle entrypoint's e2e identity cannot be derived: e.g. its
+/// Use it when the e2e identity cannot be derived: e.g. a bundle entrypoint's
 /// name matches no `argoPackageNames` leaf and `packageId` cannot be set because
-/// it would re-key the marketplace card. Stating the values here keeps them in
-/// the contract instead of hand-pinned in the test module (conformance T023).
+/// it would re-key the marketplace card, or an app enriches a connection of a
+/// source it does not itself declare as its `connector` (a query-history miner
+/// whose user picks any warehouse connection). Stating the values here keeps them
+/// in the contract instead of hand-pinned in the test module (conformance T023).
 class E2EOverrides {
-  /// `connector_short_name` for this entrypoint's harness (default: the bundle `name`).
+  /// `connector_short_name` for the harness (default: the bundle `name` on a bundle
+  /// entrypoint, the app's own `name` at a single-entrypoint root).
+  /// Not cosmetic: the harness fills the manifest's `{app_name}` token and the
+  /// extract node's app from it, so an alias changes which app the run targets.
   connectorShortName: String?
 
   /// `argo_package_name` (default: matched from `packageId` / `argoPackageNames`).
@@ -2494,6 +2525,21 @@ class E2EOverrides {
 
   /// `connector_config_name` (default: the bundle's `connectorConfigName`).
   connectorConfigName: String?
+
+  /// `connection_type` — the Atlan catalog type segment of the Connection the
+  /// suite creates and the run enriches (default: the entrypoint's `source`, else
+  /// the contract's `connector.value`). Set it when the app's own `connector` is
+  /// not a real Atlas connector type, e.g. `"snowflake"` for a generic miner.
+  /// Overrides `Entrypoint.source` on a bundle entrypoint.
+  connectionType: String?
+
+  /// `connection_category` (default: the entrypoint's `sourceCategory`, else the
+  /// contract's `connector.category`; `"warehouse"` is the harness default and is
+  /// not emitted). Overrides `Entrypoint.sourceCategory` on a bundle entrypoint.
+  /// Does not change the generated base class, which still follows the
+  /// entrypoint's `sourceCategory` on a bundle entrypoint, else the contract's
+  /// `connector.category`.
+  connectionCategory: ConnectorsPkg.AtlanConnectionCategory?
 }
 
 // ── Entrypoint class ──────────────────────────────────────────────────────────
@@ -2635,7 +2681,14 @@ local function renderAnyField(f: CredentialFieldEntry): Any =
   else if (f is NamedProperty) (f as NamedProperty).property
   else renderField(f as FieldSpec)
 
-local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
+/// Render one `AuthOption` as a nested credential pane, rendering each field with
+/// [renderEntry]. The plain credential form passes [renderAnyField]; the
+/// `AdvancedJDBCUrlGroup` panes pass [renderAnyFieldStripped], which drops `ui`
+/// keys that only restate frontend defaults.
+local function renderAuthOptionWith(
+  opt: AuthOption,
+  renderEntry: (CredentialFieldEntry) -> Any
+): Mapping<String, Any> = new Mapping {
   ["type"] = "object"
   ["ui"] = new Mapping {
     ["widget"] = "nested"
@@ -2649,7 +2702,7 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
   when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
     ["properties"] = new Mapping {
       for (f in opt.fields) {
-        [f.name] = renderAnyField(f)
+        [f.name] = renderEntry.apply(f)
       }
       when (!opt.extraFields.isEmpty) {
         ["extra"] = new Mapping {
@@ -2662,17 +2715,20 @@ local function renderAuthOption(opt: AuthOption): Mapping<String, Any> = new Map
           }
           ["properties"] = new Mapping {
             for (f in opt.extraFields) {
-              [f.name] = renderAnyField(f)
+              [f.name] = renderEntry.apply(f)
             }
           }
         }
       }
       for (f in opt.postExtraFields) {
-        [f.name] = renderAnyField(f)
+        [f.name] = renderEntry.apply(f)
       }
     }
   }
 }
+
+local function renderAuthOption(opt: AuthOption): Mapping<String, Any> =
+  renderAuthOptionWith(opt, (f) -> renderAnyField(f))
 
 // ── AdvancedJDBCUrlGroup renderer ─────────────────────────────────────────────
 
@@ -2696,44 +2752,8 @@ local function renderAnyFieldStripped(f: CredentialFieldEntry): Any =
   else if (f is NamedProperty) (f as NamedProperty).property
   else renderFieldStripped(f as FieldSpec)
 
-local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new Mapping {
-  ["type"] = "object"
-  ["ui"] = new Mapping {
-    ["widget"] = "nested"
-    ["label"] = opt.nestedLabel
-    when (opt.nestedPlaceholder != null) { ["placeholder"] = opt.nestedPlaceholder }
-    ["hidden"] = opt.nestedHidden
-    when (opt.nestedHelp != null) { ["help"] = opt.nestedHelp }
-    when (opt.nestedWidth != null) { ["grid"] = opt.nestedWidth }
-    ["nestedValue"] = false
-  }
-  when (!opt.fields.isEmpty || !opt.extraFields.isEmpty || !opt.postExtraFields.isEmpty) {
-    ["properties"] = new Mapping {
-      for (f in opt.fields) {
-        [f.name] = renderAnyFieldStripped(f)
-      }
-      when (!opt.extraFields.isEmpty) {
-        ["extra"] = new Mapping {
-          ["type"] = "object"
-          ["ui"] = new Mapping {
-            ["widget"] = "nested"
-            ["label"] = opt.nestedExtraLabel
-            when (opt.nestedExtraHeader != null) { ["header"] = opt.nestedExtraHeader }
-            ["hidden"] = false
-          }
-          ["properties"] = new Mapping {
-            for (f in opt.extraFields) {
-              [f.name] = renderAnyFieldStripped(f)
-            }
-          }
-        }
-      }
-      for (f in opt.postExtraFields) {
-        [f.name] = renderAnyFieldStripped(f)
-      }
-    }
-  }
-}
+local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> =
+  renderAuthOptionWith(opt, (f) -> renderAnyFieldStripped(f))
 
 local function renderJdbcAuthMergeTargetOption(opt: AuthOption): Mapping<String, Any> =
   let (auth = renderJdbcAuthOption(opt).toMap())
@@ -4062,6 +4082,11 @@ local function widgetInputField(u: Widgets.UIElement): InputsPkg.InputField =
         // _treeSelectionWidgetCheck, which also covers fields not emitted here.
         if (ci.treeSelection && ci.baseWidgetType == "apitree")
           new InputsPkg.TreeSelectionField { coerceJsonString = ci.outputValueType == "object" }
+        else if (ci.stringMap && ci.outputValueType == "object")
+          // Flat string map (e.g. dsnTreeMap). Coerced by the lenient
+          // `_coerce_string_maps` validator, not the shared one; a stringMap
+          // with any other outputValueType is refused by _stringMapWidgetCheck.
+          new InputsPkg.MapField { values = new InputsPkg.StringField {} }
         else if (ci.outputValueType == "object")
           new InputsPkg.JsonObjectField { coerceJsonString = true }
         else
@@ -4138,8 +4163,47 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     inputNestedClasses.fold("", (acc: String, o: InputsPkg.ObjectField) -> acc + InputsPkg.renderClass(o) + "\n\n")
   // Everything the module declares, for import detection.
   local fieldText: String = fieldLines + nestedClassText
+  local stringMapCoercionFields: List<String> = (new Listing {
+    for (k, u in props) {
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))
+        && u is Widgets.ConditionalInput
+        && (u as Widgets.ConditionalInput).stringMap
+        && (u as Widgets.ConditionalInput).outputValueType == "object") {
+        toPyFieldName(k)
+      }
+    }
+  }).toList()
+  local stringMapCoercionBlock: String = if (!stringMapCoercionFields.isEmpty)
+    "    @field_validator(\(pyQuotedCsv(stringMapCoercionFields)), mode=\"before\")\n" +
+    "    @classmethod\n" +
+    "    def _coerce_string_maps(cls, value: Any) -> Any:\n" +
+    "        if value is None:\n" +
+    "            return {}\n" +
+    "        if not isinstance(value, str):\n" +
+    "            return value\n" +
+    "        stripped = value.strip()\n" +
+    "        if not stripped:\n" +
+    "            return {}\n" +
+    "        try:\n" +
+    "            parsed = orjson.loads(stripped)\n" +
+    "        except orjson.JSONDecodeError:\n" +
+    // Log the error, never the value: it may hold connection names.
+    // DEBUG because saved configs really do hold non-JSON values like
+    // "false"; exc_info keeps the trace without the raw string.
+    "            logger.debug(\n" +
+    "                \"String-map input was not valid JSON; using an empty map.\",\n" +
+    "                exc_info=True,\n" +
+    "            )\n" +
+    "            return {}\n" +
+    "        if isinstance(parsed, dict):\n" +
+    "            return parsed\n" +
+    "        logger.debug(\"String-map input was not a JSON object; using an empty map.\")\n" +
+    "        return {}\n\n"
+  else ""
+  local coercionFieldsPresent: Boolean =
+    !objectStringCoercionFields.isEmpty || !stringMapCoercionFields.isEmpty
   local objectStringCoercionSeparator: String =
-    if (!fieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
+    if (!fieldLines.isEmpty && coercionFieldsPresent) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
@@ -4206,11 +4270,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     fieldLines +
     objectStringCoercionSeparator +
     objectStringCoercionBlock +
+    stringMapCoercionBlock +
     credFieldLine +
     publishFieldBlock +
     streamingFieldBlock
   local usesAnnotated: Boolean = fieldText.contains("Annotated[")
-  local usesAny: Boolean = fieldText.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesAny: Boolean = fieldText.contains("dict[str, Any]") || coercionFieldsPresent
   local usesLiteral: Boolean = fieldText.contains("Literal[")
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
@@ -4233,7 +4298,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // sanctioned JSON entrypoint (conformance O001). Emitted as a third-party
   // import only when the JSON-object-string coercion validator is generated.
   local thirdPartyImportLines: String =
-    (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
+    (if (coercionFieldsPresent) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
     when (!nestedClassText.isEmpty) {
       "BaseModel"
@@ -4242,7 +4307,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     when (fieldText.contains(" = Field(")) {
       "Field"
     }
-    when (!objectStringCoercionFields.isEmpty) {
+    when (coercionFieldsPresent) {
       "field_validator"
     }
   }).toList()
@@ -4267,7 +4332,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
     else "") +
     (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
-    (if (!objectStringCoercionFields.isEmpty)
+    (if (coercionFieldsPresent)
       "from application_sdk.observability.logger_adaptor import get_logger\n"
     else "") +
     (if (inputBaseClass == "Input") "from application_sdk.contracts.base import Input\n"
@@ -4276,7 +4341,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // its benign "not valid JSON" fallback is observable (conformance E007) rather
   // than silently swallowed. The message never logs the value itself.
   local loggerModuleLine: String =
-    if (!objectStringCoercionFields.isEmpty) "logger = get_logger(__name__)\n\n\n" else ""
+    if (coercionFieldsPresent) "logger = get_logger(__name__)\n\n\n" else ""
   // In any order: `PyFormatPkg.format` sorts and groups them as ruff does.
   local inputImportBlock: String =
     "from __future__ import annotations\n" +
@@ -4362,18 +4427,18 @@ local function e2eSubsParent(): String =
     "SQLMustacheSubstitutions"
   else "MustacheSubstitutions"
 
-// Fields already provided by MustacheSubstitutions (always skip).
-local e2eSubsBaseSkip: Set<String> =
-  (new Listing { "credential"; "credential_guid"; "connection" }).toList().toSet()
-
-// Fields added by SQLMustacheSubstitutions (skip when parent is SQL).
-local e2eSubsSqlSkip: Set<String> =
-  List("extraction_method", "agent_json", "include_filter", "exclude_filter", "exclude_table_regex", "preflight_check")
-    .fold(e2eSubsBaseSkip, (acc, elem) -> (acc as Set<String>).add(elem))
-
+// Fields the SDK parent class already declares: never redeclared in the
+// generated subclass (`SdkNames.pkl` keeps them in step with the SDK).
 local function e2eSubsSkip(): Set<String> =
-  if (e2eSubsParent() == "SQLMustacheSubstitutions") e2eSubsSqlSkip
-  else e2eSubsBaseSkip
+  if (e2eSubsParent() == "SQLMustacheSubstitutions") SdkNamesPkg.sqlMustacheSubstitutionFields
+  else SdkNamesPkg.mustacheSubstitutionFields
+
+// A class attribute the generated e2e base assigns. Only names listed in
+// `SdkNames.e2eBaseAttributes`, which `scripts/test-sdk-import.py` checks are
+// declared on `BaseE2ETest`, may be emitted.
+local function e2eAttr(attr: String): String =
+  if (SdkNamesPkg.e2eBaseAttributes.contains(attr)) "    \(attr) = "
+  else throw("App.pkl: e2e base attribute `\(attr)` is not in SdkNames.e2eBaseAttributes. Add it there once BaseE2ETest declares it.")
 
 // One substitution Field line. Over 88 columns it is laid out one argument
 // per line with a trailing comma, not left to `PyFormatPkg.format` (which would
@@ -4401,6 +4466,14 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
     fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  // DateInput and FileUploader must match `widgetInputField`: the harness
+  // substitutes the dumped default into the DAG arg, which the app's
+  // `_input.py` then validates. The `str` fallback below would submit `""`,
+  // which neither `int` nor `FileReference | None` accepts.
+  else if (u is Widgets.DateInput)
+    fmtSubsField(pyName, "int", "default=0", k)
+  else if (u is Widgets.FileUploader)
+    fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
   else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
     fmtSubsField(pyName, "list[str]", "default_factory=list", k)
   else if (u is Widgets.Radio)
@@ -4436,7 +4509,9 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
       fmtSubsField(pyName, "str", "default=\"\(escapePyStr(if (dd.default != null) dd.default!! else ""))\"", k)
   else if (u is Widgets.ConditionalInput)
     let (ci = u as Widgets.ConditionalInput)
-    if (ci.outputValueType == "object")
+    if (ci.outputValueType == "object" && ci.stringMap)
+      fmtSubsField(pyName, "dict[str, str] | None", "default=None", k)
+    else if (ci.outputValueType == "object")
       fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
     else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
       // A ConditionalInput's value space is the union of `baseEnum` and every
@@ -4472,6 +4547,16 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
       else "")
     fmtSubsField(pyName, "str", "default=\"\(escapePyStr(defVal))\"", k)
 
+local primaryConfigmapWritten: Boolean =
+  uiConfig != null && hasCredentialConfig && credentialAuthOptions != null
+
+local function e2eConnectionLines(o: E2EOverrides, fallbackType: String?, fallbackCategory: String?): String =
+  let (connType = o.connectionType ?? fallbackType)
+  let (connCat = o.connectionCategory ?? fallbackCategory)
+    (if (connType != null) e2eAttr("connection_type") + "\"\(escapePyStr(connType))\"\n" else "")
+      + (if (connCat != null && connCat != SdkNamesPkg.e2eConnectionCategoryDefault)
+          e2eAttr("connection_category") + "\"\(escapePyStr(connCat))\"\n" else "")
+
 local function generateE2EBasePy(): FileOutput = new FileOutput {
   local baseClass = e2eBaseClass()
   local cname = pascalCase(name)
@@ -4482,22 +4567,22 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
   // Emitting unconditionally makes this artifact agree with the frontend config
   // and removes the entire latent app-name-fallback bug class. When value ==
   // name the emitted line simply restates the fallback (harmless).
-  local emitConnType = connector != null
-  local emitConnCat = connector != null && connector!!.category != "warehouse"
   text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
-    "    connector_short_name = \"\(escapePyStr(name))\"\n" +
+    e2eAttr("connector_short_name") + "\"\(escapePyStr(e2eOverrides.connectorShortName ?? name))\"\n" +
     // SystemAppE2ETest submits straight to AE and never sends the Heracles
     // envelope these name, so a system app's base leaves them out.
     (if (isSystemApp) "" else
-      "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
-      "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
-      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
-    (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
-    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "") +
+      e2eAttr("argo_package_name") + "\"\(escapePyStr(resolvedArgoPackageName))\"\n" +
+      e2eAttr("argo_template_name") + "\"\(escapePyStr(argoTemplateName))\"\n" +
+      e2eAttr("app_service_url") + "\"\(escapePyStr(appServiceUrl))\"\n") +
+    e2eConnectionLines(e2eOverrides, connector?.value, connector?.category) +
+    (if (!isSystemApp && primaryConfigmapWritten && e2eOverrides.connectorShortName != null)
+      e2eAttr("connector_config_name") + "\"\(escapePyStr(connectorConfigName))\"\n"
+    else "") +
     // No manifest.json is generated without a uiConfig, so the harness's
     // default manifest_path names a file that does not exist.
     (if (isSystemApp && uiConfig == null)
@@ -4633,21 +4718,18 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
   // `connection_type` is always emitted (never gated on `value != name`): the SDK
   // falls back to `connector_short_name`, which is now the BUNDLE name and so is
   // wrong for every bundle whose source differs from it.
-  local connType = ep.source ?? c.connector?.value
-  local connCat = ep.sourceCategory ?? c.connector?.category
   text = PyFormatPkg.format(
     "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
     "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
-    "    connector_short_name = \"\(escapePyStr(shortName))\"\n" +
+    e2eAttr("connector_short_name") + "\"\(escapePyStr(shortName))\"\n" +
     // As for a single-entrypoint system app: no Heracles envelope is sent.
     (if (isSystemEp) "" else
-      "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
-      "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
-      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
-    (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
-    (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
+      e2eAttr("argo_package_name") + "\"\(escapePyStr(pkgName))\"\n" +
+      e2eAttr("argo_template_name") + "\"\(escapePyStr(tmplName))\"\n" +
+      e2eAttr("app_service_url") + "\"\(escapePyStr(appServiceUrl))\"\n") +
+    e2eConnectionLines(ep.e2eOverrides, ep.source ?? c.connector?.value, ep.sourceCategory ?? c.connector?.category) +
     // FND-3563: a UI-less system entrypoint has no manifest.json, credential or
     // extract/publish DAG of its own. As for a single-entrypoint system app, the
     // suite is told to supply the DAG; only the entrypoint selector is kept.
@@ -4655,25 +4737,25 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
       "    # This entrypoint generates no manifest.json: its callers declare its DAG node.\n" +
       "    # Set manifest_path in the suite to a fixture DAG copied from a calling\n" +
       "    # connector's manifest, and required_dag_nodes to the nodes it runs.\n" +
-      "    entrypoint = \"\(escapePyStr(ep.name))\"\n"
+      e2eAttr("entrypoint") + "\"\(escapePyStr(ep.name))\"\n"
     else
       // A system entrypoint has no credential config of its own and submits
       // straight to AE, so no connector config is named.
-      (if (isSystemEp) "" else "    connector_config_name = \"\(escapePyStr(configName))\"\n") +
+      (if (isSystemEp) "" else e2eAttr("connector_config_name") + "\"\(escapePyStr(configName))\"\n") +
       "    # This entrypoint's own manifest. Without it the harness reads the\n" +
       "    # single-entrypoint default (app/generated/manifest.json), which a bundle\n" +
       "    # does not have, and fails with ManifestFileNotFoundError.\n" +
-      "    manifest_path = \"app/generated/\(escapePyStr(ep.name))/manifest.json\"\n" +
+      e2eAttr("manifest_path") + "\"app/generated/\(escapePyStr(ep.name))/manifest.json\"\n" +
       "    # Sent as metadata.entrypoint on the AE submit so Automation Engine\n" +
       "    # fetches THIS entrypoint's manifest from the deployed pod. A bare fetch\n" +
       "    # 404s \"No manifest available\" on a multi-entrypoint app.\n" +
-      "    entrypoint = \"\(escapePyStr(ep.name))\"\n" +
+      e2eAttr("entrypoint") + "\"\(escapePyStr(ep.name))\"\n" +
       "    # Derived from this entrypoint's pipeline, so the assertions match the\n" +
       "    # DAG that was generated rather than the crawler-shaped SDK defaults.\n" +
-      "    required_dag_nodes = \(epRequiredDagNodes(c))\n" +
-      "    expect_connection = \(pyBool(publishes))\n" +
-      "    require_nonempty_assets = \(pyBool(publishes))\n" +
-      "    expect_lineage = \(pyBool(expectsLineage))\n"))
+      e2eAttr("required_dag_nodes") + "\(epRequiredDagNodes(c))\n" +
+      e2eAttr("expect_connection") + "\(pyBool(publishes))\n" +
+      e2eAttr("require_nonempty_assets") + "\(pyBool(publishes))\n" +
+      e2eAttr("expect_lineage") + "\(pyBool(expectsLineage))\n"))
 }
 
 local function generateE2ESubstitutionsPy(): FileOutput? =
@@ -5482,6 +5564,33 @@ local artifactSchemasOutput: FileOutput = new FileOutput {
   renderer = new JsonRenderer {}
 }
 
+local function declaresE2EOverride(o: Any): Boolean =
+  o is Typed && (o as Typed).toMap().values.any((v) -> v != null)
+
+hidden _e2eOverridesCheck: Any =
+  if (!entrypoints.isEmpty && declaresE2EOverride(e2eOverrides))
+    throw("App.pkl: `e2eOverrides` is declared on a multi-entrypoint bundle root, "
+      + "which renders no _e2e_base.py of its own, so the values would be dropped "
+      + "silently. Declare `e2eOverrides` on each entrypoint instead.")
+  else if (entrypoints.toList().any((ep) -> ep.contract != null
+      && declaresE2EOverride(ep.contract!!.getPropertyOrNull("e2eOverrides"))))
+    throw("App.pkl: `e2eOverrides` is declared on an entrypoint's `contract`, whose "
+      + "_e2e_base.py the bundle replaces, so the values would be dropped silently. "
+      + "Declare them on the `Entrypoint` itself (`Entrypoint.e2eOverrides`).")
+  else if (entrypoints.isEmpty && (e2eOverrides.argoPackageName != null
+      || e2eOverrides.argoTemplateName != null || e2eOverrides.connectorConfigName != null))
+    throw("App.pkl: `e2eOverrides.argoPackageName`, `argoTemplateName` and "
+      + "`connectorConfigName` are bundle-entrypoint overrides. On a single-entrypoint "
+      + "app set the root `argoPackageNames`, `argoTemplateName` or `connectorConfigName` "
+      + "instead, which already drive _e2e_base.py.")
+  else if (entrypoints.isEmpty && !isSystemApp && e2eOverrides.connectorShortName != null
+      && !primaryConfigmapWritten && !additionalCredentialConfigs.isEmpty)
+    throw("App.pkl: `e2eOverrides.connectorShortName` is set on an app whose only credential "
+      + "configs are `additionalCredentialConfigs`, so _e2e_base.py has no primary config to "
+      + "pin and the harness would look for `atlan-connectors-<alias>`, which is never "
+      + "generated. Drop the alias, or declare the primary credential config.")
+  else null
+
 // A bundle root has no contract model of its own, so a key here could never name a
 // real `FileReference` field. Emitting it anyway would put a shared
 // `app/generated/artifact_schemas.json` next to the per-entrypoint ones, where a
@@ -5661,6 +5770,26 @@ local _treeSelectionWidgetCheck: Any =
   else throw("ConditionalInput \(bad.join(", ")) sets treeSelection; "
     + "treeSelection applies only to baseWidgetType = \"apitree\".")
 
+local _stringMapWidgetCheck: Any =
+  let (stringMaps = (uiConfig?.properties ?? Map())
+    .filter((_, u) -> u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).stringMap))
+  let (badType = stringMaps
+    .filter((_, u) -> (u as Widgets.ConditionalInput).outputValueType != "object")
+    .map((k, u) -> Pair(k, "'\(k)' (outputValueType = \"\((u as Widgets.ConditionalInput).outputValueType)\")"))
+    .values.toList())
+  let (badTree = stringMaps
+    .filter((_, u) -> (u as Widgets.ConditionalInput).treeSelection)
+    .keys.toList().sort().map((k) -> "'\(k)'"))
+  if (!badType.isEmpty)
+    throw("ConditionalInput \(badType.join(", ")) sets stringMap; "
+      + "stringMap applies only to outputValueType = \"object\".")
+  // treeSelection would win in widgetInputField and render TreeSelection, so the
+  // requested dict[str, str] would be dropped silently. The two types conflict.
+  else if (!badTree.isEmpty)
+    throw("ConditionalInput \(badTree.join(", ")) sets both stringMap and treeSelection; "
+      + "they declare conflicting types (dict[str, str] vs TreeSelection). Set only one.")
+  else null
+
 local _treeFilterModeCheck: Any =
   let (bad = filterWidgets
     .filter((_, u) -> !(isTreeWidget(u) && setsTreeSelection(u)) && !(u is Widgets.TextInput))
@@ -5702,7 +5831,7 @@ local _additionalCredentialConfigsCheck: Any =
   let (badPrefix = names.filter((n) -> !n.matches(Regex(#"(atlan|csa)-connectors-[a-z0-9]+(-[a-z0-9]+)*"#))))
   let (dupes = names.filter((n) -> names.filter((m) -> m == n).length > 1).distinct)
   let (reserved = List(workflowConfigName)
-    + (if (hasCredentialConfig && credentialAuthOptions != null) List(connectorConfigName) else List()))
+    + (if (primaryConfigmapWritten) List(connectorConfigName) else List()))
   let (clashes = names.filter((n) -> reserved.contains(n)))
   let (noConnector = cs.filter((c) -> c.wrapper && c.connector == null && connector == null).map((c) -> c.name))
   let (unusedWrapperKeys = cs.filter((c) -> !c.wrapper
@@ -5781,8 +5910,10 @@ output =
   // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
   // never be evaluated and would vanish without a word.
   let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
+  let (_e2eOverridesOutputCheck = _e2eOverridesCheck)
   let (_bundleInputNameCheck = _bundleInputClassNameCheck)
   let (_treeSelectionCheck = _treeSelectionWidgetCheck)
+  let (_stringMapCheck = _stringMapWidgetCheck)
   let (_treeFilterCheck = _treeFilterModeCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
@@ -5802,7 +5933,7 @@ output =
         // uiConfig-dependent runtime artifacts
         when (uiConfig != null) {
           ["app/generated/\(workflowConfigName).json"] = workflowConfigOutput
-          when (hasCredentialConfig && credentialAuthOptions != null) {
+          when (primaryConfigmapWritten) {
             ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
           }
           for (c in additionalCredentialConfigs) {

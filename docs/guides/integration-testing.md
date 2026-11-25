@@ -324,7 +324,7 @@ To inspect intermediates while debugging, turn it off for that session only — 
 os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
 ```
 
-This one is read at run time rather than at import, so its position is not load-bearing.
+This one is read when the worker starts rather than at import, so its position relative to the imports is not load-bearing; it must be set before the worker fixture starts. Each run keeps the value it started with.
 
 ## Markers and CI tiering — the directory *is* the boundary
 
@@ -414,7 +414,7 @@ Three of those are worth a decision:
 
 ## Legacy: HTTP scenario tests
 
-> **Deprecated in 3.56, removed in v4.0.0.** Use the [recommended pattern](#the-recommended-pattern-in-process-workflow-tests) above. Importing `BaseIntegrationTest`, `generate_test_methods` or `parametrize_scenarios` from `application_sdk.testing.integration` emits a `DeprecationWarning`, and conformance rule B001 reports it. The routes these scenarios call are SDK-owned (`application_sdk.handler.service`), so a scenario test mostly re-tests SDK code: app behaviour belongs in the fixture kit, and a deployed surface belongs in `tests/e2e`. Its one SDK subclass, `BaseSDRIntegrationTest`, is deprecated for v4.0 too. This section stays until the removal, for suites still migrating.
+> **Deprecated in 3.56, removed in v4.0.0.** Use the [recommended pattern](#the-recommended-pattern-in-process-workflow-tests) above. Importing `BaseIntegrationTest`, `generate_test_methods` or `parametrize_scenarios` from `application_sdk.testing.integration` emits a `DeprecationWarning`, and conformance rule B001 reports it. So does importing any of the names the framework is built from — `Scenario`, `ScenarioResult` and `APIType`; every assertion predicate (`equals`, `one_of`, `all_of`, ...); `IntegrationTestClient`; `compare_metadata`, `load_expected_data`, `load_actual_output`, `GapReport` and `AssetDiff`; the pandera validators; and `lazy`, `Lazy`, `is_lazy` and `evaluate_if_lazy` — because they exist only to serve it and are removed with it in v4.0.0 (FND-4911). Two of them have a replacement outside the framework: check a run's output with `assert_output_matches` from `application_sdk.testing.integration.output_schema`, which reads existing pandera YAML without pandas (see [Migrating from `validate_with_pandera`](./integration-fixtures.md#migrating-from-validate_with_pandera)), and run an App with the kit's `AppExecutor` or, deployed, `BaseE2ETest` instead of `IntegrationTestClient`. The golden-corpus loader, `DataForgeSource` and the `application_sdk.validation` re-exports are not part of the framework and stay. The routes these scenarios call are SDK-owned (`application_sdk.handler.service`), so a scenario test mostly re-tests SDK code: app behaviour belongs in the fixture kit, and a deployed surface belongs in `tests/e2e`. Its one SDK subclass, `BaseSDRIntegrationTest`, is deprecated for v4.0 too. This section stays until the removal, for suites still migrating.
 
 The HTTP scenario framework provides a **declarative, data-driven** approach to testing the running app server's HTTP surface. Instead of writing procedural test code, you define **scenarios** that specify:
 
@@ -478,10 +478,12 @@ Edit `test_integration.py`:
 from application_sdk.testing.integration import BaseIntegrationTest
 from .scenarios import scenarios
 
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
     server_host = "http://localhost:8000"
 ```
+
+The class name must start with `Test`. pytest only collects classes that match its `python_classes` pattern (`Test*` by default), so a class named `MyConnectorTest` collects zero tests and the run passes without executing a single scenario. Check with `pytest --collect-only -q tests/integration/my_connector`: it should list one test per scenario.
 
 ### Step 4: Run Tests
 
@@ -755,7 +757,7 @@ workflow_scenarios = [
 ### Basic Configuration
 
 ```python
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
     server_host = "http://localhost:8000"
     server_version = "v1"
@@ -768,7 +770,7 @@ class MyConnectorTest(BaseIntegrationTest):
 If your workflow endpoint is different from `/start`:
 
 ```python
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
     workflow_endpoint = "/extract"  # Custom endpoint
 ```
@@ -808,7 +810,7 @@ Scenario(
 Or suite-wide, when every scenario in the class targets one entrypoint:
 
 ```python
-class MinerIntegrationTest(BaseIntegrationTest):
+class TestMinerIntegration(BaseIntegrationTest):
     entrypoint = "miner"         # applies to every workflow scenario
     scenarios = miner_scenarios
 ```
@@ -844,7 +846,7 @@ await executor.execute(MyApp, input_data, entry_point="extract-metadata")
 ### Setup and Teardown Hooks
 
 ```python
-class MyConnectorTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
 
     @classmethod
@@ -1002,7 +1004,7 @@ pytest -v --log-cli-level=DEBUG
 
 Increase timeout:
 ```python
-class MyTest(BaseIntegrationTest):
+class TestMyConnector(BaseIntegrationTest):
     timeout = 60  # Increase from default 30
 ```
 

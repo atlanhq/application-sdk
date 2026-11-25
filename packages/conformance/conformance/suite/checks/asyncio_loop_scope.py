@@ -74,9 +74,12 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    discover_root_file,
     is_test_class,
     is_test_function,
+    leaf_name,
     make_cli_main,
+    make_scan_path,
     make_toml_finding,
     parse_toml_suppressions,
 )
@@ -161,16 +164,6 @@ def _broadened_fixture_scope(text: str) -> str | None:
     return fixture_scope
 
 
-def _call_name(call: ast.Call) -> str | None:
-    """Terminal name of a call target: ``f()`` -> 'f', ``a.b.f()`` -> 'f'."""
-    func = call.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return None
-
-
 def _drives_workflow_in_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True if *func*'s body awaits a workflow-submission call.
 
@@ -182,7 +175,10 @@ def _drives_workflow_in_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
         if not isinstance(node, ast.Await):
             continue
         value = node.value
-        if isinstance(value, ast.Call) and _call_name(value) in _WORKFLOW_DRIVER_NAMES:
+        if (
+            isinstance(value, ast.Call)
+            and leaf_name(value.func) in _WORKFLOW_DRIVER_NAMES
+        ):
             return True
     return False
 
@@ -296,21 +292,10 @@ def in_body_workflow_drivers(root: Path) -> list[str]:
     return labels
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan the repo-root ``pyproject.toml`` for T019.
-
-    Resolves the in-body workflow drivers from *root* so the finding reflects the
-    real interaction between the app's loop-scope config and its test suite.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel), in_body_drivers=in_body_workflow_drivers(root))
+scan_path = make_scan_path(
+    scan_text,
+    context=lambda path, root: {"in_body_drivers": in_body_workflow_drivers(root)},
+)
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
@@ -324,8 +309,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
 def discover(root: Path) -> list[Path]:
     """Discover the repo-root ``pyproject.toml`` (``[]`` when absent → no-op)."""
-    pyproject = root / "pyproject.toml"
-    return [pyproject] if pyproject.is_file() else []
+    return discover_root_file(root, "pyproject.toml")
 
 
 main = make_cli_main(

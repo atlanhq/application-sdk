@@ -18,7 +18,8 @@ import obstore
 import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
-from application_sdk.errors import STORAGE_DISK_FULL, DiskFullError
+from application_sdk.errors import DiskFullError
+from application_sdk.errors._legacy_codes import STORAGE_DISK_FULL, legacy_code_for
 from application_sdk.storage import chunked as chunked_module
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix
@@ -33,11 +34,6 @@ from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _put, download_file, download_file_chunked
 from application_sdk.storage.reference import _materialize_lock
 from tests.unit.private_stdlib import private_stdlib
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 class TestDownloadAtomicPublish:
@@ -1016,7 +1012,7 @@ class TestDiskFullDuringDownload:
         """Every typed storage error declares its own legacy code; inheriting
         StorageError's would label a full disk as a generic store failure."""
         err = StorageDiskFullError("no space", key="k")
-        assert err.error_code is STORAGE_DISK_FULL
+        assert legacy_code_for(StorageDiskFullError) is STORAGE_DISK_FULL
         assert str(err).startswith(f"[{STORAGE_DISK_FULL.code}] no space")
 
     async def test_concurrent_downloads_surface_the_typed_error_not_a_group(

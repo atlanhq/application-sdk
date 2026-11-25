@@ -32,9 +32,12 @@ from typing import (
     overload,
 )
 
+from application_sdk import _deprecation
 from application_sdk.common._env import env_int
 from application_sdk.contracts.base import Input, Output
-from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -100,7 +103,7 @@ def _validate_watchdog_declaration(
         The pair, with the mode coerced to a :class:`ProgressWatchdogMode`.
 
     Raises:
-        TaskContractError: If either value is unusable. Raised at *decoration*
+        TaskDeclarationError: If either value is unusable. Raised at *decoration*
             time rather than swallowed, unlike the env-var readers next door: a
             typo in one deployment manifest must not stop a worker booting, but
             a typo in an app's own source is a bug its author should see at
@@ -115,8 +118,8 @@ def _validate_watchdog_declaration(
         try:
             mode = ProgressWatchdogMode(progress_watchdog)
         except ValueError:
-            raise TaskContractError(
-                f"progress_watchdog={progress_watchdog!r} is not a valid mode. "
+            raise TaskDeclarationError(
+                message=f"progress_watchdog={progress_watchdog!r} is not a valid mode. "
                 f"Use one of {', '.join(repr(m.value) for m in ProgressWatchdogMode)} "
                 "(or the ProgressWatchdogMode enum). Omit it to inherit the "
                 "fleet-wide default from ATLAN_PROGRESS_WATCHDOG."
@@ -128,13 +131,13 @@ def _validate_watchdog_declaration(
         def _reject_allowance() -> NoReturn:
             """Both ways an allowance can be unusable get the same message.
 
-            A closure rather than a pre-built exception because
-            ``TaskContractError.__init__`` warns on construction, and rather than
+            A closure rather than a pre-built exception so each raise carries
+            the traceback of the check that failed, and rather than
             a NaN sentinel threaded to a later branch because a non-numeric
             allowance should visibly raise where it is detected.
             """
-            raise TaskContractError(
-                f"max_no_progress_seconds={max_no_progress_seconds!r} must be a "
+            raise TaskDeclarationError(
+                message=f"max_no_progress_seconds={max_no_progress_seconds!r} must be a "
                 "finite positive number of seconds. A zero or negative allowance "
                 "makes every attempt stall on its first watchdog tick; pass "
                 "progress_watchdog='off' to disable the watchdog deliberately, or "
@@ -198,27 +201,35 @@ class UnresolvableTaskAnnotationsError(InvalidInputError):
     field: str | None = "annotations"
 
 
-class TaskContractError(InvalidInputError):
-    """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
+@dataclass(kw_only=True)
+class TaskContractError(_LegacyErrorCodeMixin, InvalidInputError):
+    """Deprecated: use ``application_sdk.app.task.TaskDeclarationError`` — removed in v4.0."""
 
     code: ClassVar[str] = "INVALID_INPUT_TASK_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         warnings.warn(
-            "TaskContractError is deprecated; use application_sdk.errors.InvalidInputError "
+            "TaskContractError is deprecated; use application_sdk.app.task.TaskDeclarationError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
         )
         InvalidInputError.__init__(self, message=message)
-        self._legacy_error_code = error_code or CONTRACT_VALIDATION
+        self._set_legacy_error_code(error_code)
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return self._legacy_error_code
 
-    def __str__(self) -> str:
-        return f"[{self._legacy_error_code}] {self.message}"
+@dataclass(kw_only=True)
+class TaskDeclarationError(TaskContractError):
+    """A ``@task`` method or its decorator arguments break the task contract.
+
+    Raised at decoration or class-definition time.
+    It subclasses the deprecated ``TaskContractError`` only until v4.0, so
+    ``except TaskContractError:`` clauses keep matching what the SDK raises;
+    constructing it does not warn. v4.0 deletes ``TaskContractError`` and
+    re-bases this class onto ``InvalidInputError``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_TASK_CONTRACT"
 
 
 @dataclass
@@ -277,12 +288,19 @@ class TaskMetadata:
     When set, the framework routes this activity to the task queue registered
     for that pool via ``ATLAN_POOL_<POOL>_QUEUE``. Tasks without a pool run
     on the workflow's own task queue (default behavior). Must match a key
-    declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``.
+    declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``
+    after the first one: the first key is the main worker, which polls the
+    base queue. A pool routed by a non-empty ``ATLAN_POOL_<POOL>_QUEUE``
+    override in the main worker's env to a queue the app deploys a worker
+    for needs no key. Nothing
+    checks this at runtime; conformance rule K032 (TaskPoolNotDeployed)
+    checks it at build time.
     """
 
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
-    """Full retry policy for this task. When provided, takes precedence over
-    retry_max_attempts and retry_max_interval_seconds."""
+    """Full retry policy for this task. When provided, the activity is
+    dispatched with it as-is and the three ``retry_*`` scalars below are never
+    read; ``@task`` warns when both are passed (an error from v4.0.0)."""
 
     retry_max_attempts: int = 3
     """Maximum retry attempts for this task. Ignored when retry_policy is set."""
@@ -355,7 +373,7 @@ def _validate_task_signature(
         Tuple of (input_type, output_type).
 
     Raises:
-        TaskContractError: If the signature is invalid.
+        TaskDeclarationError: If the signature is invalid.
     """
     # Get function name safely (Callable doesn't guarantee __name__)
     fn_name = getattr(fn, "__name__", repr(fn))
@@ -370,8 +388,8 @@ def _validate_task_signature(
 
     # Must have exactly one parameter
     if len(params) != 1:
-        raise TaskContractError(
-            f"Task '{fn_name}' must have exactly one parameter (extending Input), "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' must have exactly one parameter (extending Input), "
             f"got {len(params)} parameters. "
             f"Wrap multiple values in a single Input dataclass."
         )
@@ -405,33 +423,63 @@ def _validate_task_signature(
     param = params[0]
     input_type = hints.get(param.name)
     if input_type is None:
-        raise TaskContractError(
-            f"Task '{fn_name}' parameter '{param.name}' must have a type annotation "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' parameter '{param.name}' must have a type annotation "
             f"extending Input."
         )
 
     # Check input extends Input base class
     if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-        raise TaskContractError(
-            f"Task '{fn_name}' parameter '{param.name}' must extend Input base class, "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' parameter '{param.name}' must extend Input base class, "
             f"got {input_type}. Define a dataclass that extends Input."
         )
 
     # Validate return type
     output_type = hints.get("return")
     if output_type is None:
-        raise TaskContractError(
-            f"Task '{fn_name}' must have a return type annotation extending Output."
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' must have a return type annotation extending Output."
         )
 
     # Check output extends Output base class
     if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-        raise TaskContractError(
-            f"Task '{fn_name}' return type must extend Output base class, "
+        raise TaskDeclarationError(
+            message=f"Task '{fn_name}' return type must extend Output base class, "
             f"got {output_type}. Define a dataclass that extends Output."
         )
 
     return input_type, output_type
+
+
+def _warn_retry_overrides_ignored(task_name: str | None, overrides: list[str]) -> None:
+    """Complain that ``retry_policy`` makes the named retry arguments dead.
+
+    The activity wrapper dispatches ``retry_policy`` as-is and never reads the
+    three scalar arguments when one is set, so an author who passes both loses
+    the scalars without a word. A ``DeprecationWarning`` (so ``-W error`` and
+    test suites catch it) plus a logged WARNING (so a worker's log shows it)
+    today; a :class:`TaskDeclarationError` in v4.0.0.
+    """
+    where = f"@task(name={task_name!r})" if task_name else "@task"
+    ignored = ", ".join(overrides)
+    # stacklevel=3: this helper, then task(), then the decorator line.
+    _deprecation.warn_deprecated(
+        f"{where} with retry_policy and {ignored}",
+        "the matching RetryPolicy field (max_attempts, initial_interval, max_interval)",
+        "4.0.0",
+        note=f"retry_policy alone sets the task's retries, so {ignored} is "
+        "ignored; from v4.0.0 passing both raises TaskDeclarationError",
+        stacklevel=3,
+    )
+    logger.warning(
+        "%s: retry_policy alone sets the task's retries, so these arguments "
+        "are ignored: %s. Put the values on the RetryPolicy (max_attempts, "
+        "initial_interval, max_interval) and drop the arguments; passing both "
+        "raises TaskDeclarationError from v4.0.0",
+        where,
+        ignored,
+    )
 
 
 @overload
@@ -466,9 +514,9 @@ def task(
     timeout_seconds: int | object = _USE_DEFAULT,
     schedule_to_close_seconds: int | None | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
-    retry_max_attempts: int = 3,
-    retry_initial_interval_seconds: int = 1,
-    retry_max_interval_seconds: int = 30,
+    retry_max_attempts: int | object = _USE_DEFAULT,
+    retry_initial_interval_seconds: int | object = _USE_DEFAULT,
+    retry_max_interval_seconds: int | object = _USE_DEFAULT,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
     pool: str | None = None,
@@ -553,18 +601,22 @@ def task(
             ``ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS`` when that env var is set
             to a positive value; passing ``None`` explicitly opts this task out
             of that fleet-wide ceiling.
-        retry_policy: Full retry policy. When provided, takes precedence over
-            retry_max_attempts and retry_max_interval_seconds.
-        retry_max_attempts: Maximum retry attempts (default 3). Ignored when
-            retry_policy is provided.
+        retry_policy: Full retry policy. When provided, it replaces
+            retry_max_attempts, retry_initial_interval_seconds and
+            retry_max_interval_seconds: put those settings on the policy
+            instead. Passing any of the three alongside ``retry_policy`` warns
+            at decoration today and raises :class:`TaskDeclarationError` from
+            v4.0.0.
+        retry_max_attempts: Maximum retry attempts (default 3). Not allowed
+            together with retry_policy.
         retry_initial_interval_seconds: Delay before the first retry, in seconds
             (default 1). Later delays grow from it by the backoff coefficient,
             so this is the knob that widens the window a small attempt budget
             spans — raise it when the task's dependency fails for tens of
-            seconds at a time. Ignored when retry_policy is provided.
+            seconds at a time. Not allowed together with retry_policy.
         retry_max_interval_seconds: Maximum interval between retries in seconds.
             Caps exponential backoff to prevent very long waits. Default: 30 seconds.
-            Ignored when retry_policy is provided.
+            Not allowed together with retry_policy.
         heartbeat_timeout_seconds: Heartbeat timeout in seconds — if no heartbeat
             is received within this window, Temporal restarts the activity. Set to
             None to disable heartbeating entirely. Defaults to
@@ -576,7 +628,11 @@ def task(
         pool: Logical worker-pool name for this task. When set, the framework
             routes this activity to the task queue registered for that pool via
             ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
-            contract ``pools { … }``. Must be a non-empty lowercase kebab-case
+            contract ``pools { … }`` other than the first (the main worker,
+            which polls the base queue), unless a non-empty
+            ``ATLAN_POOL_<POOL>_QUEUE`` in the main worker's env routes it to a queue the app
+            deploys a worker for; conformance rule K032 checks this at build
+            time, not this decorator. Must be a non-empty lowercase kebab-case
             string (e.g. ``"heavy"``, ``"cold-tier"``). The env-var key is
             derived by uppercasing the pool name and replacing hyphens with
             underscores (``"cold-tier"`` → ``ATLAN_POOL_COLD_TIER_QUEUE``), so
@@ -608,23 +664,48 @@ def task(
         The decorated function with task metadata attached.
 
     Raises:
-        TaskContractError: If the method doesn't follow the contract pattern.
+        TaskDeclarationError: If the method doesn't follow the contract pattern.
     """
     if pool is not None:
         if not pool or not pool.strip():
-            raise TaskContractError(
-                "pool must not be empty or whitespace-only. "
+            raise TaskDeclarationError(
+                message="pool must not be empty or whitespace-only. "
                 "Use a lowercase kebab-case string (e.g. 'heavy', 'cold-tier') "
                 "matching a key in pools { ... } in your app contract."
             )
         if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", pool):
-            raise TaskContractError(
-                f"pool={pool!r} must be lowercase kebab-case "
+            raise TaskDeclarationError(
+                message=f"pool={pool!r} must be lowercase kebab-case "
                 "(e.g. 'heavy', 'cold-tier'). "
                 "Pool keys must match entries in pools { ... } in App.pkl; "
                 "the ATLAN_POOL_<POOL>_QUEUE env-var key is derived by uppercasing "
                 "the pool name, so mixed or upper case creates a lookup mismatch."
             )
+
+    retry_overrides = [
+        arg_name
+        for arg_name, value in (
+            ("retry_max_attempts", retry_max_attempts),
+            ("retry_initial_interval_seconds", retry_initial_interval_seconds),
+            ("retry_max_interval_seconds", retry_max_interval_seconds),
+        )
+        if value is not _USE_DEFAULT
+    ]
+    if retry_policy is not None and retry_overrides:
+        _warn_retry_overrides_ignored(name, retry_overrides)
+    resolved_retry_max_attempts: int = (
+        3 if retry_max_attempts is _USE_DEFAULT else cast("int", retry_max_attempts)
+    )
+    resolved_retry_initial_interval: int = (
+        1
+        if retry_initial_interval_seconds is _USE_DEFAULT
+        else cast("int", retry_initial_interval_seconds)
+    )
+    resolved_retry_max_interval: int = (
+        30
+        if retry_max_interval_seconds is _USE_DEFAULT
+        else cast("int", retry_max_interval_seconds)
+    )
 
     # Resolve sentinels at decoration time so test-side monkeypatching of
     # _DEFAULT_* constants takes effect on subsequent @task uses; env-var values
@@ -650,8 +731,8 @@ def task(
         else cast("int | None", schedule_to_close_seconds)
     )
     if resolved_schedule_to_close is not None and resolved_schedule_to_close <= 0:
-        raise TaskContractError(
-            f"schedule_to_close_seconds={resolved_schedule_to_close!r} must be a "
+        raise TaskDeclarationError(
+            message=f"schedule_to_close_seconds={resolved_schedule_to_close!r} must be a "
             "positive number of seconds. Pass None to leave the retry product "
             "unbounded (the default); a ceiling of zero would fail every attempt "
             "before it started."
@@ -674,7 +755,7 @@ def task(
         input_type, output_type = _validate_task_signature(fn)
 
         # Store metadata on the function
-        fn._task_metadata = TaskMetadata(  # type: ignore[attr-defined]
+        fn._task_metadata = TaskMetadata(  # pyright: ignore[reportFunctionMemberAccess]
             name=task_name,
             func=fn,
             input_type=input_type,
@@ -685,9 +766,9 @@ def task(
             schedule_to_close_seconds=resolved_schedule_to_close,
             pool=pool,
             retry_policy=retry_policy,
-            retry_max_attempts=retry_max_attempts,
-            retry_initial_interval_seconds=retry_initial_interval_seconds,
-            retry_max_interval_seconds=retry_max_interval_seconds,
+            retry_max_attempts=resolved_retry_max_attempts,
+            retry_initial_interval_seconds=resolved_retry_initial_interval,
+            retry_max_interval_seconds=resolved_retry_max_interval,
             heartbeat_timeout_seconds=resolved_heartbeat_timeout,
             auto_heartbeat_seconds=resolved_auto_heartbeat,
             progress_watchdog=resolved_watchdog,
@@ -702,11 +783,29 @@ def task(
     return decorator
 
 
-def is_task(obj: Any) -> bool:
+def is_task(obj: object) -> bool:
     """Check if an object is decorated with @task."""
     return hasattr(obj, "_task_metadata")
 
 
-def get_task_metadata(obj: Any) -> TaskMetadata | None:
+def get_task_metadata(obj: object) -> TaskMetadata | None:
     """Get task metadata from a decorated function."""
     return getattr(obj, "_task_metadata", None)
+
+
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CONTRACT_VALIDATION": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

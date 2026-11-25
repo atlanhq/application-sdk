@@ -8,11 +8,11 @@ Most functions previously in this module have been moved to more logical homes:
 """
 
 import os
-import warnings
 
 import orjson
 from pydantic import BaseModel
 
+from application_sdk import _deprecation
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
 from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
@@ -61,7 +61,7 @@ async def download_file_from_upload_response(
             raise ResponseTypeError(
                 message=f"Unsupported response type: {type(response).__name__}"
             )
-        key = getattr(response, "key")  # noqa: B009 — BaseModel declares no ``key``; checked above
+        key = getattr(response, "key")  # BaseModel declares no ``key``; checked above
         # handler.contracts.FileUploadResponse defaults ``key`` to "": an unset
         # key is a missing key, not a request to download the temp directory.
         if not key:
@@ -132,16 +132,9 @@ def _deprecated_constant_value(name: str) -> object:
     raise AssertionError(name)
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-export once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecated_constant_value,
+)

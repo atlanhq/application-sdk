@@ -41,9 +41,10 @@ embedded in the code that ships them.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/credentials.py — credentials arrive as a `CredentialRef` built by
-  `build_credential_ref`, or as an inline dict, and the typed `MetabaseCredential`
-  defaults `password` to "". No string literal is assigned to a credential-named
+- **Compliant example:** atlan-metabase-app app/credentials.py — the typed `MetabaseCredential` defaults
+  `password` to "", and its values arrive at runtime: app/connector.py
+  `extract_metadata` routes the input through the SDK's `route_credentials` into a
+  credential ref or an inline dict. No string literal is assigned to a credential-named
   variable in any shipped app/ module of the three reference apps.
 - **Migrate with:** [`programs/areas/security.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/security.prose.md)
 
@@ -91,12 +92,13 @@ mechanism so credential handling stays uniform and auditable.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` routes the input to a
-  `CredentialRef` through the SDK's `CredentialRef.resolve` (`credential_guid` or agent
-  `agent_json`), and app/connector.py `_build_client` fetches the secret with
-  `self.context.resolve_credential_raw` and parses it into the typed MetabaseCredential
-  the API client consumes. No credential-named environment variable is read in either
-  module — resolution through the seam is what correct looks like, not a justified read.
+- **Compliant example:** atlan-metabase-app app/connector.py — `extract_metadata` routes the input to a
+  `CredentialRef` through the SDK's `route_credentials` (`credential_guid` or agent
+  `agent_json`), and `_build_client` fetches the secret with
+  `self.context.resolve_credential_raw_or_inline` and hands it to app/credentials.py
+  `parse_metabase_credentials` for the typed MetabaseCredential the API client consumes.
+  No credential-named environment variable is read in either module — resolution through
+  the seam is what correct looks like, not a justified read.
 - **Migrate with:** [`programs/areas/security.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/security.prose.md)
 - **Already correct when:** Zero findings, reached by resolving the secret through CredentialRef / the SecretStore
   protocol rather than reading it from the environment. S002 flags reads only — a

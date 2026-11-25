@@ -152,8 +152,8 @@ class TestCleanupStorageListing:
             return streams[-1]
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-lag",
+            "application_sdk.app.base._current_run_key",
+            return_value=("wf-lag", "run-lag"),
         ):
             TaskStateAccessor().set(
                 TRACKED_FILE_REFS_KEY, [FileReference(storage_path="file_refs/dir/")]
@@ -173,7 +173,7 @@ class TestCleanupStorageListing:
                 from application_sdk.app.base import _app_state, _app_state_lock
 
                 with _app_state_lock:
-                    _app_state.pop("wf-lag", None)
+                    _app_state.pop(("wf-lag", "run-lag"), None)
 
         assert deleted == [
             "file_refs/dir/part-0.parquet",

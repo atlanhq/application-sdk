@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from conformance.suite.schema.builder import ReportBuilder
-from conformance.suite.schema.sarif import SarifReport, Suppression
+from conformance.suite.schema.sarif import Notification, SarifReport, Suppression
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,7 @@ def findings_to_report(
     branch: str | None = None,
     excluded_paths: list[str] | None = None,
     rule_ids: set[str] | None = None,
+    notifications: list[Notification] | None = None,
 ) -> SarifReport:
     """Convert a list of Findings to a SARIF SarifReport via ReportBuilder.
 
@@ -76,8 +77,11 @@ def findings_to_report(
     for one rule's findings — consumers feed this SARIF to models, and the
     unused descriptors are pure context waste). ``None`` keeps the full
     catalog, which series-scoped runs rely on for fleet dashboards.
+
+    ``notifications`` pass through to :meth:`ReportBuilder.build` as the
+    invocation's ``toolExecutionNotifications``.
     """
-    from conformance.suite.rules import load_catalog
+    from conformance.suite.rules import load_catalog  # noqa: PLC0415 — circular: suite.rules imports suite.schema
 
     catalog = load_catalog()
     if rule_ids is not None:
@@ -112,4 +116,4 @@ def findings_to_report(
             discriminator=f.discriminator,
             extra_properties=f.properties or None,
         )
-    return builder.build(excluded_paths=excluded_paths)
+    return builder.build(excluded_paths=excluded_paths, notifications=notifications)

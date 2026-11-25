@@ -37,12 +37,40 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Call `gh` through `_gh.py`, write outputs through `_gha.py` (FND-4924)
+
+A new script does not write its own `gh` wrapper or its own `$GITHUB_OUTPUT`
+writer. Import the shared ones:
+
+| Need | Use | What it decides for you |
+|------|-----|-------------------------|
+| Run `gh` | `_gh.gh(args, input=, timeout=, retries=, idempotent=)` | A timeout on every call (120 s default), retry with backoff on a transient failure, `GhError(status, stderr)` on any other |
+| Parse its JSON | `_gh.gh_json(args)` | A non-JSON answer is a `GhError`, not a crash |
+| Read a paginated REST listing | `_gh.gh_paginated(path, key=)` | `--paginate --slurp` plus one flatten; a page of the wrong shape is an error, not a silent drop |
+| Decide "worth retrying" | `_gh.is_transient(status, stderr)` | 5xx, 429, a rate-limit 403 (not a permission 403), network errors |
+| Set a step output | `_gha.set_output(name, value)` / `set_outputs({...})` | Heredoc form with a random delimiter for any multi-line value; stdout when `$GITHUB_OUTPUT` is unset |
+| Write the step summary | `_gha.append_summary(markdown)` | Same unset behaviour |
+
+Pass `idempotent=False` for a call that creates something (a `POST` of a check
+run, a comment, a ref). It is then retried only on a rate limit, which GitHub
+refuses before doing the write; a 5xx or a timeout may already have created the
+object, so a retry would leave a duplicate.
+
+Tests stub `_gh.run`, the one subprocess seam, and get the real retry,
+classification and parsing. The conftest sleep stub makes backoff free.
+
+Existing scripts adopt these incrementally (FND-4924 and its follow-ups). Two
+kinds of script must stay self-contained and not import them: one a workflow
+sparse-checks-out as a single file, unless the sparse set is widened in the
+same change, and one vendored into consumer repos (`probe_code_scanning.py`,
+`build_conformance_args.py`).
+
 ### Never aggregate over `gh api --paginate --jq`
 
 With `--paginate`, gh runs the `--jq` filter once per page. A filter that
 aggregates (`length`, `add`, `first`, `any`) therefore prints one result per
 page: a review count over two pages is `"1\n0"`, not `1`. Fetch the listing
-with `--paginate --slurp`, flatten it with `_flatten_pages`, and do the
+with `_gh.gh_paginated` (`--paginate --slurp` plus a flatten) and do the
 counting in Python. `renovate_approval_conditions.fetch_reviews` and
 `count_signature_approvals` do this for review counts, and
 `vuln_auto_merge_gate` imports them rather than keeping its own copy (FND-4898).
@@ -84,6 +112,29 @@ refuse it.
 A new step that needs to decide something gets a script, not an allowlist
 entry.
 
+## Every job sets `timeout-minutes`
+
+**Rule:** every workflow job that runs `steps:` declares `timeout-minutes`
+below 360: a literal, or `${{ inputs.<name> }}` naming a `workflow_call` input
+whose default is a literal below 360. In-repo callers may not pass that input
+360 or more. A job that calls a reusable workflow (`uses:`) cannot take a
+`timeout-minutes` of its own; the called workflow's jobs carry it.
+
+**Why:** GitHub's default is 360 minutes. A job that waits on a run in another
+repo, or on a callback that never arrives, otherwise holds a runner and, on the
+merge queue, a queue slot for six hours.
+
+**Choosing the value:** a few times the observed duration (check recent runs),
+not the 360-minute default. When a step runs its own poll with a budget
+(`poll_dispatched_run.py`, `poll_check_runs_gate.py`), set the job cap above
+that budget, so the poller reports its own timeout instead of the job being
+killed without a verdict. `flag_job_timeouts.py` warns when a job finishes
+close to its cap, which is the signal a value is too low.
+
+`.github/scripts/tests/test_job_timeouts.py` enforces the rule over every
+workflow under `.github/workflows/`, and fails if a conformance bootstrap
+template grows a job with its own steps that it cannot parse.
+
 ## Running the script tests
 
 The `CI script tests` workflow (`.github/workflows/scripts-tests.yaml`) runs
@@ -95,6 +146,20 @@ uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 
 If you add a new script, add its test in the same PR — the workflow will pick
 it up automatically.
+
+The suite has its own `.github/scripts/pytest.ini`, which pytest uses instead of
+the root `pyproject.toml` whenever its arguments sit under `.github/scripts`.
+Its `pythonpath` puts `.github/scripts` and `.github/scripts/tests` on
+`sys.path`, so a test imports its script with a plain `import do_the_thing` and
+a shared helper with `from _workflows import …`. Do not add a
+`sys.path.insert` for either directory; `test_pytest_ini.py` fails on one. A
+script kept elsewhere (`.github/actions/*/`, `build_and_publish/`) still needs
+its own insert.
+
+A test that asserts on workflow or composite-action YAML reads it through
+`.github/scripts/tests/_workflows.py` (`load_workflow`, `job`, `steps`,
+`step_named`, `triggers`) rather than declaring its own `_load` / `_job` /
+`_step`.
 
 The trigger is deliberately **not** path-filtered. Part of this suite consists of
 cross-file guards that read YAML outside `.github/scripts/` — the mask-before-write
@@ -110,8 +175,8 @@ same change, or every PR waits on a check that never reports.
 
 ## pyright on `.github/scripts`: a baseline that only shrinks
 
-`[tool.pyright]` excludes `.github/**`, so the pre-commit pyright hook never
-sees the CI scripts. The `pyright .github/scripts` job runs
+`[tool.pyright]` excludes `.github/**`, so the pre-commit pyright hook (the
+SDK-tree check below) never sees the CI scripts. The `pyright .github/scripts` job runs
 `.github/scripts/check_pyright_baseline.py`, which runs pyright over
 `.github/scripts` with the repo's own pyright settings (minus the exclude,
 pinned to Linux and the `requires-python` floor) and compares the result,
@@ -134,20 +199,166 @@ uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.
 
 Counts are per (file, rule), so fixing one finding does not pay for a different
 new one in the same file. A new script starts at zero: it must be pyright-clean.
-A pyright upgrade (the `dev`-group pin, kept equal to the pre-commit hook's rev)
-may move counts either way; regenerate the baseline in that PR.
+A pyright upgrade (the `dev`-group pin, which both pyright pre-commit hooks run)
+may move counts either way; regenerate both baselines in that PR.
 
 The generated pyright config is written inside `.github/scripts`, not at the repo
 root. pyright auto-excludes `**/.*` below a config's root whatever `exclude`
 says, so a repo-root config can never reach `.github/`. If pyright reports 0
 files analysed, the check fails rather than matching an empty baseline.
 
-## An artifact upload retry must use a DIFFERENT artifact name
+## pyright on the SDK tree: errors held to a baseline that only shrinks
+
+`reportArgumentType`, `reportAttributeAccessIssue` and
+`reportFunctionMemberAccess` are errors in `[tool.pyright]` (FND-4295). They
+were warnings, which pre-commit does not fail on, so an argument-type or
+attribute bug in new code passed CI; the findings that predate the promotion
+are held to the repo-root `pyright_baseline.json`. The pre-commit `pyright`
+hook runs `check_pyright_baseline.py --scope sdk`, the same check as above over
+everything `[tool.pyright]` includes, with two differences: it counts errors
+only (warnings stay advisory), and it runs in a venv with every extra and
+group installed, as CI's is. The same three outcomes apply. In CI, the
+`Pre-commit Checks` job (`codeql.yaml`) sets `PYRIGHT_BASELINE_BASE_SHA` to the
+PR's (or merge group's) base, which the check reads when `--base-sha` is not
+given, so both pyright hooks there also refuse a baseline raised in the same
+PR.
+
+```bash
+uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_baseline.py --scope sdk           # check
+uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_baseline.py --scope sdk --update  # rewrite baseline
+```
+
+The base comparison is per rule, summed over severities, so promoting a rule
+from warning to error moves its findings to a new key without reading as new
+ones. The SDK baseline never held the warnings, so for it the check also reads
+the base revision's `[tool.pyright]`: a rule the base set explicitly to
+`warning`/`information`/`none` and this PR sets to `error` may raise its
+counts, printed as a `::warning::` for the reviewer. A rule the base left at
+pyright's default stays strict (it may already have been an error there). An
+unreadable base `pyproject.toml` fails the check.
+
+A PR that introduces a baseline (no baseline file at its base) is compared with
+pyright's findings on the base revision's own tree instead, checked out in a
+temporary `git worktree` and analysed under the PR's rule levels (the base's
+own `enableTypeIgnoreComments` / `reportUnnecessaryTypeIgnoreComment`, since its
+comments were written for them). So even the PR that adds a baseline cannot
+add a finding to it.
+
+`# type: ignore` is off (`enableTypeIgnoreComments = false`): it silenced every
+rule on its line, and the mypy codes in its brackets mean nothing to pyright.
+Suppress with `# pyright: ignore[<rule>]`. `reportUnnecessaryTypeIgnoreComment`
+is an error, so a suppression that outlives its finding fails the check.
+
+## Conformance function size: a C901 / PLR0915 baseline that only shrinks
+
+`packages/conformance` measures ruff's C901 (McCabe complexity above 10) and
+PLR0915 (more than 50 statements) over `conformance/`, at thresholds pinned in
+its `[tool.ruff.lint.mccabe]` / `[tool.ruff.lint.pylint]`. Neither rule is in
+the package's ruff `select`: about 190 existing functions exceed them. They are
+held instead to `packages/conformance/ruff_complexity_baseline.json`, per file
+and per rule, by `packages/conformance/tests/test_complexity_baseline.py`, with
+the same three outcomes as the pyright baseline above:
+
+- **A count above the baseline fails.** Split the new or grown function. The
+  failure lists every over-limit function in the file.
+- **A count below the baseline also fails.** Lock the improvement in with
+  `--update`.
+- **A baseline count above the base revision's fails.** The
+  `Conformance Suite Tests` job passes `--base-sha`. `--update` also refuses to
+  raise a count unless given `--allow-increase`.
+
+```bash
+uv run --frozen python packages/conformance/tests/test_complexity_baseline.py           # check
+uv run --frozen python packages/conformance/tests/test_complexity_baseline.py --update  # lock in a reduction
+```
+
+The file is both a pytest module (the package's own test run) and a script (the
+`conformance-complexity-baseline` pre-commit hook and the CI base check). It
+needs only ruff, which the root env pins to the package's version. A new file
+starts at zero, so new code must stay under both thresholds.
+
+## `Any` in an SDK signature: an ANN401 baseline that only shrinks
+
+ruff's ANN401 flags `typing.Any` in a parameter or return annotation. It is not
+in the root ruff `select`: `application_sdk/` had about 490 such sites when it
+was enabled (FND-4301). They are held instead to
+`.github/scripts/ann401_baseline.json`, per file, by
+`.github/scripts/check_ann401_baseline.py`, with the same three outcomes as the
+baselines above:
+
+- **A count above the baseline fails.** Type the new signature (see
+  [coding.md](coding.md), "No `Any` in a signature"). The failure lists every site in
+  the file.
+- **A count below the baseline also fails.** Lock the improvement in with
+  `--update`.
+- **A baseline count above the base revision's fails.** The
+  `CI script tests` job passes `--base-sha`; a file renamed in the PR keeps its
+  base count. A base with no baseline file is measured on its own tree instead.
+
+```bash
+uv run --frozen python .github/scripts/check_ann401_baseline.py           # check
+uv run --frozen python .github/scripts/check_ann401_baseline.py --update  # lock in a reduction
+```
+
+The baseline is the only suppression. ruff runs with `--isolated`, so it reads
+no config file: `ignore`, `extend-ignore`, `per-file-ignores`,
+`extend-per-file-ignores`, `exclude`, `extend-exclude`, a nested `ruff.toml` and
+`flake8-annotations.allow-star-arg-any` cannot hide a site. `--ignore-noqa` does
+the same for `# noqa: ANN401`. `test_check_ann401_baseline.py` writes each of
+those into a throwaway tree and asserts the sites are still counted. Because no
+config is read, the target version is passed explicitly and a test holds it to
+`requires-python`.
+
+The counts are per file, not per site. Swapping one `Any` for another in the
+same file leaves the count unchanged and passes; the ratchet stops a file's
+count from rising, and review is what catches a like-for-like swap.
+
+A tree with no ANN401 left passes: an empty measurement is accepted when ruff,
+run the same way, still flags a canary with a known `Any` signature. A ruff
+that stopped reporting the rule fails instead of matching an emptied baseline.
+
+The `ann401-baseline` pre-commit hook runs the check on every change under
+`application_sdk/`.
+
+## Artifacts move through the retry composites
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
-as non-retryable and fails the step, so every upload on a gating path is paired
-with a retry (first attempt `continue-on-error: true`, companion step guarded on
-`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+as non-retryable and fails the step, and `actions/download-artifact` does the
+same with a `ListArtifacts` 403. So every upload and download goes through one
+of two composites that hold the retry:
+
+```yaml
+- name: Upload test results
+  if: always()
+  continue-on-error: true        # only when a lost artifact must not fail the job
+  uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+  with:
+    name: integration-test-results
+    path: results/
+    retention-days: 14
+
+- name: Download test results
+  uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+  with:
+    pattern: integration-test-results*
+    path: results/
+```
+
+Each composite runs a first attempt with `continue-on-error: true`, a 20-second
+wait and a retry, both guarded on the first attempt's outcome. The step fails
+only when both attempts fail. The caller's `if:` gates the whole thing. A
+workflow that only ever runs in this repo, on a checkout of it, may use the
+relative `./.github/actions/...` ref (`codeql.yaml` does, so a PR exercises its
+own version of the upload composite); reusable workflows and composites must
+use `atlanhq/...@main`, because a relative ref resolves against a consumer's
+workspace.
+
+`conformance-reusable.yaml` still writes its 12 SARIF pairs by hand: this
+repo's own PR CI runs it, and an `@main` ref to a composite that is not yet on
+`main` fails the job at setup. It moves in a follow-up once the composites
+merge.
+
+The upload composite follows these rules:
 
 1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
    leaves an artifact record that holds the name for the rest of the run but
@@ -193,11 +404,11 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    "nothing matched" as **success**, so any step gated on
    `steps.<download>.outcome` has to move onto `hashFiles(...)`.
 
-`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
-every workflow, composite action and script in this repo — including a
-cross-file check that no consumer addresses a retried artifact by its base name
-alone — and `EXEMPT` there carries the reason for each upload that does not need
-the hardening.
+`.github/scripts/tests/test_artifact_upload_retry.py` and
+`test_artifact_download_retry.py` pin these rules on the composites, fail on any
+direct `actions/upload-artifact` or `actions/download-artifact` step elsewhere,
+and check that no consumer addresses a retried artifact by its base name alone.
+`EXEMPT` in each carries the reason for a direct call that needs no retry.
 
 ## Test legs are requested by PR comment, never by label
 
@@ -301,6 +512,20 @@ contains(github.event.pull_request.labels.*.name, 'e2e') &&
 [`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py)
 enforces that term and fails any workflow or scaffold that subscribes to
 `labeled`. Both the gates and the input go once the fleet has resynced.
+
+**Review is requested by comment too, in a workflow of its own.** In connector
+repos `/review` asks the connector reviewer for an AI review of the pull
+request, judged against application-sdk's fleet principles and the
+repository's own (`.github/connector-reviewer/principles/` in each). It is not
+a test command: the scaffolded `connector-reviewer.yaml` handles it, calling
+`connector-reviewer-reusable.yaml`, on `issue_comment` and `workflow_dispatch`
+only. The result is one summary comment and a `connector-reviewer` status on
+the head commit. Unlike `test-commands.yaml` it has no `concurrency:` group:
+the reviewer holds its own lock, found by the run name, so a running review
+finishes and a second request is dropped. It replaces the review gate that ran
+on every pull request and review event (`connector-review-gate.yaml`, retired
+in FND-5317; `bootstrap` removes it and its script, and C002 reports a copy
+still on disk).
 
 ## Bot-opened PRs are never labelled
 
@@ -469,7 +694,7 @@ then skips every step, or runs a script that passes at once, is billed a full
 runner minute. In a reusable that every connector calls, that minute is paid on
 every PR, push and merge-group run across the fleet (FND-3320:
 `renovate-artifacts` in `tests-reusable.yaml`, and the merge-group no-ops in
-`commits.yaml`, `release-gate.yaml` and `connector-review-gate.yaml`).
+`commits.yaml` and `release-gate.yaml`).
 
 **It is safe for a required check** as long as the job `name:` is a static
 string. A job-level skip still files its check run, with conclusion `skipped`,
@@ -514,21 +739,22 @@ enter the queue until its required checks are green on its head, so a check
 whose inputs are identical on the queue commit can only repeat that verdict,
 and every repeat bills a runner across the fleet (FND-3321).
 
-Seven bootstrap callers declare `merge_group:`. Each check is either
+Six bootstrap callers declare `merge_group:`. Each check is either
 base-sensitive or not:
 
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
 | `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
-| `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
 | `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
 | `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
-runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
+runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. Its body is one
+nested reusable, `queue-diff-reusable.yaml`, which each of the three reusables
+calls with `./` (FND-4928); each keeps its own `if:`. It reads the PR
 number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and
 fetches the PR head from `refs/pull/<N>/head`. The SHA in the branch name is
 the commit the entry was built on, the queue commit's parent, not the PR head.
@@ -668,6 +894,34 @@ no `pre-commit / Pre-commit` context or never call `checks-reusable.yaml`.
 Both sit in shared workflows, not bootstrap templates, so they go live in the
 same merge as the skip.
 
+## Every unit leg runs a socket guard
+
+**Rule:** every SDK unit leg, Windows included, runs pytest-socket with
+`--disable-socket --allow-unix-socket`. `.github/scripts/unit_test_command.py`
+builds the flags, and its tests pin them.
+
+**How Windows survives it:** `ProactorEventLoop`'s self-pipe is
+`socket.socketpair()`, and Windows has no native one. CPython emulates it with
+two AF_INET sockets on loopback, created through the guarded `socket.socket`,
+so every new event loop would fail. On Windows, `tests/conftest.py` replaces
+`socket.socketpair` with `tests/socket_guard.py`'s `loopback_socketpair`. That
+function builds the same pair from the socket class captured at collection,
+before pytest-socket swaps it. Every socket a test creates itself is still
+refused. `tests/unit/test_socket_guard.py` proves this on every OS.
+
+**Not `--allow-hosts`:** it patches `socket.connect()` only. On Windows,
+asyncio connects through `ConnectEx`, and UDP sends through `sendto`. Neither
+calls `connect()`, so a host allowlist guards neither.
+
+**Dapr, locally too:** a plain local `pytest` run has no socket guard. The
+autouse `_intercept_dapr_sidecar` fixture in `tests/unit/conftest.py` gives
+`application_sdk.infrastructure._dapr.http` a private `httpx` whose transport
+raises `UnmockedDaprSidecarCallError`, so a test that forgot to mock Dapr fails
+the same way everywhere. A test that wants a Dapr answer mocks the client or
+swaps the transport. If the module stops importing `httpx`, the fixture raises
+at setup, so a refactor cannot leave the interceptor silently patching nothing.
+That happened to the `DaprClient` mock it replaced (FND-4287).
+
 ## Runner sizing
 
 **Rule:** a short glue job (it calls the GitHub API, rolls up results, posts a
@@ -723,7 +977,7 @@ Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
   `update-fleet-dashboards.yaml`, FND-3337).
 * `commits.yaml`, `conformance-upload-sarif-reusable.yaml`, `stale.yml`,
   `tag-and-release.yaml`, `release-version-bump.yaml`: their one job each.
-* Bootstrap templates: `connector-review-gate.yaml`, `release-gate.yaml`.
+* Bootstrap template: `release-gate.yaml`.
 
 Short fleet jobs that stay on `ubuntu-latest`:
 
@@ -733,7 +987,7 @@ Short fleet jobs that stay on `ubuntu-latest`:
 | build-and-publish-app `prepare` | Runs `parse_atlan_yaml.py` / `validate_atlan_yaml.py` on the system `python3`, which import PyYAML and `packaging` from the full image. |
 | build-and-publish-app `leak-scan`, `certify`; `generated-freshness` | `sudo` (gitleaks / `install-pkl`), not yet verified on slim. |
 | tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
-| tests-reusable `wake-` / `pause-dataforge-source` | GlobalProtect VPN needs a tun device, which an unprivileged container cannot create. |
+| tests-reusable `wake-` / `pause-dataforge-source` | The Twingate client needs a tun device, which an unprivileged container cannot create. |
 | `checks-reusable` pre-commit, tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
 | Image build, merge, scan and e2e jobs | Docker. |
 
@@ -883,26 +1137,42 @@ backends and build hooks, and they inherit uv's environment.
 
 Instead:
 
-1. Mint the token in four inline steps, gated on the caller's opt-in input:
-   check out the app; sparse-check-out `.github/scripts/git_auth.py` from
-   `ref: ${{ job.workflow_sha }}` at `.sdk-git-auth`; run
-   `git_auth.py repos` to list the private atlanhq repositories the app names
-   as git dependencies (every `pyproject.toml` and `uv.lock` in the checkout),
-   then `rm -rf .sdk-git-auth`; and mint a read-only fleet App token
-   (`continue-on-error: true`) scoped to exactly that list. When the list is
-   empty, skip the mint: `create-github-app-token` with no `repositories`
-   grants the whole installation. The list is also capped by
-   `ALLOWED_PRIVATE_DEPS` in `git_auth.py`: a PR controls its own
-   `pyproject.toml` and `uv.lock`, so an app naming any other private repo
-   fails closed (`repos` and `mirror` both refuse it). Only aggregator repos in
-   `AGGREGATOR_REPOS` (common-app-server), matched on `GITHUB_REPOSITORY`, may
-   name any. Never fall back to `ORG_PAT_GITHUB`. Inline,
-   not a composite: callers pin composites `@main`, so a new one cannot run
-   before it merges, and composite steps cannot `continue-on-error`.
-   `.github/scripts/tests/_scoped_mint.py` pins the shape.
-2. Follow it with a guard step that fails, naming `FLEET_APP_ID` and
-   `FLEET_APP_PRIVATE_KEY`, when the opt-in is set, the app names a private
-   repository (`outputs.repositories != ''`) and the token is empty.
+1. Check out the app, then mint the token with the
+   `scoped-private-deps-token` composite, gated on the caller's opt-in input:
+
+   ```yaml
+   - name: Mint read-only token for private git dependencies
+     id: git-deps-token
+     if: inputs.private-git-deps
+     uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
+     with:
+       app-id: ${{ secrets.FLEET_APP_ID }}
+       private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+   ```
+
+   The action runs its own copy of `git_auth.py repos` to list the private
+   atlanhq repositories the app names as git dependencies (every
+   `pyproject.toml` and `uv.lock` under `project-dir`), and mints a read-only
+   fleet App token scoped to exactly that list. When the list is empty it
+   mints nothing: `create-github-app-token` with no `repositories` grants the
+   whole installation. The list is also capped by `ALLOWED_PRIVATE_DEPS` in
+   `git_auth.py`: a PR controls its own `pyproject.toml` and `uv.lock`, so an
+   app naming any other private repo fails closed (`repos` and `mirror` both
+   refuse it). Only aggregator repos in `AGGREGATOR_REPOS` (common-app-server),
+   matched on `GITHUB_REPOSITORY`, may name any. Never fall back to
+   `ORG_PAT_GITHUB`, and do not inline these steps again: thirteen inline
+   copies drifted until six had lost their guard (FND-4901).
+   `.github/scripts/tests/_scoped_mint.py` pins the action and every call.
+2. The action fails, naming `FLEET_APP_ID` and `FLEET_APP_PRIVATE_KEY`, when
+   the app names a private repository and the token did not mint. Pass
+   `require: "false"` only where an empty token already fails visibly further
+   on, and say why at the call: an image build (only a Dockerfile that mounts
+   the `git_token` secret needs it, and that build fails at its clone) or
+   certify (the failed install feeds the verdict, which blocks publish).
+   `_scoped_mint.py`'s `NOT_REQUIRED` lists every such call.
+   `conformance-reusable.yaml` still inlines the steps, with the guard: the
+   SDK's own PRs run it, so it can only call the action once the action is on
+   `main`.
 3. Hand the token to a step of its own that runs `git_auth.py mirror`, and
    run the fetching command through `git_auth.py run` in a later step with no
    token:
@@ -1305,6 +1575,7 @@ lanes are a deliberate exception to the baseline, recorded here (FND-4651).
 |---|---|---|
 | Third-party GitHub Actions, and the toolchains `actions/setup-*` and `astral-sh/setup-uv` install | 7 days | `renovate-config/default.json`, github-actions release-age rule |
 | The uv cache-key literal in `setup-deps` | 7 days | `renovate.json`, astral-sh/uv release-age rule |
+| Local dev images in `local/` compose files (major, minor, patch; digests are not held) | 7 days | `renovate.json`, local dev images release-age rule |
 | Third-party PyPI (major, minor, patch) | 3 days | `renovate-config/default.json`, PyPI release-age rule |
 | Lock refresh (`lockFileMaintenance`), fleet | 3 days | `renovate-config/self-hosted.js`, `--window P3D` |
 | Lock refresh, application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D` |
@@ -1325,7 +1596,12 @@ action runs inside a workflow that holds the org token, so a compromised release
 reaches a credential on its first run. A library reaches a test environment
 first. Action majors are also not auto-merged: a human reviews and merges the
 `renovate/major-github-actions` PR. Minor, patch and digest bumps still
-auto-merge once they are 7 days old.
+auto-merge once they are 7 days old. The uv cache-key literal follows the same
+rule for a uv major, so both halves of the bump land in that PR together.
+
+Regex-managed majors (pkl, the uv cache key, an app's own `customManagers`) are
+proposed like any other major. Only the app-contract-toolkit and SDK majors are
+disabled in the fleet preset, as opt-in migrations (FND-4903).
 
 **What this record is not.** It is not a change to the org baseline. Security
 owns the baseline, and they need to amend it or acknowledge this exception
@@ -1369,8 +1645,8 @@ metadata: the released conformance wheel still declares a plain
 therefore also re-resolves `packages/conformance/uv.lock`.
 
 **One commit, not one per lock.** Every push to the branch re-fires the PR's
-entire required-check suite, so the bound rewrites both uv locks and the npm lock
-in a single commit.
+entire required-check suite, so the bound rewrites both uv locks in a single
+commit.
 
 The workflow pushes with a minted App token, not `GITHUB_TOKEN`: a `GITHUB_TOKEN`
 push does not re-trigger the PR's required checks, which would leave the PR green
@@ -1404,6 +1680,18 @@ and "not yet" would otherwise read as "never".
 If you add another workflow that commits to a Renovate branch, it inherits this
 problem. Carry the status or accept that the PR needs a human.
 
+### One implementation for both fix-up lanes
+
+`renovate-lock-cooldown.yaml` and `renovate-conformance-lock-sync.yaml` both
+call `renovate-branch-fixup.yaml` (FND-4928). The caller owns the trigger, the
+concurrency group and the driver's arguments. The reusable owns the actor
+allowlist, the re-entrancy guard, the read-only `generate` job, the App-token
+`publish` job and the `renovate/artifacts` carry-forward. A new lane that rewrites
+files on a Renovate branch should call it too. Its driver must take
+`--no-commit --baseline-ref REF`, `--stage-to DIR` and `--apply-from DIR`, and
+write only its `OUTPUT_PATHS`. `test_renovate_branch_fixup.py` checks that
+contract for every caller.
+
 ### Repo-local `postUpgradeTasks` override
 
 `renovate.json` clears the preset's `lockFileMaintenance.postUpgradeTasks`
@@ -1414,64 +1702,9 @@ branch, which the gate then withholds on. Measured: the lane read `success` on
 Clearing the commands removes a signal that can only ever be false here; the
 bound itself is not lost, because the workflow above applies it instead.
 
-### The npm lock is bounded differently: all-or-nothing on the whole file
-
-The lane rewrites a fourth file, `packages/conformance/conformance/package-lock.json`
-— dev-only devDependencies for the remediation programs, never bundled in the
-published wheel. It gets its own driver, `renovate_npm_lock_bounded` (FND-380),
-because **npm can express none of the per-package retention ceilings the uv bound
-depends on, and has no forward-only mode at all.** Measured on npm 11.19.0 against
-this project:
-
-| command | versus `main` |
-| --- | --- |
-| `npm install --package-lock-only` (lock present) | byte-identical, no-op |
-| `npm install --package-lock-only --before=X` (lock present) | **no-op** |
-| `npm install --package-lock-only --before=X` (no lock) | 4 rolled **back** |
-| `npm update --package-lock-only --before=X` (lock present) | the same 4 rolled **back** |
-
-Two of those rows are traps. The second is the silent one: leaving the committed
-lock in place and adding `--before` exits clean and changes nothing, so a bound
-written that way reports success, bounds nothing, and is indistinguishable from a
-lane with nothing to do. **The lock must be deleted before the resolve for the
-date bound to reach the tree at all.** The third and fourth are the mass-rollback
-failure FND-359 corrected before merge — the four were `fast-uri`, `hono`, `jose`
-and `negotiator`, all adopted by `main` before this bound existed.
-
-So the mechanism gates the file as a unit:
-
-1. re-resolve from `package.json` alone with `--before` set to the window,
-2. compare against the lock `main` ships, on the newest version each package
-   *name* is pinned at — by name and not by install path, so a package moving
-   between a hoisted and a nested position is not read as one entry vanishing and
-   another appearing,
-3. any name whose newest version went down, restore `main`'s lock **verbatim**;
-   otherwise take the bounded resolve.
-
-It cannot roll anything back, structurally rather than as a policy: the only two
-things it can ever write are a resolve that regressed nothing and the exact bytes
-it compared against. **A decline is exit 0, not an error.** Nothing in CI installs
-this lock — there is no `npm ci` anywhere in the repo — so unlike the uv side
-there is no required check a red could hold the branch on, and the state a decline
-leaves is the safe one. Non-zero is reserved for the cases with no safe outcome at
-all: npm unavailable, an unparseable lock, or a `package.json` that has moved away
-from the baseline the fallback was resolved against.
-
-The cost is the coupling, and it is real: one package `main` adopted inside the
-window holds the entire npm lock until it ages out. It is not permanent — under
-this bound `main` only ever takes versions that were already `--window` old, so
-the pre-bound adoptions age past the window and the file starts moving again.
-
-Do not reuse `packaging.Version` for the comparison, tempting as it is: PEP 440
-reads `1.0.0-1` as `1.0.0.post1` and ranks it **above** `1.0.0`, so a rollback
-from a release to one of its own prereleases would read as an upgrade, and it
-rejects `7.0.0-next.5` outright — an ordinary npm channel — which the uv driver
-treats as "cannot compare" and therefore as a regression, wedging the file into
-declining every run.
-
 ### What `checks/dep-cooldown` still reports, and why that is not a bug here
 
-The bound runs at `P3D` on both halves, matching the fleet's policy. The
+The bound runs at `P3D` on both uv projects, matching the fleet's policy. The
 `checks/dep-cooldown` check run enforces **7 days** — measured 2026-08-24 on
 \#3365, which it failed on a 3-day-old release. So an adoption aged between 3 and 7
 days is bounded correctly by policy and still reported by the check. Measured
@@ -1722,8 +1955,8 @@ step re-installs a list the reusable has already checked, or never reaches it
 because D is skipped after a rejected one.
 
 `.github/scripts/tests/test_install_apt_packages.py` tests the script and
-fails on any `apt-get install` in `.github/workflows`, `.github/actions`,
-`.github/workflow-templates` or the bootstrap templates that bypasses it. It
+fails on any `apt-get install` in `.github/workflows`, `.github/actions`
+or the bootstrap templates that bypasses it. It
 reads whole shell commands, joining backslash-continued lines, so splitting
 `apt-get \` from `install "$LIST"` does not hide an install. The only
 exceptions are fixed packages this repo names itself (`twingate`,
@@ -1972,8 +2205,12 @@ Three further consequences to design for:
 **The ref transport lives in exactly one module, and that is why the lease is a
 script and not a composite action.** `.github/scripts/_gh_refs.py` holds the
 primitives — the CAS, the blob read/write, the ref listing, holder liveness, and
-the 403-rate-limit/403-permission split — and both the tenant lease and the
-DataForge source refcount import it. A composite action cannot: it is checked out
+the 403-rate-limit/403-permission split — and the tenant lease, the DataForge
+source refcount and the e2e dispatch guard all import it. Callers that disagree
+about what a transport failure means do not get a copy each: the module raises
+`TransportError`, a `SystemExit`, so the lease and the refcount fail the job as
+they always did, and the guard, which fails open, catches it by name and
+dispatches (FND-4925). A composite action cannot import it: it is checked out
 in isolation, with no sibling scripts on disk, so it has to carry its own copy.
 The lease was an action, and the copy taken from it for the refcount dropped the
 rate-limit/permission split on the way out — reintroducing the exact conflation

@@ -1,11 +1,11 @@
 import logging
-import warnings
 from time import time
 from typing import Any, ClassVar
 
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
 
+from application_sdk import _deprecation
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     METRICS_BATCH_SIZE,
@@ -18,7 +18,9 @@ from application_sdk.constants import (
     SEGMENT_WRITE_KEY,
     SERVICE_NAME,
 )
-from application_sdk.observability.background_loop import BackgroundTask
+from application_sdk.observability.background_loop import (  # noqa: F401 — re-exported (named here before FND-4918)
+    BackgroundTask,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.models import MetricRecord, MetricType
 from application_sdk.observability.observability import AtlanObservability
@@ -27,6 +29,7 @@ from application_sdk.observability.utils import (
     build_otel_resource,
     get_metric_labels,
     get_observability_dir,
+    self_failure_logger,
 )
 
 # MetricRecord and MetricType are imported from models.py to avoid circular dependencies
@@ -48,21 +51,12 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     - Gzip-compressed NDJSON file storage
     """
 
-    _flush_task_started: ClassVar[bool] = False
-    # Kept so ``_reset_for_testing`` can stop the flush: otherwise the next
-    # construction starts a second one beside it on the shared loop.
-    _flush_task: ClassVar[BackgroundTask | None] = None
     _otel_setup_failed_logged: ClassVar[bool] = False
 
     @classmethod
     def _reset_for_testing(cls) -> None:
         """Reset initialization state for test isolation."""
-        task = cls._flush_task
-        cls._flush_task = None
-        cls._flush_task_started = False
-        if task is not None:
-            task.cancel()
-            task.wait(timeout=5)
+        cls._stop_class_flushes_for_testing()
         cls._otel_setup_failed_logged = False
 
     def __init__(self):
@@ -97,13 +91,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         # No atexit close for the Segment client: its worker runs on the shared
         # observability loop, whose one shutdown at exit sends the last batch.
 
-        # Start periodic flush task if not already started
-        if not AtlanMetricsAdapter._flush_task_started:
-            try:
-                AtlanMetricsAdapter._flush_task = self._start_periodic_flush()
-                AtlanMetricsAdapter._flush_task_started = True
-            except Exception:
-                logging.error("Failed to start metrics flush task", exc_info=True)
+        self._ensure_periodic_flush()
 
     def _setup_otel_metrics(self):
         """Set up the OpenTelemetry MeterProvider with the Prometheus reader.
@@ -150,11 +138,11 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         except Exception:
             self._otel_metrics_enabled = False
             if not AtlanMetricsAdapter._otel_setup_failed_logged:
-                logging.error("Failed to setup OTel meter provider", exc_info=True)
+                logging.warning("Failed to setup OTel meter provider", exc_info=True)
                 AtlanMetricsAdapter._otel_setup_failed_logged = True
 
-    async def _flush_buffer(self, force=False):
-        await super()._flush_buffer(force=force)
+    async def _flush_buffer(self) -> None:
+        await super()._flush_buffer()
         await self.segment_client.flush()
 
     def process_record(self, record: Any) -> dict[str, Any]:
@@ -261,7 +249,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 )
                 histogram.record(metric_record.value, otel_attrs)
         except Exception:
-            logging.error("Error sending metric to OpenTelemetry", exc_info=True)
+            self_failure_logger.warning(
+                "Error sending metric to OpenTelemetry", exc_info=True
+            )
 
     def _log_to_console(self, metric_record: MetricRecord):
         """Log metric to console using the logger.
@@ -292,7 +282,9 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             logger = get_logger()
             logger.metric(log_message)
         except Exception:
-            logging.error("Error logging metric to console", exc_info=True)
+            self_failure_logger.warning(
+                "Error logging metric to console", exc_info=True
+            )
 
     def record_metric(
         self,
@@ -344,7 +336,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             self.add_record(metric_record)
 
         except Exception:
-            logging.error("Error recording metric", exc_info=True)
+            self_failure_logger.warning("Error recording metric", exc_info=True)
 
 
 # Create a singleton instance of the metrics adapter
@@ -380,20 +372,14 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed constants once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+def _former_default(name: str) -> object:
     from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
         _DEPRECATED_CONSTANT_VALUES,
     )
 
     return _DEPRECATED_CONSTANT_VALUES[name]
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0", resolve=_former_default
+)

@@ -280,11 +280,37 @@ class Tool(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class Notification(BaseModel):
+    """SARIF ``notification``: a condition met while the tool ran.
+
+    The suite emits these as ``toolExecutionNotifications`` for files it could
+    not analyse (e.g. a file the runner's Python cannot parse).  They are not
+    rule results: no rule ran on the file at all.
+    """
+
+    message: dict[str, str]
+    """``{text: "..."}``."""
+
+    level: str = "error"
+    """``"error"`` | ``"warning"`` | ``"note"`` | ``"none"``."""
+
+    locations: list[Location] | None = None
+
+    descriptor: dict[str, str] | None = None
+    """Optional ``{id: "..."}`` reportingDescriptorReference naming the condition."""
+
+    model_config = _SARIF_COMMON
+
+
 class Invocation(BaseModel):
     """Records how and when the suite was invoked."""
 
     execution_successful: bool = True
-    """``True`` if the suite ran to completion (regardless of violations found)."""
+    """``True`` if the suite analysed every discovered file (regardless of
+    violations found).  ``False`` when an ``error``-level
+    ``toolExecutionNotifications`` entry records a file it could not analyse."""
+
+    tool_execution_notifications: list[Notification] | None = None
 
     exit_code: int | None = None
     """0 = gate passed; 1 = gate failed (≥1 FAILING result)."""

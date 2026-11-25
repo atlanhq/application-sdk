@@ -37,15 +37,11 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from conformance.bootstrap import render as bootstrap_render  # noqa: E402
+from conformance.bootstrap import render as bootstrap_render
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _TEMPLATE_DIR = "packages/conformance/conformance/bootstrap/templates"
@@ -129,17 +125,9 @@ _GRANDFATHERED: dict[str, tuple[int, str]] = {
     ".github/workflows/stale.yml": (
         1,
         "actions/stale: debug-only by default, so writes no label unless a "
-        "caller opts in. Opting in for PRs would label connector PRs.",
-    ),
-    ".github/workflows/schedule.yaml": (
-        1,
-        "actions/stale on application-sdk's own issues/PRs.",
-    ),
-    ".github/workflow-templates/stale.yml": (
-        1,
-        "Starter template running actions/stale on the job's GITHUB_TOKEN; "
-        "events from GITHUB_TOKEN do not start workflow runs, so its label "
-        "adds trigger no Tests run.",
+        "caller opts in. application-sdk's own schedule.yaml opts in for its "
+        "own issues/PRs, whose PR workflows take no `labeled`; a connector "
+        "opting in for PRs would label connector PRs.",
     ),
 }
 

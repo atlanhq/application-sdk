@@ -51,6 +51,8 @@ class TestSimpleSymbolRename:
         src = "from application_sdk.activities.common.models import ActivityResult"
         out, changes = rewrite(src)
         assert "from application_sdk.common.models import TaskResult" in out
+        # TaskResult is itself deprecated, so the rewrite carries a TODO to replace it.
+        assert "# TODO(upgrade-v3): TaskResult is deprecated" in out
 
     def test_handler_interface_renamed(self):
         src = "from application_sdk.handlers import HandlerInterface"
@@ -146,8 +148,17 @@ class TestStructuralImports:
     def test_sql_workflow_gets_todo(self):
         src = "from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow"
         out, changes = rewrite(src)
-        assert "from application_sdk.templates import SqlMetadataExtractor" in out
+        assert "from application_sdk.templates import SqlApp" in out
         assert "# TODO(upgrade-v3):" in out
+
+    def test_incremental_workflow_lands_on_sql_app(self):
+        src = (
+            "from application_sdk.workflows.metadata_extraction.incremental_sql "
+            "import IncrementalSQLMetadataExtractionWorkflow"
+        )
+        out, changes = rewrite(src)
+        assert "from application_sdk.templates import SqlApp" in out
+        assert "IncrementalSqlMetadataExtractor" not in out
 
     def test_activities_interface_gets_todo(self):
         src = "from application_sdk.activities import ActivitiesInterface"

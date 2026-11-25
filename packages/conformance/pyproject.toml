@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlan-application-sdk-conformance"
-version = "0.57.0"
+version = "0.61.0"
 description = "Conformance suite, remediation programs, and CLI for the Atlan Application SDK"
 license = "Apache-2.0"
 authors = [
@@ -76,7 +76,7 @@ testpaths = ["tests"]
 # root dev group's pin and the ruff-pre-commit rev (FND-4247, enforced by
 # .github/scripts/tests/test_lint_guards.py).
 [dependency-groups]
-dev = ["ruff==0.17.4"]
+dev = ["ruff==0.17.6"]
 
 [tool.ruff.lint]
 # This file is the nearest ruff config for packages/conformance/, so the root
@@ -84,13 +84,58 @@ dev = ["ruff==0.17.4"]
 # reasons as the root: pin the rule set across ruff bumps, and sort imports
 # with ruff (`I`), which replaced isort repo-wide in FND-4247.
 select = ["E4", "E7", "E9", "F", "I"]
+# The root's extend-select, mirrored rule for rule (FND-4670): without it this
+# package was exempt from every guard the root enforces. preview +
+# explicit-preview-rules is how the root opts into PLC0415 alone.
+preview = true
+explicit-preview-rules = true
+extend-select = [
+    "G001",    # % operator inline in log call (not lazy)
+    "G003",    # string concatenation in log call
+    "G004",    # f-string in log call
+    "T201",    # print() in production code
+    "PLC0415", # imports must be at top of module
+    "S110",    # try-except-pass detected
+    "S112",    # try-except-continue detected
+    "LOG009",  # logger.warn() is deprecated — use .warning()
+]
+
+# Function size and complexity (FND-4668). The thresholds are ruff's defaults,
+# spelled out because tests/test_complexity_baseline.py measures C901 and
+# PLR0915 at them. Neither rule is in `select`: ~190 existing functions exceed
+# them, so they are held to ruff_complexity_baseline.json, which only shrinks.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 50
 
 [tool.ruff.format]
 # *.md: same reason as the root pyproject (ruff 0.17 formats Markdown code blocks).
 exclude = ["conformance/bootstrap/templates/renovate.json", "*.md"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["G004", "PLC0415", "F841", "T201"]
+# Same reasons as the root's tests/**: inline imports isolate fixtures, and
+# preview mode makes F841 stricter on tuple unpacking. Only codes that fire
+# are listed; an exemption nobody needs is dead config.
+"tests/**" = ["PLC0415", "F841"]
+# Also a CLI (pre-commit and CI run it as a script): its report is the output.
+"tests/test_complexity_baseline.py" = ["T201"]
+# CLI entry points: stdout is the product (SARIF, scorecard JSON, generated
+# files, help text) and diagnostics go to stderr. The package has no logger.
+# cli.py dispatches each subcommand through an inline import so one
+# subcommand never loads another's dependencies (generate-sdk-contract-fields
+# needs application_sdk, which only the `test` extra installs).
+"conformance/cli.py" = ["T201", "PLC0415"]
+"conformance/bootstrap/args.py" = ["T201"]
+"conformance/bootstrap/autodetect.py" = ["T201"]
+"conformance/bootstrap/command.py" = ["T201"]
+"conformance/renovate/scan.py" = ["T201"]
+"conformance/scorecard/cli.py" = ["T201"]
+"conformance/suite/runner.py" = ["T201"]
+"conformance/suite/checks/_ast_common/_cli.py" = ["T201"]
+# Generators run as scripts, like the root's tools/**.
+"conformance/tools/**" = ["T201", "PLC0415"]
 "conformance/tools/generate_rule_docs.py" = ["E402"]
 
 # Pin the resolver's default index to PyPI explicitly (FND-1928).

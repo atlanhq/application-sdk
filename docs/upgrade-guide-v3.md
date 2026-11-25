@@ -713,9 +713,11 @@ Passthrough modules are declared on the `App` class itself as a `ClassVar` (a `s
 
 ```python
 class MyConnector(App):
-    passthrough_modules = {"my_connector", "third_party_lib"}
+    passthrough_modules = {"third_party_lib"}
     ...
 ```
+
+Most apps need none. The worker passes through every library already imported when it starts, and re-imports only your app's own package in the sandbox, so Temporal checks your workflow code. Do not list your own package: that turns the check off. See [Workflow Sandbox and Passthrough Modules](concepts/apps.md#workflow-sandbox-and-passthrough-modules).
 
 ### Concurrency defaults follow the pod's limits
 
@@ -768,7 +770,7 @@ The v2 activity return types are renamed in v3:
 | v2 (`application_sdk.activities.common.models`) | v3 (`application_sdk.common.models`) |
 |----|-----|
 | `ActivityStatistics` | `TaskStatistics` |
-| `ActivityResult` | `TaskResult` |
+| `ActivityResult` | `TaskResult` (deprecated in 3.58.0, removed in v4.0: nothing reads it; use `TaskStatistics` or your own `TypedDict`) |
 
 In v3 templates these are returned inside typed `Output` models, so you generally won't
 import them directly unless you are building a custom `App` from scratch.
@@ -1176,6 +1178,15 @@ improves — a wedge is now visible one budget in, where before it was only ever
 luck. See [ADR-0018 → Migration](adr/0018-progress-aware-heartbeat.md#migration--backward-compatibility--what-if-i-do-nothing)
 for why that trade is the one being made.
 
+**`SqlApp` apps get the backstop without editing anything.** `SqlApp`'s twelve
+`extract_*` / `transform_*` tasks used to pin `timeout_seconds=1800`,
+`heartbeat_timeout_seconds=120` and `auto_heartbeat_seconds=30`, which hid both the
+backstop and the env vars from every app built on it. They now declare nothing, so
+an attempt that ran longer than 30 minutes is no longer killed, and the heartbeat
+window is `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` (default 60 s, beating every 10 s). If
+your app overrode those methods only to raise the 30-minute limit, the override can
+go. See [Tasks → Which knob governs `SqlApp`](concepts/tasks.md#process-wide-timeout-defaults-via-env-vars).
+
 ### Declaring holds is an eventual optimisation, not an upgrade task
 
 Wrapping opaque calls in `holding_progress()` is work you take on when you want the
@@ -1387,6 +1398,21 @@ The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE
 
 ---
 
+## Hypothesis strategies: orphaned modules and a duplicate (deprecated, removed in v4.0.0)
+
+Three strategy modules had no importer anywhere in the SDK or its tests. Every public name in them is deprecated and removed in v4.0.0. `strategies.sql_client` duplicated `strategies.clients.sql`; its strategies moved there, and the old module serves them with a warning until v4.0.0. B001 flags each import.
+
+| Deprecated | Replacement |
+|---|---|
+| `testing.hypothesis.strategies.sql_client.*` | the same name in `testing.hypothesis.strategies.clients.sql` |
+| `testing.hypothesis.strategies.handlers.sql.sql_metadata.*` | none; build strategies from your app's own metadata rows in its tests |
+| `testing.hypothesis.strategies.handlers.sql.sql_preflight.*` | none; build strategies from your app's typed preflight `Input` contract |
+| `testing.hypothesis.strategies.outputs.statestore.*` | none; build strategies from your app's own credential and config models |
+
+Every integer the SQL client and logger strategies draw is now bounded; `outputs.json_output` still draws unbounded `chunk_size` and row counts until FND-4286 bounds them. `sqlalchemy_connect_args_strategy`, `sql_engine_config_strategy` and the logger strategies' `attempt` and timeouts draw no negative sizes, counts or timeouts (`pool_recycle` keeps SQLAlchemy's `-1`, "never recycle"), and every one has an upper bound. `sql_data_strategy` and `sql_query_strategy` draw within the 64-bit signed range. A property test that relied on drawing a negative timeout or an arbitrarily large integer from these strategies no longer sees one.
+
+---
+
 ## Distributed locks (deprecated, removed in v4.0.0)
 
 `needs_lock` has no effect in v3. `create_worker` registers neither the lock interceptor nor the `acquire_distributed_lock` / `release_distributed_lock` activities, and it takes no extra activities, so a task decorated with `needs_lock` runs with no concurrency limit. Setting `IS_LOCKING_DISABLED=false` does not change that. `needs_lock` now emits a `DeprecationWarning`, and `create_worker` logs a warning naming each decorated task.
@@ -1415,6 +1441,32 @@ The SDK's Redis clients still work, but they are deprecated too: the lock was th
 | `infrastructure.OutputBinding` | `infrastructure.Binding` (`DaprBinding.invoke`); the SDK never shipped an implementation |
 | `infrastructure.InputBinding` | No input-binding replacement (the SDK never shipped an implementation). To receive messages, use `SubscriptionConfig` with `create_app_handler_service(subscriptions=...)` |
 | `infrastructure.BindingRequest` | pass `operation`, `data` and `metadata` to `Binding.invoke()`; nothing accepted a `BindingRequest` |
+
+---
+
+## Legacy `AAF-*` error codes (deprecated, removed in v4.0.0)
+
+An SDK error class names its failure with one vocabulary, its `code` ClassVar (`NOT_FOUND_CREDENTIAL`, `DEPENDENCY_UNAVAILABLE_STORAGE`, …). The older `AAF-{COMP}-{ID}` `ErrorCode` is no longer declared on any class. Each of these still works and warns. B001 flags each import, and E022 flags a class that binds `DEFAULT_ERROR_CODE` in this vocabulary. `str()` on a legacy-coded error keeps its `[AAF-…]` prefix until v4.0.0, so log text does not change.
+
+| Deprecated | Replacement |
+|---|---|
+| `application_sdk.errors.ErrorCode` and its 39 constants (`APP_ERROR`, `STORAGE_CONFIG`, `CREDENTIAL_NOT_FOUND`, …) | the `code` (or `qualified_code`) of the error class |
+| `Cls.DEFAULT_ERROR_CODE`, `err.error_code` | `Cls.code`, `err.qualified_code` |
+| the `error_code=` keyword of an SDK error constructor | raise an `AppError` subclass whose `code` names the failure |
+| `DEFAULT_ERROR_CODE = …` on your own subclass of an SDK error | delete it, and give the class its own `code: ClassVar[str]` |
+
+---
+
+## `retry_policy` together with the `@task` retry scalars (warns now, an error in v4.0.0)
+
+`retry_policy` replaces `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds`. The task is dispatched with the policy as-is and the three scalars are never read, so `@task(retry_policy=RetryPolicy(max_attempts=2), retry_max_attempts=5)` ran with 2 attempts and the 5 was dropped without a word. `@task` now emits a `DeprecationWarning` and logs a WARNING at decoration when `retry_policy` is passed together with any of the three, even when the value passed equals the default. From v4.0.0 it raises `TaskDeclarationError`. Retry behaviour is unchanged: the policy still wins.
+
+| Instead of | Do this |
+|---|---|
+| `@task(retry_policy=policy, retry_max_attempts=5)` | `@task(retry_policy=policy.with_max_attempts(5))` |
+| `@task(retry_policy=policy, retry_initial_interval_seconds=5)` | `@task(retry_policy=policy.with_initial_interval(timedelta(seconds=5)))` |
+| `@task(retry_policy=policy, retry_max_interval_seconds=60)` | `RetryPolicy(..., max_interval=timedelta(seconds=60))` |
+| `@task(retry_policy=RetryPolicy(), retry_max_attempts=1)` | `@task(retry_policy=RetryPolicy())` to keep what runs today, or `@task(retry_max_attempts=1)` for what the scalar asked for |
 
 ---
 
@@ -1453,7 +1505,7 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 |---|---|
 | `application_sdk.activities.ActivitiesInterface` | `application_sdk.app.App` with `@task` |
 | `application_sdk.activities.common.models.ActivityStatistics` | `application_sdk.common.models.TaskStatistics` |
-| `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` |
+| `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` (itself deprecated, removed in v4.0) |
 | `application_sdk.activities.common.utils` | `application_sdk.execution` (`build_output_path`, `get_object_store_prefix` are re-exported; direct activity internals should be accessed via `Input.workflow_id` instead) |
 | `application_sdk.activities.metadata_extraction.base` | `application_sdk.app.App` (non-SQL source); `application_sdk.templates.SqlApp` (SQL source) |
 | `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlApp` |

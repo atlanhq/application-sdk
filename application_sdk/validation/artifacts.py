@@ -37,7 +37,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, Literal, Union, final
+from typing import Final, Literal, Union, final, get_args
 
 import orjson
 
@@ -142,21 +142,23 @@ ArtifactFieldType = Literal[
 ]
 """The stable floor: types every validator must map, for every format."""
 
-ArtifactFieldTypeExtended = Union[
-    ArtifactFieldType,
-    Literal["decimal", "binary", "time", "array", "struct", "map"],
+_ArtifactFieldTypeExtension = Literal[
+    "decimal", "binary", "time", "array", "struct", "map"
 ]
+
+ArtifactFieldTypeExtended = Union[ArtifactFieldType, _ArtifactFieldTypeExtension]
 """Additive extension. Declarations use this, so a member can be declared before
 every validator supports it — resolving to ``unsupported`` for a format rather
 than widening the floor above."""
 
-ARTIFACT_FIELD_TYPES: Final[frozenset[str]] = frozenset(
-    {"string", "int", "float", "bool", "timestamp", "date", "json", "any"}
-)
+# The runtime sets are read off the Literals, so each member is spelled once.
+# The contract toolkit's src/SdkNames.pkl copies them; its test-sdk-import.py
+# compares that copy with these sets.
+ARTIFACT_FIELD_TYPES: Final[frozenset[str]] = frozenset(get_args(ArtifactFieldType))
 """Runtime membership test for :data:`ArtifactFieldType`."""
 
 ARTIFACT_FIELD_TYPES_EXTENDED: Final[frozenset[str]] = ARTIFACT_FIELD_TYPES | frozenset(
-    {"decimal", "binary", "time", "array", "struct", "map"}
+    get_args(_ArtifactFieldTypeExtension)
 )
 """Runtime membership test for :data:`ArtifactFieldTypeExtended`."""
 
@@ -185,7 +187,7 @@ ArtifactFormat = Literal["ndjson", "parquet"]
 """Physical container format of a declared artifact. Each format has its own
 validator with its own dependency floor."""
 
-ARTIFACT_FORMATS: Final[frozenset[str]] = frozenset({FORMAT_NDJSON, FORMAT_PARQUET})
+ARTIFACT_FORMATS: Final[frozenset[str]] = frozenset(get_args(ArtifactFormat))
 """Runtime membership test for :data:`ArtifactFormat`."""
 
 

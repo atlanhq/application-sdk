@@ -12,14 +12,10 @@ test_renovate_pkl_sync.py; this file pins the placement rules themselves.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import pkl_contract_layout as mod
+import pytest
 
 
 @pytest.fixture

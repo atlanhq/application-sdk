@@ -27,7 +27,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -37,7 +36,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.SDK,
         name="HandRolledRetryLadder",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="retry-policy",
         autofixable=False,
         orthogonal_gate="tests",
@@ -91,10 +89,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress a loop that is genuinely not a retry ladder (a poller whose\n"
             "``try`` only guards a log call, say) with a justification:\n"
             "``# conformance: ignore[P060] <reason>``.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/prescriptions.md#p060"
         ),
     ),
 )

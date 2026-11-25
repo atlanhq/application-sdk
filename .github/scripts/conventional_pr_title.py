@@ -54,9 +54,10 @@ workflow gates on the `violation` output in a separate step.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
+
+from _gha import set_output
 
 # The conventional-commit types documented in docs/standards/commits.md. The
 # workflow surfaces this as an input, so a repo with an extra type (or a
@@ -177,16 +178,6 @@ def parse_list(value: str) -> tuple[str, ...]:
     return tuple(item for item in re.split(r"[,\s]+", value.strip()) if item)
 
 
-def _write_output(key: str, value: str) -> None:
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    line = f"{key}={value}"
-    if github_output:
-        with open(github_output, "a") as fh:
-            fh.write(line + "\n")
-    else:
-        print(line)
-
-
 def run(
     pr_title: str,
     head_ref: str,
@@ -247,8 +238,8 @@ def main() -> int:
         args.comment_out,
     )
 
-    _write_output("violation", "true" if error_message else "false")
-    _write_output("error_message", error_message)
+    set_output("violation", "true" if error_message else "false")
+    set_output("error_message", error_message)
     return 0
 
 

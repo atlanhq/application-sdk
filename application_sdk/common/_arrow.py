@@ -1,7 +1,8 @@
 """Arrow conversion shared by the SDK's Parquet writers.
 
 Lives in ``common`` rather than ``storage.formats`` because code outside that
-package (``common.file_converter``, the scale-data generator) writes Parquet
+package (``common.file_converter``, deprecated for v4.0, and the scale-data
+generator) writes Parquet
 through it. It was the one thing tying them to ``storage.formats``, which is
 headed for removal (FND-4693).
 """

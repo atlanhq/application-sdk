@@ -25,15 +25,12 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import renovate_approval_conditions as gate  # noqa: E402
-import test_command_comment as sticky  # noqa: E402
+import renovate_approval_conditions as gate
+import test_command_comment as sticky
+import yaml
 
 SHA = "abc123"
 REPO = "owner/repo"
@@ -482,6 +479,145 @@ class TestDepFileAllowlist:
 
     def test_empty_filenames_are_ignored(self):
         assert gate.non_dep_files(["", "uv.lock"]) == []
+
+
+def _sdk_caller_extra_pattern() -> str:
+    """The extra_dep_file_pattern application-sdk's own caller passes."""
+    caller = (
+        Path(__file__).resolve().parents[2] / "workflows" / "renovate-auto-approve.yml"
+    )
+    jobs = yaml.safe_load(caller.read_text())["jobs"]
+    patterns = [
+        job["with"]["extra_dep_file_pattern"]
+        for job in jobs.values()
+        if "extra_dep_file_pattern" in job.get("with", {})
+    ]
+    assert len(patterns) == 1, patterns
+    return patterns[0]
+
+
+LOCAL_COMPOSE = "local/temporal-auth/docker-compose.yml"
+LOCAL_PATTERN = r"local/[^/]+/(docker-)?compose[^/]*\.ya?ml"
+
+
+def _meta_on(ref: str) -> dict:
+    meta = pr_payload()
+    meta["head"]["ref"] = ref
+    return meta
+
+
+class TestRepoDeclaredPathsOnMajors:
+    """Condition (d), part 3 (FND-5353): a path approvable only through the
+    caller's extra_dep_file_pattern goes to a human on a grouped-major branch,
+    because the gate judges paths, and a major bump is the same path."""
+
+    def test_extra_path_on_major_branch_is_reported(self):
+        assert gate.extra_paths_on_major(
+            [LOCAL_COMPOSE], LOCAL_PATTERN, "renovate/major-local-dev-images"
+        ) == [LOCAL_COMPOSE]
+
+    @pytest.mark.parametrize(
+        "ref", ["renovate/local-dev-images", "renovate/postgres-19.0", ""]
+    )
+    def test_extra_path_off_major_branch_is_not(self, ref):
+        assert gate.extra_paths_on_major([LOCAL_COMPOSE], LOCAL_PATTERN, ref) == []
+
+    def test_built_in_paths_on_a_major_branch_are_unchanged(self):
+        # Action and PyPI majors keep today's behaviour: scoped to the extra
+        # pattern on purpose.
+        files = [".github/workflows/ci.yaml", "uv.lock", "pyproject.toml"]
+        assert (
+            gate.extra_paths_on_major(
+                files, LOCAL_PATTERN, "renovate/major-github-actions"
+            )
+            == []
+        )
+
+    def test_no_extra_pattern_means_no_change(self):
+        assert (
+            gate.extra_paths_on_major(["uv.lock"], "", "renovate/major-pyatlan") == []
+        )
+
+    def test_major_local_image_bump_is_not_approved(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EXTRA_DEP_PATTERN": LOCAL_PATTERN},
+            meta=_meta_on("renovate/major-local-dev-images"),
+            files=file_payload(LOCAL_COMPOSE),
+        )
+        assert fake.approved_prs == []
+        assert "need a human Code Owner review" in log
+        assert LOCAL_COMPOSE in log
+
+    @pytest.mark.parametrize("ref", [None, ""])
+    def test_missing_head_ref_fails_closed(self, monkeypatch, capsys, ref):
+        meta = pr_payload()
+        if ref is not None:
+            meta["head"]["ref"] = ref
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EXTRA_DEP_PATTERN": LOCAL_PATTERN},
+            meta=meta,
+            files=file_payload(LOCAL_COMPOSE),
+        )
+        assert fake.approved_prs == []
+        assert "missing head ref" in log
+
+    def test_missing_head_ref_without_extra_pattern_is_unchanged(
+        self, monkeypatch, capsys
+    ):
+        # Callers with no extra pattern never read the ref, so nothing changes.
+        _code, fake, _log = run_main(
+            monkeypatch, capsys=capsys, files=file_payload("uv.lock")
+        )
+        assert fake.approved_prs == ["7"]
+
+    def test_non_major_local_image_bump_is_approved(self, monkeypatch, capsys):
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EXTRA_DEP_PATTERN": LOCAL_PATTERN},
+            meta=_meta_on("renovate/local-dev-images"),
+            files=file_payload(LOCAL_COMPOSE),
+        )
+        assert fake.approved_prs == ["7"]
+
+
+class TestSdkCallerExtraPattern:
+    """application-sdk's caller widens the allowlist for its own dep-managed
+    paths. Read from the real workflow file, so a pattern edit is tested."""
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "local/temporal-auth/docker-compose.yml",
+            "local/temporal-auth/docker-compose.yaml",
+            "local/other-stack/compose.yml",
+            "packages/conformance/conformance/bootstrap/templates/tests.yaml",
+            "packages/conformance/conformance/data/relationship_directions.json",
+        ],
+    )
+    def test_dep_managed_paths_are_approvable(self, path):
+        assert gate.non_dep_files([path], _sdk_caller_extra_pattern()) == []
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            # The local dev images lane (FND-5353) must not reach the
+            # production Dockerfile, a root compose file, or anything else
+            # under local/.
+            "Dockerfile",
+            "docker-compose.yml",
+            "local/temporal-auth/nginx.conf",
+            "local/temporal-auth/init.sql",
+            "local/a/b/docker-compose.yml",
+            "local/docker-compose.yml",
+        ],
+    )
+    def test_other_paths_still_need_a_human(self, path):
+        assert gate.non_dep_files([path], _sdk_caller_extra_pattern()) == [path]
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,14 @@
 """Unit tests for application_sdk.observability.traces_adaptor.
 
 Targets the uncovered branches:
-- _reset_for_testing (ClassVar reset).
+- the adapter keeps nothing for later: no flush task, no buffer, no upload.
 - setup_tracer_provider: off, OTLP-only default, dev-only console exporter,
   idempotence, reuse of a pre-installed global, install races, concurrent
   callers, exporter and provider failures.
 - the adapter binding to the shared provider.
 - export_record dispatch (TraceRecord vs other; ENABLE_OTLP_TRACES on/off).
-- _send_to_otel ERROR-status branch and exception swallow.
+- _send_to_otel span timing and parentage, ERROR-status branch and exception
+  swallow.
 - _log_to_console exception swallow.
 - record_trace re-raises after logging.
 
@@ -20,13 +21,17 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Iterator
 from unittest import mock
 
 import pytest
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter
-from opentelemetry.trace import ProxyTracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+from opentelemetry.trace import ProxyTracerProvider, SpanKind, StatusCode
 
 from application_sdk.observability import traces_adaptor as tracer_mod
 from application_sdk.observability.models import TraceRecord
@@ -34,33 +39,81 @@ from application_sdk.observability.traces_adaptor import AtlanTracesAdapter, get
 
 
 def _adapter_with_otel_disabled() -> AtlanTracesAdapter:
-    """Build an adapter with OTLP disabled and the flush task suppressed."""
-    AtlanTracesAdapter._flush_task_started = True  # don't start the flush
+    """Build an adapter with OTLP disabled."""
     with mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", False):
         return AtlanTracesAdapter()
 
 
 # ---------------------------------------------------------------------------
-# Class-level reset
+# Nothing is kept for later: no flush task, no buffer, no upload
 # ---------------------------------------------------------------------------
 
 
-class TestResetForTesting:
-    def test_reset_for_testing_clears_flag(self) -> None:
-        AtlanTracesAdapter._flush_task_started = True
-        AtlanTracesAdapter._reset_for_testing()
-        assert AtlanTracesAdapter._flush_task_started is False
+def _record(**overrides: object) -> TraceRecord:
+    fields: dict[str, object] = {
+        "timestamp": 1.0,
+        "trace_id": "t",
+        "span_id": "s",
+        "name": "n",
+        "kind": "INTERNAL",
+        "status_code": "OK",
+        "attributes": {},
+        "duration_ms": 1.0,
+    }
+    fields.update(overrides)
+    return TraceRecord(**fields)  # type: ignore[arg-type]  # test-only kwargs bag
 
-    def test_reset_for_testing_stops_the_running_flush(self) -> None:
-        """A reset stops the old flush, so the next construction does not
-        leave two running side by side on the shared loop."""
-        task = mock.MagicMock()
-        AtlanTracesAdapter._flush_task = task
-        AtlanTracesAdapter._flush_task_started = True
-        AtlanTracesAdapter._reset_for_testing()
-        task.cancel.assert_called_once_with()
-        task.wait.assert_called_once_with(timeout=5)
-        assert AtlanTracesAdapter._flush_task is None
+
+#: The switch every sink shares; the unit-test conftest turns it off.
+_STORE_SINK_SWITCH = (
+    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK"
+)
+
+
+class TestNothingKeptForLater:
+    """FND-4913: the adapter used to buffer records, upload them as NDJSON
+    under ``observability/.../traces/`` and start a periodic flush task on the
+    loop that built it. Nothing read those files; the adapter now only emits."""
+
+    def test_construction_starts_no_flush_task(self) -> None:
+        with (
+            mock.patch(
+                "application_sdk.observability.observability.observability_loop"
+            ) as shared_loop,
+        ):
+            _adapter_with_otel_disabled()
+        shared_loop.start.assert_not_called()
+
+    def test_record_trace_buffers_nothing_and_exports_at_once(self) -> None:
+        adapter = _adapter_with_otel_disabled()
+        with mock.patch.object(adapter, "_log_to_console") as mock_log:
+            adapter.record_trace(
+                name="n",
+                trace_id="t",
+                span_id="s",
+                kind="INTERNAL",
+                status_code="OK",
+                attributes={},
+            )
+        mock_log.assert_called_once()
+        assert adapter._buffer == []
+        assert adapter._flush_tasks == set()
+
+    def test_store_sink_is_off_even_when_the_shared_switch_is_on(self) -> None:
+        with mock.patch(_STORE_SINK_SWITCH, True):
+            assert _adapter_with_otel_disabled()._store_sink_enabled() is False
+
+    async def test_flush_uploads_nothing(self) -> None:
+        adapter = _adapter_with_otel_disabled()
+        adapter._buffer.append(adapter.process_record(_record()))
+        with (
+            mock.patch(_STORE_SINK_SWITCH, True),
+            mock.patch(
+                "application_sdk.observability.observability._upload_to_observability_stores"
+            ) as upload,
+        ):
+            await adapter._flush_buffer()
+        upload.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +326,6 @@ class TestSetupTracerProvider:
 
 class TestAdapterUsesSharedProvider:
     def test_adapter_reuses_the_installed_provider(self) -> None:
-        AtlanTracesAdapter._flush_task_started = True
         provider = mock.MagicMock()
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
@@ -287,7 +339,6 @@ class TestAdapterUsesSharedProvider:
         assert adapter.tracer is provider.get_tracer.return_value
 
     def test_adapter_without_provider_has_no_tracer(self) -> None:
-        AtlanTracesAdapter._flush_task_started = True
         with (
             mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", True),
             mock.patch.object(tracer_mod, "setup_tracer_provider", return_value=None),
@@ -362,55 +413,95 @@ class TestExportRecord:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def recorded_spans() -> "Iterator[tuple[AtlanTracesAdapter, InMemorySpanExporter]]":
+    """An adapter whose tracer exports to memory, on a provider of its own."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    adapter = _adapter_with_otel_disabled()
+    adapter.tracer = provider.get_tracer("test")
+    yield adapter, exporter
+    provider.shutdown()
+
+
 class TestSendToOtel:
-    def test_send_to_otel_sets_error_status(self) -> None:
-        adapter = _adapter_with_otel_disabled()
-        adapter.tracer = mock.MagicMock()
-        span_ctx = mock.MagicMock()
-        adapter.tracer.start_as_current_span.return_value.__enter__.return_value = (
-            span_ctx
+    def test_span_covers_the_recorded_duration(self, recorded_spans) -> None:
+        """FND-4913: the span used to open at export time and close at once,
+        so every span read 0 ms whatever the call took."""
+        adapter, exporter = recorded_spans
+        adapter._send_to_otel(_record(timestamp=100.0, duration_ms=250.0))
+        (span,) = exporter.get_finished_spans()
+        assert span.end_time == 100_000_000_000
+        assert span.end_time - span.start_time == 250_000_000
+
+    def test_span_is_a_child_of_the_current_span(self, recorded_spans) -> None:
+        adapter, exporter = recorded_spans
+        with adapter.tracer.start_as_current_span("caller") as caller:
+            adapter._send_to_otel(_record(timestamp=100.0))
+        recorded = next(s for s in exporter.get_finished_spans() if s.name == "n")
+        assert recorded.parent is not None
+        assert recorded.parent.span_id == caller.get_span_context().span_id
+
+    def test_span_carries_kind_attributes_and_events(self, recorded_spans) -> None:
+        adapter, exporter = recorded_spans
+        adapter._send_to_otel(
+            _record(
+                kind="SERVER",
+                attributes={"function": "f"},
+                events=[{"name": "e", "timestamp": 0.5, "attributes": {"k": "v"}}],
+            )
+        )
+        (span,) = exporter.get_finished_spans()
+        assert span.kind == SpanKind.SERVER
+        assert dict(span.attributes or {}) == {"function": "f"}
+        (event,) = span.events
+        assert (event.name, event.timestamp, dict(event.attributes or {})) == (
+            "e",
+            500_000_000,
+            {"k": "v"},
         )
 
-        record = TraceRecord(
-            timestamp=1.0,
-            trace_id="t",
-            span_id="s",
-            name="n",
-            kind="INTERNAL",
-            status_code="ERROR",
-            status_message="boom",
-            attributes={},
-            duration_ms=1.0,
-        )
-        adapter._send_to_otel(record)
-        # set_status was called with an ERROR status.
-        span_ctx.set_status.assert_called_once()
-        status_arg = span_ctx.set_status.call_args.args[0]
-        # We don't introspect StatusCode here (would couple to OTel internals);
-        # but we can confirm the call happened.
-        assert status_arg is not None
+    def test_send_to_otel_sets_error_status(self, recorded_spans) -> None:
+        adapter, exporter = recorded_spans
+        adapter._send_to_otel(_record(status_code="ERROR", status_message="boom"))
+        (span,) = exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.ERROR
+        assert span.status.description == "boom"
 
     def test_send_to_otel_swallows_exceptions(self, caplog) -> None:
         adapter = _adapter_with_otel_disabled()
         adapter.tracer = mock.MagicMock()
-        adapter.tracer.start_as_current_span.side_effect = RuntimeError("otel down")
+        adapter.tracer.start_span.side_effect = RuntimeError("otel down")
 
-        record = TraceRecord(
-            timestamp=1.0,
-            trace_id="t",
-            span_id="s",
-            name="n",
-            kind="INTERNAL",
-            status_code="OK",
-            attributes={},
-            duration_ms=1.0,
-        )
-        with caplog.at_level(logging.ERROR):
-            adapter._send_to_otel(record)
+        with caplog.at_level(logging.WARNING):
+            adapter._send_to_otel(_record())
         assert any(
             "Error sending trace to OpenTelemetry" in rec.message
             for rec in caplog.records
         )
+
+    def test_repeated_send_failure_logs_one_warning(self, caplog) -> None:
+        """A tracer that fails on every span logs once per interval, not per span.
+
+        Each failure is handled (the span is dropped and the caller carries
+        on), so the record is a WARNING, and a broken exporter must not flood
+        the log at the application's own trace rate.
+        """
+        adapter = _adapter_with_otel_disabled()
+        adapter.tracer = mock.MagicMock()
+        adapter.tracer.start_span.side_effect = RuntimeError("otel down")
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                adapter._send_to_otel(_record())
+        failures = [
+            rec
+            for rec in caplog.records
+            if "Error sending trace to OpenTelemetry" in rec.message
+        ]
+        assert [rec.levelno for rec in failures] == [logging.WARNING]
+        assert failures[0].exc_info is not None
 
     def test_str_to_span_kind_unknown_defaults_to_internal(self) -> None:
         from opentelemetry.trace import SpanKind
@@ -445,7 +536,7 @@ class TestLogToConsole:
         with mock.patch.object(
             tracer_mod, "get_logger", side_effect=RuntimeError("logger down")
         ):
-            with caplog.at_level(logging.ERROR):
+            with caplog.at_level(logging.WARNING):
                 adapter._log_to_console(record)
         assert any(
             "Error logging trace to console" in rec.message for rec in caplog.records
@@ -483,12 +574,55 @@ class TestRecordTrace:
 
 class TestGetTracesSingleton:
     def test_get_traces_caches_singleton(self) -> None:
-        # Reset module-level singleton; ensure flush task suppressed.
         tracer_mod._traces_instance = None
-        AtlanTracesAdapter._flush_task_started = True
         with mock.patch.object(tracer_mod, "ENABLE_OTLP_TRACES", False):
             first = get_traces()
             second = get_traces()
         assert first is second
         # Reset for any subsequent tests.
         tracer_mod._traces_instance = None
+
+
+# ---------------------------------------------------------------------------
+# Self-failure rate limit
+# ---------------------------------------------------------------------------
+
+
+class TestSelfFailureRateLimit:
+    @staticmethod
+    def _record(msg: str = "Error sending trace to OpenTelemetry") -> logging.LogRecord:
+        return logging.LogRecord(
+            "application_sdk.observability.self_failure",
+            logging.WARNING,
+            __file__,
+            1,
+            msg,
+            None,
+            None,
+        )
+
+    def test_suppressed_count_is_reported_on_the_next_record(self) -> None:
+        from application_sdk.observability.utils import _SelfFailureRateLimit
+
+        now = [0.0]
+        limit = _SelfFailureRateLimit(60.0, clock=lambda: now[0])
+
+        assert limit.filter(self._record()) is True
+        assert [limit.filter(self._record()) for _ in range(3)] == [False] * 3
+
+        now[0] = 61.0
+        record = self._record()
+        assert limit.filter(record) is True
+        assert record.getMessage() == (
+            "Error sending trace to OpenTelemetry "
+            "(3 similar failures suppressed since the last report)"
+        )
+
+    def test_messages_are_limited_independently(self) -> None:
+        from application_sdk.observability.utils import _SelfFailureRateLimit
+
+        limit = _SelfFailureRateLimit(60.0, clock=lambda: 0.0)
+
+        assert limit.filter(self._record("Error in log sink")) is True
+        assert limit.filter(self._record("Error buffering log")) is True
+        assert limit.filter(self._record("Error in log sink")) is False

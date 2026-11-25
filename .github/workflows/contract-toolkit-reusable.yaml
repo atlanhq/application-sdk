@@ -27,12 +27,13 @@ jobs:
   generated-output:
     name: Verify generated output
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # No version: — install-pkl resolves the SDK pin from
       # application_sdk/pkl_version.py, the one place it is declared.
@@ -70,15 +71,13 @@ jobs:
   pkl-tests:
     name: PKL tests and invariants
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # No version: — install-pkl resolves the SDK pin from
       # application_sdk/pkl_version.py, the one place it is declared.
       - uses: ./.github/actions/install-pkl
-
-      - name: Check generated output invariants
-        run: contract-toolkit/scripts/check-invariants.sh
 
       - name: Run PKL tests
         run: |
@@ -88,6 +87,7 @@ jobs:
   generated-python:
     name: Generated Python lint and SDK imports
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -97,7 +97,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # No version: — install-pkl resolves the SDK pin from
       # application_sdk/pkl_version.py, the one place it is declared.
@@ -115,6 +115,7 @@ jobs:
   changelog-guard:
     name: Toolkit changelog guard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       !startsWith(github.head_ref, 'release/contract-toolkit-v') &&
@@ -142,6 +143,7 @@ jobs:
   docs-check:
     name: Toolkit docs update check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       !startsWith(github.head_ref, 'release/contract-toolkit-v') &&

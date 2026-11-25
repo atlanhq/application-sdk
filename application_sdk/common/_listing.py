@@ -32,7 +32,7 @@ from pathlib import Path
 try:
     import fcntl
 except ImportError:  # Windows has no fcntl; only the darwin barrier below uses it
-    fcntl = None  # type: ignore[assignment]  # — sentinel for "no fcntl on this platform": None is not a module
+    fcntl = None
 
 # Darwin-only fcntl op: flush kernel buffer + drive cache. Value from
 # <sys/fcntl.h>; not exported by Python's fcntl module.

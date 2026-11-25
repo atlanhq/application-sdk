@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -14,16 +16,19 @@ import pytest
 from conformance.suite.checks import dependency_conformance
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
-    _LOCK_URL_RE,
-    _REMOTE_COMPONENT_FETCH_RE,
     DEPRECATED_SDK_EXTRAS,
     RUNTIME_IMAGE_PYTHON,
     SDK_PYTHON_FLOOR,
     TEST_ONLY_SDK_EXTRAS,
-    _collect_dialect_drivers,
-    _collect_dialect_names,
-    _dist_dialect_entry_points,
-    _env_dialect_entry_points,
+    _metadata,
+    _unused,
+    main,
+    scan_all,
+    scan_text,
+)
+from conformance.suite.checks.dependency_conformance._common import (
+    _LOCK_URL_RE,
+    _REMOTE_COMPONENT_FETCH_RE,
     _is_bounded_specifier,
     _is_floating_range,
     _iter_dep_entries,
@@ -32,9 +37,14 @@ from conformance.suite.checks.dependency_conformance import (
     _parse_requirement,
     _requires_python_lower_bound,
     _sdk_extras_in,
-    main,
-    scan_all,
-    scan_text,
+)
+from conformance.suite.checks.dependency_conformance._metadata import (
+    _dist_dialect_entry_points,
+    _env_dialect_entry_points,
+)
+from conformance.suite.checks.dependency_conformance._unused import (
+    _collect_dialect_drivers,
+    _collect_dialect_names,
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition
@@ -268,7 +278,7 @@ def test_d002_skipped_when_sdk_metadata_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When importlib.metadata.requires returns None for the SDK, skip D002."""
-    from conformance.suite.checks import dependency_conformance as dc
+    from conformance.suite.checks.dependency_conformance import _metadata as dc
 
     monkeypatch.setattr(dc, "_sdk_managed_packages", lambda: None)
     text = _write_pyproject(
@@ -1066,12 +1076,12 @@ def _d004_scan_all_with_sources(
         path.write_text(source, encoding="utf-8")
 
     monkeypatch.setattr(
-        dependency_conformance,
+        _metadata,
         "_sdk_managed_packages",
         lambda: {"sample-transport"},
     )
     monkeypatch.setattr(
-        dependency_conformance.importlib_metadata,
+        _metadata.importlib_metadata,
         "packages_distributions",
         lambda: {"sample_transport": ["sample-transport"]},
     )
@@ -1149,10 +1159,10 @@ def test_d004_test_imports_do_not_leak_across_projects(
         "import sample_transport\n", encoding="utf-8"
     )
     monkeypatch.setattr(
-        dependency_conformance, "_sdk_managed_packages", lambda: {"sample-transport"}
+        _metadata, "_sdk_managed_packages", lambda: {"sample-transport"}
     )
     monkeypatch.setattr(
-        dependency_conformance.importlib_metadata,
+        _metadata.importlib_metadata,
         "packages_distributions",
         lambda: {"sample_transport": ["sample-transport"]},
     )
@@ -1248,7 +1258,7 @@ def test_d005_unknown_extra_in_dependency_group_fires() -> None:
 def test_d005_skipped_when_sdk_metadata_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import conformance.suite.checks.dependency_conformance as mod
+    import conformance.suite.checks.dependency_conformance._metadata as mod
 
     monkeypatch.setattr(mod, "_sdk_published_extras", lambda: None)
     findings = scan_text(
@@ -1549,6 +1559,30 @@ def test_main_exit_1_on_blocking_violation(tmp_path: Path) -> None:
     assert code == 1
 
 
+def test_python_dash_m_runs_the_cli(tmp_path: Path) -> None:
+    """``python -m conformance.suite.checks.dependency_conformance`` still runs the
+    CLI now that the check is a package (its ``__init__`` never runs as main)."""
+    _scratch_pyproject(
+        tmp_path,
+        '[project]\nname = "x"\nversion = "0"\ndependencies = ["rich>=13,<14"]\n',
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "conformance.suite.checks.dependency_conformance",
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "pyproject.toml"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "D001" in proc.stdout + proc.stderr
+
+
 def test_main_exit_0_when_clean(tmp_path: Path) -> None:
     _scratch_pyproject(
         tmp_path,
@@ -1836,14 +1870,9 @@ def test_d003_collects_dialect_scheme_from_source_string(tmp_path: Path) -> None
     assert [f for f in findings if f.rule_id == "D003"] == []
 
 
-@pytest.mark.parametrize(
-    "call",
-    ['URL.create(drivername="crate", host="h")', 'URL.create("crate", host="h")'],
-)
-def test_d003_url_create_literal_drivername_counts_as_dialect_usage(
-    tmp_path: Path, call: str
-) -> None:
-    """A literal ``URL.create`` drivername selects the dialect with no ``://``."""
+def _d003_cratedb_messages(tmp_path: Path, source: str) -> list[str]:
+    """Scan a repo that depends on ``sqlalchemy-cratedb`` (dialect scheme
+    ``crate``) with *source* as its only app module; return D003 messages."""
     pp = tmp_path / "pyproject.toml"
     pp.write_text(
         '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
@@ -1851,9 +1880,7 @@ def test_d003_url_create_literal_drivername_counts_as_dialect_usage(
     )
     src = tmp_path / "app" / "clients.py"
     src.parent.mkdir(parents=True)
-    src.write_text(
-        f"from sqlalchemy.engine import URL\nurl = {call}\n", encoding="utf-8"
-    )
+    src.write_text(source, encoding="utf-8")
     findings = scan_all(
         [pp, src],
         tmp_path,
@@ -1861,7 +1888,93 @@ def test_d003_url_create_literal_drivername_counts_as_dialect_usage(
         dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
         dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
     )
-    assert [f for f in findings if f.rule_id == "D003"] == []
+    return [f.message for f in findings if f.rule_id == "D003"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A literal ``URL.create`` drivername selects the dialect with no ``://``.
+        pytest.param(
+            "from sqlalchemy.engine import URL\n"
+            'url = URL.create(drivername="crate", host="h")\n',
+            id="url_create_drivername_kwarg",
+        ),
+        pytest.param(
+            'from sqlalchemy.engine import URL\nurl = URL.create("crate", host="h")\n',
+            id="url_create_drivername_positional",
+        ),
+        pytest.param(
+            "from sqlalchemy import create_engine\n"
+            'host = "db.example"\n'
+            'engine = create_engine(f"crate://{host}/db")\n',
+            id="fstring_url_prefix",
+        ),
+        pytest.param(
+            "from sqlalchemy import engine_from_config\n"
+            'engine_from_config({"sqlalchemy.url": "crate://db.example/catalog"})\n',
+            id="engine_from_config_inline_default_url_mapping",
+        ),
+        pytest.param(
+            "from sqlalchemy import engine_from_config as configure\n"
+            'configure({"sqlalchemy.url": "crate://db.example/catalog"})\n',
+            id="engine_from_config_alias_uses_imported_factory_identity",
+        ),
+        pytest.param(
+            "import sqlalchemy as sa\n"
+            'sa.engine_from_config({"sqlalchemy.url": "crate://db.example/catalog"})\n',
+            id="engine_from_config_module_call",
+        ),
+        pytest.param(
+            "from sqlalchemy import engine_from_config\n"
+            'configuration = {"db.url": "crate://db.example/catalog"}\n'
+            'engine_from_config(configuration=configuration, prefix="db.")\n',
+            id="engine_from_config_url_mapping_and_custom_prefix",
+        ),
+    ],
+)
+def test_d003_dialect_usage_clears_finding(tmp_path: Path, source: str) -> None:
+    assert _d003_cratedb_messages(tmp_path, source) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "from sqlalchemy import create_engine\n"
+            'dialect = "crate"\n'
+            'engine = create_engine(f"{dialect}://db.example/catalog")\n',
+            id="partial_fstring_scheme",
+        ),
+        pytest.param(
+            "from sqlalchemy.engine import URL\n"
+            'suffix = "+sqlite"\n'
+            'URL.create(drivername=f"crate{suffix}")\n',
+            id="partial_fstring_drivername",
+        ),
+        # With no ``sqlalchemy`` import anywhere in the repo, nothing loads a
+        # dialect entry point, so a ``crate://`` string is not evidence.
+        pytest.param(
+            'EXAMPLE = "crate://user:password@host/db"\n'
+            "def send_request(url):\n"
+            "    return http_client.get(url)\n",
+            id="url_without_any_sqlalchemy_import",
+        ),
+        pytest.param(
+            '"""Example connection: crate://user:password@host/db"""\n'
+            "from sqlalchemy.engine import URL\n"
+            "class Client:\n"
+            '    """Connects with crate://host/db."""\n'
+            "    def connect(self):\n"
+            '        """Open crate://host/db."""\n',
+            id="docstring_url",
+        ),
+    ],
+)
+def test_d003_non_usage_keeps_finding(tmp_path: Path, source: str) -> None:
+    assert any(
+        "sqlalchemy-cratedb" in m for m in _d003_cratedb_messages(tmp_path, source)
+    )
 
 
 def test_d003_url_constant_in_module_without_sqlalchemy_import_counts(
@@ -1929,223 +2042,6 @@ def test_d003_scheme_literal_is_matching_biased_only_for_registrants(
     flagged = [f.message for f in findings if f.rule_id == "D003"]
     assert not any("sqlalchemy-cratedb" in m for m in flagged)
     assert any("other-dialect" in m for m in flagged)
-
-
-def test_d003_partial_fstring_scheme_does_not_count_as_usage(tmp_path: Path) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "from sqlalchemy import create_engine\n"
-        'dialect = "crate"\n'
-        'engine = create_engine(f"{dialect}://db.example/catalog")\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert any(
-        f.rule_id == "D003" and "sqlalchemy-cratedb" in f.message for f in findings
-    )
-
-
-def test_d003_partial_fstring_drivername_does_not_count_as_usage(
-    tmp_path: Path,
-) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "from sqlalchemy.engine import URL\n"
-        'suffix = "+sqlite"\n'
-        'URL.create(drivername=f"crate{suffix}")\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert any(
-        f.rule_id == "D003" and "sqlalchemy-cratedb" in f.message for f in findings
-    )
-
-
-def test_d003_fstring_url_prefix_counts_as_dialect_usage(tmp_path: Path) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "from sqlalchemy import create_engine\n"
-        'host = "db.example"\n'
-        'engine = create_engine(f"crate://{host}/db")\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert [f for f in findings if f.rule_id == "D003"] == []
-
-
-def test_d003_engine_from_config_reads_inline_default_url_mapping(
-    tmp_path: Path,
-) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "from sqlalchemy import engine_from_config\n"
-        'engine_from_config({"sqlalchemy.url": "crate://db.example/catalog"})\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert [f for f in findings if f.rule_id == "D003"] == []
-
-
-def test_d003_engine_from_config_alias_uses_imported_factory_identity(
-    tmp_path: Path,
-) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "from sqlalchemy import engine_from_config as configure\n"
-        'configure({"sqlalchemy.url": "crate://db.example/catalog"})\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert [f for f in findings if f.rule_id == "D003"] == []
-
-
-def test_d003_engine_from_config_module_call_uses_url_mapping(
-    tmp_path: Path,
-) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "import sqlalchemy as sa\n"
-        'sa.engine_from_config({"sqlalchemy.url": "crate://db.example/catalog"})\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert [f for f in findings if f.rule_id == "D003"] == []
-
-
-def test_d003_engine_from_config_reads_url_mapping_and_custom_prefix(
-    tmp_path: Path,
-) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        "from sqlalchemy import engine_from_config\n"
-        'configuration = {"db.url": "crate://db.example/catalog"}\n'
-        'engine_from_config(configuration=configuration, prefix="db.")\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert [f for f in findings if f.rule_id == "D003"] == []
-
-
-def test_d003_url_without_any_sqlalchemy_import_does_not_count(
-    tmp_path: Path,
-) -> None:
-    """With no ``sqlalchemy`` import anywhere in the repo, nothing loads a
-    dialect entry point, so a ``crate://`` string is not evidence."""
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        'EXAMPLE = "crate://user:password@host/db"\n'
-        "def send_request(url):\n"
-        "    return http_client.get(url)\n",
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert any(
-        f.rule_id == "D003" and "sqlalchemy-cratedb" in f.message for f in findings
-    )
 
 
 _SDK_SQL_CLIENT_SOURCE = (
@@ -2314,36 +2210,6 @@ def test_d003_sdk_import_without_sql_client_or_scheme_is_not_evidence(
     assert any("sqlalchemy-cratedb" in m for m in flagged)
 
 
-def test_d003_docstring_url_does_not_count_as_dialect_usage(tmp_path: Path) -> None:
-    pp = tmp_path / "pyproject.toml"
-    pp.write_text(
-        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
-        encoding="utf-8",
-    )
-    src = tmp_path / "app" / "clients.py"
-    src.parent.mkdir(parents=True)
-    src.write_text(
-        '"""Example connection: crate://user:password@host/db"""\n'
-        "from sqlalchemy.engine import URL\n"
-        "class Client:\n"
-        '    """Connects with crate://host/db."""\n'
-        "    def connect(self):\n"
-        '        """Open crate://host/db."""\n',
-        encoding="utf-8",
-    )
-
-    findings = scan_all(
-        [pp, src],
-        tmp_path,
-        imported_modules={"os"},
-        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
-        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
-    )
-    assert any(
-        f.rule_id == "D003" and "sqlalchemy-cratedb" in f.message for f in findings
-    )
-
-
 def test_collect_source_usage_parses_each_file_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2355,17 +2221,15 @@ def test_collect_source_usage_parses_each_file_once(
         encoding="utf-8",
     )
 
-    original_parse = dependency_conformance.ast.parse
+    original_parse = _unused.ast.parse
     parsed: list[bytes | str] = []
 
     def count_parse(source: bytes | str, *args: object, **kwargs: object) -> object:
         parsed.append(source)
         return original_parse(source, *args, **kwargs)
 
-    monkeypatch.setattr(dependency_conformance.ast, "parse", count_parse)
-    modules, drivers, dialect_names = dependency_conformance._collect_source_usage(
-        [src]
-    )
+    monkeypatch.setattr(_unused.ast, "parse", count_parse)
+    modules, drivers, dialect_names = _unused._collect_source_usage([src])
 
     assert modules == {"requests", "sqlalchemy"}
     assert drivers == {"aiomysql"}
@@ -2385,7 +2249,7 @@ def test_scan_all_skips_dialect_metadata_without_url_schemes(
     src = tmp_path / "client.py"
     src.write_text("import requests\n", encoding="utf-8")
     monkeypatch.setattr(
-        dependency_conformance,
+        _metadata,
         "_env_distribution_metadata",
         lambda *args, **kwargs: pytest.fail(
             "no dialect URLs require entry-point metadata"
@@ -2434,7 +2298,7 @@ def test_env_dialect_entry_points_preserves_empty_registration(
         return interpreter_dist
 
     monkeypatch.setattr(
-        dependency_conformance.importlib_metadata,
+        _metadata.importlib_metadata,
         "distribution",
         interpreter_distribution,
     )
@@ -2469,7 +2333,7 @@ def test_env_dialect_entry_points_reads_installed_metadata(tmp_path: Path) -> No
         "some-cli": set(),
     }
     # Scoped to declared dependencies, undeclared distributions are not read.
-    _, scoped = dependency_conformance._env_distribution_metadata(
+    _, scoped = _metadata._env_distribution_metadata(
         [str(site)],
         include_imports=False,
         include_dialects=True,
@@ -2763,7 +2627,7 @@ def test_d003_repo_venv_does_not_mask_a_dependency_it_lacks(tmp_path: Path) -> N
 def test_d003_skips_non_utf8_source_without_crashing(tmp_path: Path) -> None:
     """A latin-1 source with a PEP 263 coding cookie is parsed (not skipped) and
     its imports counted, so a dep imported only there is not falsely flagged."""
-    from conformance.suite.checks.dependency_conformance import (
+    from conformance.suite.checks.dependency_conformance._unused import (
         _collect_top_level_imports,
     )
 

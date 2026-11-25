@@ -224,8 +224,8 @@ class _RecordingSink(AtlanObservability[Any]):
         self._flushed = flushed
         self.first_flush_done = threading.Event()
 
-    async def _flush_buffer(self, force: bool = False) -> None:
-        await super()._flush_buffer(force=force)
+    async def _flush_buffer(self) -> None:
+        await super()._flush_buffer()
         self.first_flush_done.set()
 
     def process_record(self, record: Any) -> dict[str, Any]:

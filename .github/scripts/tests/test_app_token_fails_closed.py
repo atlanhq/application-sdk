@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 import yaml
+from _workflows import REPO_ROOT, load_workflow
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 GITHUB = REPO_ROOT / ".github"
 
 FILES = sorted(
@@ -39,11 +39,15 @@ INDEX = re.compile(r"""\s*\[\s*(['"])([^'"]+)\1\s*\]""")
 
 #: Soft mints that are allowed to stay continue-on-error. None of them falls
 #: back to ORG_PAT_GITHUB:
-#: * git-deps-token / image-git-token: a failed mint leaves the token empty and
-#:   the install or image build that needs it fails visibly (FND-4740/4744).
+#: * git-deps-token: the scoped private-dependency mint, in
+#:   scoped-private-deps-token (and inline in conformance-reusable.yaml). A
+#:   failed mint leaves the token empty and the guard after it fails the job,
+#:   unless the call passes ``require: "false"``, where the install or image
+#:   build that needs it fails visibly instead (FND-4740/4744/4901,
+#:   _scoped_mint.py).
 #: * stale.yml app-token: falls back to the repo's own GITHUB_TOKEN, a narrower
 #:   credential, for a housekeeping job.
-SOFT_MINT_IDS = {"git-deps-token", "image-git-token"}
+SOFT_MINT_IDS = {"git-deps-token"}
 SOFT_MINT_SITES = {("stale.yml", "app-token")}
 
 
@@ -101,7 +105,7 @@ def test_no_org_pat_fallback_for_a_minted_token(path: Path) -> None:
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
 def test_app_token_mint_is_not_continue_on_error(path: Path) -> None:
-    found = soft_mints(path.name, yaml.safe_load(path.read_text()))
+    found = soft_mints(path.name, load_workflow(path))
     assert not found, (
         f"{path.name}: App-token mint(s) {found} are continue-on-error, so a "
         "broken App credential is invisible. Drop continue-on-error (FND-4652)."

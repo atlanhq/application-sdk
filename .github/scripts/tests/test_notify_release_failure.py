@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import shlex
 import subprocess
-import sys
 from pathlib import Path
 from typing import Sequence
 
+import notify_release_failure as notify
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import notify_release_failure as notify  # noqa: E402
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 RELEASE_WORKFLOWS = ("conformance-release.yml", "contract-toolkit-release.yml")

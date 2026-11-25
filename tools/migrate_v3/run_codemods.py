@@ -87,7 +87,7 @@ class RunResult:
                 count += sum(1 for c in changes if c.startswith("SKIPPED"))
         return count
 
-    def to_dict(self) -> dict:  # type: ignore[return]
+    def to_dict(self) -> dict:
         """Return a JSON-serialisable representation of the result."""
         d = asdict(self)
         d["todos_inserted"] = self.todos_inserted

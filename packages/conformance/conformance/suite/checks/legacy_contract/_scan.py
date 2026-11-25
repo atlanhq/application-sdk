@@ -16,7 +16,7 @@ Suppression
 -----------
 Pkl uses ``//`` for line comments.  The Python ``# conformance: ignore``
 infrastructure cannot be reused; the pkl-specific parser lives in
-``_directives_pkl.py``.
+``_ast_common/_directives_pkl.py``.
 
 Block-comment stripping
 -----------------------
@@ -30,9 +30,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from conformance.suite.checks._ast_common import (
+    _make_pkl_finding_suppressed,
+    _parse_pkl_directives,
+)
 from conformance.suite.schema.findings import Finding
-
-from ._directives_pkl import _make_pkl_finding_suppressed, _parse_pkl_directives
 
 # ---------------------------------------------------------------------------
 # Patterns

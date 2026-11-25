@@ -6,12 +6,13 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 
 ### How values are read
 
-Every typed variable follows the same rules:
+Every variable follows the same rules:
 
-- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured.
+- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured. This holds for string variables too (names, paths, URLs): `ATLAN_APPLICATION_NAME=` means `default`, not an empty name. Surrounding whitespace is ignored.
 - **A malformed value means the default, with a warning.** `OTEL_BATCH_SIZE=abc` or an `inf` timeout does not stop the process. It logs a warning naming the variable and the value, and uses the default. Values read at import time (most of this page) warn on stderr, because logging is not set up yet. Values read later warn through the SDK logger.
 - **Booleans:** `true`, `1`, `yes` and `on` enable. `false`, `0`, `no` and `off` disable. Matching is case-insensitive and ignores surrounding whitespace. Any other word warns and keeps the default.
 - **Choices** (for example `ATLAN_OOM_RESTART_CHECK`, `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE`): an unrecognised word warns and keeps the default.
+- **Durations** (the `ATLAN_OBSTORE_*_TIMEOUT` variables): one or more number-and-unit terms such as `30s`, `90s`, `1h 30m` or `1.5h`. Units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `M` (months) and `y`, plus their long forms. A bare number has no unit and is rejected (it warns and keeps the default), except `0`, which is accepted as zero, as the object-store client accepts it.
 
 `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` is the one exception: an explicitly empty value disables server-side cursors, as it always has.
 
@@ -30,6 +31,7 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
 | `ATLAN_DOMAIN_NAME` | `atlan.com` | Tenant domain name. |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Path for intermediate files during processing. |
+| `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` | `true` | End-of-run cleanup. Read once at worker start and pinned on each run, which keeps the value it started with on any pod. When `false`, the default `on_complete()` skips `cleanup_files()` and `cleanup_storage()`, and a worker that releases a closed run's app state keeps the local files that run's tasks tracked. The run's app-state slot is still released and its cached clients closed. |
 | `ATLAN_CLEANUP_BASE_PATHS` | _(empty)_ | Comma-separated object-store prefixes cleaned up by `cleanup_files()`. Defaults to the workflow-scoped run path when unset. |
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |
@@ -80,7 +82,7 @@ before changing either value.
 |----------|---------|-------------|
 | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`). **v2-compat fallback:** if unset, the SDK constructs the address from `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` (deprecated; remove when all deployments set `ATLAN_TEMPORAL_HOST`). |
 | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace. **v2-compat fallback:** `ATLAN_WORKFLOW_NAMESPACE`. |
-| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. See [Task-queue naming](#task-queue-naming). |
+| `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. The override is for local and CLI runs: **do not pin it in a deployed app's deploy or pool env** (`contract/app.pkl` or `atlan.yaml`) — the on-demand (`-od`) worker then polls the base queue and its retries hang (conformance rule K031). See [Task-queue naming](#task-queue-naming). |
 | `APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR` | `true` | Collect `get_outputs()` metrics and artifacts and merge them into the workflow result. Each activity carries its outputs back on its own result (`metrics` / `artifacts` on an `Output`, or a reserved `_atlan_outputs` key on a dict result, which the workflow strips from its own dict result), so they arrive whichever worker runs the activity. An activity returning anything else (e.g. `None`) cannot carry them: they are dropped with a warning. Set it on workflow **and** activity workers alike. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 
@@ -102,6 +104,8 @@ Two consequences worth internalising when writing or rewriting an AE DAG outside
 
 - **Pass the bare app name.** `derive_task_queue` adds the `atlan-` prefix. Prefixing a value that is already prefixed produces `atlan-atlan-dbt-production`, a queue nothing polls.
 - **Never invent a name for the unset case.** `atlan-default-prod` reads as a legitimate queue and reproduces the original silent hang; a literal `{app_name}` in the DAG is greppable and diagnosable in one step. That is why `ATLAN_APPLICATION_NAME`'s `default` fallback is scoped to identity uses and excluded here.
+
+**Do not pin `ATLAN_TASK_QUEUE` in a deployed app.** The chart runs an on-demand variant of the worker with `-od` appended to `ATLAN_DEPLOYMENT_NAME`, so the derivation gives it its own queue, `atlan-{app}-{deployment}-od`. An explicit `ATLAN_TASK_QUEUE` in the contract's deploy or pool `env` (or in `atlan.yaml`) overrides the derivation for both variants, so the `-od` worker polls the base queue. When a worker pod is lost, the activity rerouter moves the retry to the `-od` queue, nothing polls it, and the run hangs until its workflow timeout. Conformance rule K031 flags the pin. Setting it for a local or CLI run (`--task-queue`) is fine.
 
 Nodes that dispatch to a *different* app's queue (`atlan-publish-{deployment_name}` and friends) are legitimately not this app's queue: their `{deployment_name}` token is filled and the value is otherwise left alone.
 
@@ -158,6 +162,8 @@ unavailable the poll state is reported as *unknown*, never as zero.
 | `ATLAN_HANDLER_PORT` | `8000` | HTTP port for the handler. Fallback: `ATLAN_APP_HTTP_PORT`. |
 | `ATLAN_HEALTH_PORT` | `8081` | Port for the worker health endpoint. |
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
+| `ATLAN_HANDLER_MAX_BODY_BYTES` | `4194304` (4 MiB) | Largest request body the handler accepts on a route that reads its body whole: every route without a `File` or `Form` parameter, an app's own routes included. A larger body gets `413`, whether it declares its `Content-Length` or not; it is counted as it arrives and never read whole. Applies to the worker's handler and to the consolidated API host. A non-integer or a value below 1 is ignored with a warning. |
+| `ATLAN_HANDLER_MAX_UPLOAD_BYTES` | `536870912` (512 MiB) | Largest body accepted on a form route: `/workflows/v1/file`, or any route of the app's own (`Handler.routers()`) that declares a `File` or `Form` parameter, which is all an app does to take large uploads. The route decides, not the request's `Content-Type`. The upload is refused with `413` as soon as it passes the cap, before more of it is written to the pod's disk, and nothing is stored. Same parsing rules as `ATLAN_HANDLER_MAX_BODY_BYTES`. To accept a larger file (e.g. a multi-GB CSV), raise this on the pod that serves the route, e.g. `5368709120` for 5 GiB. There is no upper bound. The value is read once at startup, so restart the pod after changing it. It is per pod: on the consolidated API host it applies to every app that host serves. The upload is spooled to the pod's temp disk in full before it is stored, so give the pod ephemeral storage for the largest file times the concurrent uploads. Any body-size limit on the ingress in front of the pod still applies. |
 | `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
 | `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT` | `3600`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Seconds the Temporal worker waits for in-flight activities to finish on shutdown before cancelling them. |
 | `TEMPORAL_MAX_CONCURRENT_ACTIVITIES` | derived from the container's limits | Activity slots per worker. Unset or blank, the SDK derives it as `min(100, 32 × CPUs, memory limit ÷ 64 MiB)`, never below 16. CPUs are the whole CPUs the process may use: the tighter of its CPU affinity and the CFS quota (a fractional quota rounds down, never below 1). Without a quota it is the affinity count, or the node's count where there is no affinity API. The memory limit is the cgroup's, falling back to `K8S_POD_MEMORY_LIMIT`; with neither, only the CPU term applies. A half-CPU pod under 1 GiB gets 16 slots, a 1-CPU, 2 GiB pod gets 32, and a pod with no known memory limit and at least 4 usable CPUs gets 100. The worker derives this once at startup and logs the value and its inputs (a value passed to `create_worker(max_concurrent_activities=...)` wins and is logged as such), and publishes the value it runs with as the `temporal_worker_activity_slots_limit` gauge. Set this to use an exact number instead. |
@@ -304,9 +310,9 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
-| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. |
-| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. |
-| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. An invalid value logs a warning and keeps the default. |
+| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. A value that is not a duration (see [How values are read](#how-values-are-read)) warns and keeps the default, as do the other `ATLAN_OBSTORE_*_TIMEOUT` variables. |
+| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. A malformed or negative value logs a warning and keeps the default. |
+| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. A malformed or negative value logs a warning and keeps the default. |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its in-flight part file and checkpoint sidecar (`.sdk-partial/{name}.part` and `.sdk-partial/{name}.transfer-state` beside the destination), and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Interval (seconds) between in-progress heartbeat log lines during a long upload/download. `0` disables heartbeats. |
 | `ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS` | `30` | Interval (seconds) between progress marks while an activity waits on a per-destination storage lock (a second download of the same path queues behind the first). Capped at a quarter of `ATLAN_MAX_NO_PROGRESS_SECONDS` so a queued activity is never killed as stalled; floored at `1`. |
@@ -323,6 +329,23 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS` | `600` | Upper bound in seconds for one upload's asset-validation scan. The scan runs in an isolated child process (CNCT-85); past this bound the child is killed and the upload proceeds with a warning, so warn-only validation can neither stall nor crash a handoff. |
 | `ATLAN_FAULT_ISOLATION_IDLE_SECONDS` | `30` | Seconds a fault-isolation process pool (`run_fault_isolated` / `run_best_effort`, which the asset-validation scans use) keeps its spawn children after its last call finishes. Past it the children exit and their memory returns to the pod; the next call spawns afresh. `0` shuts the pool down as soon as it goes idle. Read when a pool goes idle, so a change applies from the next idle period. A value that isn't a non-negative number is ignored, with one warning. See [ADR-0017](adr/0017-native-execution-isolation.md#addendum-idle-children-are-reaped-fnd-4278). |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by the SDK's `httpx` clients when set. |
+
+---
+
+## Outbound proxy
+
+Every SDK connection that can go through an egress proxy resolves it with one rule (`application_sdk/_proxy.py`): the `BaseClient` HTTP transport, the obstore object-store clients, the Temporal connection and the S3 bucket-region lookup.
+
+1. The proxy for a connection is its scheme's variable, then `ALL_PROXY`: `HTTPS_PROXY` for TLS connections (object stores, a TLS Temporal endpoint, `https://` requests), `HTTP_PROXY` for plaintext ones. `HTTP_PROXY` is never used for a TLS connection.
+2. A host matching `NO_PROXY` connects directly: an exact host, a domain suffix (`.example.com` or `example.com` match subdomains), or `*` for every host. A port on the host is ignored. obstore receives the raw list as `proxy_excludes` and matches it per request itself.
+3. Only the process environment is read. The lowercase spelling (`https_proxy`) wins over the uppercase one. Operating-system proxy settings (macOS System Settings, the Windows registry) are ignored, so a laptop resolves the same way a pod does.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HTTPS_PROXY` | _(empty)_ | Proxy URL (`http://[user[:password]@]host:port`) for TLS connections. |
+| `HTTP_PROXY` | _(empty)_ | Proxy URL for plaintext connections. |
+| `ALL_PROXY` | _(empty)_ | Proxy URL for any connection whose scheme variable is unset. |
+| `NO_PROXY` | _(empty)_ | Comma-separated hosts and domain suffixes that connect directly. |
 
 ---
 
@@ -380,6 +403,7 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `OTEL_SEMCONV_STABILITY_OPT_IN` | `http` | Read by OTel instrumentation, once per process. The handler service sets it to `http` when unset, so HTTP metrics use the stable names (`http_server_request_duration_seconds`, in seconds). An explicit value replaces that default: keep `http` in it (or `http/dup` to emit both stable and legacy names), or the legacy `http_server_duration_milliseconds` comes back. |
 
 | `OTEL_WF_NODE_NAME` | _(empty)_ | Kubernetes node name for workflow telemetry. |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | `30` | Timeout for OTLP export operations. |

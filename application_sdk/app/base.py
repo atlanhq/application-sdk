@@ -11,9 +11,9 @@ import threading
 import types
 import warnings
 from abc import ABC
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import (
@@ -22,6 +22,7 @@ from typing import (
     ClassVar,
     Literal,
     Never,
+    ParamSpec,
     Sequence,
     TypeVar,
     cast,
@@ -34,10 +35,12 @@ from temporalio import activity, workflow
 from temporalio.exceptions import ActivityError, FailureError
 from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 
-from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
+from application_sdk import _deprecation
+from application_sdk._context_errors import (  # re-exported; defined in the api distribution
     AppContextError,
 )
 from application_sdk._runtime.offload import run_best_effort, run_in_thread
+from application_sdk.app._app_config_validation import validate_app_config
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
     _build_entry_points,
@@ -45,6 +48,7 @@ from application_sdk.app._ep_registration import (
     _register_tasks,
     _scan_entrypoints,
 )
+from application_sdk.app._run_scratch import run_scratch_dir as _run_scratch_dir
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
     ObjectStoreNotConfiguredError,
@@ -56,7 +60,7 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointDeclarationError,
     EntryPointMetadata,
     canonical_workflow_type,
     workflow_type_class_segment,
@@ -69,6 +73,7 @@ from application_sdk.constants import (
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
     COMMIT_SHA,
     LOCAL_WORKFLOW_ID,
+    _run_prefix,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -76,6 +81,10 @@ from application_sdk.contracts.cleanup import (
     CleanupOutput,
     StorageCleanupInput,
     StorageCleanupOutput,
+)
+from application_sdk.contracts.fetch_failures import (
+    MergeFetchFailuresInput,
+    MergeFetchFailuresOutput,
 )
 from application_sdk.contracts.skipped_records import (
     MergeSkippedRecordsInput,
@@ -92,8 +101,9 @@ from application_sdk.contracts.storage import (
     VerifyRefsOutput,
 )
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
-from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, ErrorCode
+from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -237,6 +247,14 @@ async def _warn_on_invalid_transformed_assets(
     emitted from before the fold-in. This hook does **not** additionally emit
     ``ARTIFACT_VALIDATION_EVENT``: one hand-off, one row.
 
+    **Only a bounded outcome comes back from the scan** (FND-4088). The full
+    report is unbounded — every failure, twice — so the event's attribute map and
+    the capped ``format_report()`` text are built inside the isolated child by
+    :func:`~application_sdk.validation.assets.summarize_asset_validation`, and only
+    that :class:`~application_sdk.validation.assets.AssetValidationOutcome` is
+    pickled back. A batch that fails on every record costs this worker the cap,
+    not the batch.
+
     The scan runs via
     :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
     It keeps the event loop and the activity's auto-heartbeat free while a large
@@ -313,30 +331,47 @@ async def _warn_on_invalid_transformed_assets(
     )
 
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        AssetArtifactReport,
         AssetBatchScope,
         ModelSource,
-        asset_validation_event_fields,
+        summarize_asset_validation,
         validate_artifact,
         validate_assets_as_artifact,
     )
 
+    # One path is ``upload``; a list is every declared part of an ``upload_refs``
+    # fan-in (see the docstring).
+    scope = AssetBatchScope(
+        upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
+        parts_validated=len(targets),
+        parts_not_local=len(remote),
+    )
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
+    # summarize_asset_validation builds the event and the capped report text in
+    # the child, so only that bounded outcome is pickled back into this worker,
+    # never the full report (FND-4088).
     if len(targets) == 1 and check_referential_integrity and not creation_rules:
-        report = await run_best_effort(
+        outcome = await run_best_effort(
+            summarize_asset_validation,
             validate_artifact,
             targets[0],
             ModelSource(model=Asset),
+            app_name=app_name,
+            scope=scope,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
             label="Transformed-asset validation",
             logger=_task_logger,
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
         )
     else:
-        report = await run_best_effort(
+        outcome = await run_best_effort(
+            summarize_asset_validation,
             validate_assets_as_artifact,
             targets,
+            app_name=app_name,
+            scope=scope,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
             check_referential_integrity=check_referential_integrity,
             creation_rules=creation_rules,
             label="Transformed-asset validation",
@@ -344,14 +379,14 @@ async def _warn_on_invalid_transformed_assets(
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
         )
 
-    if report is None:
+    if outcome is None:
         # run_best_effort swallowed a native crash / timeout / error (it already
         # logged a warning). The "nothing to validate" cases (flag off, not a
         # transformed/ subtree) already returned above, so reaching here with
         # None means the scan itself failed — no counts to emit.
         return
 
-    if not isinstance(report, AssetArtifactReport):
+    if outcome.event_fields is None:
         # The wrapper resolved to an outcome without running the cell — it never
         # raises, so a broken plug-in or an unreadable artifact arrives as a plain
         # report instead of an exception. There are no asset-vocabulary counts to
@@ -361,40 +396,23 @@ async def _warn_on_invalid_transformed_assets(
         _task_logger.warning(
             "Transformed-asset validation produced no counts (%s: %s); "
             "handoff continues",
-            report.outcome,
-            report.reason or "no reason recorded",
+            outcome.outcome,
+            outcome.reason or "no reason recorded",
         )
         return
 
     # Emit the structured outcome on every validated upload (clean + flagged) so
     # the row is queryable and gives a denominator. Wrapped: a defect in the
-    # emit path (e.g. matrix encoding) must never break a real handoff.
+    # emit path must never break a real handoff.
     try:
-        assets = report.assets
-        flagged = not assets.ok
-        # The summary walks every failure (a broken batch can carry millions), so
-        # the projection is built off the event loop to keep heartbeats flowing.
-        fields = await run_in_thread(
-            asset_validation_event_fields,
-            assets,
-            app_name=app_name,
-            max_items=_VALIDATION_MATRIX_MAX_ROWS,
-            scope=AssetBatchScope(
-                # One path is ``upload``; a list is every declared part of an
-                # ``upload_refs`` fan-in (see the docstring).
-                upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
-                parts_validated=len(targets),
-                parts_not_local=len(remote),
-            ),
-        )
-        _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
-        if flagged:
+        _task_logger.info(ASSET_VALIDATION_EVENT, **outcome.event_fields)
+        if outcome.flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
                 "(handoff continues): %s",
-                assets.format_report(max_items=_VALIDATION_MATRIX_MAX_ROWS),
+                outcome.flagged_report,
             )
-    except Exception:  # noqa: BLE001 — defense-in-depth must never break the upload
+    except Exception:  # defense-in-depth must never break the upload
         _task_logger.warning(
             "Transformed-asset validation outcome emission failed (handoff continues)",
             exc_info=True,
@@ -428,6 +446,7 @@ def _tag_ref_store(
 
 # Type variable for require() method
 T = TypeVar("T")
+_P = ParamSpec("_P")
 HT = TypeVar("HT", bound=HeartbeatDetails)
 
 # BLDX-878: inter-app calls deactivated pending review.
@@ -483,8 +502,7 @@ def _run_started_at_epoch() -> float:
     """
     try:
         start_time = workflow.info().start_time
-    # conformance: ignore[E004] probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
         return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
     return start_time.timestamp() if start_time is not None else 0.0
 
@@ -527,7 +545,7 @@ def _format_build_identity() -> str:
 _BUILD_IDENTITY = _format_build_identity()
 
 
-def _safe_log(level: str, message: str, **attrs: Any) -> None:
+def _safe_log(level: str, message: str, **attrs: object) -> None:
     """Log using Temporal's workflow logger.
 
     Always runs in Temporal workflow context.
@@ -563,15 +581,19 @@ def _safe_log(level: str, message: str, **attrs: Any) -> None:
 # =============================================================================
 
 
-class AppError(_NewAppError):
+@dataclass(kw_only=True)
+class AppError(_LegacyErrorCodeMixin, _NewAppError):
     """Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
 
     Back-compat shim. Accepts a positional ``message`` argument and the legacy
     ``error_code`` keyword to avoid breaking existing raise sites.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     code: ClassVar[str] = "APP"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("app_name", "app"),
+        ("run_id", "run_id"),
+    )
 
     def __init__(
         self,
@@ -591,29 +613,12 @@ class AppError(_NewAppError):
         _NewAppError.__init__(
             self, message=message, cause=cause, app_name=app_name, run_id=run_id
         )
-        self._legacy_error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.app_name:
-            parts.append(f"app={self.app_name}")
-        if self.run_id:
-            parts.append(f"run_id={self.run_id}")
-        if self.cause:
-            parts.append(f"caused_by={self.cause}")
-        return " | ".join(parts)
+        self._set_legacy_error_code(error_code)
 
 
+@dataclass(kw_only=True)
 class NonRetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 
     Use this for failures that are deterministic and will never succeed on retry:
     - Authentication failures (invalid credentials)
@@ -632,12 +637,35 @@ class NonRetryableError(AppError):
             )
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_NON_RETRYABLE
     default_retryable: ClassVar[bool] = False
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
+        _deprecation.warn_deprecated(
+            "NonRetryableError",
+            "a typed application_sdk.errors.AppError subclass with "
+            "default_retryable = False",
+            "4.0.0",
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._set_legacy_error_code(error_code)
 
+
+@dataclass(kw_only=True)
 class RetryableError(AppError):
-    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.
+    """Deprecated: use a typed ``AppError`` subclass with ``default_retryable = True`` — removed in v4.0.0.
 
     Extend this when raising an error directly from an ``@entrypoint`` method
     that signals a *transient* failure — one where retrying the entire workflow
@@ -665,8 +693,30 @@ class RetryableError(AppError):
             ...
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_ERROR
     default_retryable: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        app_name: str | None = None,
+        run_id: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        # Warns when an error is raised, not when a subclass is defined, so
+        # importing an app that subclasses this never warns. Replaces the
+        # generic AppError notice with one naming this class.
+        _deprecation.warn_deprecated(
+            "RetryableError",
+            "a typed application_sdk.errors.AppError subclass with "
+            "default_retryable = True",
+            "4.0.0",
+        )
+        _NewAppError.__init__(
+            self, message=message, cause=cause, app_name=app_name, run_id=run_id
+        )
+        self._set_legacy_error_code(error_code)
 
 
 # =============================================================================
@@ -674,10 +724,19 @@ class RetryableError(AppError):
 # =============================================================================
 
 
-# Class-level app state storage shared by all App subclasses.
-# Keyed by workflow_id to isolate state between different app executions.
-_app_state: dict[str, dict[str, Any]] = {}
+#: In-memory app state shared by all App subclasses, one slot per run:
+#: ``(workflow_id, run_id) -> {key: value}``. Process-local: each worker holds
+#: the slots of the runs whose tasks it executed, so a run's state on one
+#: worker is invisible to another. A slot is released, and every value in it
+#: closed, by the worker's run-state sweeper once Temporal reports the run
+#: closed (``execution._temporal.credential_sweep``), and the rest at worker
+#: shutdown — on every worker, not only the one that ran the workflow.
+_app_state: dict[tuple[str, str], dict[str, Any]] = {}
 _app_state_lock = threading.Lock()
+
+#: Bound on closing one app-state value when its run's slot is released, so a
+#: client whose close hangs cannot stall the sweeper.
+_STATE_VALUE_CLOSE_TIMEOUT_SECONDS = 10.0
 
 
 def _get_execution_id_from_task() -> str:
@@ -783,6 +842,226 @@ async def _remove_run_credential_dirs(run: tuple[str, str]) -> dict[str, bool]:
     return results
 
 
+def _runs_with_app_state() -> list[tuple[str, str]]:
+    """The runs that still hold an app-state slot on this worker."""
+    with _app_state_lock:
+        return list(_app_state)
+
+
+def _run_close_in_own_thread(closer: Callable[[], object]) -> "asyncio.Future[object]":
+    """Run a synchronous ``close()`` on a thread of its own; resolve when done.
+
+    Not on the shared blocking pool (``run_in_thread``): a close that hangs
+    past ``_STATE_VALUE_CLOSE_TIMEOUT_SECONDS`` keeps its thread after the
+    await gives up, and on the pool every such hang would take a worker away
+    from the tasks the pool serves. A daemon thread of its own costs nothing
+    to leave behind, and does not hold up interpreter exit.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[object] = loop.create_future()
+
+    def _settle(outcome: object, error: BaseException | None) -> None:
+        if future.done():
+            return  # the await already gave up on it
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(outcome)
+
+    def _run() -> None:
+        outcome: object = None
+        error: BaseException | None = None
+        try:
+            outcome = closer()
+        # conformance: ignore[E004] the outcome is handed back to the awaiting coroutine, which logs it
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the event loop through the future
+            error = exc
+        try:
+            loop.call_soon_threadsafe(_settle, outcome, error)
+        except RuntimeError:  # conformance: ignore[E002] the event loop has closed (worker exit), so nothing awaits this close any more
+            pass
+
+    threading.Thread(target=_run, name="app-state-close", daemon=True).start()
+    return future
+
+
+async def _close_state_value(value: object) -> None:
+    """Close one app-state value: ``aclose()`` if it has one, else ``close()``.
+
+    A value with neither is left alone. A synchronous ``close()`` runs on a
+    thread of its own, since a client's close may block on a socket. Each
+    close is awaited for at most ``_STATE_VALUE_CLOSE_TIMEOUT_SECONDS``.
+    """
+    if isinstance(value, type):
+        return  # a class object's close is an unbound method, not this value's
+    closer = getattr(value, "aclose", None)
+    if not callable(closer):
+        closer = getattr(value, "close", None)
+    if not callable(closer):
+        return
+
+    async def _close() -> None:
+        if inspect.iscoroutinefunction(closer):
+            result: object = await closer()
+        else:
+            result = await _run_close_in_own_thread(closer)
+        if inspect.isawaitable(result):
+            await result
+
+    await asyncio.wait_for(_close(), timeout=_STATE_VALUE_CLOSE_TIMEOUT_SECONDS)
+
+
+#: Releases started and not yet finished. A release removes its slot from
+#: ``_app_state`` before it does the work, so a shutdown that cancels the
+#: sweeper mid-release would otherwise lose that slot: ``release_all_runs``
+#: waits for these before it releases what is left.
+_releases_in_flight: set["asyncio.Task[None]"] = set()
+
+
+async def _release_run_state(run: tuple[str, str]) -> None:
+    """Release *run*'s app-state slot on this worker.
+
+    Removes the slot, deletes the local files of the ``FileReference`` objects
+    it tracked (when cleanup is enabled, as for ``cleanup_files``), and closes
+    every value that has ``aclose()`` or ``close()`` — a cached client, a
+    connection pool. Called by the worker's run-state sweeper once Temporal
+    reports the run closed, and for every remaining run at worker shutdown.
+    Each failure is logged and skipped; the slot is gone either way.
+
+    The work runs as its own task, shielded: cancelling the caller (the
+    sweeper, at shutdown) leaves it running, and ``_drain_state_releases``
+    waits for it.
+    """
+    with _app_state_lock:
+        slot = _app_state.pop(run, None)
+    if not slot:
+        return
+    release = asyncio.create_task(_release_slot(slot), name="app-state-release")
+    _releases_in_flight.add(release)
+    release.add_done_callback(_releases_in_flight.discard)
+    await asyncio.shield(release)
+
+
+async def _drain_state_releases() -> None:
+    """Wait for every release already under way to finish."""
+    while _releases_in_flight:
+        await asyncio.gather(*list(_releases_in_flight), return_exceptions=True)
+
+
+async def _release_slot(slot: dict[str, Any]) -> None:
+    """Delete a removed slot's tracked local files and close its values."""
+    from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        TRACKED_FILE_REFS_KEY,
+    )
+
+    tracked_refs = slot.get(TRACKED_FILE_REFS_KEY) or ()
+    if tracked_refs and env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True):
+        for ref in tracked_refs:
+            local_path: str | None = getattr(ref, "local_path", None)
+            if not local_path:
+                continue
+            for path in (local_path, local_path + ".sha256"):
+                try:
+                    if os.path.isdir(path):
+                        await run_in_thread(shutil.rmtree, path)
+                    elif os.path.lexists(path):
+                        await run_in_thread(os.remove, path)
+                except OSError:
+                    _task_logger.warning(
+                        "Failed to delete a tracked local path of a closed run",
+                        exc_info=True,
+                    )
+
+    closed: set[int] = set()
+    for key, value in slot.items():
+        if key == TRACKED_FILE_REFS_KEY or value is None or id(value) in closed:
+            continue
+        closed.add(id(value))
+        try:
+            await _close_state_value(value)
+        # conformance: ignore[E004] releasing a closed run's state must outlive one bad value; logged, the rest are still closed
+        except Exception:
+            _task_logger.warning(
+                "Failed to close app state value %r of a closed run",
+                key,
+                exc_info=True,
+            )
+
+
+def _cleanup_ref_key(ref: FileReference) -> tuple[object, ...]:
+    """Identity of the stored object(s) a ref names, for cleanup dedup."""
+    return (ref.storage_path, ref.store, ref.tier, ref.manifest_path)
+
+
+def _merge_cleanup_refs(
+    tracked: Iterable[FileReference], carried: Iterable[FileReference]
+) -> list[FileReference]:
+    """Combine this worker's tracked refs with the workflow's carried ones.
+
+    Keeps one ref per stored object, so a key reaching ``cleanup_storage`` by
+    both routes is deleted and counted once. Tracked refs come first.
+    """
+    merged: dict[tuple[object, ...], FileReference] = {}
+    for ref in (*tracked, *carried):
+        merged.setdefault(_cleanup_ref_key(ref), ref)
+    return list(merged.values())
+
+
+class _RunStoredRefs:
+    """Stored refs a run's workflow read off its tasks' inputs and results.
+
+    Lives on the workflow side, one per run. Built only from task inputs and
+    results, which come from workflow history, so a replay on any worker
+    rebuilds the same set. ``cleanup_storage`` gets them through
+    ``StorageCleanupInput.file_refs``: the refs a task on another worker
+    tracked are otherwise invisible to the worker that runs the cleanup.
+    """
+
+    def __init__(self) -> None:
+        self._refs: dict[tuple[object, ...], FileReference] = {}
+
+    def record(self, refs: Iterable[FileReference]) -> None:
+        """Keep each ref that names a stored object, once per object.
+
+        The copy kept drops ``local_path`` (a path on the worker that made
+        it) and turns ``auto_materialize`` off, so ``cleanup_storage`` is
+        never handed a download.
+        """
+        for ref in refs:
+            if not ref.storage_path:
+                continue
+            key = _cleanup_ref_key(ref)
+            if key not in self._refs:
+                self._refs[key] = ref.model_copy(
+                    update={"local_path": None, "auto_materialize": False}
+                )
+
+    def for_cleanup(self) -> list[FileReference]:
+        """The refs to pass to ``cleanup_storage``, bounded for the payload.
+
+        Durable refs come first, so a cut never drops the ref that keeps a
+        ``TRANSIENT`` alias of its key from being deleted. A cut is logged.
+        """
+        from application_sdk.contracts.cleanup import (  # noqa: PLC0415 — cold path: once per run, at cleanup
+            STORAGE_CLEANUP_FILE_REFS_MAX,
+        )
+
+        refs = sorted(
+            self._refs.values(), key=lambda r: r.tier == StorageTier.TRANSIENT
+        )
+        if len(refs) > STORAGE_CLEANUP_FILE_REFS_MAX:
+            # _safe_log takes no format args; the counts go in the message.
+            _safe_log(
+                "warning",
+                f"Passing {STORAGE_CLEANUP_FILE_REFS_MAX} of the run's "
+                f"{len(refs)} stored refs to cleanup_storage; TRANSIENT objects "
+                "among those left out are deleted only where the worker that "
+                "tracked them runs the cleanup",
+            )
+            refs = refs[:STORAGE_CLEANUP_FILE_REFS_MAX]
+        return refs
+
+
 class TaskStateAccessor:
     """Accessor for app state from within a task (not a @task method on an App).
 
@@ -797,18 +1076,20 @@ class TaskStateAccessor:
     """
 
     def get(self, key: str) -> Any | None:
-        """Get in-memory state for the current app execution."""
-        workflow_id = _get_execution_id_from_task()
+        """Get in-memory state for the current run on this worker."""
+        run = _current_run_key()
         with _app_state_lock:
-            return _app_state.get(workflow_id, {}).get(key)
+            return _app_state.get(run, {}).get(key)
 
-    def set(self, key: str, value: Any) -> None:
-        """Set in-memory state for the current app execution."""
-        workflow_id = _get_execution_id_from_task()
+    def set(self, key: str, value: object) -> None:
+        """Set in-memory state for the current run on this worker.
+
+        A value with ``aclose()`` or ``close()`` is closed when the run's slot
+        is released, after the run has closed.
+        """
+        run = _current_run_key()
         with _app_state_lock:
-            if workflow_id not in _app_state:
-                _app_state[workflow_id] = {}
-            _app_state[workflow_id][key] = value
+            _app_state.setdefault(run, {})[key] = value
 
 
 class AppStateAccessor:
@@ -818,8 +1099,12 @@ class AppStateAccessor:
         self.app_state.get(key)
         self.app_state.set(key, value)
 
-    State persists across task calls within the same app execution but
-    is NOT persisted externally - if the worker restarts, state is lost.
+    State persists across task calls of the same run on the same worker. It
+    is NOT shared between workers and NOT persisted externally: a task that
+    runs on another worker, or after a restart, sees an empty slot. Once the
+    run has closed, each worker releases its slot and closes every value with
+    ``aclose()`` or ``close()`` (a cached client, say), so do not store an
+    object another run still uses.
     """
 
     def __init__(self, app: "App") -> None:
@@ -839,7 +1124,7 @@ class AppStateAccessor:
         """
         return self._app.get_app_state(key)
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
 
         Args:
@@ -913,8 +1198,8 @@ def _require_aliases_not_expired(cls: type, app_name: str) -> None:
     )
 
     if not all(part.isdigit() for part in removal.split(".")):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types_removal_version must "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types_removal_version must "
             f"be a dotted numeric version, got {removal!r}."
         )
     from packaging.version import (  # noqa: PLC0415 — cheap, lazy like __version__
@@ -922,8 +1207,8 @@ def _require_aliases_not_expired(cls: type, app_name: str) -> None:
     )
 
     if Version(__version__) >= Version(removal):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types declared with removal "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types declared with removal "
             f"version {removal}, and the installed SDK is {__version__}. The "
             f"aliases have expired — delete the drained "
             f"legacy_workflow_types entries, or push "
@@ -1218,17 +1503,19 @@ class App(ABC):
     #: app registered by an SDK older than this attribute).
     _app_build_id: ClassVar[str] = ""
     _app_metadata: AppMetadata
-    _original_run: Callable[..., Any]
     _input_type: type[Input]
     _output_type: type[Output]
 
     # Set by the execution layer before run() is called
     _context: AppContext | None = None
+    # Set by the generated workflow for each run: the stored refs read off
+    # every task's input and result, for cleanup_storage. None outside one.
+    _run_stored_refs: "_RunStoredRefs | None" = None
     # BLDX-878: inter-app calls deactivated pending review.
     # _client: "WorkflowAppClient | None" = None
     _task_context: "TaskExecutionContext | None" = None
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """Automatically register App subclasses.
 
         This is called when a class inherits from App. It:
@@ -1243,6 +1530,12 @@ class App(ABC):
         - No valid entry points or run() with proper types found
         """
         super().__init_subclass__(**kwargs)
+
+        # Before the registered-skip: a template or abstract base reports its
+        # own bad declarations too. Warn-only until v4.0.0. Not in the
+        # workflow sandbox, which re-imports app modules on every run.
+        if not workflow.unsafe.in_sandbox():
+            validate_app_config(cls)
 
         # Skip if already registered (check own __dict__ only, not inherited)
         if cls.__dict__.get("_app_registered", False):
@@ -1289,6 +1582,8 @@ class App(ABC):
             # contract and must not propagate to subclasses through the MRO.
             legacy_workflow_types=cls.__dict__.get("legacy_workflow_types", {}),
         )
+        if workflow.unsafe.in_sandbox():
+            _install_workflow_classes(cls)
 
     @property
     def context(self) -> AppContext:
@@ -1335,6 +1630,39 @@ class App(ABC):
         return self.context.run_id
 
     @property
+    def run_scratch_dir(self) -> str:
+        """The run's local scratch directory, removed when the run ends.
+
+        ``{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}``,
+        e.g. ``./local/tmp/artifacts/apps/my-app/workflows/wf-123/run-456``.
+        Use it instead of ``tempfile.gettempdir()`` for files a run writes
+        locally:
+
+        * It is the same string in ``run()`` and in every ``@task`` of the
+          same run, so a path the workflow builds and passes to a task is the
+          one the task writes to.
+        * ``cleanup_files`` removes it at the end of the run (the default
+          ``on_complete``), so nothing is left on the worker's disk.
+        * It is safe in workflow code: it is computed from the run's
+          identity with string-only ``os.path`` calls, never from
+          ``tempfile``, the filesystem or the clock, which the workflow
+          sandbox refuses.
+        * It sits under ``TEMPORARY_PATH``, so a file under it maps to an
+          object-store key the way every ``./local/tmp/...`` path does.
+
+        The directory is not created; ``os.makedirs(..., exist_ok=True)`` it
+        in a task before writing. Do not create it in ``run()``: workflow
+        code must not touch the filesystem.
+
+        Raises:
+            AppContextError: If accessed outside ``run()`` or a ``@task``.
+            RunTempDirEscapeError: If the run's workflow ID would place the
+                directory outside ``TEMPORARY_PATH`` (e.g. ``..`` segments).
+        """
+        context = self.context
+        return _run_scratch_dir(context.app_name, context.workflow_id, context.run_id)
+
+    @property
     def correlation_id(self) -> str:
         """Get the correlation ID."""
         return self.context.correlation_id
@@ -1347,7 +1675,7 @@ class App(ABC):
     # Task-only methods (raise AppContextError if called outside @task methods)
     # =========================================================================
 
-    def heartbeat(self, *details: Any) -> None:
+    def heartbeat(self, *details: object) -> None:
         """Send a heartbeat with optional progress details.
 
         Only available in @task methods.
@@ -1403,10 +1731,10 @@ class App(ABC):
 
     async def run_in_thread(
         self,
-        func: Callable[..., Any],
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        func: Callable[_P, T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> T:
         """Run a blocking function in a thread pool.
 
         Only available in @task methods. The offload is automatically wrapped in
@@ -1552,27 +1880,26 @@ class App(ABC):
         Raises:
             AppContextError: If called outside a @task method.
         """
-        execution_id = self._get_current_execution_id()
+        run = _current_run_key()
         with _app_state_lock:
-            return _app_state.get(execution_id, {}).get(key)
+            return _app_state.get(run, {}).get(key)
 
-    def set_app_state(self, key: str, value: Any) -> None:
+    def set_app_state(self, key: str, value: object) -> None:
         """Set in-memory state for the current app execution.
 
         Only available inside @task methods.
 
         Args:
             key: State key to store.
-            value: Value to store (any Python object).
+            value: Value to store (any Python object). One with ``aclose()``
+                or ``close()`` is closed when the run's slot is released.
 
         Raises:
             AppContextError: If called outside a @task method.
         """
-        execution_id = self._get_current_execution_id()
+        run = _current_run_key()
         with _app_state_lock:
-            if execution_id not in _app_state:
-                _app_state[execution_id] = {}
-            _app_state[execution_id][key] = value
+            _app_state.setdefault(run, {})[key] = value
 
     def _get_current_execution_id(self) -> str:
         """Get the execution ID from current task context."""
@@ -1773,7 +2100,9 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
+        run_prefix = _run_prefix(
+            self._app_name, self.context.workflow_id, self.context.run_id
+        )
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -2474,6 +2803,10 @@ class App(ABC):
 
         1. **Tracked ``TRANSIENT``-tier refs** (always): auto-persisted
            intermediary files (``StorageTier.TRANSIENT``, the default).
+           Tracked means the refs this worker's tasks took or returned, plus
+           ``input.file_refs`` — the stored refs the workflow read off every
+           task's input and result, whichever worker ran it. The default
+           ``on_complete`` fills it in.
            Each key and its ``.sha256`` sidecar are deleted, and a directory
            ref's manifest (``manifest_path``) with it.
            ``RETAINED`` and ``PERSISTENT`` tier refs are skipped, and so is
@@ -2535,8 +2868,13 @@ class App(ABC):
                     )
                     return False
 
-        # 1. Delete tracked transient objects.
-        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY) or ()
+        # 1. Delete tracked transient objects: the refs this worker tracked,
+        # plus the refs the workflow read off every task's input and result
+        # (``input.file_refs``), which cover the tasks that ran on other
+        # workers. One entry per stored object, this worker's copy first.
+        tracked_refs = _merge_cleanup_refs(
+            TaskStateAccessor().get(TRACKED_FILE_REFS_KEY) or (), input.file_refs
+        )
 
         # Keys a RETAINED/PERSISTENT ref in this run points at. A TRANSIENT ref
         # can alias one of them (an app that hand-builds a TRANSIENT ref on a key
@@ -2720,12 +3058,57 @@ class App(ABC):
             key=merged.key, kept=merged.kept, truncated=truncated
         )
 
+    # A bounded merge of at most MAX_SKIPPED_RECORDS lines, as above.
+    @task(timeout_seconds=300, retry_max_attempts=3, heartbeat_timeout_seconds=60)
+    async def merge_fetch_failures(
+        self, input: MergeFetchFailuresInput
+    ) -> MergeFetchFailuresOutput:
+        """Framework task: merge the run's fetch-failure parts into one artifact.
+
+        Scheduled by the workflow after ``run()`` returns, and only when the
+        run's ``fetch-failures`` metric is above zero. Concatenates the
+        per-activity parts under ``{run prefix}/fetch-failures/parts/`` into
+        ``{run prefix}/fetch-failures.ndjson`` (capped at
+        ``MAX_SKIPPED_RECORDS`` lines), adds it as the run artifact
+        ``fetch-failures``, and records ``fetch-failures-truncated`` for every
+        failure that was counted but neither kept nor lost to a storage
+        failure. See ``application_sdk.outputs.fetch_failures``.
+        """
+        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            build_output_path,
+        )
+        from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: as above
+            run_temp_dir,
+        )
+        from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+        from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
+            FETCH_FAILURES_LAYOUT,
+            FETCH_FAILURES_TRUNCATED_METRIC,
+        )
+        from application_sdk.outputs.skipped import merge_run_log  # noqa: PLC0415
+
+        merged = await merge_run_log(
+            build_output_path(), run_temp_dir(), FETCH_FAILURES_LAYOUT
+        )
+        truncated = max(0, input.failure_count - input.unpersisted_count - merged.kept)
+        if truncated:
+            get_outputs().add_metric(
+                Metric(name=FETCH_FAILURES_TRUNCATED_METRIC, value=truncated)
+            )
+        return MergeFetchFailuresOutput(
+            key=merged.key, kept=merged.kept, truncated=truncated
+        )
+
     async def on_complete(self) -> None:
         """Lifecycle hook called after ``run()`` finishes (success or failure).
 
         The default implementation deletes local files produced during the run
         when cleanup is enabled (``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``
-        not set to a falsy value).
+        not set to a falsy value). Inside a workflow the worker reads that
+        variable once at start and pins its value on each run at the run's
+        first workflow task, so a run replays with the cleanup it started
+        with whatever the replaying pod's value is. Called outside a
+        workflow, it reads the variable.
 
         Override this method to add custom post-run logic.  Call
         ``await super().on_complete()`` to preserve the default file cleanup::
@@ -2734,14 +3117,19 @@ class App(ABC):
                 await self.send_notification()
                 await super().on_complete()
         """
-        cleanup_enabled = env_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", True)
-        if cleanup_enabled:
+        # Passed through so the sandbox sees the module the worker's
+        # RunFlagsInterceptor set the run's flags in, not a fresh copy.
+        with workflow.unsafe.imports_passed_through():
+            from application_sdk.execution._temporal.run_flags import (  # noqa: PLC0415 — circular: execution imports app.base
+                cleanup_enabled,
+            )
+
+        if cleanup_enabled():
 
             async def _local_cleanup() -> None:
                 try:
                     await self.cleanup_files(CleanupInput())
-                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                except Exception:
+                except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
                         "cleanup_files task failed during on_complete",
@@ -2750,9 +3138,13 @@ class App(ABC):
 
             async def _storage_cleanup() -> None:
                 try:
-                    await self.cleanup_storage(StorageCleanupInput())
-                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-                except Exception:
+                    stored = self._run_stored_refs
+                    await self.cleanup_storage(
+                        StorageCleanupInput(
+                            file_refs=stored.for_cleanup() if stored else []
+                        )
+                    )
+                except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                     _safe_log(
                         "warning",
                         "cleanup_storage task failed during on_complete",
@@ -2773,8 +3165,7 @@ class App(ABC):
         # tests, and any subclass that calls super() outside a workflow).
         try:
             await AtlanObservability.flush_all()
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
@@ -2791,6 +3182,11 @@ class App(ABC):
 # calls (e.g. tests or worker re-creation) and never registers the same Temporal
 # workflow twice.
 _workflow_class_cache: dict[tuple[type, str, str], type] = {}
+
+_EARLY_RUN_BINDING_PATCH = "atlan-sdk/early-run-binding"
+"""``workflow.patched`` marker recorded by every run whose generated
+``__init__`` binds the App instance to the run (FND-5219). A history without it
+was written before that change and binds in ``_run``, as it did then."""
 
 
 def _validate_interaction_signature(
@@ -2823,7 +3219,7 @@ def _validate_interaction_signature(
     try:
         hints: dict[str, Any] = get_type_hints(fn)
     # conformance: ignore[E004,E009] get_type_hints probe; broad catch intentional — falls back to __annotations__ when forward refs are unresolvable
-    except Exception:
+    except Exception:  # noqa: BLE001 — get_type_hints probe; falls back to __annotations__ (see directive above)
         hints = getattr(fn, "__annotations__", {})
 
     if kind == "signal":
@@ -2990,11 +3386,11 @@ def _collect_interaction_relays(
         if signal_defn is not None:
             # Rebind the definition's fn to the relay so Temporal's _bind_method
             # passes wf_self (not an App instance) as the first arg.
-            relay.__temporal_signal_definition = replace(  # type: ignore[attr-defined]
+            relay.__temporal_signal_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 signal_defn, fn=relay
             )
         elif query_defn is not None:
-            relay.__temporal_query_definition = replace(  # type: ignore[attr-defined]
+            relay.__temporal_query_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 query_defn, fn=relay
             )
         else:
@@ -3004,7 +3400,7 @@ def _collect_interaction_relays(
             if update_defn.validator is not None:
                 new_validator = _build_validator_relay(update_defn.validator)
 
-            relay._defn = replace(  # type: ignore[attr-defined]
+            relay._defn = replace(  # pyright: ignore[reportFunctionMemberAccess]
                 update_defn, fn=relay, validator=new_validator
             )
             # Temporal's @workflow.update decorator also sets a `.validator`
@@ -3012,7 +3408,7 @@ def _collect_interaction_relays(
             # We don't need it for runtime dispatch — Temporal reads the
             # validator off the definition — but provide one so the relay
             # structurally matches UpdateMethodMultiParam.
-            relay.validator = lambda fn: fn  # type: ignore[attr-defined]
+            relay.validator = lambda fn: fn  # pyright: ignore[reportFunctionMemberAccess]
 
         relays[member_name] = relay
 
@@ -3046,19 +3442,65 @@ async def _merge_skipped_records(app_instance: "App") -> None:
                 skipped_count=skipped, unpersisted_count=unpersisted
             )
         )
-    # conformance: ignore[E004] fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
-    except Exception:
+    except Exception:  # noqa: BLE001 — fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
         _safe_log(
             "error",
             "Failed to merge skipped-record parts; the run has no "
             "skipped-records artifact (parts remain under the run prefix)",
-            skipped=skipped,
+            skipped_count=skipped,
             exc_info=True,
         )
         lost = skipped - unpersisted
         if lost > 0:
             outputs.add_metric(
                 Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lost)
+            )
+
+
+async def _merge_fetch_failures(app_instance: "App") -> None:
+    """Schedule ``merge_fetch_failures`` when the run recorded any (FND-5294).
+
+    Workflow code, the sibling of :func:`_merge_skipped_records`. A run with
+    no fetch failures schedules nothing, and ``workflow.patched`` keeps any
+    run started before this path existed replaying unchanged, even one whose
+    app emitted a ``fetch-failures`` metric of its own. Fails open: a
+    merge failure is logged and every failure not already counted as
+    unpersisted is recorded as ``fetch-failures-unpersisted``.
+    """
+    from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
+    from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
+        FETCH_FAILURES_METRIC,
+        FETCH_FAILURES_UNPERSISTED_METRIC,
+    )
+
+    outputs = get_outputs()
+    failures = int(outputs.numeric_metric(FETCH_FAILURES_METRIC))
+    if failures <= 0:
+        return
+    # An app on an older SDK may have emitted its own ``fetch-failures``
+    # metric. Replaying that history must not gain the new activity, so the
+    # command is versioned rather than relying on the name being unused.
+    if not workflow.patched("fetch-failures-merge"):
+        return
+    unpersisted = int(outputs.numeric_metric(FETCH_FAILURES_UNPERSISTED_METRIC))
+    try:
+        await app_instance.merge_fetch_failures(
+            MergeFetchFailuresInput(
+                failure_count=failures, unpersisted_count=unpersisted
+            )
+        )
+    except Exception:  # noqa: BLE001 — fail-open by design (FND-5294): logged via _safe_log with exc_info=True and counted in fetch-failures-unpersisted
+        _safe_log(
+            "error",
+            "Failed to merge fetch-failure parts; the run has no "
+            "fetch-failures artifact (parts remain under the run prefix)",
+            fetch_failure_count=failures,
+            exc_info=True,
+        )
+        lost = failures - unpersisted
+        if lost > 0:
+            outputs.add_metric(
+                Metric(name=FETCH_FAILURES_UNPERSISTED_METRIC, value=lost)
             )
 
 
@@ -3378,7 +3820,7 @@ async def _run_preflight_gate(
         start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
         heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
         _no_verdict(e, None, None)
         return
 
@@ -3401,7 +3843,7 @@ async def _run_preflight_gate(
     if not workflow.patched("preflight-gate-warmup"):
         try:
             await _dispatch_checks(None, None)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, None, None)
         return
 
@@ -3412,7 +3854,7 @@ async def _run_preflight_gate(
     first_poll: WarmupPoll | None = None
     try:
         first_poll = await _poll()
-    except Exception:
+    except Exception:  # noqa: BLE001 — _safe_log reports the probe failure at WARNING with exc_info; the gate fails open by design
         # The probe's own plumbing failed: run every tier, as before tiers, and
         # say so on that row. A broken probe must not cost the run its verdict.
         _safe_log(
@@ -3433,7 +3875,7 @@ async def _run_preflight_gate(
                 None,
                 None if seen is not None else WarmupWait(outcome=WarmupOutcome.BROKEN),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, None, None)
         # Success: the activity already emitted the proceeded outcome event.
         return
@@ -3446,7 +3888,7 @@ async def _run_preflight_gate(
     )
     try:
         await _dispatch_checks(frozenset({CheckTier.PREFLIGHT}), first_wait)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
         _set_health_line("")
         _no_verdict(e, CheckTier.PREFLIGHT, first_wait)
         return
@@ -3480,7 +3922,7 @@ async def _run_preflight_gate(
             # started inside the ceiling can finish outside it, and a READY that
             # arrives late does not buy the WARMUP checks extra time.
             late_ready = seen.state is WarmupState.READY and workflow.now() >= deadline
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — _emit_row records the GATE_BROKEN row with exc_info; the gate fails open by design
         # The poll activity turns everything the probe does into a WarmupPoll,
         # so what reaches here is the gate's own plumbing: fail open.
         _set_health_line("")
@@ -3506,7 +3948,7 @@ async def _run_preflight_gate(
         ready = _wait(WarmupOutcome.READY)
         try:
             await _dispatch_checks(frozenset({CheckTier.WARMUP}), ready)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — _no_verdict emits the NO_VERDICT row with exc_info and raises the block when the posture blocks
             _no_verdict(e, CheckTier.WARMUP, ready)
         return
 
@@ -3559,8 +4001,7 @@ def _set_health_line(text: str) -> None:
     """
     try:
         workflow.set_current_details(text)
-    # conformance: ignore[E004] a status line must never fail the gate; logged at DEBUG with exc_info=True
-    except Exception:
+    except Exception:  # noqa: BLE001 — a status line must never fail the gate; logged at DEBUG with exc_info=True
         _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
@@ -3805,7 +4246,13 @@ def generate_workflow_class(
 
     canonical_type = canonical_workflow_type(app_name, ep)
     alias_of_canonical = None if workflow_name == canonical_type else canonical_type
-    if alias_of_canonical is None and not input_type_supports_gate(input_type):
+    # Boot-time advice, said once by the host. The sandbox rebuilds this class
+    # for every run (see _install_workflow_classes) and must not repeat it.
+    if (
+        alias_of_canonical is None
+        and not workflow.unsafe.in_sandbox()
+        and not input_type_supports_gate(input_type)
+    ):
         _task_logger.warning(
             "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
             "not declare the credential-routing fields (extraction_method, "
@@ -3864,8 +4311,7 @@ def generate_workflow_class(
 
             _corr_ctx = get_correlation_context()
             correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log(
                 "warning",
                 "Failed to read correlation context, falling back to run_id",
@@ -3873,6 +4319,23 @@ def generate_workflow_class(
             )
             correlation_id = run_id
 
+        # wf_cls.__init__ builds the App instance and binds it to the run
+        # (context, stored refs, @task wrapping) before Temporal applies any
+        # @signal / @update delivered in the run's first activation, which
+        # runs before this coroutine starts. See _bind_app_instance_to_run.
+        # The correlation id needs the start input, so __init__ binds a
+        # provisional one; set the resolved one here, in the same dict the
+        # task wrappers hold. Fall back to binding here when ``self`` is a
+        # stand-in (e.g. MagicMock from unit tests) where ``__init__`` didn't run.
+        existing = getattr(self, "_app_instance", None)
+        context_data = getattr(self, "_run_context_data", None)
+        if isinstance(existing, app_cls) and isinstance(context_data, dict):
+            app_instance = existing
+        else:
+            app_instance = existing if isinstance(existing, app_cls) else app_cls()
+            self._app_instance = app_instance
+            context_data = _bind_app_instance_to_run(app_instance, start_time)
+        context_data["correlation_id"] = correlation_id
         context = AppContext(
             app_name=app_name,
             app_version=app_version,
@@ -3882,28 +4345,7 @@ def generate_workflow_class(
             correlation_id=correlation_id,
             started_at=start_time,
         )
-        # The wf_cls.__init__ constructs the App instance up-front so that any
-        # @signal / @query / @update runtime interactions
-        # (which may fire as early as immediately after workflow start, before
-        # _run's first await) can delegate to the same instance _run uses.
-        # Fall back to constructing one here when ``self`` is a stand-in (e.g.
-        # MagicMock from unit tests) where ``__init__`` didn't run.
-        existing = getattr(self, "_app_instance", None)
-        if isinstance(existing, app_cls):
-            app_instance = existing
-        else:
-            app_instance = app_cls()
-            self._app_instance = app_instance
         app_instance._context = context
-
-        context_data = {
-            "run_id": run_id,
-            "workflow_id": workflow_id,
-            "correlation_id": context.correlation_id,
-        }
-        # BLDX-878: inter-app calls deactivated pending review.
-        # app_instance._client = WorkflowAppClient(context_data)
-        _wrap_instance_tasks(app_instance, context_data)
 
         _safe_log(
             "info",
@@ -3915,6 +4357,10 @@ def generate_workflow_class(
 
         try:
             if hasattr(input_data, "_log_summary"):
+                # The summary itself is not attached: ``_log_summary`` drops
+                # fields by name only, so a value such as a URL carrying
+                # userinfo would pass through unredacted to OTLP and the
+                # object-store log sink. It was never exported before either.
                 input_summary = input_data._log_summary()
                 if input_summary:
                     _safe_log(
@@ -3923,10 +4369,8 @@ def generate_workflow_class(
                         app_name=app_name,
                         run_id=str(run_id),
                         correlation_id=context.correlation_id,
-                        input=input_summary,
                     )
-        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-        except Exception:
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
@@ -3944,10 +4388,18 @@ def generate_workflow_class(
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             await _merge_skipped_records(app_instance)
+            await _merge_fetch_failures(app_instance)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
+            # Non-determinism (a sandbox RestrictedWorkflowAccessError, e.g. a
+            # datetime.now() in run()) is a fault in the code, not in the run:
+            # let it fail the workflow TASK, which Temporal retries, so a fixed
+            # deployment resumes the run. Wrapping it below would fail the run
+            # for good and lose it.
+            if isinstance(e, workflow.NondeterminismError):
+                raise
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     is_preflight_block,
@@ -4018,8 +4470,7 @@ def generate_workflow_class(
         finally:
             try:
                 await app_instance.on_complete()
-            # conformance: ignore[E004] finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
-            except Exception:
+            except Exception:  # noqa: BLE001 — finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
                 _safe_log(
                     "warning",
                     "on_complete() hook raised an unexpected exception",
@@ -4037,11 +4488,14 @@ def generate_workflow_class(
                 duration_ms=duration_ms,
             )
 
-            workflow_id = workflow.info().workflow_id
-            with _app_state_lock:
-                _app_state.pop(workflow_id, None)
-
+            # The run's app-state slots are not touched here. They live on
+            # the workers that ran its tasks, which release them (and close
+            # what they hold) once Temporal reports the run closed. This block
+            # can neither await a close nor tell a finished run from a cache
+            # eviction of a running one, where a task on this worker may
+            # still be using what the slot holds.
             app_instance._context = None
+            app_instance._run_stored_refs = None
             # BLDX-878: inter-app calls deactivated pending review.
             # app_instance._client = None
 
@@ -4070,12 +4524,58 @@ def generate_workflow_class(
     # — sharing state with _run.
     interaction_relays = _collect_interaction_relays(app_cls, cls_name)
 
+    def _bind_app_instance_to_run(
+        app_instance: "App", started_at: datetime
+    ) -> dict[str, Any]:
+        """Give ``app_instance`` this run's context, stored refs and task wrappers.
+
+        Returns the context dict the task wrappers hold. Its ``correlation_id``
+        starts as the run id; ``_run`` sets the resolved one, which needs the
+        start input.
+        """
+        info = workflow.info()
+        context_data: dict[str, Any] = {
+            "run_id": info.run_id,
+            "workflow_id": info.workflow_id,
+            "correlation_id": info.run_id,
+        }
+        app_instance._context = AppContext(
+            app_name=app_name,
+            app_version=app_version,
+            build_id=app_build_id,
+            run_id=info.run_id,
+            workflow_id=info.workflow_id,
+            correlation_id=info.run_id,
+            started_at=started_at,
+        )
+        app_instance._run_stored_refs = _RunStoredRefs()
+        # BLDX-878: inter-app calls deactivated pending review.
+        # app_instance._client = WorkflowAppClient(context_data)
+        _wrap_instance_tasks(app_instance, context_data)
+        return context_data
+
     def _wf_init(self: Any) -> None:
-        # Construct the per-run App instance eagerly so interactions that fire
-        # before _run's first await still hit a live instance. _run later
-        # finishes context setup (correlation id, _wrap_instance_tasks, etc.)
-        # on this same instance.
+        # Build the per-run App instance and bind it to the run here, not in
+        # _run. Temporal applies the @signal / @update jobs of the run's first
+        # activation (signal-with-start, update-with-start) after __init__ but
+        # before the run coroutine starts, so a handler there must already see
+        # @task methods wrapped as activities. Unwrapped, the task body would
+        # run inline on the workflow thread: no retries, no timeouts, and
+        # re-run on every replay.
         self._app_instance = app_cls()
+        # Outside a workflow (unit tests constructing wf_cls directly) there
+        # is no run to bind to; _run binds on its fallback path instead.
+        #
+        # The patch marker keeps runs started before this change replaying
+        # their own history: there a first-activation handler ran its task
+        # inline and recorded no activity, so binding here would schedule one
+        # on replay and fail the run with a nondeterminism error. Live,
+        # ``patched`` is True and records the marker; on replay it is True only
+        # when the history has it, so such runs keep binding in _run.
+        if workflow.in_workflow() and workflow.patched(_EARLY_RUN_BINDING_PATCH):
+            self._run_context_data = _bind_app_instance_to_run(
+                self._app_instance, _safe_now()
+            )
 
     _wf_init.__name__ = "__init__"
     _wf_init.__qualname__ = f"{cls_name}.__init__"
@@ -4098,8 +4598,29 @@ def generate_workflow_class(
     if _src_module is not None:
         setattr(_src_module, cls_name, wf_cls)
 
-    _workflow_class_cache[cache_key] = wf_cls
+    # Inside the sandbox, app_cls is the run's own re-imported copy, and so is
+    # the module above (sys.modules is the sandbox's while it imports). The
+    # cache is host state: an entry would keep every run's sandbox alive.
+    if not workflow.unsafe.in_sandbox():
+        _workflow_class_cache[cache_key] = wf_cls
     return wf_cls
+
+
+def _install_workflow_classes(app_cls: "type[App]") -> None:
+    """Rebuild an app's generated workflow classes on its sandbox copy.
+
+    Temporal's sandbox runs a workflow by re-importing the module named by the
+    workflow class's ``__module__`` (the app's module) and reading the class
+    from it by name. The host built those classes after import and attached
+    them to the host module, so the fresh copy does not have them. Building
+    them again from the re-imported App class, during that import, puts them
+    where the sandbox looks, and makes ``run()`` and every helper it calls
+    sandboxed code that Temporal checks for non-determinism.
+
+    Called only inside the sandbox, from ``App.__init_subclass__``.
+    """
+    for workflow_type, ep in app_cls._app_metadata.workflow_types.items():
+        generate_workflow_class(app_cls, ep, workflow_type)
 
 
 def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> None:
@@ -4136,6 +4657,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
                     progress_watchdog=task_meta.progress_watchdog,
                     max_no_progress_seconds=task_meta.max_no_progress_seconds,
+                    stored_refs=app_instance._run_stored_refs,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -4157,6 +4679,7 @@ def _create_task_activity_wrapper(
     schedule_to_close_seconds: int | None = None,
     progress_watchdog: "ProgressWatchdogMode | None" = None,
     max_no_progress_seconds: float | None = None,
+    stored_refs: _RunStoredRefs | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -4194,6 +4717,9 @@ def _create_task_activity_wrapper(
         max_no_progress_seconds: The task's declared no-progress allowance in
             seconds, or ``None`` to inherit the fleet-wide one. Forwarded
             verbatim, for the same reason.
+        stored_refs: The run's sink for stored refs. When set, the refs in
+            each call's input and result are recorded in it, for
+            ``cleanup_storage``.
 
     Returns:
         Async function that executes the task as an activity.
@@ -4229,6 +4755,9 @@ def _create_task_activity_wrapper(
         from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             execute_activity_with_eviction_retry,
         )
+        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+            _find_file_refs,
+        )
 
     # Build the Temporal RetryPolicy once (not per invocation)
     if retry_policy is not None:
@@ -4241,6 +4770,25 @@ def _create_task_activity_wrapper(
                 max_interval=timedelta(seconds=retry_max_interval_seconds),
             )
         )
+
+    def _record_stored_refs(data: object) -> None:
+        """Record *data*'s stored refs in the run's sink, if it has one.
+
+        *data* is the input this workflow sent or the result it decoded,
+        both from history, so recording is deterministic on replay. Never
+        fails the task: a ref left out is only one cleanup misses.
+        """
+        if stored_refs is None:
+            return
+        try:
+            stored_refs.record(_find_file_refs(data))
+        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
+            _safe_log(
+                "warning",
+                f"Could not record the stored refs of task {task_name} for "
+                "cleanup_storage",
+                exc_info=True,
+            )
 
     async def wrapper(input_data: Input) -> Output:
         # Create the task context (metadata for the activity)
@@ -4273,6 +4821,10 @@ def _create_task_activity_wrapper(
             else None
         )
 
+        # Input refs first, before the activity can fail: a task that fails
+        # still received them, and cleanup_storage must still see them.
+        _record_stored_refs(input_data)
+
         # Extract summary from input for Temporal UI display
         summary = input_data.summary() if hasattr(input_data, "summary") else None
 
@@ -4301,6 +4853,7 @@ def _create_task_activity_wrapper(
             **({"task_queue": pool_queue} if pool_queue else {}),
         )
 
+        _record_stored_refs(result)
         return result
 
     return wrapper

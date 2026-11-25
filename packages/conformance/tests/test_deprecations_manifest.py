@@ -17,25 +17,13 @@ It is the manifest counterpart of ``assert_registry_consistent`` /
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from conformance.suite.checks.deprecation._manifest import (
     MANIFEST_PATH,
-    SDK_IMPORT_ROOT,
     build_manifest,
     load_manifest,
     serialize,
 )
-
-
-def _find_sdk_root() -> Path | None:
-    """Locate the repo root containing ``application_sdk/`` from this test file."""
-    for parent in Path(__file__).resolve().parents:
-        if (parent / SDK_IMPORT_ROOT / "__init__.py").is_file():
-            return parent
-    return None
+from tests._helpers import sdk_root
 
 
 def test_manifest_is_committed() -> None:
@@ -83,11 +71,7 @@ def test_committed_manifest_matches_fresh_scan() -> None:
     If this fails, the SDK's deprecation surface changed but the manifest was not
     regenerated.  Run ``gen-deprecations`` and commit the result in the same PR.
     """
-    sdk_root = _find_sdk_root()
-    if sdk_root is None:
-        pytest.skip("application_sdk/ not found alongside the conformance package")
-
-    fresh = build_manifest(sdk_root)
+    fresh = build_manifest(sdk_root())
     on_disk = MANIFEST_PATH.read_text(encoding="utf-8")
     assert on_disk == serialize(fresh), (
         "deprecated_symbols.json is stale — regenerate with "

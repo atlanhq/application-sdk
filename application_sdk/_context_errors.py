@@ -10,7 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors import APP_CONTEXT_ERROR, ErrorCode
+from application_sdk import _deprecation
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import PreconditionError
 
@@ -38,7 +41,8 @@ class SecretStoreNotConfiguredError(PreconditionError):
     expected_state: str | None = "configured"
 
 
-class AppContextError(_InternalError):
+@dataclass(kw_only=True)
+class AppContextError(_LegacyErrorCodeMixin, _InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 
     This is a programming error — it indicates that context-dependent methods
@@ -46,20 +50,26 @@ class AppContextError(_InternalError):
     workflow run or @task execution.
     """
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
     code: ClassVar[str] = "INTERNAL_APP_CONTEXT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         _InternalError.__init__(self, message=message)
-        self._legacy_error_code = error_code
+        self._set_legacy_error_code(error_code)
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
 
-    def __str__(self) -> str:
-        return f"[{self.error_code.code}] {self.message}"
+#: The AAF-* constants this module imported before FND-4299, kept importable
+#: from here with a warning until v4.0.0. Literal per entry: the surface gate
+#: and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "APP_CONTEXT_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: getattr(_legacy_codes, name),
+)

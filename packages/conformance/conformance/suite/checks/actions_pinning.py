@@ -8,7 +8,11 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import make_cli_main, safe_read_text
+from conformance.suite.checks._ast_common import (
+    make_cli_main,
+    make_scan_path,
+    strip_yaml_comment,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "C"
@@ -28,14 +32,6 @@ class ActionUse:
     column: int
 
 
-def _strip_inline_comment(value: str) -> str:
-    """Strip trailing `# ...` inline comment from an unquoted value."""
-    idx = value.find(" #")
-    if idx != -1:
-        return value[:idx].rstrip()
-    return value
-
-
 def _unwrap_quotes(value: str) -> str:
     """Strip surrounding single or double quotes."""
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
@@ -52,10 +48,7 @@ def iter_uses(text: str, file: str) -> Iterator[ActionUse]:
         m = _USES_RE.match(raw_line)
         if not m:
             continue
-        raw_val = m.group("val")
-        if not (raw_val.startswith('"') or raw_val.startswith("'")):
-            raw_val = _strip_inline_comment(raw_val)
-        raw_val = _unwrap_quotes(raw_val)
+        raw_val = _unwrap_quotes(strip_yaml_comment(m.group("val")))
         col = raw_line.index(m.group("val")) + 1
         yield ActionUse(raw_ref=raw_val, file=file, line=lineno, column=col)
 
@@ -102,16 +95,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single workflow file, producing repo-root-relative URIs."""
-    text = safe_read_text(path)
-    if text is None:
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def discover(root: Path) -> list[Path]:

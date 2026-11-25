@@ -7,7 +7,8 @@ with workflow.unsafe.imports_passed_through():
 
     from application_sdk.app.base import generate_workflow_class
     from application_sdk.app.entrypoint import (
-        EntryPointContractError,
+        EntryPointContractError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+        EntryPointDeclarationError,
         workflow_type_class_segment,
     )
     from application_sdk.app.registry import AppMetadata, AppRegistry
@@ -42,8 +43,8 @@ def _require_declaration_matches_registration(
         else None
     )
     if normalized != dict(app_metadata.legacy_workflow_types):
-        raise EntryPointContractError(
-            f"App '{app_name}': legacy_workflow_types on the class "
+        raise EntryPointDeclarationError(
+            message=f"App '{app_name}': legacy_workflow_types on the class "
             f"({declared!r}) no longer matches what registration recorded "
             f"({dict(app_metadata.legacy_workflow_types)!r}). The declaration "
             f"is read once at class definition — declare aliases in the class "
@@ -67,21 +68,21 @@ def get_all_app_workflows() -> list[type]:
         _require_declaration_matches_registration(app_name, app_metadata)
         for workflow_type, ep in app_metadata.workflow_types.items():
             if workflow_type in _RESERVED_SDR_WORKFLOW_TYPES:
-                raise EntryPointContractError(
-                    f"App '{app_name}' registers Temporal workflow type "
+                raise EntryPointDeclarationError(
+                    message=f"App '{app_name}' registers Temporal workflow type "
                     f"'{workflow_type}', which is reserved for the SDK's SDR "
                     "handler workflows. Choose a different legacy alias."
                 )
             if workflow_type in _RESERVED_SDK_WORKFLOW_TYPES:
-                raise EntryPointContractError(
-                    f"App '{app_name}' registers Temporal workflow type "
+                raise EntryPointDeclarationError(
+                    message=f"App '{app_name}' registers Temporal workflow type "
                     f"'{workflow_type}', which is reserved for an SDK built-in "
                     "workflow. Choose a different legacy alias."
                 )
             claimed_by = claimed_types.get(workflow_type)
             if claimed_by is not None and claimed_by != app_name:
-                raise EntryPointContractError(
-                    f"Apps '{claimed_by}' and '{app_name}' both register Temporal "
+                raise EntryPointDeclarationError(
+                    message=f"Apps '{claimed_by}' and '{app_name}' both register Temporal "
                     f"workflow type '{workflow_type}'. Every workflow type on a "
                     "shared worker must be unique."
                 )
@@ -92,8 +93,8 @@ def get_all_app_workflows() -> list[type]:
             class_claim = claimed_classes.get(class_key)
             if class_claim is not None and class_claim != (app_name, workflow_type):
                 other_app, other_type = class_claim
-                raise EntryPointContractError(
-                    f"Apps '{other_app}' and '{app_name}' register Temporal workflow "
+                raise EntryPointDeclarationError(
+                    message=f"Apps '{other_app}' and '{app_name}' register Temporal workflow "
                     f"types '{other_type}' and '{workflow_type}', which both generate "
                     f"workflow class '_Workflow_{class_segment}' in module "
                     f"'{class_key[0]}'. One would overwrite the other."

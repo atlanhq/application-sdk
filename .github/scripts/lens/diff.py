@@ -60,6 +60,35 @@ class FileDiff:
             if ln.kind != "-" and ln.new_no
         }
 
+    def _deletions(self) -> list[tuple[int | None, int | None]]:
+        """Each pure deletion (a run of removed lines with no added line beside
+        it), as the RIGHT-side lines just before and just after it in its hunk
+        (None where there is none). A replacement is left out: its added lines
+        already mark the change."""
+        out: list[tuple[int | None, int | None]] = []
+        for h in self.hunks:
+            for i, j in _removed_runs(h):
+                prev, nxt = _beside(h, i, j)
+                if not _is_added(prev) and not _is_added(nxt):
+                    out.append((_new_no(prev), _new_no(nxt)))
+        return out
+
+    @property
+    def deletion_sites(self) -> set[int]:
+        """The RIGHT-side lines that border a pure deletion: the line just
+        before and just after it. A finding there is about the change, not
+        about unchanged code."""
+        return {n for run in self._deletions() for n in run if n}
+
+    @property
+    def changed_lines(self) -> set[int]:
+        """Added lines, and for each pure deletion the one RIGHT-side line it
+        is attributed to: the line before it (inside the same function as the
+        removed code), else the line after it."""
+        return self.added_lines | {
+            n for before, after in self._deletions() if (n := before or after)
+        }
+
     @property
     def additions(self) -> int:
         return sum(1 for h in self.hunks for ln in h.lines if ln.kind == "+")
@@ -67,14 +96,6 @@ class FileDiff:
     @property
     def deletions(self) -> int:
         return sum(1 for h in self.hunks for ln in h.lines if ln.kind == "-")
-
-    def right_text(self) -> dict[int, str]:
-        return {
-            ln.new_no: ln.text
-            for h in self.hunks
-            for ln in h.lines
-            if ln.kind != "-" and ln.new_no
-        }
 
     def render(self, max_lines: int | None = None) -> str:
         """The diff as the model sees it: RIGHT-side line numbers on every
@@ -94,11 +115,108 @@ class FileDiff:
         return "\n".join(out)
 
 
+def _removed_runs(h: Hunk) -> list[tuple[int, int]]:
+    """(start, end) of each run of consecutive removed lines in a hunk, the end
+    exclusive."""
+    runs: list[tuple[int, int]] = []
+    i = 0
+    while i < len(h.lines):
+        if h.lines[i].kind != "-":
+            i += 1
+            continue
+        j = i
+        while j < len(h.lines) and h.lines[j].kind == "-":
+            j += 1
+        runs.append((i, j))
+        i = j
+    return runs
+
+
+def _beside(h: Hunk, i: int, j: int) -> tuple[Line | None, Line | None]:
+    """The lines just before and just after `h.lines[i:j]` in its hunk."""
+    return (h.lines[i - 1] if i > 0 else None), (
+        h.lines[j] if j < len(h.lines) else None
+    )
+
+
+def _is_added(ln: Line | None) -> bool:
+    return ln is not None and ln.kind == "+"
+
+
+def _new_no(ln: Line | None) -> int | None:
+    return ln.new_no if ln is not None else None
+
+
+# Git's C-style quoting of a path that holds a special character: `\"`, `\\`,
+# the control escapes, and `\ooo` octal for each byte of a non-ASCII character
+# (the default `core.quotePath`).
+_C_ESCAPES = {
+    "a": 7,
+    "b": 8,
+    "t": 9,
+    "n": 10,
+    "v": 11,
+    "f": 12,
+    "r": 13,
+    '"': 34,
+    "\\": 92,
+}
+_OCTAL = re.compile(r"[0-7]{3}")
+
+
+def _unquote(p: str) -> str:
+    """A path as Git wrote it, decoded: a quoted one (`"app/a\\"b.py"`,
+    `"caf\\303\\251.py"`) loses its quotes and escapes; any other is unchanged."""
+    if len(p) < 2 or p[0] != '"' or p[-1] != '"':
+        return p
+    s, out, i = p[1:-1], bytearray(), 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            if _OCTAL.match(s, i + 1):
+                out.append(int(s[i + 1 : i + 4], 8))
+                i += 4
+                continue
+            if s[i + 1] in _C_ESCAPES:
+                out.append(_C_ESCAPES[s[i + 1]])
+                i += 2
+                continue
+        out += s[i].encode("utf-8")
+        i += 1
+    return out.decode("utf-8", "replace")
+
+
 def _strip_prefix(p: str) -> str:
-    p = p.strip()
-    if p.startswith('"') and p.endswith('"'):
-        p = p[1:-1]
+    p = _unquote(p.strip())
     return p[2:] if p[:2] in ("a/", "b/") else p
+
+
+def _quoted_end(s: str) -> int:
+    """The index of the `"` that closes the quoted string `s` opens, or -1."""
+    i = 1
+    while i < len(s):
+        if s[i] == "\\":
+            i += 2
+            continue
+        if s[i] == '"':
+            return i
+        i += 1
+    return -1
+
+
+def _header_path(rest: str) -> str:
+    """The new path in a `diff --git <old> <new>` header (`rest` is what follows
+    `diff --git `). Either name is C-quoted when it holds a special character,
+    and an unquoted name may hold spaces."""
+    if rest.startswith('"'):
+        end = _quoted_end(rest)
+        if end > 0:
+            return _strip_prefix(rest[end + 1 :])
+    if rest.endswith('"'):
+        start = rest.rfind(' "')
+        if start >= 0:
+            return _strip_prefix(rest[start + 1 :])
+    parts = rest.split(" b/", 1)
+    return parts[1] if len(parts) == 2 else _strip_prefix(rest.rsplit(" ", 1)[-1])
 
 
 def parse_unified_diff(text: str) -> list[FileDiff]:
@@ -108,10 +226,7 @@ def parse_unified_diff(text: str) -> list[FileDiff]:
     old_no = new_no = 0
     for raw in text.splitlines():
         if raw.startswith("diff --git "):
-            parts = raw[len("diff --git ") :].split(" b/", 1)
-            path = (
-                parts[1] if len(parts) == 2 else _strip_prefix(raw.rsplit(" ", 1)[-1])
-            )
+            path = _header_path(raw[len("diff --git ") :])
             cur = FileDiff(path=path)
             files.append(cur)
             hunk = None
@@ -136,10 +251,10 @@ def parse_unified_diff(text: str) -> list[FileDiff]:
             elif raw.startswith("deleted file mode"):
                 cur.status = "deleted"
             elif raw.startswith("rename from "):
-                cur.old_path = raw[len("rename from ") :]
+                cur.old_path = _unquote(raw[len("rename from ") :])
                 cur.status = "renamed"
             elif raw.startswith("rename to "):
-                cur.path = raw[len("rename to ") :]
+                cur.path = _unquote(raw[len("rename to ") :])
             elif raw.startswith("Binary files ") or raw.startswith("GIT binary patch"):
                 cur.is_binary = True
             elif raw.startswith("+++ "):
@@ -167,6 +282,11 @@ def _norm(s: str) -> str:
     return " ".join(s.split())
 
 
+# How `FileDiff.render` shows a removed line: an empty five-wide number column,
+# a space, then the marker. Matched exactly, so a unary minus is never eaten.
+_REMOVED_RENDER = "      -"
+
+
 def snippet_lines(snippet: str) -> list[str]:
     """A quoted snippet as comparable lines: whitespace-normalised, a leading
     diff marker or rendered line number stripped, blanks dropped."""
@@ -176,6 +296,8 @@ def snippet_lines(snippet: str) -> list[str]:
         m = re.match(r"^\s*\d+\s[+\- ]", s)  # "  123 +code" as rendered to the model
         if m:
             s = s[m.end() :]
+        elif s.startswith(_REMOVED_RENDER):  # "      -code": a removed line, no number
+            s = s[len(_REMOVED_RENDER) :]
         elif s[:1] in "+-":
             s = s[1:]
         s = _norm(s)
@@ -193,19 +315,63 @@ def _find_run(seq: list[tuple[int, str]], needle: list[str]) -> list[tuple[int, 
     return hits
 
 
+def _removed_hits(fd: FileDiff, needle: list[str]) -> list[int]:
+    """Where `needle` matches the LEFT side of a hunk (context + removed lines)
+    in a run that holds at least one removed line: the RIGHT-side line the
+    first removed line maps to, or 0 when the hunk has no RIGHT-side line (a
+    whole-file deletion). A replaced line maps to the added line that replaced
+    it; a pure deletion to the line before it, else the line after it
+    (`FileDiff.changed_lines`)."""
+    out: list[int] = []
+    for h in fd.hunks:
+        runs = _removed_runs(h)
+        seq = [
+            (i, _norm(ln.text))
+            for i, ln in enumerate(h.lines)
+            if ln.kind != "+" and _norm(ln.text)
+        ]
+        for lo, hi in _find_run(seq, needle):
+            first = next((i for i in range(lo, hi + 1) if h.lines[i].kind == "-"), -1)
+            if first < 0:
+                continue  # context only: the RIGHT-side match covers it
+            i, j = next((i, j) for i, j in runs if i <= first < j)
+            prev, nxt = _beside(h, i, j)
+            if _is_added(nxt):
+                site = _new_no(nxt)
+            elif _is_added(prev):
+                site = _new_no(prev)
+            else:
+                site = _new_no(prev) or _new_no(nxt)
+            out.append(site or 0)
+    return out
+
+
+def in_removed_lines(fd: FileDiff, snippet: str) -> bool:
+    """Whether `snippet` quotes code this diff removes (a run of the LEFT side
+    holding at least one removed line)."""
+    needle = snippet_lines(snippet)
+    return bool(needle) and bool(_removed_hits(fd, needle))
+
+
 def anchor(fd: FileDiff, snippet: str) -> tuple[int, int] | None:
     """The RIGHT-side (start, end) the quoted code occupies inside the diff, or None.
 
     The model never supplies a line number — it quotes the code it means and
     the position is computed here (drift is fixed in code, not by asking
     harder). Matching is a consecutive, whitespace-
-    normalised run over each hunk's RIGHT side (context + added lines). When
-    the snippet appears more than once, the occurrence that touches an added
-    line wins, then the first."""
+    normalised run over each hunk's RIGHT side (context + added lines), and
+    over its LEFT side (context + removed lines): removed code is the change
+    too, and a quote of it is placed on the added line that replaced it, or
+    for a pure deletion on the line the deletion is attributed to
+    (`FileDiff.changed_lines`). When the snippet appears more
+    than once, an occurrence that touches the change wins (a RIGHT-side run
+    over an added line or a deletion's border, then removed code), then the
+    first. None when nothing matches or the quote is of a file deleted whole,
+    which has no RIGHT side to place it on."""
     needle = snippet_lines(snippet)
     if not needle:
         return None
-    added = fd.added_lines
+    changed = fd.added_lines | fd.deletion_sites
     hits: list[tuple[int, int]] = []
     for h in fd.hunks:
         seq = [
@@ -215,10 +381,10 @@ def anchor(fd: FileDiff, snippet: str) -> tuple[int, int] | None:
         ]
         seq = [(n, t) for n, t in seq if t]
         hits.extend(_find_run(seq, needle))
-    if not hits:
-        return None
-    touching = [h for h in hits if any(n in added for n in range(h[0], h[1] + 1))]
-    return (touching or hits)[0]
+    touching = [h for h in hits if any(n in changed for n in range(h[0], h[1] + 1))]
+    removed = [(n, n) for n in _removed_hits(fd, needle) if n]
+    ranked = touching + removed + hits
+    return ranked[0] if ranked else None
 
 
 def locate_in_text(text: str, snippet: str) -> int:

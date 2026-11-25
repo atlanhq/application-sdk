@@ -5,10 +5,10 @@ tests pin the mechanism that makes the *product* boundable — and pin that the
 default still leaves it unbounded, because ADR-0018's accepted position is to
 start there deliberately and size the ceiling from warn-mode data.
 
-The dispatch assertions run through ``_create_task_activity_wrapper`` and
-``get_activity_options`` — the two code paths that actually hand timeouts to
-Temporal — rather than against the resolver alone, so a ceiling that resolves
-correctly but never reaches the wire still fails.
+The dispatch assertions run through ``_create_task_activity_wrapper`` — the
+code path that actually hands timeouts to Temporal — rather than against the
+resolver alone, so a ceiling that resolves correctly but never reaches the
+wire still fails.
 """
 
 from __future__ import annotations
@@ -19,16 +19,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.app import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import (
-    TaskContractError,
+    TaskDeclarationError,
     _load_default_schedule_to_close_seconds,
     get_task_metadata,
     task,
 )
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution import retry_product_seconds
-from application_sdk.execution._temporal.activities import get_activity_options
 from application_sdk.execution.retry import resolve_activity_time_bounds
 
 _EVICTION_RETRY_PATH = (
@@ -118,14 +116,6 @@ class TestResolveActivityTimeBounds:
 
 
 class TestTaskDeclaration:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_unset_by_default_so_todays_behaviour_is_unchanged(self) -> None:
         class _App(App):
             @task(timeout_seconds=600)
@@ -155,14 +145,14 @@ class TestTaskDeclaration:
     def test_zero_is_refused_rather_than_read_as_disabled(self) -> None:
         """``0`` would fail every attempt before it started. ``None`` is how a
         task opts out; the error has to say so."""
-        with pytest.raises(TaskContractError, match="Pass None"):
+        with pytest.raises(TaskDeclarationError, match="Pass None"):
 
             @task(schedule_to_close_seconds=0)
             async def extract(input: _In) -> _Out:
                 return _Out()
 
     def test_negative_is_refused(self) -> None:
-        with pytest.raises(TaskContractError, match="positive number of seconds"):
+        with pytest.raises(TaskDeclarationError, match="positive number of seconds"):
 
             @task(schedule_to_close_seconds=-1)
             async def extract(input: _In) -> _Out:
@@ -206,50 +196,8 @@ class TestFleetWideEnvVar:
 
 
 # ---------------------------------------------------------------------------
-# The wire: both paths that hand timeouts to Temporal
+# The wire: the path that hands timeouts to Temporal
 # ---------------------------------------------------------------------------
-
-
-class TestGetActivityOptions:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def _options(self, **task_kwargs: object) -> dict[str, object]:
-        class _OptionsApp(App):
-            @task(**task_kwargs)  # type: ignore[arg-type]
-            async def extract(self, input: _In) -> _Out:
-                return _Out()
-
-            async def run(self, input: _In) -> _Out:
-                return _Out()
-
-        tasks = TaskRegistry.get_instance().get_tasks_for_app("_options-app")
-        return get_activity_options(next(t for t in tasks if t.name == "extract"))
-
-    def test_no_schedule_to_close_without_a_declared_ceiling(self) -> None:
-        options = self._options(timeout_seconds=600)
-
-        assert "schedule_to_close_timeout" not in options
-        assert options["start_to_close_timeout"] == timedelta(seconds=600)
-
-    def test_a_declared_ceiling_reaches_the_options(self) -> None:
-        options = self._options(timeout_seconds=600, schedule_to_close_seconds=1810)
-
-        assert options["schedule_to_close_timeout"] == timedelta(seconds=1810)
-        assert options["start_to_close_timeout"] == timedelta(seconds=600)
-
-    def test_a_ceiling_below_one_attempt_caps_start_to_close_in_the_options(
-        self,
-    ) -> None:
-        options = self._options(timeout_seconds=86_400, schedule_to_close_seconds=3600)
-
-        assert options["start_to_close_timeout"] == timedelta(seconds=3600)
-        assert options["schedule_to_close_timeout"] == timedelta(seconds=3600)
 
 
 class TestWorkflowDispatch:

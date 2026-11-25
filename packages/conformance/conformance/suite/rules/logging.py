@@ -9,7 +9,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -26,7 +25,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="FStringInLogMessage",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         orthogonal_gate="tests",
@@ -56,7 +54,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "%-style message body: embed context directly in the format string, do not\n"
             "move values to kwargs.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -74,7 +71,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="NonCanonicalLoggerFactory",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         orthogonal_gate="tests",
@@ -130,7 +126,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[L002] reason`` directive on that line\n"
             "suppresses it.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -146,7 +141,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ExtraKwargsWrongFramework",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.4.0",
@@ -162,7 +156,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "unindexed nested dict invisible to aggregation queries.  Framework-dependent\n"
             "classification; the checker must detect the active framework first.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -180,7 +173,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfoLog",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="missing-traceback",
         autofixable=True,
         orthogonal_gate="tests",
@@ -240,7 +232,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "* Everywhere else, ``exc_info=True`` on the existing log call is the fix.\n\n"
             '* A site that already logs a sanitized traceback (``redact_secrets("".join(traceback.format_exception(exc)))`` passed to the logger) delivers the rationale: leave it.\n\n'
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l004",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -258,7 +249,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="PrintInProductionCode",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.4.0",
@@ -277,7 +267,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "if __name__ == '__main__' guard. For those,\n"
             "stdout is the user interface, not a logging bypass."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -293,7 +282,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="InfoInTightLoop",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
         since="0.4.0",
@@ -326,7 +314,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``try``, nested loop or nested scope may sit between the log and that\n"
             "``return``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -343,7 +330,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="LoggerCriticalUsage",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
         since="0.4.0",
@@ -360,7 +346,6 @@ RULES: tuple[RuleDefinition, ...] = (
             'failure is "critical" from some perspective.  Use ERROR and handle severity\n'
             "through alerting rules on the observability platform.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l007",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -376,7 +361,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UnguardedExpensiveDebug",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-performance",
         autofixable=True,
         since="0.4.0",
@@ -405,7 +389,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "    if logger.isEnabledFor(logging.DEBUG):\n"
             "        logger.debug('snapshot: %s', json.dumps(big_dict))\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -422,7 +405,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-noise",
         autofixable=True,
         since="0.4.0",
@@ -457,7 +439,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "A ``raise HTTPException(...)`` (fastapi/starlette) is exempt anywhere:\n"
             "the framework never logs it, so the preceding log is the only record.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -474,7 +455,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="security",
         autofixable=True,
         orthogonal_gate="tests",
@@ -511,7 +491,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "A resource token that is only logged — never part of a path — still\n"
             "fires; log a name beside it, or drop it."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -527,7 +506,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="StringConcatenationInLog",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.4.0",
@@ -544,7 +522,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Like f-strings (L001), string concatenation embeds values into the message\n"
             "string in a way that breaks log grouping.  Rewrite as %-style message body.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l011",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -563,7 +540,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="StdlibExtraReservedKeyCollision",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="log-crash",
         autofixable=True,
         since="0.4.0",
@@ -585,7 +561,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "keys include: ``name``, ``message``, ``module``, ``args``, ``filename``,\n"
             "``process``, ``thread``.  Applies to stdlib only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l012",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -602,7 +577,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="StdlibArbitraryKwargs",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="log-crash",
         autofixable=True,
         since="0.4.0",
@@ -621,7 +595,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "and crashes the caller.  Very common when migrating from structlog/loguru.\n"
             "Applies to stdlib only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l013",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -637,7 +610,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="StructlogEventKwargOverwrite",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.4.0",
@@ -653,7 +625,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "overwrites the message with the domain value.  Rename the domain field to\n"
             "avoid collision.  Applies to structlog only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l014",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -672,7 +643,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="DictConfigDisableExistingLoggers",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
         since="0.4.0",
@@ -689,7 +659,6 @@ RULES: tuple[RuleDefinition, ...] = (
             'is the most common source of "why is my logging not working?".  Always set\n'
             '``"disable_existing_loggers": False``.  Applies to stdlib only.\n'
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l015",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -705,7 +674,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="BasicConfigNoopAfterFirstCall",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
         since="0.4.0",
@@ -722,7 +690,6 @@ RULES: tuple[RuleDefinition, ...] = (
             '``basicConfig()`` call outside ``if __name__ == "__main__":`` blocks.\n'
             "Applies to stdlib only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l016",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -738,7 +705,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="LoggerExceptionUsage",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
         since="0.4.0",
@@ -773,7 +739,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "exempt — it exists only to satisfy third-party Temporal callers and\n"
             "immediately delegates to ``self.error(..., exc_info=True)``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l017",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -790,7 +755,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="KwargsInApplicationLogCalls",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.4.0",
@@ -808,7 +772,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "invisible in the log stream.  Embed context directly in the message body\n"
             "using %-style formatting.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l018",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -824,7 +787,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="DiscardedBindResult",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
         since="0.4.0",
@@ -841,7 +803,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "discards the result, so the context is never attached to any log call.\n"
             "Assign the result: ``log = logger.bind(key=value)``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l019",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -858,7 +819,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="DeprecatedLoggingWarn",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.4.0",
@@ -873,7 +833,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``logger.warning()`` that will be removed in a future Python version.\n"
             "Rename every call site to ``logger.warning(...)``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l020",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",
@@ -908,7 +867,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="MissingLoggingLintRules",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
         since="0.4.0",
@@ -952,7 +910,79 @@ RULES: tuple[RuleDefinition, ...] = (
             "``[project].name`` starts with ``atlan-application-sdk`` are skipped\n"
             "(the SDK's own tooling config is managed separately).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="L022",
+        canonical_reference=(
+            "atlan-openapi-app app/api_client.py — `_parse_zip` catches a ZIP "
+            "entry that does not parse, logs `skipping file in ZIP` at WARNING "
+            "with exc_info=True and moves on to the next entry: the failure is "
+            "handled, so the record is a WARNING. atlan-mysql-app app/handler.py "
+            "`test_auth` is the contrast: it logs at ERROR and returns "
+            "AuthOutput(status=AuthStatus.FAILED, ...), so the failure reaches "
+            "the caller and the record stays at ERROR."
+        ),
+        rule_interactions=(
+            "E007 (ErrorToReturnValue) and E020 (HttpFailureToEmptyReturn) "
+            "judge what the handler returns; L022 judges only the level. A "
+            "handler that logs at ERROR and returns None can draw both: fix "
+            "the return first, because a handler that now raises or returns a "
+            "failure result clears L022 too. L009 (WarnThenRaiseDuplication) "
+            "never meets L022 on the same line: L022 skips every handler that "
+            "contains a raise. L004 still applies after the downgrade, so keep "
+            "exc_info=True on the WARNING."
+        ),
+        scope=RuleScope.BOTH,
+        name="HandledFailureLoggedAtError",
+        tier=EnforcementTier.WARN,
+        category="log-level",
+        autofixable=True,
+        since="0.60.0",
+        rationale=(
+            "ERROR means the operation failed. The customer-facing log view "
+            "filters at ERROR, so a failure the code caught and recovered from "
+            "— a best-effort close, a cache miss, a fallback taken — reads to "
+            "the customer as a failed run. A handler that neither raises, "
+            "exits, nor returns a failure result has handled the exception; "
+            "its record belongs at WARNING, which is what graceful degradation "
+            "is for."
+        ),
+        short_description=(
+            "logger.error() in an except block that neither raises nor returns "
+            "a failure — log the handled failure at WARNING"
+        ),
+        full_description=(
+            "Flags ``logger.error(...)`` (and ``logging.error(...)``) whose\n"
+            "innermost enclosing ``except`` handler does none of these:\n"
+            "\n"
+            "* contains a ``raise`` (anywhere in the handler, conditional or not);\n"
+            "* calls ``sys.exit``, ``os._exit``, ``exit`` or ``quit``;\n"
+            "* returns a failure result — a call or dict literal carrying\n"
+            "  ``success=False``, ``status=<Enum>.FAILURE|FAILED|ERROR``, any\n"
+            "  ``status=AuthStatus.<member>`` other than ``SUCCESS`` (the SDK\n"
+            "  contract's ``is_success`` is False for each), or a\n"
+            "  ``status_code`` of 500 or more. A call to a module-level helper,\n"
+            "  bound nowhere else in the module, counts only when its sole normal\n"
+            "  return is such a failure result; an ``async`` helper counts only\n"
+            "  when awaited.\n"
+            "* returns a nonzero integer status from a function whose every call\n"
+            "  sends its result to a process exit, such as\n"
+            "  ``raise SystemExit(asyncio.run(main()))``.\n"
+            "\n"
+            "Returning ``False``, ``None`` or a default value does not count as a\n"
+            "failure result: the caller gets a sentinel it may ignore, so the\n"
+            "handler has absorbed the failure.\n"
+            "\n"
+            "Fix: change ``.error(`` to ``.warning(`` and keep ``exc_info=True``.\n"
+            "When the handled failure can repeat at high rate (a per-record\n"
+            "pipeline path), rate-limit the record as well.  When the failure\n"
+            "is in fact fatal but surfaces later (collected and raised after\n"
+            "other work completes), keep ERROR and suppress with a reason.\n"
+        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/logging.prose.md",

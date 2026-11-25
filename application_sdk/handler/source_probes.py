@@ -70,7 +70,7 @@ _DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 
 
-def _getaddrinfo(host: str, port: int) -> list[tuple]:  # type: ignore[type-arg]
+def _getaddrinfo(host: str, port: int) -> list[tuple]:
     """The blocking resolver call. A module seam so tests replace only this."""
     return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
 
@@ -470,7 +470,7 @@ async def _probe_endpoint(
     for position, (base, probe) in enumerate(chain):
         try:
             row = await probe(endpoint, state, timeouts, policy)
-        except Exception:  # noqa: BLE001 — our defect: fail open, never a row
+        except Exception:  # our defect: fail open, never a row
             logger.warning(
                 "Source probe %s raised; reported as broken, not as a source failure",
                 base,

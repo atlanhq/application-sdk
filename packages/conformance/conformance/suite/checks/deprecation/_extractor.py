@@ -22,7 +22,13 @@ What counts as a machine-readable marker (derived empirically from the SDK):
    class body — one site per entry, attributed to ``<Enum>.<member>``;
 4. a ``_DEPRECATED_CONSTANTS = {"<name>": "<notice>"}`` mapping at module level
    in a module that also defines ``__getattr__`` (PEP 562) — one site per entry,
-   attributed to the bare constant name.
+   attributed to the bare constant name. ``__getattr__`` is either a ``def`` or
+   ``__getattr__ = deprecated_module_getattr(..., remove_in="X.Y.Z")``, the
+   SDK's shared factory (``application_sdk._deprecation``).
+
+A call to the SDK's ``warn_deprecated(name, replacement, remove_in)`` helper
+counts as a ``warnings.warn(..., DeprecationWarning)`` call everywhere above;
+its notice is rebuilt from the literal arguments.
 
 Markers 3 and 4 exist for the same reason: a decorator cannot reach either
 target. An enum member is an assignment in a class body and a module constant is
@@ -63,7 +69,13 @@ from conformance.suite.checks._deprecation_warn import (
     _class_warn_message,
     _is_deprecation_warn_call,
     _static_str,
+    warn_deprecated_message,
 )
+
+#: The SDK's PEP 562 factory (``application_sdk._deprecation``). A module that
+#: assigns ``__getattr__ = deprecated_module_getattr(...)`` has the shim, and
+#: the call's ``remove_in=`` keyword is its removal version.
+_MODULE_GETATTR_FACTORY = "deprecated_module_getattr"
 
 # Decorator / call names we recognise.
 _DEPRECATED_DECORATORS: frozenset[str] = frozenset({"deprecated"})
@@ -80,14 +92,28 @@ _DEPRECATED_CONSTANTS_ATTR = "_DEPRECATED_CONSTANTS"
 # A migration target is named when the notice points at a replacement.  Derived
 # from every notice the SDK writes today: "use X", "Use X instead",
 # "Migrate to Y", "Migrate now: …", "replaced by Z", "… instead".
+#
+# The second alternative is an imperative that opens a clause ("…; construct
+# DaprSecretStore(…) directly", ". Catch the category leaf", ". Remove the
+# decorator"): it tells the caller what to do instead even without the word
+# "use". Anchoring it to the start of a clause keeps a verb in passing ("the
+# activities that raise it", "no caller") from counting. "has no effect" is the
+# migration for a no-op: delete the usage, and nothing changes.
 _MIGRATION_RE = re.compile(
-    r"\b(use|migrate|replaced\s+by|instead|switch\s+to|prefer)\b",
+    r"\b(use|migrate|replaced\s+by|instead|switch\s+to|prefer)\b"
+    r"|(?:^|[.;:,—]\s*)(?:read|raise|catch|construct|call|remove|pass|omit|drop|declare)\b"
+    r"|\bhas\s+no\s+effect\b",
     re.IGNORECASE,
 )
 
-# A removal version is named as "removed in vX[.Y[.Z]]" / "will be removed in …".
+# A removal version is named as "removed in vX[.Y[.Z]]" / "will be removed in …",
+# as the release a deprecated usage starts failing ("rejected in vX", "will be
+# an error in vX"), or as the end of a grace period ("keeps working … until
+# vX"). The forms other than "removed in" require the "v", so "until 3 retries"
+# is not read as a version.
 _REMOVAL_RE = re.compile(
-    r"removed\s+in\s+[vV]?(\d+(?:\.\d+)*)",
+    r"(?:removed\s+in\s+[vV]?|(?:rejected|an\s+error)\s+in\s+[vV]|until\s+[vV])"
+    r"(\d+(?:\.\d+)*)",
     re.IGNORECASE,
 )
 
@@ -96,8 +122,13 @@ _REMOVAL_RE = re.compile(
 # colon (rather than a bare "Deprecated" word boundary) keeps free-form prose like
 # "Deprecated APIs are filtered out here" from reading as a claim, while still
 # matching every real notice ("Deprecated: use X — removed in v4.0").
+#
+# Only at the docstring's own indentation (after ``inspect.cleandoc``): a
+# directive indented under an ``Attributes:`` / ``Args:`` entry or a list item
+# deprecates that field or parameter, not the symbol, and a field cannot carry
+# ``@deprecated``.
 _DOCSTRING_CLAIM_RE = re.compile(
-    r"^\s*deprecated\s*:|^\s*\.\.\s*deprecated::",
+    r"^deprecated\s*:|^\.\.\s*deprecated::",
     re.IGNORECASE,
 )
 
@@ -116,7 +147,7 @@ class DeprecationNotice:
 
     message: str
     via: str
-    """``"decorator"`` | ``"warn"`` | ``"enum-member"``."""
+    """``"decorator"`` | ``"warn"`` | ``"enum-member"`` | ``"module-getattr"``."""
     has_migration_target: bool
     removal_version_raw: str | None
     lineno: int
@@ -265,26 +296,69 @@ def _deprecated_members(class_node: ast.ClassDef) -> list[tuple[str, str, int]]:
     return out
 
 
+def _module_getattr(tree: ast.Module) -> ast.AST | None:
+    """The module's PEP 562 ``__getattr__``: a ``def``, or a factory call.
+
+    Returns the ``def`` node, or the ``deprecated_module_getattr(...)`` call a
+    ``__getattr__ = …`` assignment binds; ``None`` when the module has neither.
+    """
+    for node in tree.body:
+        if (
+            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.name == "__getattr__"
+        ):
+            return node
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "__getattr__" for t in node.targets
+            )
+            and _is_module_getattr_factory(node.value)
+        ):
+            return node.value
+    return None
+
+
+def _is_module_getattr_factory(node: ast.expr) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    called = (
+        func.id
+        if isinstance(func, ast.Name)
+        else func.attr
+        if isinstance(func, ast.Attribute)
+        else None
+    )
+    return called == _MODULE_GETATTR_FACTORY
+
+
 def _module_getattr_tail(tree: ast.Module) -> str:
     """The shared notice text inside a module's PEP 562 ``__getattr__`` shim.
 
     The idiom keeps the per-name parts in :data:`_DEPRECATED_CONSTANTS_ATTR` and
     the sentence they are formatted into — crucially, the removal version —
-    inside ``__getattr__``'s ``warnings.warn`` f-string. Neither half carries a
-    complete notice on its own, so B002/B003 need both glued back together.
+    inside ``__getattr__``'s ``warnings.warn`` f-string, or in the factory's
+    ``remove_in=`` keyword. Neither half carries a complete notice on its own,
+    so B002/B003 need both glued back together.
 
-    Returns the constant parts of that f-string, or ``""`` when the module has
-    no shim (or one whose message is not statically extractable).
+    Returns the constant parts of that f-string (for the factory, a sentence
+    naming its ``remove_in``), or ``""`` when the module has no shim or one
+    whose message is not statically extractable.
     """
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        if node.name != "__getattr__":
-            continue
-        for inner in ast.walk(node):
-            message = _is_deprecation_warn_call(inner)
-            if message:
-                return message
+    getter = _module_getattr(tree)
+    if isinstance(getter, ast.Call):
+        remove_in = next(
+            (_static_str(kw.value) for kw in getter.keywords if kw.arg == "remove_in"),
+            "",
+        )
+        return f"Will be removed in v{remove_in}." if remove_in else ""
+    if getter is None:
+        return ""
+    for inner in ast.walk(getter):
+        message = _is_deprecation_warn_call(inner)
+        if message:
+            return message
     return ""
 
 
@@ -310,12 +384,7 @@ def _deprecated_constants(tree: ast.Module) -> list[tuple[str, str, int]]:
     tail is appended in both cases, because that is where the idiom keeps the
     removal version.
     """
-    has_getattr = any(
-        isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-        and node.name == "__getattr__"
-        for node in tree.body
-    )
-    if not has_getattr:
+    if _module_getattr(tree) is None:
         return []
     # Only the removal VERSION is taken from the shim's message, not its text.
     # Concatenating the text produced notices like "GATE_BROKEN — the enum
@@ -372,7 +441,7 @@ def _docstring_claims(node: ast.AST) -> bool:
         node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
     ):
         return False
-    doc = ast.get_docstring(node, clean=False)
+    doc = ast.get_docstring(node, clean=True)
     if not doc:
         return False
     return any(_DOCSTRING_CLAIM_RE.match(line) for line in doc.splitlines())
@@ -414,6 +483,39 @@ def _notice(message: str, via: str, lineno: int) -> DeprecationNotice:
     )
 
 
+def _warn_notice(
+    node: ast.AST,
+    constants: dict[str, str],
+    bindings: dict[tuple[str, int], str],
+) -> DeprecationNotice | None:
+    """The notice a ``DeprecationWarning`` call emits, or ``None`` for any other node.
+
+    A plain ``warnings.warn`` message is read through a local binding or a
+    module-level string constant when it is not a literal. Re-emitting an enum
+    member's notice is not a second notice: it is graded where it is declared.
+    """
+    message = _is_deprecation_warn_call(node)
+    if message is None:
+        return None
+    assert isinstance(node, ast.Call)  # _is_deprecation_warn_call checked it
+    # warn_deprecated's notice is rebuilt from all its arguments, not the first.
+    first = (
+        node.args[0] if node.args and warn_deprecated_message(node) is None else None
+    )
+    if _is_member_notice_lookup(first):
+        return None
+    if isinstance(first, ast.Name):
+        # A name the function writes is read from that write; otherwise it is a
+        # module-level constant, or unreadable.
+        key = (first.id, node.lineno)
+        message = message or (
+            bindings[key] if key in bindings else constants.get(first.id, "")
+        )
+    elif isinstance(first, ast.JoinedStr):
+        message = _render(first, constants)
+    return _notice(message, "warn", node.lineno)
+
+
 def extract_notices(tree: ast.Module) -> list[DeprecationNotice]:
     """Return every deprecation *notice* in *tree* (decorator or warn call).
 
@@ -422,6 +524,8 @@ def extract_notices(tree: ast.Module) -> list[DeprecationNotice]:
     authoring-hygiene checks B002 (format) and B003 (overdue removal).
     """
     notices: list[DeprecationNotice] = []
+    constants = _module_string_constants(tree)
+    bindings = _local_string_bindings(tree, constants)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             dec_message = _deprecated_decorator_message(node)
@@ -430,10 +534,140 @@ def extract_notices(tree: ast.Module) -> list[DeprecationNotice]:
         if isinstance(node, ast.ClassDef):
             for _member, message, lineno in _deprecated_members(node):
                 notices.append(_notice(message, "enum-member", lineno))
-        warn_message = _is_deprecation_warn_call(node)
-        if warn_message is not None:
-            notices.append(_notice(warn_message, "warn", node.lineno))
+        warn_notice = _warn_notice(node, constants, bindings)
+        if warn_notice is not None:
+            notices.append(warn_notice)
+    # A factory-built shim has no warn call in the module for the walk above to
+    # find; its notices are the table entries, each completed with remove_in=.
+    if isinstance(_module_getattr(tree), ast.Call):
+        for _name, message, lineno in _deprecated_constants(tree):
+            notices.append(_notice(message, "module-getattr", lineno))
     return notices
+
+
+def _is_member_notice_lookup(node: ast.expr | None) -> bool:
+    """``Enum.__deprecated_members__["X"]``: the notice of a deprecated member.
+
+    Warning with it re-emits a notice already graded at the enum, so it is not
+    a second notice.
+    """
+    return (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == _DEPRECATED_MEMBERS_ATTR
+    )
+
+
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Module-level ``NAME = "text"`` bindings, for reading f-string notices.
+
+    A removal version kept in one constant (``REMOVAL_VERSION = "4.0.0"``) and
+    interpolated into the notice is good practice, and the notice is still
+    statically known: the constant is a literal in the same module.
+    """
+    out: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        else:
+            continue
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            out[target.id] = value.value
+    return out
+
+
+def _render(node: ast.expr | None, constants: dict[str, str]) -> str:
+    """:func:`_static_str`, with ``{NAME}`` filled from *constants* where known."""
+    if not isinstance(node, ast.JoinedStr):
+        return _static_str(node)
+    parts: list[str] = []
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            parts.append(part.value)
+        elif (
+            isinstance(part, ast.FormattedValue)
+            and isinstance(part.value, ast.Name)
+            and part.format_spec is None
+            and part.conversion == -1
+        ):
+            parts.append(constants.get(part.value.id, ""))
+    return "".join(parts)
+
+
+def _own_scope(function: ast.FunctionDef | ast.AsyncFunctionDef):
+    """The nodes of *function*'s body, not descending into nested scopes."""
+    pending = list(ast.iter_child_nodes(function))
+    while pending:
+        node = pending.pop()
+        yield node
+        if not isinstance(
+            node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
+        ):
+            pending.extend(ast.iter_child_nodes(node))
+
+
+def _bound_names(node: ast.AST) -> list[tuple[str, ast.expr | None]]:
+    """``(name, value)`` for each plain name *node* writes; value ``None`` if unknown."""
+    if isinstance(node, ast.Assign):
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            return [(node.targets[0].id, node.value)]
+        return [
+            (n.id, None)
+            for t in node.targets
+            for n in ast.walk(t)
+            if isinstance(n, ast.Name)
+        ]
+    if isinstance(node, ast.AnnAssign | ast.AugAssign) and isinstance(
+        node.target, ast.Name
+    ):
+        value = node.value if isinstance(node, ast.AnnAssign) else None
+        return [(node.target.id, value)]
+    if isinstance(node, ast.NamedExpr):
+        return [(node.target.id, node.value)]
+    return []
+
+
+def _local_string_bindings(
+    tree: ast.Module, constants: dict[str, str]
+) -> dict[tuple[str, int], str]:
+    """The text a ``warn(name, …)`` call's *name* holds, keyed by ``(name, call line)``.
+
+    ``message = (f"…"); warnings.warn(message, DeprecationWarning)`` is a common
+    shape when the same text also goes to a logger. For each such call, the
+    nearest write of that name above it in the same function is the notice:
+    a plain ``name = <string or f-string>`` gives its text, and any other write
+    gives ``""`` (unreadable), so an earlier literal is never reused. Writes in
+    nested functions or classes are another scope and do not count. A name the
+    function never writes is absent, for the caller to look up at module level.
+    """
+    out: dict[tuple[str, int], str] = {}
+    for func in ast.walk(tree):
+        if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        assigned: dict[str, list[tuple[int, str]]] = {}
+        calls: list[tuple[str, int]] = []
+        for node in _own_scope(func):
+            for name, value in _bound_names(node):
+                text = _render(value, constants) if value is not None else ""
+                assigned.setdefault(name, []).append((getattr(node, "lineno", 0), text))
+            if (
+                isinstance(node, ast.Call)
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and _is_deprecation_warn_call(node) == ""
+            ):
+                calls.append((node.args[0].id, node.lineno))
+        for name, line in calls:
+            before = [entry for entry in assigned.get(name, []) if entry[0] < line]
+            if before:
+                out[(name, line)] = max(before)[1]
+    return out
 
 
 def extract_sites(tree: ast.Module) -> list[DeprecationSite]:

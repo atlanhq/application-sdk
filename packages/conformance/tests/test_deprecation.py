@@ -24,6 +24,7 @@ from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
 from conformance.suite.checks.deprecation._consumer import (
     PUBLIC_RENAMES,
+    own_module_paths,
     scan_consumer,
     unsafe_renames,
 )
@@ -144,6 +145,103 @@ def test_b001_fires_on_deprecated_method_call() -> None:
     findings = _b001(src)
     assert [f.rule_id for f in findings] == ["B001"]
     assert "upload_to_atlan" in findings[0].message
+
+
+def _b001_own(src: str, file: str, own: frozenset[str]) -> list:
+    tree, directives = _tree_and_directives(src)
+    return scan_consumer(tree, file, _MANIFEST, directives, own_modules=own)
+
+
+def test_b001_skips_a_method_name_called_on_an_own_module() -> None:
+    # FND-4919: an app's own module exposing a function named like a
+    # deprecated SDK method. ``events.upload_to_atlan(...)`` runs the
+    # module's function; it cannot be the SDK method.
+    src = (
+        "from app.toolshed import events\n"
+        "def run(data):\n    return events.upload_to_atlan(data)\n"
+    )
+    own = own_module_paths_of("app/toolshed/events.py")
+    assert _b001_own(src, "app/main.py", own) == []
+
+
+def test_b001_skips_a_method_name_called_on_an_imported_module() -> None:
+    src = (
+        "import events as ev\nimport pkg.events\n"
+        "ev.upload_to_atlan(1)\npkg.upload_to_atlan(2)\n"
+    )
+    assert _b001(src) == []
+
+
+def test_b001_resolves_a_relative_import_of_an_own_module() -> None:
+    src = "from . import events\nevents.upload_to_atlan(1)\n"
+    own = own_module_paths_of("app/toolshed/events.py")
+    assert _b001_own(src, "app/toolshed/runner.py", own) == []
+
+
+def test_b001_still_fires_when_from_import_is_not_a_known_module() -> None:
+    # ``logger`` imported from an app module is an object, maybe an SDK one.
+    src = "from app.utils import logger\nlogger.upload_to_atlan(1)\n"
+    own = own_module_paths_of("app/utils.py")
+    assert [f.rule_id for f in _b001_own(src, "app/main.py", own)] == ["B001"]
+
+
+def test_b001_still_fires_when_a_module_name_is_rebound() -> None:
+    src = (
+        "import events\n"
+        "def run(make):\n"
+        "    events = make()\n"
+        "    return events.upload_to_atlan(1)\n"
+    )
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_still_fires_on_an_attribute_receiver_of_a_module() -> None:
+    # ``mod.obj.method()`` — the receiver is ``mod.obj``, not the module.
+    src = "import mod\nmod.extractor.upload_to_atlan(1)\n"
+    assert [f.rule_id for f in _b001(src)] == ["B001"]
+
+
+def test_b001_scan_all_exempts_own_module_receiver(tmp_path) -> None:
+    """The FND-4919 shape, through scan_all and the committed manifest.
+
+    An app module's ``activity()`` context manager must not be reported as
+    the deprecated ``AtlanLoggerAdapter.activity``; the SDK logger's own
+    ``activity()`` call in the same file still is.
+    """
+    from conformance.suite.checks.deprecation import scan_all
+
+    root = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[project]\nname = "atlan-example-app"\nversion = "0.1.0"\n',
+            "app/toolshed/lookup_events.py": "def activity(labels):\n    pass\n",
+            "app/main.py": (
+                "from application_sdk.observability.logger_adaptor import get_logger\n"
+                "from app.toolshed import lookup_events\n"
+                "logger = get_logger(__name__)\n"
+                "with lookup_events.activity({}):\n"
+                "    logger.activity('x')\n"
+            ),
+        },
+    )
+    lines = [
+        f.line
+        for f in scan_all([root / "app/main.py"], root)
+        if f.rule_id == "B001" and "'activity'" in f.message
+    ]
+    assert lines == [5]
+
+
+def own_module_paths_of(*files: str) -> frozenset[str]:
+    """``own_module_paths`` for a tree holding exactly *files*."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        for f in files:
+            path = Path(d) / f
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+        return own_module_paths(Path(d))
 
 
 def test_b001_never_matches_a_deprecated_property_as_a_call() -> None:
@@ -2192,3 +2290,254 @@ def test_b001_rename_check_prunes_skipped_directories_from_the_walk(
         for part in parts
     )
     assert ("app",) in entered
+
+
+# ── The SDK's shared helpers (application_sdk._deprecation, FND-4300) ──────────
+
+
+def test_warn_deprecated_call_is_a_graded_notice() -> None:
+    src = (
+        "from application_sdk import _deprecation\n"
+        "def old():\n"
+        "    _deprecation.warn_deprecated('old', 'new', '9.0.0', note='renamed')\n"
+    )
+    (notice,) = extract_notices(ast.parse(src))
+    assert notice.message == (
+        "old is deprecated; use new instead — renamed. Will be removed in v9.0.0."
+    )
+    assert notice.removal_version_raw == "9.0.0"
+    assert _authoring_ids(src) == []
+
+
+def test_warn_deprecated_with_an_unreadable_version_is_flagged() -> None:
+    src = (
+        "from application_sdk._deprecation import warn_deprecated\n"
+        "def old(version):\n"
+        "    warn_deprecated('old', 'new', version)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_warn_deprecated_in_init_subclass_marks_the_class() -> None:
+    src = (
+        "class Old:\n"
+        "    def __init_subclass__(cls, **kw):\n"
+        "        warn_deprecated('Old', 'New', '9.0.0')\n"
+    )
+    (site,) = extract_sites(ast.parse(src))
+    assert (site.symbol, site.marker_via, site.removal_version_raw) == (
+        "Old",
+        "warn",
+        "9.0.0",
+    )
+
+
+_FACTORY_SHIM = (
+    "from application_sdk import _deprecation\n"
+    "_DEPRECATED_CONSTANTS = {\n"
+    "    'OLD': ('pkg.NEW', 'moved'),\n"
+    "    'GONE': 'GONE is deprecated and has no effect; it will be removed in v9.0.0.',\n"
+    "}\n"
+    "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+    "    __name__, _DEPRECATED_CONSTANTS, remove_in='9.0.0'\n"
+    ")\n"
+)
+
+
+def test_factory_shim_serves_its_table_as_constants() -> None:
+    sites = {s.symbol: s for s in extract_sites(ast.parse(_FACTORY_SHIM))}
+    assert set(sites) == {"OLD", "GONE"}
+    assert sites["OLD"].marker_via == "module-getattr"
+    # The removal version comes from the factory's remove_in= keyword.
+    assert sites["OLD"].removal_version_raw == "9.0.0"
+    assert sites["OLD"].has_migration_target
+    assert _authoring_ids(_FACTORY_SHIM) == []
+
+
+def test_factory_shim_removal_can_fall_overdue() -> None:
+    assert "B003" in _authoring_ids(_FACTORY_SHIM, version="9.0.0")
+
+
+def test_table_without_any_getattr_is_still_not_a_shim() -> None:
+    src = "_DEPRECATED_CONSTANTS = {'OLD': ('pkg.NEW', 'moved')}\n"
+    assert extract_sites(ast.parse(src)) == []
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "f is deprecated; construct Store(client) directly. Will be removed in v9.0.0.",
+        "f is deprecated; call g() and h(). Will be removed in v9.0.0.",
+        "E is deprecated and will be removed in v9.0.0. Catch the category leaf.",
+        "f has no effect: nothing registers it. Will be removed in v9.0.0.",
+        "needs_lock has no effect. Remove the decorator; it will be removed in v9.0.0.",
+        "f(x=None) is deprecated. Pass x=True, or omit x. Removed in v9.0.0.",
+        "f is deprecated; drop the call. Will be removed in v9.0.0.",
+    ],
+)
+def test_b002_reads_an_imperative_or_no_op_notice_as_naming_a_migration(
+    notice: str,
+) -> None:
+    src = f"import warnings\ndef f():\n    warnings.warn({notice!r}, DeprecationWarning)\n"
+    assert _authoring_ids(src) == []
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        # A verb in passing, not opening a clause, names nothing to do.
+        "E is deprecated: nothing in the SDK raises it. Will be removed in v9.0.0.",
+        "f is deprecated and has no caller. Will be removed in v9.0.0.",
+    ],
+)
+def test_b002_still_fires_on_a_verb_in_passing(notice: str) -> None:
+    src = f"import warnings\ndef f():\n    warnings.warn({notice!r}, DeprecationWarning)\n"
+    assert _authoring_ids(src) == ["B002"]
+
+
+@pytest.mark.parametrize(
+    ("notice", "version"),
+    [
+        ("plain strings are rejected in v9.0.0; use a Dir", "9.0.0"),
+        ("use X instead; this will be an error in v9.1", "9.1"),
+        ("override g() instead; the old hook keeps working until v9.0.0", "9.0.0"),
+    ],
+)
+def test_removal_version_reads_a_behaviour_change_horizon(
+    notice: str, version: str
+) -> None:
+    src = f"import warnings\ndef f():\n    warnings.warn({notice!r}, DeprecationWarning)\n"
+    (read,) = extract_notices(ast.parse(src))
+    assert read.removal_version_raw == version
+
+
+def test_until_without_a_v_is_not_a_version() -> None:
+    src = (
+        "import warnings\ndef f():\n"
+        "    warnings.warn('use g instead; retried until 3 attempts', DeprecationWarning)\n"
+    )
+    (read,) = extract_notices(ast.parse(src))
+    assert read.removal_version_raw is None
+
+
+def test_b002_reads_a_notice_held_in_a_local_variable() -> None:
+    src = (
+        "import warnings\n"
+        "REMOVAL = '9.0.0'\n"
+        "def f(name):\n"
+        "    message = (\n"
+        "        f'{name}: old() is deprecated; use new() — removed in v{REMOVAL}.'\n"
+        "    )\n"
+        "    warnings.warn(message, DeprecationWarning, stacklevel=2)\n"
+    )
+    (read,) = extract_notices(ast.parse(src))
+    assert read.removal_version_raw == "9.0.0"
+    assert _authoring_ids(src) == []
+
+
+def test_b002_still_fires_on_a_variable_it_cannot_read() -> None:
+    src = (
+        "import warnings\n"
+        "def f(message):\n"
+        "    warnings.warn(message, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_an_unknown_name_in_an_f_string_leaves_the_version_unread() -> None:
+    src = (
+        "import warnings\n"
+        "from elsewhere import REMOVAL\n"
+        "def f():\n"
+        "    warnings.warn(f'use new() — removed in v{REMOVAL}', DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_reemitting_an_enum_members_notice_is_not_a_second_notice() -> None:
+    src = (
+        "import warnings\n"
+        "def f(status):\n"
+        "    warnings.warn(\n"
+        "        Status.__deprecated_members__['PARTIAL'], DeprecationWarning\n"
+        "    )\n"
+    )
+    assert extract_notices(ast.parse(src)) == []
+
+
+def test_b004_silent_on_a_directive_that_deprecates_a_field() -> None:
+    src = (
+        "class Plan:\n"
+        '    """How a run is addressed.\n'
+        "\n"
+        "    Attributes:\n"
+        "        run_id: Ignored.\n"
+        "\n"
+        "            .. deprecated:: 3.34.0\n"
+        "               Nothing reads this. Removed in v4.0.\n"
+        '    """\n'
+    )
+    assert _authoring_ids(src) == []
+
+
+def test_b004_still_fires_on_a_top_level_directive() -> None:
+    src = (
+        "def old():\n"
+        '    """Do the old thing.\n'
+        "\n"
+        "    .. deprecated:: 3.37\n"
+        "        Use new(). Removed in v4.0.\n"
+        '    """\n'
+    )
+    assert _authoring_ids(src) == ["B004"]
+
+
+def test_b002_and_b004_block() -> None:
+    assert get_rule("B002").tier is EnforcementTier.BLOCK
+    assert get_rule("B004").tier is EnforcementTier.BLOCK
+
+
+def test_a_later_unreadable_write_hides_an_earlier_literal() -> None:
+    src = (
+        "import warnings\n"
+        "def f():\n"
+        "    message = 'old() is deprecated; use new() — removed in v9.0.0.'\n"
+        "    message = build_notice()\n"
+        "    warnings.warn(message, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_a_nested_scopes_binding_does_not_feed_the_outer_warning() -> None:
+    src = (
+        "import warnings\n"
+        "def f():\n"
+        "    def helper():\n"
+        "        message = 'old() is deprecated; use new() — removed in v9.0.0.'\n"
+        "        return message\n"
+        "    warnings.warn(message, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]
+
+
+def test_a_module_level_notice_constant_is_read() -> None:
+    src = (
+        "import warnings\n"
+        "NOTICE = 'Old is deprecated; use New. Will be removed in v9.0.0.'\n"
+        "def f():\n"
+        "    warnings.warn(NOTICE, DeprecationWarning)\n"
+    )
+    (read,) = extract_notices(ast.parse(src))
+    assert read.removal_version_raw == "9.0.0"
+    assert _authoring_ids(src) == []
+
+
+def test_a_local_write_shadows_the_module_constant() -> None:
+    src = (
+        "import warnings\n"
+        "NOTICE = 'Old is deprecated; use New. Will be removed in v9.0.0.'\n"
+        "def f():\n"
+        "    NOTICE = compute()\n"
+        "    warnings.warn(NOTICE, DeprecationWarning)\n"
+    )
+    assert _authoring_ids(src) == ["B002"]

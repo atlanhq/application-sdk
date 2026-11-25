@@ -235,7 +235,7 @@ async def wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None:
     except Exception:
         # The worst outcome of this whole feature has to be a worker that starts
         # normally, so nothing raised in here reaches the caller.
-        logger.error(
+        logger.warning(
             "could not hold this worker back; starting it normally", exc_info=True
         )
 

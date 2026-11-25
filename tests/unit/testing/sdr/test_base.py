@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 import orjson
 import pytest
 
-from application_sdk.testing.integration import BaseIntegrationTest, Scenario
+from application_sdk.testing.integration.models import Scenario
+from application_sdk.testing.integration.runner import BaseIntegrationTest
 from application_sdk.testing.sdr import BaseSDRIntegrationTest
 
 

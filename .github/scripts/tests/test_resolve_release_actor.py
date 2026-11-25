@@ -9,15 +9,11 @@ the shape of the real API responses is pinned here as fixtures.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
+import resolve_release_actor as actor
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import resolve_release_actor as actor  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = _REPO_ROOT / ".github/workflows/build-and-publish-app.yaml"

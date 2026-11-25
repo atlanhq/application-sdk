@@ -6,14 +6,10 @@ import email.message
 import inspect
 import io
 import json
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import renovate_fleet_scan as rfs
-from _frozen_clock import freeze_clock  # noqa: E402
+from _frozen_clock import freeze_clock
 
 # ---------------------------------------------------------------------------
 # Scope resolution + query building
@@ -32,19 +28,18 @@ def test_resolve_scope_single_repo_when_repo_set():
 
 
 def test_build_search_query_full_fleet():
-    q = rfs.build_search_query("org:atlanhq", "is:open")
-    assert (
-        q == "org:atlanhq is:pr author:app/renovate author:app/atlan-app-fleet is:open"
-    )
+    q = rfs.build_search_query("org:atlanhq", "app/renovate", "is:open")
+    assert q == "org:atlanhq is:pr author:app/renovate is:open"
 
 
 def test_build_search_query_single_repo():
     q = rfs.build_search_query(
-        "repo:atlanhq/atlan-mysql-app", "is:merged merged:>=2026-06-01"
+        "repo:atlanhq/atlan-mysql-app",
+        "app/atlan-app-fleet",
+        "is:merged merged:>=2026-06-01",
     )
     assert q == (
-        "repo:atlanhq/atlan-mysql-app is:pr "
-        "author:app/renovate author:app/atlan-app-fleet "
+        "repo:atlanhq/atlan-mysql-app is:pr author:app/atlan-app-fleet "
         "is:merged merged:>=2026-06-01"
     )
 

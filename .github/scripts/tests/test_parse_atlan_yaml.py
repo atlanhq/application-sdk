@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import json
-import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from parse_atlan_yaml import (
     AtlanYamlError,
     _read_sdk_version_from_uv_lock,

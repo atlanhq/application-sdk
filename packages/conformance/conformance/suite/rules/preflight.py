@@ -33,13 +33,7 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
-)
-
-_HELP_BASE = (
-    "https://github.com/atlanhq/application-sdk/blob/main/"
-    "packages/conformance/conformance/docs/rules/preflight.md"
 )
 
 _EXISTING_RULES: tuple[RuleDefinition, ...] = (
@@ -54,7 +48,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="ReservedPreflightActivityName",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -85,7 +78,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``Handler.preflight_check`` (which the gate already calls). A non-literal "
             "``@task(name=<expr>)`` is not statically resolvable and is not flagged."
         ),
-        help_uri=f"{_HELP_BASE}#f001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -102,7 +94,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DuplicateInWorkflowPreflight",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -127,7 +118,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "Remediation: delete the app-owned preflight activity and keep the single "
             "``Handler.preflight_check`` implementation the gate calls."
         ),
-        help_uri=f"{_HELP_BASE}#f002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -146,7 +136,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -174,7 +163,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``passed`` without an error produces F019 instead of a proven violation. "
             "A locally-defined non-SDK class named ``PreflightCheck`` is not flagged."
         ),
-        help_uri=f"{_HELP_BASE}#f003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -193,7 +181,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="PreflightMetadataContractParity",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -230,7 +217,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "via either ``model_config`` form: "
             '``ConfigDict(extra="allow")`` or ``{"extra": "allow"}``.'
         ),
-        help_uri=f"{_HELP_BASE}#f004",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -248,7 +234,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="PreflightFailureLoggedAsWarning",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         autofixable=False,
         orthogonal_gate="tests",
@@ -290,7 +275,6 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "data. A probe arm that already returns a typed PreflightCheck clears "
             "E004 with no log at all (FND-2628). Found in FND-2569."
         ),
-        help_uri=f"{_HELP_BASE}#f005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -311,14 +295,12 @@ _CONTRACT_RULES = (
         name="PreflightHandlerContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
         full_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
         rationale="Customer impact: Missing types and legacy output dictionaries hide contract drift from both UI and workflow consumers.",
-        help_uri=f"{_HELP_BASE}#f006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -336,7 +318,6 @@ _CONTRACT_RULES = (
         name="PreflightFailureAction",
         scope=RuleScope.APP,
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
@@ -357,7 +338,6 @@ _CONTRACT_RULES = (
             "audience, so keep internal file paths and exception text out of it."
         ),
         rationale="Customer impact: A typed error with no action still leaves a blocked workflow without a usable next step.",
-        help_uri=f"{_HELP_BASE}#f007",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -376,7 +356,6 @@ _CONTRACT_RULES = (
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
@@ -408,7 +387,6 @@ _CONTRACT_RULES = (
             "row a returned verdict carries, and a raised fail-open category is a "
             "deprecated request the gate no longer honours as plumbing."
         ),
-        help_uri=f"{_HELP_BASE}#f008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -426,14 +404,12 @@ _CONTRACT_RULES = (
         name="PreflightVerdictAggregation",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
         full_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
         rationale="Advisory failures must not become mandatory blocks and a successful status must not hide failed checks.",
-        help_uri=f"{_HELP_BASE}#f009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -452,14 +428,12 @@ _CONTRACT_RULES = (
         name="PreflightGateInputParity",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
         full_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
         rationale="The injected gate runs before workflow-body normalization, so a UI check can succeed while the gate sees different inputs.",
-        help_uri=f"{_HELP_BASE}#f010",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -476,7 +450,6 @@ _CONTRACT_RULES = (
         name="PreflightBlockingProbe",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
@@ -497,7 +470,6 @@ _CONTRACT_RULES = (
             "remaining preflight budget. Swapping without the deadline leaves F011 "
             "firing on the new line."
         ),
-        help_uri=f"{_HELP_BASE}#f011",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -517,14 +489,12 @@ _CONTRACT_RULES = (
         name="PreflightBudgetOverride",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Keep probe and retry deadlines inside the remaining gate budget.",
         full_description="Keep probe and retry deadlines inside the remaining gate budget.",
         rationale="Floors, extra margins and equal nested timeout boundaries turn healthy probes into timeout races.",
-        help_uri=f"{_HELP_BASE}#f012",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -541,14 +511,12 @@ _CONTRACT_RULES = (
         name="PreflightCancellationCleanup",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Release owned preflight resources without blocking the event loop.",
         full_description="Release owned preflight resources without blocking the event loop.",
         rationale="Cancellation of an await does not terminate a driver thread or release its resources.",
-        help_uri=f"{_HELP_BASE}#f013",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/preflight-guide.md",
@@ -565,14 +533,12 @@ _CONTRACT_RULES = (
         name="PreflightFailureExposure",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Keep raw exception and credential values out of preflight outputs and logs.",
         full_description="Keep raw exception and credential values out of preflight outputs and logs.",
         rationale="Typed wire fields and traceback locals are independent channels through which secrets can escape.",
-        help_uri=f"{_HELP_BASE}#f014",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="adopt-preflight-gate",
@@ -593,14 +559,12 @@ _CONTRACT_RULES = (
         name="PreflightRemovedGateContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Migrate the inert mode override and the renamed gate-classification helpers.",
         full_description="Migrate the inert mode override and the renamed gate-classification helpers.",
         rationale="SDK PR #3685 renamed the old gate contract. The nine affected symbols are served as deprecated aliases until v3.40.0 and ATLAN_PREFLIGHT_GATE_MODE no longer does anything, so a hit is a migration window rather than proof of current incompatibility — WARN, not BLOCK.",
-        help_uri=f"{_HELP_BASE}#f015",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/preflight-guide.md",
@@ -621,7 +585,6 @@ _CONTRACT_RULES = (
         name="PreflightBehaviorContract",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
@@ -646,7 +609,6 @@ _CONTRACT_RULES = (
             "it has."
         ),
         rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime, so each scenario must exist as a test the test gate runs. A missing scenario is a behaviour nothing verifies.",
-        help_uri=f"{_HELP_BASE}#f016",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/preflight-guide.md",
@@ -664,7 +626,6 @@ _CONTRACT_RULES = (
         name="PreflightAnalysisCoverage",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
@@ -686,7 +647,6 @@ _CONTRACT_RULES = (
             "the code statically resolvable."
         ),
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
-        help_uri=f"{_HELP_BASE}#f019",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/preflight-guide.md",
@@ -703,7 +663,6 @@ _CONTRACT_RULES = (
         name="RetiredPreflightSuppression",
         scope=RuleScope.APP,
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.32.0",
@@ -723,7 +682,6 @@ _CONTRACT_RULES = (
             "unexplained finding on the next conformance run, and the developer has "
             "no signal that the stale directive is the cause."
         ),
-        help_uri=f"{_HELP_BASE}#f020",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/preflight-guide.md",

@@ -1,7 +1,6 @@
 """Build and run the SDK unit-test pytest command for one matrix leg.
 
-Called by ``.github/actions/unit-tests``. The per-leg decisions — which uv
-groups exist on this Python, whether the socket guard can be on, how a hung
+Called by ``.github/actions/unit-tests``. The per-leg decisions — how a hung
 test is interrupted, whether this leg measures coverage — live here rather
 than in the action's ``run:`` block so each branch has a test
 (``tests/test_unit_test_command.py``; see ``docs/standards/ci.md``).
@@ -13,12 +12,12 @@ cannot sink far below the global gate under a passing total (FND-4678).
 Usage::
 
     python .github/scripts/unit_test_command.py \\
-        --python-version 3.12 --runner-os Linux --coverage true --fail-under 85
+        --runner-os Linux --coverage true --fail-under 85
 
     # The dependency-floor leg: the same suite with pandas and pyarrow at the
     # lowest versions the SDK publishes, instead of the locked ones.
     python .github/scripts/unit_test_command.py \\
-        --python-version 3.11 --runner-os Linux --coverage false --fail-under 85 \\
+        --runner-os Linux --coverage false --fail-under 85 \\
         --dependency-floors pandas,pyarrow
 """
 
@@ -56,16 +55,6 @@ SLOW_TEST_SECONDS = 5.0
 #: Annotate at most this many slow tests, slowest first: GitHub shows only the
 #: first few annotations of a step, and a wall of them is noise.
 MAX_SLOW_TEST_ANNOTATIONS = 10
-
-#: Python 3.14+ legs skip the dev group (libcst has no 3.14 support) and
-#: the tests that need it, or pyatlan's pydantic-v1 compat (upstream fix:
-#: atlan-python PR #893).
-_PY314_IGNORES = (
-    "--ignore=tests/unit/tools",
-    "--ignore=tests/unit/clients/test_atlan_client.py",
-    "--ignore=tests/unit/credentials/test_atlan_client.py",
-)
-
 
 #: The extra whose published floors the dependency-floor leg installs. pandas
 #: and pyarrow reach apps through it; the [incremental] and [pandas] extras
@@ -131,16 +120,8 @@ def dependency_floors(
     return pins
 
 
-def _python_minor(python_version: str) -> int:
-    major, minor, *_ = python_version.split(".")
-    if major != "3":
-        raise ValueError(f"unsupported Python version {python_version!r}")
-    return int(minor)
-
-
 def build_command(
     *,
-    python_version: str,
     runner_os: str,
     coverage: bool,
     fail_under: str,
@@ -153,12 +134,9 @@ def build_command(
     installed over the locked environment with ``uv run --with``; the lock
     itself is still ``--frozen``.
     """
-    py314 = _python_minor(python_version) >= 14
     windows = runner_os == "Windows"
 
     argv = ["uv", "run", "--frozen"]
-    if py314:
-        argv += ["--no-group", "dev"]
     for pin in floor_pins:
         argv += ["--with", pin]
     # With --with, uv runs an overlay interpreter on top of the project venv.
@@ -168,8 +146,6 @@ def build_command(
     # `python -m pytest` runs under the overlay interpreter.
     argv += ["python", "-m", "pytest"] if floor_pins else ["pytest"]
     argv += ["--import-mode=importlib", "tests/"]
-    if py314:
-        argv += _PY314_IGNORES
 
     # -n auto: the suite was single-threaded, so a leg took 6-10 minutes while
     # the runner sat on 4 idle vCPUs (FND-961).
@@ -182,12 +158,13 @@ def build_command(
     # execnet, and it made a job log 20,000 lines.
     argv += ["-n", "auto", "--hypothesis-show-statistics"]
 
-    # pytest-socket: on Linux/macOS the event loop uses os.pipe()/AF_UNIX for
-    # its self-pipe, so --allow-unix-socket is sufficient. On Windows,
-    # ProactorEventLoop uses AF_INET socket pairs internally; --disable-socket
-    # would break asyncio entirely there, so Windows runs without the guard.
-    if not windows:
-        argv += ["--disable-socket", "--allow-unix-socket"]
+    # pytest-socket on every OS: no test may create a socket other than an
+    # AF_UNIX one (the POSIX event loop's self-pipe). Windows has no native
+    # socketpair(), so ProactorEventLoop's self-pipe is an emulated loopback
+    # pair; tests/conftest.py builds it from the pre-guard socket class there
+    # (tests/socket_guard.py). --allow-hosts is not used for Windows: it guards
+    # socket.connect() only, which Proactor's ConnectEx and UDP sendto bypass.
+    argv += ["--disable-socket", "--allow-unix-socket"]
 
     # SIGALRM interrupts the hung test and the worker carries on. Windows has
     # no SIGALRM, so it gets the thread method, which dumps every stack and
@@ -432,7 +409,6 @@ def _run(argv: Sequence[str]) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--python-version", required=True)
     parser.add_argument("--runner-os", required=True)
     parser.add_argument("--coverage", required=True, type=_parse_bool)
     parser.add_argument("--fail-under", required=True)
@@ -460,7 +436,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "unit-tests-junit.xml"
     )
     command = build_command(
-        python_version=args.python_version,
         runner_os=args.runner_os,
         coverage=args.coverage,
         fail_under=args.fail_under,

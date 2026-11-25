@@ -10,14 +10,16 @@
 //   - declarations are keyed by contract field name, never by path shape.
 //   - nesting stays flat: a container declaration plus leaf paths, with `[]` as the
 //     "descend into the list" step, so arrays of structs are expressible without a
-//     recursive type grammar. (The refusals for an undeclared or wrongly-typed
-//     container live in scripts/check-invariants.sh.)
+//     recursive type grammar; an undeclared or wrongly-typed container is refused.
+//   - a declaration that would check nothing fails to generate rather than render.
 //   - a bundle relocates each entrypoint's declarations under
 //     `app/generated/{entrypoint}/` with no bundle-specific wiring.
 
 amends "pkl:test"
 
 import "pkl:json"
+import "pkl:reflect"
+import "../src/SdkNames.pkl"
 import "../examples/artifact-schemas/app.pkl" as artifactSchemasApp
 import "../examples/minimal/app.pkl" as minimalApp
 import "../src/App.pkl" as App
@@ -260,7 +262,48 @@ local arraysSchemas = parser.parse(
 
 local arraysFields = arraysSchemas["schemas"]["entities"]["fields"]
 
+// ── Refusals: declarations that must fail to generate ─────────────────────────
+
+// Renders every output file, as `pkl eval -m` does, and returns the refusal message.
+local function err(m: Module): String =
+  module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text))
+
+local function withSchema(key: String, schemaFields: Listing<App.ArtifactField>) = (noSchemasApp) {
+  artifactSchemas {
+    [key] = new App.ArtifactSchema {
+      format = "ndjson"
+      fields = schemaFields
+    }
+  }
+}
+
+local function f(fieldName: String, fieldType: String) =
+  new App.ArtifactField { name = fieldName; type = fieldType; description = "d" }
+
+// The string literals a vocabulary typealias accepts, through nested aliases.
+local function literals(t: reflect.Type): Set<String> =
+  if (t is reflect.UnionType) t.members.fold(Set(), (acc: Set<String>, m) -> acc + literals(m))
+  else if (t is reflect.StringLiteralType) Set(t.value)
+  else if (t is reflect.DeclaredType && t.referent is reflect.TypeAlias)
+    literals((t.referent as reflect.TypeAlias).referent)
+  else throw("unexpected member \(t) in an artifact vocabulary typealias")
+
 facts {
+  // ── Vocabulary: the typealiases accept exactly SdkNames.pkl's sets ──────────
+  // scripts/test-sdk-import.py compares those sets with the SDK's
+  // ARTIFACT_FIELD_TYPES / ARTIFACT_FIELD_TYPES_EXTENDED / ARTIFACT_FORMATS, so
+  // together the two checks pin each typealias to the SDK's vocabulary.
+  ["ArtifactFieldType accepts exactly SdkNames.artifactFieldTypes"] {
+    literals(reflect.TypeAlias(App.ArtifactFieldType).referent) == SdkNames.artifactFieldTypes
+  }
+  ["ArtifactFieldTypeExtended accepts exactly SdkNames.artifactFieldTypesExtended"] {
+    literals(reflect.TypeAlias(App.ArtifactFieldTypeExtended).referent)
+      == SdkNames.artifactFieldTypesExtended
+  }
+  ["ArtifactFormat accepts exactly SdkNames.artifactFormats"] {
+    literals(reflect.TypeAlias(App.ArtifactFormat).referent) == SdkNames.artifactFormats
+  }
+
   // ── Opt-in: no declaration, no artifact ────────────────────────────────────
   ["an app that declares nothing emits no artifact_schemas.json"] {
     !noSchemasApp.output.files.containsKey("app/generated/artifact_schemas.json")
@@ -319,8 +362,7 @@ facts {
   // description is REQUIRED and non-empty, so it is always present — a consumer
   // reading the artifact never has to branch on it, and a field can never state an
   // assertion without stating why it holds. (The refusals for a missing or empty
-  // field description live in scripts/check-invariants.sh, since facts cannot
-  // express "eval fails".)
+  // field description are in the refusals below.)
   ["schema description is omitted when unset; field description is always present"] {
     !defaultsSchemas["schemas"]["bare"].containsKey("description")
     defaultsSchemas["schemas"]["bare"]["fields"][0]["description"] ==
@@ -400,8 +442,86 @@ facts {
 
   // A bundle root emits no shared file that could shadow the per-entrypoint ones.
   // (Declaring `artifactSchemas` on a bundle root is a generation error — asserted
-  // in scripts/check-invariants.sh, since facts cannot express "eval fails".)
+  // in the refusals below.)
   ["a bundle root emits no shared artifact_schemas.json"] {
     !bundleFiles.containsKey("app/generated/artifact_schemas.json")
+  }
+
+  // ── Refusals ───────────────────────────────────────────────────────────────
+  // Declarations are keyed by the contract field the runtime is materialising;
+  // path-shape inference is what let the earlier upload-time hook match nothing.
+  ["a path-shaped key is refused"] {
+    err(withSchema("artifacts/raw/*.parquet", new { f("QUERY_ID", "string") })).contains("A-Za-z_")
+  }
+
+  // Reports as declared and asserts nothing.
+  ["an empty fields listing is refused"] {
+    err(withSchema("raw_queries", new {})).contains("isEmpty")
+  }
+
+  // Would collapse silently to one assertion.
+  ["duplicate field names are refused"] {
+    err(withSchema("raw_queries", new { f("QUERY_ID", "string"); f("QUERY_ID", "int") })).contains("isDistinct")
+  }
+
+  ["a field with no description is refused"] {
+    err(withSchema("raw_queries", new {
+      new App.ArtifactField { name = "START_TIME"; type = "timestamp" }
+    })).contains("`description` is required")
+  }
+
+  ["a field with an empty description is refused"] {
+    err(withSchema("raw_queries", new {
+      new App.ArtifactField { name = "START_TIME"; type = "timestamp"; description = "" }
+    })).contains("isEmpty")
+  }
+
+  // An undeclared container drops exactly the check that catches a producer which
+  // flattened it away; the leaf assertion alone can still pass on a flat record.
+  ["a nested path with an undeclared container is refused"] {
+    err(withSchema("raw_queries", new { f("attributes.name", "string") })).contains("without their container")
+  }
+
+  ["an element path with an undeclared element is refused"] {
+    err(withSchema("raw_queries", new { f("columns", "array"); f("columns[].name", "string") }))
+      .contains("without their container")
+  }
+
+  // A container declared with a scalar type is a contradiction the validator would
+  // have to resolve by guessing.
+  ["a named-member step into a scalar container is refused"] {
+    err(withSchema("raw_queries", new { f("attributes", "string"); f("attributes.name", "string") }))
+      .contains("descends into")
+  }
+
+  ["a [] step into a non-array container is refused"] {
+    err(withSchema("raw_queries", new { f("columns", "struct"); f("columns[]", "struct") }))
+      .contains("descends into")
+  }
+
+  // A schema describes every element, not one of them, so `columns[0]` must fail
+  // the path grammar rather than be read as `columns[]`.
+  ["index selection in a path is refused"] {
+    err(withSchema("raw_queries", new { f("columns[0]", "struct") })).contains("Type constraint")
+  }
+
+  // A bundle root has no contract model, so a key there names no real field, and the
+  // file it would emit could be picked up as a fallback for an entrypoint.
+  ["a bundle root declaring artifactSchemas is refused"] {
+    err((bundleApp) {
+      artifactSchemas {
+        ["raw_queries"] = new App.ArtifactSchema {
+          format = "parquet"
+          fields { f("START_TIME", "timestamp") }
+        }
+      }
+    }).contains("multi-entrypoint bundle root")
+  }
+
+  // Control for the refusals: the same helper with a valid declaration generates and
+  // emits the artifact, so the refusals above are not "every declaration fails".
+  ["a valid declaration through the same helper generates (control)"] {
+    parser.parse(withSchema("raw_queries", new { f("START_TIME", "timestamp") })
+      .output.files["app/generated/artifact_schemas.json"].text)["schemas"].keys == Set("raw_queries")
   }
 }

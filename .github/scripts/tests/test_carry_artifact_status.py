@@ -10,14 +10,9 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import carry_artifact_status as carry
+import pytest
 
 REPO = "atlanhq/application-sdk"
 HEAD = "a" * 40

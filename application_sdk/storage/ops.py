@@ -61,9 +61,9 @@ try:  # pragma: no cover — defensive import
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
     from obstore.exceptions import PreconditionError as _ObstorePreconditionError
 except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
-    _ObstoreBaseError = None  # type: ignore[assignment,misc]
-    _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
-    _ObstorePreconditionError = None  # type: ignore[assignment,misc]
+    _ObstoreBaseError = None
+    _ObstoreNotFoundError = None
+    _ObstorePreconditionError = None
 
 
 if TYPE_CHECKING:
@@ -536,7 +536,8 @@ def _store_target(store: ObjectStore, key: str) -> str | None:
         prefix = getattr(store, "prefix", None)
         path = f"{prefix}/{key}" if isinstance(prefix, str) and prefix else key
         return f"{scheme}://{container}/{path}" if container else f"{scheme}:///{path}"
-    except Exception:  # pragma: no cover — identity is decoration, never fatal
+    # conformance: ignore[E004] the identity is decoration on an error message; the error itself is still raised
+    except Exception:  # noqa: BLE001 — identity is decoration on an error message that is still raised
         return None
 
 
@@ -934,8 +935,7 @@ async def _head_not_found(store: ObjectStore, path: str) -> bool:
         # An exhausted gateway retry re-raises the no-route 404, which obstore
         # also types as not-found: that is the gateway, not the key.
         return not _is_gateway_no_route(exc)
-    # conformance: ignore[E004] probe only; any other error keeps the key and the download reports it
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — probe only; any other error keeps the key and the download reports it
         if _is_gateway_no_route(exc):
             return False
         return _ObstoreNotFoundError is not None and isinstance(
@@ -961,8 +961,7 @@ async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
         # Through the seam, like the HEAD probe: a stale gateway instance here
         # would otherwise leave an S3 ``path/`` marker in the listing.
         return await _past_gateway_no_route("list", path, _probe)
-    # conformance: ignore[E004] probe only; any error keeps the key and the download reports it
-    except Exception:
+    except Exception:  # noqa: BLE001 — probe only; any error keeps the key and the download reports it
         return False
 
 

@@ -20,6 +20,10 @@ for pkl in examples/*/app.pkl; do
 
   # Remove known generated paths before eval so stale artifacts don't linger.
   rm -rf "${example_dir}/app/generated"
+  # System-app caller nodes (contract/generated/**/input.pkl). The examples
+  # keep nothing else here, so a node the toolkit stops emitting is deleted
+  # and the CI diff check sees the deletion instead of a stale golden file.
+  rm -rf "${example_dir}/contract/generated"
   rm -f  "${example_dir}/atlan.yaml" "${example_dir}/app.yaml"
 
   echo ":: $pkl → $example_dir"

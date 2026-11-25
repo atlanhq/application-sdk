@@ -15,41 +15,23 @@ import asyncio
 import base64
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import obstore
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from obstore.store import LocalStore, MemoryStore
 
 from application_sdk import _obstore_config
 from application_sdk.handler import (
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
-    Handler,
-    MetadataInput,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataOutput,
     object_routes,
 )
 from application_sdk.handler.asgi import build_asgi_app, default_object_store
 from application_sdk.handler.object_routes import HostObjectStore
-
-
-class _Handler(Handler):
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS)
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
-        return SqlMetadataOutput(objects=[])
+from tests.unit._doubles import StaticHandler
 
 
 def _stored(store: MemoryStore) -> dict[str, bytes]:
@@ -67,7 +49,7 @@ def memory() -> MemoryStore:
 def host(memory: MemoryStore) -> TestClient:
     store = HostObjectStore(memory, kind="memory")
     return TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=store),
         raise_server_exceptions=False,
     )
 
@@ -109,7 +91,7 @@ class _FailingStore:
 def test_a_failed_store_read_is_503_not_404() -> None:
     """IAM, network or 5xx: the store is unavailable; the config is not missing."""
     client = TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=_FailingStore()),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=_FailingStore()),
         raise_server_exceptions=False,
     )
     response = client.get("/workflows/v1/config/guid-1?type=credentials")
@@ -140,7 +122,9 @@ def test_an_unreadable_object_raises_rather_than_reads_as_missing(
 
 
 def test_without_a_store_the_routes_answer_503() -> None:
-    bare = TestClient(build_asgi_app(_Handler(), app_name="mysql", object_store=None))
+    bare = TestClient(
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=None)
+    )
     assert bare.get("/workflows/v1/config/guid-1").status_code == 503
     assert bare.post("/workflows/v1/config/guid-1", json={}).status_code == 503
     upload = bare.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
@@ -217,9 +201,10 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
     assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
 
 
-def test_the_worker_keeps_accepting_any_prefix() -> None:
-    """Only the shared host validates the prefix; a worker (no upload namespace)
-    stores it as given, exactly as before."""
+def _worker(
+    stored_key: Callable[[str], str] = lambda key: key,
+) -> tuple[TestClient, list[str]]:
+    """The routes as the worker registers them: no upload namespace."""
     from fastapi import FastAPI
 
     from application_sdk.handler.object_routes import (
@@ -243,15 +228,90 @@ def test_the_worker_keeps_accepting_any_prefix() -> None:
             load_config=_no_config,
             save_config=_no_config,
             upload_file=_upload,
+            stored_key=stored_key,
         ),
     )
-    response = TestClient(app).post(
+    return TestClient(app), uploaded
+
+
+def _worker_upload(client: TestClient, prefix: str | None) -> Response:
+    data = {} if prefix is None else {"prefix": prefix}
+    return client.post(
         "/workflows/v1/file",
         files={"file": ("rows.csv", b"a,b\n", "text/csv")},
-        data={"prefix": "my uploads/./2026 run"},
+        data=data,
     )
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [None, "workflow_file_upload", "sample_data/2026-run", "my.app/v1.2"],
+)
+def test_the_worker_keeps_a_safe_prefix_as_given(prefix: str | None) -> None:
+    """The worker does not namespace: its keys stay where its readers look."""
+    client, uploaded = _worker()
+    response = _worker_upload(client, prefix)
     assert response.status_code == 200
-    assert uploaded[0].startswith("my uploads/./2026 run/")
+    expected = prefix or "workflow_file_upload"
+    (key,) = uploaded
+    assert key.startswith(f"{expected}/")
+    assert response.json()["data"]["key"] == key
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "../x",
+        "../../persistent-artifacts/apps/redshift",
+        "a/../b",
+        "/abs",
+        "a//b",
+        "trailing/",
+        ".",
+        "a/./b",
+        "my uploads",
+        "x" * 300,
+        "abc\n",
+    ],
+)
+def test_the_worker_refuses_an_unsafe_prefix(prefix: str) -> None:
+    client, uploaded = _worker()
+    response = _worker_upload(client, prefix)
+    assert response.status_code == 400
+    assert uploaded == []
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "persistent-artifacts/apps/redshift/credentials",
+        "persistent-artifacts",
+        "artifacts/apps/redshift/workflows/run-1",
+        "connection-cache",
+    ],
+)
+def test_the_worker_refuses_a_prefix_in_a_reserved_tree(prefix: str) -> None:
+    """Another app's tree in the shared bucket is not the worker's to write."""
+    client, uploaded = _worker()
+    response = _worker_upload(client, prefix)
+    assert response.status_code == 400
+    assert uploaded == []
+
+
+def test_an_upload_the_store_would_rewrite_is_refused() -> None:
+    """The check runs on the key the store writes: a store that maps
+    ``staging/...`` onto ``...`` (as the worker's ``normalize_key`` strips its
+    staging root) must not carry ``staging/artifacts/...`` into ``artifacts/``."""
+
+    def _strip_staging(key: str) -> str:
+        return key.removeprefix("staging/")
+
+    client, uploaded = _worker(stored_key=_strip_staging)
+    assert _worker_upload(client, "staging/artifacts/apps/other").status_code == 400
+    assert uploaded == []
+    # A key the store keeps unchanged is still accepted.
+    assert _worker_upload(client, "workflow_file_upload").status_code == 200
+    assert len(uploaded) == 1
 
 
 # --- the store from the host's env ------------------------------------------
@@ -596,7 +656,7 @@ def test_without_a_store_the_host_answers_503(
 ) -> None:
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    host = TestClient(build_asgi_app(_Handler(), app_name="mysql"))
+    host = TestClient(build_asgi_app(StaticHandler(), app_name="mysql"))
     assert host.get("/workflows/v1/config/g1?type=credentials").status_code == 503
     assert (
         host.post("/workflows/v1/config/g1?type=credentials", json={}).status_code

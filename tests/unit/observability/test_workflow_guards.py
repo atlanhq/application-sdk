@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from unittest import mock
 
@@ -43,7 +43,7 @@ from application_sdk.observability.utils import in_temporal_workflow
 _OBS_MODULE = "application_sdk.observability.observability"
 _LOG_MODULE = "application_sdk.observability.logger_adaptor"
 
-_BASE_TS = datetime(2026, 8, 26, 10, 30, 0).timestamp()
+_BASE_TS = datetime(2026, 8, 26, 10, 30, 0, tzinfo=UTC).timestamp()
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +260,8 @@ class TestSyncFlushWorkflowGuard:
         """Async branch: nothing is scheduled on the (workflow) running loop."""
         flushed: list[bool] = []
 
-        async def _flush_buffer(force=False):
-            flushed.append(force)
+        async def _flush_buffer():
+            flushed.append(True)
 
         with (
             mock.patch(f"{_LOG_MODULE}.in_temporal_workflow", return_value=True),
@@ -279,8 +279,8 @@ class TestSyncFlushWorkflowGuard:
         """Positive control for the async branch."""
         flushed: list[bool] = []
 
-        async def _flush_buffer(force=False):
-            flushed.append(force)
+        async def _flush_buffer():
+            flushed.append(True)
 
         with (
             mock.patch(f"{_LOG_MODULE}.in_temporal_workflow", return_value=False),
@@ -310,8 +310,8 @@ class TestSyncFlushWorkflowGuard:
         """Positive control for the sync branch."""
         flushed: list[bool] = []
 
-        async def _flush_buffer(force=False):
-            flushed.append(force)
+        async def _flush_buffer():
+            flushed.append(True)
 
         with (
             mock.patch(f"{_LOG_MODULE}.in_temporal_workflow", return_value=False),

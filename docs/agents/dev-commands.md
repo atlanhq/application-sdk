@@ -25,7 +25,7 @@ uv run pre-commit install
 - **ruff-format**: Code formatting (line length, spacing, etc.)
 
 The dev group pins `ruff` to the hook's exact version, so `uv run ruff check --fix` and `uv run ruff format` give the same result as CI.
-- **pyright**: Type checking
+- **pyright**: Type checking, held to `pyright_baseline.json` (errors only; see "pyright on the SDK tree" in `docs/standards/ci.md`). It fails on a new error per file and rule, and on a fixed one until you run `uv run --frozen --all-extras --all-groups python .github/scripts/check_pyright_baseline.py --scope sdk --update` and commit the lower baseline.
 - **conventional-pre-commit**: Commit message format (on commit-msg stage)
 - **pre-commit-hooks**: Merge conflicts, debug statements, trailing whitespace, BOM
 

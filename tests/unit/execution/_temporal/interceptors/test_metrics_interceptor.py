@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -29,6 +29,7 @@ from application_sdk.execution._temporal.interceptors.metrics import (
     _workflow_failures_classified,
 )
 from application_sdk.observability.resource_sampler import ResourceSample
+from tests.unit._doubles import WORKFLOW_START, ActivityInfo, ExecuteInput, WorkflowInfo
 from tests.unit.private_stdlib import private_stdlib
 
 _METER_TARGET = (
@@ -36,37 +37,7 @@ _METER_TARGET = (
 )
 
 
-@dataclass
-class MockWorkflowInfo:
-    workflow_type: str = "TestWorkflow"
-    workflow_id: str = "wf-id"
-    task_queue: str = "default"
-    namespace: str = "ns"
-    run_id: str = "run-id"
-    attempt: int = 1
-
-
-@dataclass
-class MockActivityInfo:
-    activity_type: str = "TestActivity"
-    activity_id: str = "act-id"
-    task_queue: str = "default"
-    workflow_id: str = "wf-id"
-    workflow_run_id: str = "run-id"
-    workflow_type: str = "TestWorkflow"
-    attempt: int = 1
-
-
-@dataclass
-class MockExecuteWorkflowInput:
-    headers: dict = field(default_factory=dict)
-    args: list = field(default_factory=list)
-
-
-@dataclass
-class MockExecuteActivityInput:
-    headers: dict = field(default_factory=dict)
-    args: list = field(default_factory=list)
+_NOW = WORKFLOW_START + timedelta(seconds=1.5)
 
 
 @pytest.fixture(autouse=True)
@@ -114,12 +85,6 @@ class TestInstrumentCaching:
 
 class TestMetricsWorkflowInboundInterceptor:
     @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_workflow = AsyncMock(return_value="result")
-        return n
-
-    @pytest.fixture
     def interceptor(self, mock_next):
         return _MetricsWorkflowInboundInterceptor(mock_next)
 
@@ -128,7 +93,7 @@ class TestMetricsWorkflowInboundInterceptor:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
-            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+            await interceptor.execute_workflow(ExecuteInput())
         mock_meter.create_counter.assert_not_called()
         mock_meter.create_histogram.assert_not_called()
 
@@ -139,8 +104,9 @@ class TestMetricsWorkflowInboundInterceptor:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
-            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
+            await interceptor.execute_workflow(ExecuteInput())
 
         counter = mock_meter.create_counter.return_value
         counter.add.assert_called_once()
@@ -154,8 +120,9 @@ class TestMetricsWorkflowInboundInterceptor:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
-            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
+            await interceptor.execute_workflow(ExecuteInput())
 
         histogram = mock_meter.create_histogram.return_value
         histogram.record.assert_called_once()
@@ -173,9 +140,10 @@ class TestMetricsWorkflowInboundInterceptor:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
             with pytest.raises(RuntimeError, match="boom"):
-                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+                await interceptor.execute_workflow(ExecuteInput())
 
         exec_calls = [
             c
@@ -183,6 +151,86 @@ class TestMetricsWorkflowInboundInterceptor:
             if c[0][1].get("otel.status_code") == "ERROR"
         ]
         assert len(exec_calls) == 1
+
+
+class TestWorkflowMetricsAcrossInstanceLifetimes:
+    """One run, several workflow-instance lifetimes (eviction, worker change).
+
+    The sample must come from the lifetime that finishes the run live, and only
+    from it: replay at entry must not disable instrumentation, eviction teardown
+    must not record an ERROR, and duration is history time.
+    """
+
+    @pytest.fixture
+    def split_instruments(self, mock_meter):
+        exec_counter = MagicMock()
+        classified_counter = MagicMock()
+        histogram = MagicMock()
+
+        def make_counter(name, **kwargs):
+            if "failures.classified" in name:
+                return classified_counter
+            return exec_counter
+
+        mock_meter.create_counter.side_effect = make_counter
+        mock_meter.create_histogram.return_value = histogram
+        return exec_counter, histogram, classified_counter
+
+    async def _run(self, next_side_effect, replaying_during, replaying_at_exit):
+        """Run the interceptor with replay state flipping as history is consumed."""
+        state = {"replaying": replaying_during}
+
+        async def body(_input):
+            # Replayed history consumed; the remaining work is live (or, for
+            # eviction, temporalio forces replay on before cancelling).
+            state["replaying"] = replaying_at_exit
+            if next_side_effect is not None:
+                raise next_side_effect
+            return "result"
+
+        mock_next = AsyncMock()
+        mock_next.execute_workflow = AsyncMock(side_effect=body)
+        interceptor = _MetricsWorkflowInboundInterceptor(mock_next)
+        with patch(
+            "application_sdk.execution._temporal.interceptors.metrics.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.side_effect = lambda: state["replaying"]
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
+            if next_side_effect is None:
+                await interceptor.execute_workflow(ExecuteInput())
+            else:
+                with pytest.raises(type(next_side_effect)):
+                    await interceptor.execute_workflow(ExecuteInput())
+
+    async def test_rehydrated_instance_records_live_completion(self, split_instruments):
+        # A worker that rebuilds the run from history enters replaying, then
+        # finishes it live. That completion is the run's one OK sample.
+        exec_counter, histogram, classified = split_instruments
+        await self._run(None, replaying_during=True, replaying_at_exit=False)
+        exec_counter.add.assert_called_once()
+        assert exec_counter.add.call_args[0][1]["otel.status_code"] == "OK"
+        histogram.record.assert_called_once()
+        classified.add.assert_not_called()
+
+    async def test_eviction_teardown_records_nothing(self, split_instruments):
+        # Eviction cancels the workflow coroutine with is_replaying() forced
+        # true. The run is still in flight: no ERROR, no duration, no
+        # classified failure.
+        exec_counter, histogram, classified = split_instruments
+        await self._run(
+            asyncio.CancelledError(), replaying_during=False, replaying_at_exit=True
+        )
+        exec_counter.add.assert_not_called()
+        histogram.record.assert_not_called()
+        classified.add.assert_not_called()
+
+    async def test_duration_is_history_time_not_process_time(self, split_instruments):
+        # The rehydrated lifetime did not see the start; duration comes from
+        # workflow.now() - info.start_time.
+        _, histogram, _ = split_instruments
+        await self._run(None, replaying_during=True, replaying_at_exit=False)
+        assert histogram.record.call_args[0][0] == pytest.approx(1.5)
 
 
 class TestWorkflowFailuresClassified:
@@ -216,9 +264,10 @@ class TestWorkflowFailuresClassified:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
             with pytest.raises(type(exc)):
-                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+                await interceptor.execute_workflow(ExecuteInput())
 
     async def test_app_owner_audience_fires_with_correct_labels(self, split_counters):
         _, classified = split_counters
@@ -265,8 +314,9 @@ class TestWorkflowFailuresClassified:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
-            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
+            await interceptor.execute_workflow(ExecuteInput())
 
         classified.add.assert_not_called()
 
@@ -280,7 +330,7 @@ class TestWorkflowFailuresClassified:
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = True
             with pytest.raises(RuntimeError, match="boom"):
-                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+                await interceptor.execute_workflow(ExecuteInput())
 
         classified.add.assert_not_called()
 
@@ -367,9 +417,10 @@ class TestWorkflowFailuresClassified:
             "application_sdk.execution._temporal.interceptors.metrics.workflow"
         ) as mock_wf:
             mock_wf.unsafe.is_replaying.return_value = False
-            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.info.return_value = WorkflowInfo()
+            mock_wf.now.return_value = _NOW
             with pytest.raises(RuntimeError, match="boom"):
-                await interceptor.execute_workflow(MockExecuteWorkflowInput())
+                await interceptor.execute_workflow(ExecuteInput())
 
         # Classified emit was attempted (raw RuntimeError → APP_OWNER fallback)
         # and the RuntimeError from `.add` was swallowed by the interceptor's
@@ -380,12 +431,6 @@ class TestWorkflowFailuresClassified:
 
 class TestMetricsActivityInboundInterceptor:
     @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
-
-    @pytest.fixture
     def interceptor(self, mock_next):
         return _MetricsActivityInboundInterceptor(mock_next)
 
@@ -395,8 +440,8 @@ class TestMetricsActivityInboundInterceptor:
         with patch(
             "application_sdk.execution._temporal.interceptors.metrics.activity"
         ) as mock_act:
-            mock_act.info.return_value = MockActivityInfo()
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            mock_act.info.return_value = ActivityInfo()
+            await interceptor.execute_activity(ExecuteInput())
 
         # create_counter is called for both executions and (not errors on success)
         counter = mock_meter.create_counter.return_value
@@ -417,8 +462,8 @@ class TestMetricsActivityInboundInterceptor:
                 return_value=None,
             ),
         ):
-            mock_act.info.return_value = MockActivityInfo()
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            mock_act.info.return_value = ActivityInfo()
+            await interceptor.execute_activity(ExecuteInput())
 
         histogram = mock_meter.create_histogram.return_value
         histogram.record.assert_called_once()
@@ -443,8 +488,8 @@ class TestMetricsActivityInboundInterceptor:
             private_stdlib(metrics_mod, "time") as local_time,
             patch.object(local_time, "monotonic_ns", side_effect=[0, 1_000_000_000]),
         ):
-            mock_act.info.return_value = MockActivityInfo()
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            mock_act.info.return_value = ActivityInfo()
+            await interceptor.execute_activity(ExecuteInput())
 
         histogram = mock_meter.create_histogram.return_value
         # Three histograms recorded: duration, cpu_seconds, mem_gib_seconds.
@@ -481,9 +526,9 @@ class TestMetricsActivityInboundInterceptor:
             private_stdlib(metrics_mod, "time") as local_time,
             patch.object(local_time, "monotonic_ns", side_effect=[0, 1_000_000_000]),
         ):
-            mock_act.info.return_value = MockActivityInfo()
+            mock_act.info.return_value = ActivityInfo()
             with pytest.raises(ValueError):
-                await interceptor.execute_activity(MockExecuteActivityInput())
+                await interceptor.execute_activity(ExecuteInput())
 
         histogram = mock_meter.create_histogram.return_value
         # duration + cpu + mem all recorded even on error
@@ -504,8 +549,8 @@ class TestMetricsActivityInboundInterceptor:
                 return_value=None,
             ),
         ):
-            mock_act.info.return_value = MockActivityInfo()
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            mock_act.info.return_value = ActivityInfo()
+            await interceptor.execute_activity(ExecuteInput())
 
         histogram = mock_meter.create_histogram.return_value
         # Only duration — cpu/mem skipped when sample() returns None.
@@ -520,9 +565,9 @@ class TestMetricsActivityInboundInterceptor:
         with patch(
             "application_sdk.execution._temporal.interceptors.metrics.activity"
         ) as mock_act:
-            mock_act.info.return_value = MockActivityInfo()
+            mock_act.info.return_value = ActivityInfo()
             with pytest.raises(ValueError, match="bad"):
-                await interceptor.execute_activity(MockExecuteActivityInput())
+                await interceptor.execute_activity(ExecuteInput())
 
         # Both executions counter and errors counter should be called
         exec_counter_calls = [
@@ -556,9 +601,9 @@ class TestMetricsActivityInboundInterceptor:
         with patch(
             "application_sdk.execution._temporal.interceptors.metrics.activity"
         ) as mock_act:
-            mock_act.info.return_value = MockActivityInfo()
+            mock_act.info.return_value = ActivityInfo()
             with pytest.raises(ValueError):
-                await interceptor.execute_activity(MockExecuteActivityInput())
+                await interceptor.execute_activity(ExecuteInput())
 
         errors_counter.add.assert_called_once()
         err_tags = errors_counter.add.call_args[0][1]
@@ -576,8 +621,8 @@ class TestMetricsActivityInboundInterceptor:
         with patch(
             "application_sdk.execution._temporal.interceptors.metrics.activity"
         ) as mock_act:
-            mock_act.info.return_value = MockActivityInfo()
-            result = await interceptor.execute_activity(MockExecuteActivityInput())
+            mock_act.info.return_value = ActivityInfo()
+            result = await interceptor.execute_activity(ExecuteInput())
 
         assert result == "ok"
 
@@ -644,11 +689,9 @@ class TestConcurrentActivityCostAttribution:
             ),
             patch(_METER_TARGET, return_value=MagicMock()),
         ):
-            mock_act.info.return_value = MockActivityInfo()
+            mock_act.info.return_value = ActivityInfo()
             tasks = [
-                asyncio.create_task(
-                    interceptor.execute_activity(MockExecuteActivityInput())
-                )
+                asyncio.create_task(interceptor.execute_activity(ExecuteInput()))
                 for _ in range(n)
             ]
             while started < n:

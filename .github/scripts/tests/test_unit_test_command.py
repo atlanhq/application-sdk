@@ -2,28 +2,23 @@
 
 from __future__ import annotations
 
-import sys
+import shlex
 import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import unit_test_command as utc
+import yaml
 
 
 def _build(
     *,
-    python_version: str = "3.12",
     runner_os: str = "Linux",
     coverage: bool = False,
     fail_under: str = "85",
 ) -> list[str]:
     return utc.build_command(
-        python_version=python_version,
         runner_os=runner_os,
         coverage=coverage,
         fail_under=fail_under,
@@ -45,42 +40,37 @@ def test_the_coverage_leg_measures_and_enforces_the_floor() -> None:
     assert "--cov-fail-under=85" in argv
 
 
-@pytest.mark.parametrize("runner_os", ["Linux", "macOS"])
-def test_posix_legs_guard_sockets_and_interrupt_hangs_with_sigalrm(
-    runner_os: str,
-) -> None:
+@pytest.mark.parametrize("runner_os", ["Linux", "macOS", "Windows"])
+def test_every_leg_guards_sockets(runner_os: str) -> None:
+    """Windows included: --allow-hosts guards connect() only, which asyncio's
+    ConnectEx and UDP sendto bypass (FND-4287). tests/conftest.py keeps the
+    Proactor self-pipe working under the guard."""
     argv = _build(runner_os=runner_os)
     assert "--disable-socket" in argv
     assert "--allow-unix-socket" in argv
+    assert not any(arg.startswith("--allow-hosts") for arg in argv)
+
+
+@pytest.mark.parametrize("runner_os", ["Linux", "macOS"])
+def test_posix_legs_interrupt_hangs_with_sigalrm(runner_os: str) -> None:
+    argv = _build(runner_os=runner_os)
     assert "--timeout=120" in argv
     assert "--timeout-method=signal" in argv
 
 
-def test_windows_has_no_socket_guard_and_no_sigalrm() -> None:
+def test_windows_has_no_sigalrm() -> None:
     argv = _build(runner_os="Windows")
-    assert "--disable-socket" not in argv
     assert "--timeout=120" in argv
     assert "--timeout-method=thread" in argv
 
 
-@pytest.mark.parametrize("python_version", ["3.14", "3.15"])
-def test_314_and_later_drop_the_dev_group_and_its_tests(python_version: str) -> None:
-    argv = _build(python_version=python_version)
-    assert argv[:5] == ["uv", "run", "--frozen", "--no-group", "dev"]
-    assert "--ignore=tests/unit/tools" in argv
-
-
-@pytest.mark.parametrize("python_version", ["3.11", "3.13"])
-def test_earlier_pythons_keep_every_group_and_test(python_version: str) -> None:
-    argv = _build(python_version=python_version)
+@pytest.mark.parametrize("runner_os", ["Linux", "macOS", "Windows"])
+def test_every_leg_collects_the_whole_suite_with_every_group(runner_os: str) -> None:
+    """No leg drops a uv group or ignores a test path: a carve-out for one
+    Python once hid 321 passing tests from the 3.14 legs (FND-4288)."""
+    argv = _build(runner_os=runner_os)
     assert "--no-group" not in argv
-    assert not [a for a in argv if a.startswith("--ignore=")]
-
-
-@pytest.mark.parametrize("python_version", ["2.7", "3", "latest"])
-def test_an_unparseable_python_version_is_refused(python_version: str) -> None:
-    with pytest.raises(ValueError):
-        _build(python_version=python_version)
+    assert not [a for a in argv if a.startswith("--ignore")]
 
 
 def test_main_runs_the_built_command_and_returns_its_exit_code(
@@ -98,8 +88,6 @@ def test_main_runs_the_built_command_and_returns_its_exit_code(
     monkeypatch.setattr(utc, "COVERAGE_XML", tmp_path / "coverage.xml")
     code = utc.main(
         [
-            "--python-version",
-            "3.12",
             "--runner-os",
             "Linux",
             "--coverage",
@@ -111,7 +99,6 @@ def test_main_runs_the_built_command_and_returns_its_exit_code(
     assert code == 3
     assert ran == [
         utc.build_command(
-            python_version="3.12",
             runner_os="Linux",
             coverage=True,
             fail_under="85",
@@ -125,8 +112,6 @@ def test_coverage_must_be_the_literal_true_or_false(value: str) -> None:
     with pytest.raises(SystemExit):
         utc.main(
             [
-                "--python-version",
-                "3.12",
                 "--runner-os",
                 "Linux",
                 "--coverage",
@@ -146,6 +131,26 @@ def _script_call(action_text: str) -> str:
     return run
 
 
+_SETUP_DEPS = Path(__file__).parents[2] / "actions" / "setup-deps" / "action.yaml"
+
+
+def test_setup_deps_installs_every_group_on_every_python() -> None:
+    """setup-deps builds the venv the unit legs run in. Skipping a group there
+    for one Python would leave that leg unable to import the tests it needs."""
+    text = _SETUP_DEPS.read_text(encoding="utf-8")
+    assert "--no-group" not in text
+    assert "PYTHON_MINOR" not in text
+    steps = yaml.safe_load(text)["runs"]["steps"]
+    (install,) = [s for s in steps if s.get("name") == "Install dependencies"]
+    # shlex: the quoted ``${{ github.action_path }}`` wrapper path is one word.
+    assert shlex.split(install["run"])[1:] == [
+        "uv",
+        "sync",
+        "--all-extras",
+        "--all-groups",
+    ]
+
+
 def test_the_action_passes_inputs_to_the_script_through_env_not_run() -> None:
     """GitHub expands ``${{ }}`` before bash parses ``run:``, so an input holding
     a quote would become shell syntax. Inputs reach the script as env vars."""
@@ -155,7 +160,6 @@ def test_the_action_passes_inputs_to_the_script_through_env_not_run() -> None:
 def test_a_leg_writes_junit_only_when_asked() -> None:
     assert not [a for a in _build() if a.startswith("--junitxml")]
     argv = utc.build_command(
-        python_version="3.12",
         runner_os="Linux",
         coverage=False,
         fail_under="85",
@@ -267,8 +271,6 @@ def test_main_reports_after_a_failing_run_and_keeps_its_exit_code(
 
     code = utc.main(
         [
-            "--python-version",
-            "3.12",
             "--runner-os",
             "Linux",
             "--coverage",
@@ -300,8 +302,6 @@ def test_main_never_reads_a_report_left_by_an_earlier_run(
 
     utc.main(
         [
-            "--python-version",
-            "3.12",
             "--runner-os",
             "Linux",
             "--coverage",
@@ -319,8 +319,6 @@ def test_main_never_reads_a_report_left_by_an_earlier_run(
 _WORKFLOW = Path(__file__).parents[2] / "workflows" / "sdk-tests-reusable.yaml"
 
 _MAIN_ARGS = [
-    "--python-version",
-    "3.11",
     "--runner-os",
     "Linux",
     "--coverage",
@@ -372,7 +370,6 @@ def test_a_package_without_a_floor_is_refused(tmp_path: Path, sql: list[str]) ->
 
 def test_floor_pins_are_installed_over_the_frozen_lock() -> None:
     argv = utc.build_command(
-        python_version="3.11",
         runner_os="Linux",
         coverage=False,
         fail_under="85",
@@ -456,8 +453,6 @@ def test_the_floor_job_runs_on_the_sdk_python_floor() -> None:
 _REPO = Path(__file__).parents[3]
 
 _COVERAGE_ARGS = [
-    "--python-version",
-    "3.12",
     "--runner-os",
     "Linux",
     "--coverage",

@@ -10,11 +10,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import check_generated_freshness  # noqa: E402
-import renovate_pkl_sync  # noqa: E402
+import check_generated_freshness
+import renovate_pkl_sync
 
 # The scripts import each other as top-level modules (`import _bap`), so the
 # tests do too: that keeps one module object for monkeypatching. pyright

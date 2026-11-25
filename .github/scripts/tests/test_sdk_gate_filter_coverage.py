@@ -7,7 +7,7 @@ only as good as the filter that gates its job: if the filter lists where the
 test lives but not what it reads, a PR that edits only the input merges with
 the guard never run, and the drift surfaces on some later, unrelated PR.
 
-This module checks the three such reads the audit found, each derived from
+This module checks the cross-area reads the audits found, each derived from
 the source rather than restated, so a new read is covered or fails here:
 
 * the canonical sources of ``MANAGED_ACTION_FILES`` (parsed from
@@ -15,7 +15,11 @@ the source rather than restated, so a new read is covered or fails here:
 * every ``contract-toolkit/examples/...`` path an SDK or conformance-package
   test builds must run that test's job;
 * every ``application_sdk`` module a generated toolkit example imports must
-  run the toolkit suite, whose ``test-sdk-import.py`` imports those examples.
+  run the toolkit suite, whose ``test-sdk-import.py`` imports those examples;
+* so must every ``application_sdk`` module ``test-sdk-import.py`` imports
+  itself to compare ``src/SdkNames.pkl`` with the SDK (FND-4934);
+* and ``uv.lock``, which pins the pyatlan it compares ``src/Connectors.pkl``
+  with (FND-4933).
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ RENDER = (
     REPO_ROOT / "packages" / "conformance" / "conformance" / "bootstrap" / "render.py"
 )
 EXAMPLES = REPO_ROOT / "contract-toolkit" / "examples"
+SDK_IMPORT_TEST = REPO_ROOT / "contract-toolkit" / "scripts" / "test-sdk-import.py"
 
 # The path filters whose match runs each test job (the job `if:`s in
 # sdk-gate.yaml). conformance-suite-tests also runs on `sdk`.
@@ -288,21 +293,28 @@ def test_resolved_reads_are_still_read() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sdk_modules_imported_by(py: Path) -> set[str]:
+    """``application_sdk`` modules ``py`` imports, at any depth (function bodies too)."""
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names = [node.module]
+        elif isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        else:
+            continue
+        modules.update(
+            n
+            for n in names
+            if n == "application_sdk" or n.startswith("application_sdk.")
+        )
+    return modules
+
+
 def _example_sdk_modules() -> set[str]:
     modules: set[str] = set()
     for py in EXAMPLES.rglob("*.py"):
-        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-                names = [node.module]
-            elif isinstance(node, ast.Import):
-                names = [a.name for a in node.names]
-            else:
-                continue
-            modules.update(
-                n
-                for n in names
-                if n == "application_sdk" or n.startswith("application_sdk.")
-            )
+        modules |= _sdk_modules_imported_by(py)
     return modules
 
 
@@ -326,4 +338,61 @@ def test_sdk_modules_imported_by_toolkit_examples_run_the_toolkit_suite() -> Non
         f"generated toolkit examples import {missing}, but no `toolkit` filter in "
         "sdk-gate.yaml matches the module, so a change there skips "
         "contract-toolkit/scripts/test-sdk-import.py on the PR. Add the path."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 4: SDK modules test-sdk-import.py compares SdkNames.pkl with
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_modules_imported_by_the_sdk_import_test_run_the_toolkit_suite() -> None:
+    """``check_sdk_names`` reads SDK constants the examples never import.
+
+    The artifact vocabulary in ``application_sdk.validation.artifacts`` is one:
+    without a ``toolkit`` filter entry, a PR adding a type there merges with the
+    comparison against ``src/SdkNames.pkl`` never run.
+    """
+    modules = _sdk_modules_imported_by(SDK_IMPORT_TEST)
+    assert "application_sdk.validation.artifacts" in modules, sorted(modules)
+    missing = sorted(
+        f"{m} ({_module_file(m)})"
+        for m in modules
+        if not _covering(_module_file(m), TOOLKIT_TESTS)
+    )
+    assert not missing, (
+        f"contract-toolkit/scripts/test-sdk-import.py imports {missing}, but no "
+        "`toolkit` filter in sdk-gate.yaml matches the module, so a change there "
+        "skips the SdkNames.pkl comparison on the PR. Add the path."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard 5: the locked pyatlan test-sdk-import.py compares Connectors.pkl with
+# ---------------------------------------------------------------------------
+
+
+def _third_party_roots_imported_by(py: Path) -> set[str]:
+    """Top-level package names ``py`` imports, at any depth."""
+    roots: set[str] = set()
+    for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            roots.add(node.module.split(".")[0])
+        elif isinstance(node, ast.Import):
+            roots.update(a.name.split(".")[0] for a in node.names)
+    return roots
+
+
+def test_locked_pyatlan_runs_the_toolkit_suite() -> None:
+    """``check_connectors`` diffs ``src/Connectors.pkl`` against pyatlan.
+
+    The installed pyatlan is the one ``uv.lock`` pins: without a ``toolkit``
+    filter entry for it, a pyatlan bump that adds a connector type merges with
+    the comparison never run, and the drift surfaces on a later toolkit PR.
+    """
+    assert "pyatlan" in _third_party_roots_imported_by(SDK_IMPORT_TEST)
+    assert _covering("uv.lock", TOOLKIT_TESTS), (
+        "contract-toolkit/scripts/test-sdk-import.py compares Connectors.pkl with "
+        "the locked pyatlan, but no `toolkit` filter in sdk-gate.yaml matches "
+        "uv.lock, so a pyatlan bump skips the comparison on the PR. Add it."
     )

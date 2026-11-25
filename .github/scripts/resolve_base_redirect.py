@@ -58,6 +58,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from _gha import set_outputs
+
 # The base image, as apps reference it (the public reference, served by the
 # registry gateway) and as CI retrieves it (GHCR, the gateway's backend).
 PUBLIC_REPO = "registry.atlan.com/public/app-runtime-base"
@@ -300,7 +302,7 @@ def _bearer_token(
     request = urllib.request.Request(url)
     if token:
         request.add_header("Authorization", _basic_auth(user, token))
-    with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # type: ignore[operator]
+    with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # pyright: ignore[reportGeneralTypeIssues]
         payload = json.loads(response.read().decode())
     return payload.get("token") or payload.get("access_token")
 
@@ -337,7 +339,7 @@ def registry_digest(
         request.add_header("Accept", _ACCEPT)
         if auth:
             request.add_header("Authorization", auth)
-        with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # type: ignore[operator]
+        with _urlopen(request, timeout=_HTTP_TIMEOUT_S) as response:  # pyright: ignore[reportGeneralTypeIssues]
             digest = response.headers.get("Docker-Content-Digest")
             if digest:
                 return digest
@@ -470,14 +472,6 @@ def decide(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
-def _write_output(name: str, value: str) -> None:
-    path = os.environ.get("GITHUB_OUTPUT")
-    if not path:
-        return
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(f"{name}={value}\n")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -537,8 +531,9 @@ def main(argv: list[str] | None = None) -> int:
     for warning in decision.warnings:
         print(f"::warning::{warning}")
 
-    _write_output("build_contexts", decision.build_contexts)
-    _write_output("base_digest", decision.digest)
+    set_outputs(
+        {"build_contexts": decision.build_contexts, "base_digest": decision.digest}
+    )
 
     if decision.build_contexts:
         print(f"Redirect active: {decision.build_contexts}")

@@ -27,14 +27,14 @@ from third-party decorators that happen to be named ``entrypoint``.
 from __future__ import annotations
 
 import ast
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
-    SDK_APP_BASE_NAMES,
     _IgnoreDirective,
     _parse_directives,
+    pascal_to_kebab,
+    sdk_app_import_aliases,
 )
 
 _SDK_PREFIX = "application_sdk"
@@ -55,20 +55,6 @@ def _sdk_entrypoint_aliases(tree: ast.Module) -> frozenset[str]:
         if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
             for alias in node.names:
                 if alias.name == "entrypoint":
-                    bound.add(alias.asname or alias.name)
-    return frozenset(bound)
-
-
-def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
-    """Return local names bound to an SDK ``App``-family base in this module."""
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or node.level > 0:
-            continue
-        module = node.module or ""
-        if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
-            for alias in node.names:
-                if alias.name in SDK_APP_BASE_NAMES:
                     bound.add(alias.asname or alias.name)
     return frozenset(bound)
 
@@ -139,20 +125,6 @@ def _class_attribute_value(class_node: ast.ClassDef, attr: str) -> ast.expr | No
     return None
 
 
-def _pascal_to_kebab(name: str) -> str:
-    """``'MyApp'`` → ``'my-app'``, mirroring ``application_sdk.app.base``.
-
-    Kept character-for-character equivalent to the SDK's own helper: this value
-    is compared against the app name the toolkit baked into the generated
-    manifest, so a looser transform (plain underscore replacement, say) reads a
-    nameless ``App`` subclass as a *different* app and silently drops it from
-    every identity-scoped comparison.
-    """
-    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1-\2", name)
-    spaced = re.sub(r"([a-z\d])([A-Z])", r"\1-\2", spaced)
-    return spaced.lower()
-
-
 def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     """The app name this class registers under, when statically knowable.
 
@@ -162,9 +134,9 @@ def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     """
     value = _class_attribute_value(class_node, "name")
     if value is None:
-        return _pascal_to_kebab(class_node.name)
+        return pascal_to_kebab(class_node.name)
     if isinstance(value, ast.Constant) and isinstance(value.value, str):
-        return value.value or _pascal_to_kebab(class_node.name)
+        return value.value or pascal_to_kebab(class_node.name)
     return None
 
 
@@ -299,7 +271,7 @@ def scan_file_for_entrypoints(
     imports (import-provenance guard).
     """
     ep_aliases = _sdk_entrypoint_aliases(tree)
-    app_aliases = _sdk_app_aliases(tree)
+    app_aliases = sdk_app_import_aliases(tree)
 
     if not ep_aliases and not app_aliases:
         return  # No SDK imports in this file — skip entirely.

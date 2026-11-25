@@ -1,7 +1,6 @@
 name: CI script tests
 
-# Runs the pytest suite for the CI driver scripts in .github/scripts/, plus the
-# shell tests for the PR-review scripts in .mothership/pr-review/scripts/.
+# Runs the pytest suite for the CI driver scripts in .github/scripts/.
 # These scripts carry the conditional logic for our automations (release
 # bumps, allowlist validation, renovate sync, …); per docs/standards/ci.md
 # that logic must live in tested external scripts rather than inlined shell.
@@ -23,12 +22,6 @@ name: CI script tests
 # guards exist to remove. Any list we could write would silently stop firing on
 # the change it was written to catch. The suite is a sub-minute pytest run, so
 # running it unconditionally is cheaper than getting that list wrong.
-#
-# The .mothership/pr-review/scripts/ tests are here for the same reason the
-# pytest suite is: they existed and ran nowhere. A redaction rule that rewrote
-# the machine-readable REVIEWED_HEAD marker shipped unnoticed and silently cost
-# every toolkit review its atlan-ci approval, because the test that would have
-# caught it was only ever run by hand.
 #
 # Both jobs conclude on every PR (no path filter), so both can be required
 # checks on the `main` ruleset without the always-concluding-gate wrapper that
@@ -68,7 +61,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # pytest comes from the locked `test` group (a default group, as is
       # `dev`, which carries the conformance workspace package several of these
@@ -78,11 +71,13 @@ jobs:
       - name: Run script tests
         run: uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 
-      # Plain bash, no uv — the script under test is bash + perl and the harness
-      # asserts on its output, so keeping it dependency-free keeps it runnable
-      # by hand in the review sandbox exactly as it runs here.
-      - name: Run PR-review redaction tests
-        run: .mothership/pr-review/scripts/test-redact-toolkit-public-review.sh
+      # `Any` in an application_sdk signature is held to a per-file baseline
+      # that only shrinks (FND-4301). The pre-commit hook checks the counts;
+      # --base-sha also fails a PR that raises the baseline to fit a new one.
+      - name: Check ANN401 against the base revision's baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen python .github/scripts/check_ann401_baseline.py --base-sha "$BASE_SHA"
 
   pyright:
     name: pyright .github/scripts
@@ -97,7 +92,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
 
       # pyright is the exact pin in the locked `dev` group, equal to the
       # pre-commit hook's rev. `--extra workflows` installs what the scripts

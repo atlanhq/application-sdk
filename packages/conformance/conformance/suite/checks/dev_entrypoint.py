@@ -40,8 +40,10 @@ from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
     collect_import_origins,
+    discover_root_file,
     make_cli_main,
     make_finding,
+    make_scan_path,
     qualify_chained_attr_call,
 )
 from conformance.suite.schema.findings import Finding
@@ -75,8 +77,7 @@ def discover(root: Path) -> list[Path]:
     Returns an empty list when no root ``main.py`` is present, so T004
     simply no-ops on repos that have not yet added one (e.g. libraries).
     """
-    main_py = root / "main.py"
-    return [main_py] if main_py.is_file() else []
+    return discover_root_file(root, "main.py")
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
@@ -89,17 +90,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return _check_t004(tree, file, directives)
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single ``main.py`` file for T004 findings."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def _module_level_rebind_lines(tree: ast.AST, name: str) -> list[int]:

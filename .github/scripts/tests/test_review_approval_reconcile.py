@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-import yaml
+from _workflows import WORKFLOWS, job, load_workflow, triggers
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 
@@ -874,27 +874,20 @@ def test_no_grace_still_never_approves_a_withdrawn_or_open_lens_verdict():
 
 # --- the workflow runs when a review finishes --------------------------------
 
-WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
-
-
-def _workflow(name: str) -> dict:
-    return yaml.safe_load((WORKFLOWS / name).read_text())
-
 
 def test_the_reconciler_runs_when_the_review_source_completes():
     """`workflow_run` matches on the source workflow's `name:`, so a rename of
     lens would silently turn this back into cron-only recovery."""
-    wf = _workflow("review-approval-reconcile.yml")
-    on = wf.get(True, wf.get("on"))
+    on = triggers(load_workflow("review-approval-reconcile.yml"))
     listened = set(on["workflow_run"]["workflows"])
     assert on["workflow_run"]["types"] == ["completed"]
-    assert listened == {_workflow("lens.yml")["name"]}
+    assert listened == {load_workflow("lens.yml")["name"]}
 
 
 def test_skipped_source_runs_do_not_start_a_sweep():
-    job = _workflow("review-approval-reconcile.yml")["jobs"]["reconcile"]
-    assert "workflow_run.conclusion != 'skipped'" in job["if"]
-    assert "github.event_name != 'workflow_run'" in job["if"]
+    gate = job(load_workflow("review-approval-reconcile.yml"), "reconcile")["if"]
+    assert "workflow_run.conclusion != 'skipped'" in gate
+    assert "github.event_name != 'workflow_run'" in gate
 
 
 def test_the_workflow_no_longer_passes_the_grace_flags():

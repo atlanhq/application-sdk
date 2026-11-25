@@ -124,14 +124,21 @@ class TestEnrichmentBehavior:
 
         pytest.fail("smoke_override metric not found in collected output")
 
-    def test_target_info_not_enriched(self, provider, reader) -> None:
-        """target_info must pass through unmodified — no double-enrichment."""
+    def test_target_info_carries_the_resource_unchanged(
+        self, provider, reader, resource: Resource
+    ) -> None:
+        """target_info passes through as the full resource — no labels added.
+
+        The exporter emits target_info only alongside at least one metric, so
+        record one; without it the family is absent and nothing is checked.
+        ``app_name`` is expected here: it is a resource attribute, so the
+        exporter puts it on target_info itself.
+        """
+        provider.get_meter("smoke_test").create_counter("smoke_target").add(1)
         target_families = [f for f in reader._collector.collect() if f.name == "target"]
-        if not target_families:
-            pytest.skip("target_info family not present in this collection cycle")
+        assert target_families, "target_info family missing from collected output"
+
+        expected = {k.replace(".", "_"): str(v) for k, v in resource.attributes.items()}
         for family in target_families:
             for sample in family.samples:
-                assert "app_name" not in sample.labels, (
-                    "app_name was injected onto target_info, which would shadow "
-                    "the canonical OTel resource representation."
-                )
+                assert sample.labels == expected

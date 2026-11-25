@@ -10,6 +10,7 @@ from conformance.suite.schema.findings import Finding
 from .dependency_audience import DependencyAudienceMixin
 from .exception_chaining import ExceptionChainingMixin, ExceptionHelper
 from .http_failure import HttpFailureMixin
+from .legacy_error_code import LegacyErrorCodeMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin, module_bindings
@@ -22,6 +23,8 @@ def import_bindings(tree: ast.Module) -> dict[str, str]:
     it), unlike ``import a.b as c``, which binds ``c`` to ``a.b``. A name the
     module also assigns, defines or rebinds anywhere is left out: after
     ``asyncio = domain_errors`` the name no longer names the stdlib module.
+    A function or lambda parameter of the same name counts as a rebinding:
+    inside ``def f(run_in_thread)`` the name is whatever the caller passed.
     Likewise a name imported from different origins (e.g. a function-local
     import shadowing a module-level one) is left out: the map is module-wide
     and cannot say which binding a given use sees.
@@ -56,6 +59,7 @@ def import_bindings(tree: ast.Module) -> dict[str, str]:
             for n in ast.walk(tree)
             if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
         }
+        | {n.arg for n in ast.walk(tree) if isinstance(n, ast.arg)}
     )
     return {name: origin for name, origin in bound.items() if name not in rebound}
 
@@ -67,6 +71,7 @@ class Checker(
     HttpFailureMixin,
     SecurityMixin,
     DependencyAudienceMixin,
+    LegacyErrorCodeMixin,
     ast.NodeVisitor,
 ):
     """Walk a module AST and emit E-series findings."""
@@ -81,6 +86,7 @@ class Checker(
         sdk_errors: frozenset[str] = frozenset(),
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
+        legacy_coded_bases: dict[str, str] | None = None,
         deprecated_module: bool = False,
         e012_in_scope: bool = True,
         script_file: bool = False,
@@ -95,6 +101,8 @@ class Checker(
         self._sdk_errors = sdk_errors
         self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
+        # E022: class name -> the SDK legacy-coded class it reaches.
+        self._legacy_coded_bases = legacy_coded_bases or {}
         self._deprecated_module = deprecated_module
         # False for build / dev tooling outside the app runtime (see
         # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
@@ -150,7 +158,7 @@ class Checker(
         self._bound_names, self._rebound_names = module_bindings(node)
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         # Reset loop/except/try context: a nested function body executes later
         # and is not protected by the surrounding function's handlers.
         saved_loops = self._loop_stack
@@ -167,15 +175,15 @@ class Checker(
         self._except_stack = saved_excepts
         self._try_stack = saved_tries
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # type: ignore[override]
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
         saved_tries = self._try_stack
         self._loop_stack = []
         self._except_stack = []
         self._try_stack = []
-        self._function_stack.append(node)  # type: ignore[arg-type]
-        self._check_p010_in_function(node)  # type: ignore[arg-type]
+        self._function_stack.append(node)
+        self._check_p010_in_function(node)
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
@@ -186,6 +194,7 @@ class Checker(
         self._check_p011(node)
         if not self._class_stack and not self._function_stack:
             self._check_e021(node)
+        self._check_e022(node)
         self._class_stack.append(node)
         self.generic_visit(node)
         self._class_stack.pop()
@@ -196,12 +205,12 @@ class Checker(
         self._loop_stack.pop()
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
-        self._loop_stack.append(node)  # type: ignore[arg-type]
+        self._loop_stack.append(node)
         self.generic_visit(node)
         self._loop_stack.pop()
 
     def visit_While(self, node: ast.While) -> None:
-        self._loop_stack.append(node)  # type: ignore[arg-type]
+        self._loop_stack.append(node)
         self.generic_visit(node)
         self._loop_stack.pop()
 

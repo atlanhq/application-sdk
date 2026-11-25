@@ -158,6 +158,21 @@ def test_sdk_and_toolkit_majors_stay_disabled(dep: dict) -> None:
     assert _effective(HARD, dep, "major").get("enabled") is False
 
 
+@pytest.mark.parametrize("repo_json", [HARD, SOFT], ids=["hard", "soft"])
+def test_toolkit_major_rule_spares_other_regex_managed_deps(repo_json: dict) -> None:
+    """The toolkit's major disable is scoped to its depName (FND-4903): an app's
+    own customManager still gets majors, and nothing groups it with the toolkit."""
+    app_pin = {
+        "depName": "some-app-tool",
+        "packageName": "example-org/some-app-tool",
+        "manager": "custom.regex",
+        "datasource": "github-tags",
+    }
+    config = _effective(repo_json, app_pin, "major")
+    assert config.get("enabled", True) is True
+    assert config.get("groupName") is None
+
+
 def test_unknown_match_condition_fails_loudly() -> None:
     with pytest.raises(AssertionError, match="matchFileNames"):
         _matches({"matchFileNames": ["x"]}, SDK, "minor")

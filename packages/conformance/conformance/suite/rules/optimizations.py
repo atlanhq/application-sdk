@@ -15,7 +15,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -31,7 +30,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",
         autofixable=True,
         orthogonal_gate="tests",
@@ -57,6 +55,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``json.JSONDecodeError`` handling, ``json.dump``/``json.load`` (file-object\n"
             "APIs orjson does not provide), and custom ``JSONEncoder`` subclasses are\n"
             "out of scope.\n"
+            "Python build hooks under ``contract/templates/`` are also out of scope: they\n"
+            "run with system Python before the app's SDK environment is installed, so they\n"
+            "cannot rely on the SDK-provided ``orjson`` dependency.\n"
             "\n"
             "Autofixable per-site, not mechanically: ``orjson`` is not a drop-in\n"
             "replacement.  ``orjson.dumps``\n"
@@ -120,7 +121,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "location, or names a consumer that only parses the JSON or sits inside the "
             "app, is unremediated: make the swap."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/optimizations.prose.md",
@@ -137,7 +137,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
@@ -175,7 +174,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``.dict()`` on a *non-asset* pydantic model in such a file is a known\n"
             "false-positive — suppress with ``# conformance: ignore[O002] <reason>``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -192,7 +190,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UntypedAssetMapperReturn",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
@@ -224,7 +221,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[O003] <reason>`` when an untyped return is\n"
             "intentional.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -240,7 +236,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
@@ -283,7 +278,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[O004] <reason>`` when a connector\n"
             "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
@@ -300,7 +294,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DirectRocksdictImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",
         autofixable=False,
         orthogonal_gate="tests",
@@ -354,7 +347,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``rocks_backed_dict.py``'s ``append_to_key`` that ``SpillableDict`` "
             "does not provide).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/optimizations.prose.md",
@@ -372,7 +364,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UnresolvedAppNamePlaceholder",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="dag-write-path",
         autofixable=True,
         orthogonal_gate="tests",
@@ -446,7 +437,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[O005] <reason>`` for a template resolved by a\n"
             "caller in a different file than the one being scanned.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/optimizations.prose.md",

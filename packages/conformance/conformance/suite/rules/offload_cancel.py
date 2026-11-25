@@ -45,7 +45,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -64,7 +63,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UncancellableOffloadedCursorStatement",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="async-correctness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -129,7 +127,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` on the ``run_in_thread`` line records a deliberate exception\n"
             "and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p064",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -146,7 +143,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="BatchedResultsIteratedOnLoop",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="async-correctness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -199,7 +195,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P065]\n"
             "<reason>`` records a deliberate exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p065",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

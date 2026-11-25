@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ._source_cache import cached_walk
+
 # Directories excluded from discovery
 EXCLUDE_DIRS: frozenset[str] = frozenset(
     {
@@ -32,6 +34,8 @@ EXCLUDE_DIRS: frozenset[str] = frozenset(
     }
 )
 
+_EXCLUDE_DIRS_WITH_TESTS: frozenset[str] = EXCLUDE_DIRS - {"tests", "test"}
+
 
 def discover(root: Path, *, exclude_dirs: frozenset[str] = EXCLUDE_DIRS) -> list[Path]:
     """Discover Python source files under *root*, excluding test and infra dirs.
@@ -51,6 +55,74 @@ def discover(root: Path, *, exclude_dirs: frozenset[str] = EXCLUDE_DIRS) -> list
     conformance package's own sources and so must walk them with ``conformance``
     lifted from the set (see ``checks.text_io_encoding.discover``).
     """
+    return _walk_python(root, exclude_dirs=exclude_dirs, skip_test_files=True)
+
+
+def discover_with_tests(root: Path) -> list[Path]:
+    """Discover Python sources under *root*, **including** test trees and files.
+
+    The :func:`discover` walk with ``tests``/``test`` lifted from the excluded
+    directory names and the ``test_*.py`` / ``*_test.py`` filename rule off.
+    For a series whose contract applies to test harnesses as much as to app
+    code (the entrypoint, orchestration and error-seam checks).
+    """
+    return _walk_python(
+        root, exclude_dirs=_EXCLUDE_DIRS_WITH_TESTS, skip_test_files=False
+    )
+
+
+def discover_tree(root: Path, *subdir: str) -> list[Path]:
+    """Every ``*.py`` under ``root/<subdir…>``, skipping ``__pycache__``.
+
+    No other exclusion applies: a check that walks a fixed tree (``tests/``,
+    ``tests/e2e/``) wants every file in it.  ``__pycache__`` is matched relative
+    to the walked tree, so a checkout under a ``__pycache__`` directory is still
+    scanned.  Returns ``[]`` when the tree is absent.
+    """
+    base = root.joinpath(*subdir)
+    if not base.is_dir():
+        return []
+    return sorted(
+        p for p in base.rglob("*.py") if "__pycache__" not in p.relative_to(base).parts
+    )
+
+
+def discover_root_file(root: Path, name: str) -> list[Path]:
+    """``[root / name]`` when that file exists, else ``[]``.
+
+    For a check that reads one fixed file at the repo root (``pyproject.toml``,
+    ``Dockerfile``, ``main.py``).
+    """
+    path = root / name
+    return [path] if path.is_file() else []
+
+
+def discover_contract_repo(root: Path) -> list[Path]:
+    """``[root]`` for a contract-driven app repo (one with ``contract/``), else ``[]``.
+
+    For a cross-artifact K-series check that reads fixed files across the repo
+    rather than a discovered file set: the single path is the repo itself, and
+    an empty list skips the check.
+    """
+    return [root] if (root / "contract").is_dir() else []
+
+
+def _walk_python(
+    root: Path, *, exclude_dirs: frozenset[str], skip_test_files: bool
+) -> list[Path]:
+    # Most checks discover the same tree: inside a run's source cache the walk
+    # is done once per (root, exclusions) rather than once per check.
+    return cached_walk(
+        ("python", root, exclude_dirs, skip_test_files),
+        lambda: _walk_python_uncached(
+            root, exclude_dirs=exclude_dirs, skip_test_files=skip_test_files
+        ),
+    )
+
+
+def _walk_python_uncached(
+    root: Path, *, exclude_dirs: frozenset[str], skip_test_files: bool
+) -> list[Path]:
     paths: list[Path] = []
     for path in root.rglob("*.py"):
         # Exclusion checks must use path components *relative to root*, not the
@@ -68,7 +140,7 @@ def discover(root: Path, *, exclude_dirs: frozenset[str] = EXCLUDE_DIRS) -> list
             continue
         # Exclude test files by name convention
         name = path.name
-        if name.startswith("test_") or name.endswith("_test.py"):
+        if skip_test_files and (name.startswith("test_") or name.endswith("_test.py")):
             continue
         paths.append(path)
     return sorted(paths)

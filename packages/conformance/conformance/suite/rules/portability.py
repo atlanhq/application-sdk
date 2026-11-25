@@ -40,7 +40,6 @@ from __future__ import annotations
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -50,7 +49,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.SDK,
         name="LocaleDependentTextIO",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="portability",
         autofixable=False,
         orthogonal_gate="tests",
@@ -124,10 +122,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Suppress a reviewed exception with a justification:\n"
             "``# conformance: ignore[P046] <reason>``.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-            "conformance/docs/rules/prescriptions.md#p046"
         ),
     ),
 )

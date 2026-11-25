@@ -1223,14 +1223,7 @@ class TestSingleKeyMode:
         the secret store — they are literal config, not refs.
         """
 
-        class TrackingStore:
-            calls: list[str] = []
-
-            async def get_optional(self, name: str) -> str | None:
-                self.calls.append(name)
-                return None
-
-        store = TrackingStore()
+        store = MockSecretStore()
         spec = AgentCredentialSpec.model_validate(
             {
                 "agent-name": "test-agent",
@@ -1243,10 +1236,10 @@ class TestSingleKeyMode:
             }
         )
 
-        await resolve_agent_credential(spec, store)  # type: ignore[arg-type]
+        await resolve_agent_credential(spec, store)
 
         # Only the non-literal ref was probed.
-        assert store.calls == ["ATLAN_USER"]
+        assert store.get_get_optional_calls() == ["ATLAN_USER"]
 
     async def test_missing_key_type_uses_legacy_paths_unchanged(self) -> None:
         """Backward-compat sanity: without ``key-type: single-key``, the
@@ -1272,20 +1265,13 @@ class TestSingleKeyMode:
         and degrades to literal fallthrough cleanly.
         """
 
-        class TrackingStore:
-            calls: list[str] = []
-
-            async def get_optional(self, name: str) -> str | None:
-                self.calls.append(name)
-                return None
-
-        store = TrackingStore()
+        store = MockSecretStore()
         spec = AgentCredentialSpec.model_validate(
             {"agent-name": "t", "key-type": "single-key"}
         )
 
-        await resolve_agent_credential(spec, store)  # type: ignore[arg-type]
-        assert store.calls == []
+        await resolve_agent_credential(spec, store)
+        assert store.get_get_optional_calls() == []
 
 
 class TestFetchPerKeyBundle:
@@ -1296,23 +1282,16 @@ class TestFetchPerKeyBundle:
         store lookup is issued.
         """
 
-        class CountingStore:
-            calls: list[str] = []
-
-            async def get_optional(self, name: str) -> str | None:
-                self.calls.append(name)
-                return "value-of-" + name
-
-        store = CountingStore()
+        store = MockSecretStore({"SHARED_KEY": "value-of-SHARED_KEY"})
         raw = {
             "username": "SHARED_KEY",
             "password": "SHARED_KEY",
             "auth-type": "basic",
         }
 
-        bundle = await _fetch_per_key_bundle(store, raw)  # type: ignore[arg-type]
+        bundle = await _fetch_per_key_bundle(store, raw)
 
-        assert store.calls == ["SHARED_KEY"]
+        assert store.get_get_optional_calls() == ["SHARED_KEY"]
         assert bundle == {"SHARED_KEY": "value-of-SHARED_KEY"}
 
     async def test_skips_empty_string_values(self) -> None:
@@ -1899,13 +1878,7 @@ class TestSingleKeyProbeConcurrency:
         """De-duplication must survive the concurrent rewrite — the ``seen``
         set used to be mutated inside the probe and relied on serial
         execution, which would race."""
-        calls: list[str] = []
-
-        class TrackingStore:
-            async def get_optional(self, name: str) -> str | None:
-                calls.append(name)
-                return None
-
+        store = MockSecretStore()
         # Same ref-key referenced by three different fields.
         raw = self._spec(
             **{
@@ -1916,9 +1889,9 @@ class TestSingleKeyProbeConcurrency:
             }
         ).to_raw_dict()
 
-        await _fetch_per_key_bundle(TrackingStore(), raw)
+        await _fetch_per_key_bundle(store, raw)
 
-        assert sorted(calls) == ["other-key", "shared-key"]
+        assert sorted(store.get_get_optional_calls()) == ["other-key", "shared-key"]
 
     async def test_literal_credentials_inline_still_resolve_to_themselves(
         self,
@@ -1931,10 +1904,6 @@ class TestSingleKeyProbeConcurrency:
         Those workflows work today and must keep working.
         """
 
-        class EmptyStore:
-            async def get_optional(self, name: str) -> str | None:
-                return None
-
         raw = self._spec(
             **{
                 "basic.username": "svc_reader",
@@ -1943,7 +1912,7 @@ class TestSingleKeyProbeConcurrency:
             }
         ).to_raw_dict()
 
-        bundle = await _fetch_per_key_bundle(EmptyStore(), raw)
+        bundle = await _fetch_per_key_bundle(MockSecretStore(), raw)
 
         assert bundle == {}
         # The literals survive substitution unchanged.
@@ -2038,16 +2007,12 @@ class TestSingleKeyProbeConcurrency:
         it raises.)"""
         from unittest.mock import patch
 
-        class EmptyStore:
-            async def get_optional(self, name: str) -> str | None:
-                return None
-
         raw = self._spec(**{"basic.password": "p", "database": "db"}).to_raw_dict()
 
         with patch(
             "application_sdk.infrastructure._single_key_probe.logger"
         ) as mock_logger:
-            assert await _fetch_per_key_bundle(EmptyStore(), raw) == {}
+            assert await _fetch_per_key_bundle(MockSecretStore(), raw) == {}
 
         mock_logger.warning.assert_not_called()
         mock_logger.info.assert_called_once()
@@ -2058,10 +2023,6 @@ class TestSingleKeyProbeConcurrency:
         only inferable from the absence of DEBUG lines."""
         from unittest.mock import patch
 
-        class Store:
-            async def get_optional(self, name: str) -> str | None:
-                return "value" if name == "real-key" else None
-
         raw = self._spec(
             **{"basic.password": "real-key", "database": "db-literal"}
         ).to_raw_dict()
@@ -2069,7 +2030,7 @@ class TestSingleKeyProbeConcurrency:
         with patch(
             "application_sdk.infrastructure._single_key_probe.logger"
         ) as mock_logger:
-            await _fetch_per_key_bundle(Store(), raw)
+            await _fetch_per_key_bundle(MockSecretStore({"real-key": "value"}), raw)
 
         mock_logger.info.assert_called_once()
         assert mock_logger.info.call_args.args[1:] == (1, 2)

@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import Any
 from unittest import mock
 
@@ -21,7 +22,7 @@ import pytest
 from pydantic import Field
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
@@ -31,9 +32,9 @@ from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     TaskContext,
     create_activity_from_task,
-    get_activity_options,
 )
 from application_sdk.execution._temporal.eviction_retry import (
+    EVICTION_CAP_MARKER_PREFIX,
     _is_worker_evicted,
     execute_activity_with_eviction_retry,
 )
@@ -92,13 +93,9 @@ class TestActivityCancelledAttribution:
     """
 
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     def _build_cancel_activity(self) -> object:
@@ -199,6 +196,43 @@ def _make_activity_error_with_app_error_cause(
     return err
 
 
+class _FakeHistory:
+    """Stands in for the run's history for ``workflow.patched`` markers.
+
+    ``replaying`` and ``markers`` describe the history being replayed; live,
+    every ``patched`` call records its id in ``recorded`` and returns True, as
+    temporalio does.
+    """
+
+    def __init__(self, *, replaying: bool = False, markers: set[str] | None = None):
+        self.replaying = replaying
+        self.markers = markers or set()
+        self.recorded: list[str] = []
+
+    def patched(self, marker: str) -> bool:
+        if self.replaying:
+            return marker in self.markers
+        self.recorded.append(marker)
+        return True
+
+
+@pytest.fixture(autouse=True)
+def history(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeHistory]:
+    """A live, empty history of a pinned run unless a test reconfigures it."""
+    from application_sdk.execution._temporal import run_flags
+
+    fake = _FakeHistory()
+    monkeypatch.setattr(
+        run_flags.workflow.unsafe,
+        "is_replaying_history_events",
+        lambda: fake.replaying,
+    )
+    monkeypatch.setattr(run_flags.workflow, "patched", fake.patched)
+    token = run_flags._RUN_FLAGS.set(run_flags.RunFlags(events=True, cleanup=True))
+    yield fake
+    run_flags._RUN_FLAGS.reset(token)
+
+
 class TestEvictionRetryHelper:
     """Workflow-side eviction loop. Runs ``workflow.execute_activity`` and
     ``workflow.logger`` on the temporal workflow runtime in production; both
@@ -262,6 +296,90 @@ class TestEvictionRetryHelper:
         assert exec_mock.await_count == 1
 
 
+class TestEvictionCapFollowsHistory:
+    """The cap is pod configuration: live it decides and a stop is recorded;
+    on replay the record decides, whatever the replaying pod's cap is."""
+
+    _patch_workflow = TestEvictionRetryHelper._patch_workflow
+
+    async def test_a_live_stop_records_a_marker_for_that_activity(
+        self, history: _FakeHistory
+    ) -> None:
+        evict = _make_activity_error_with_app_error_cause()
+        _, exec_patch, logger_patch = self._patch_workflow([evict, evict])
+        with exec_patch, logger_patch, pytest.raises(Exception):
+            await execute_activity_with_eviction_retry(
+                "act-name", max_eviction_retries=1
+            )
+        # One re-dispatch recorded nothing; the stop recorded one marker,
+        # keyed by the failed activity's scheduled event.
+        assert history.recorded == [f"{EVICTION_CAP_MARKER_PREFIX}1"]
+
+    async def test_live_re_dispatches_record_nothing(
+        self, history: _FakeHistory
+    ) -> None:
+        evict = _make_activity_error_with_app_error_cause()
+        _, exec_patch, logger_patch = self._patch_workflow([evict, evict, "ok"])
+        with exec_patch, logger_patch:
+            await execute_activity_with_eviction_retry(
+                "act-name", max_eviction_retries=3
+            )
+        assert history.recorded == []
+
+    async def test_replay_stops_where_history_stopped_even_under_a_higher_cap(
+        self, history: _FakeHistory
+    ) -> None:
+        history.replaying = True
+        history.markers = {f"{EVICTION_CAP_MARKER_PREFIX}1"}
+        evict = _make_activity_error_with_app_error_cause()
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
+        with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+            await execute_activity_with_eviction_retry(
+                "act-name", max_eviction_retries=10
+            )
+        assert _is_worker_evicted(exc_info.value)
+        assert exec_mock.await_count == 1
+
+    @pytest.mark.parametrize(("cap", "dispatches"), [(0, 1), (1, 2)])
+    async def test_a_history_written_before_pinning_replays_under_the_pod_cap(
+        self, history: _FakeHistory, cap: int, dispatches: int
+    ) -> None:
+        """Such a history recorded no stops, so a missing marker proves
+        nothing: the cap decides, as it did when the history was written. A
+        run that stopped at cap 0 must not re-dispatch on replay."""
+        from application_sdk.execution._temporal import run_flags
+
+        history.replaying = True
+        token = run_flags._RUN_FLAGS.set(
+            run_flags.RunFlags(events=True, cleanup=True, pinned=False)
+        )
+        evict = _make_activity_error_with_app_error_cause()
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, evict])
+        try:
+            with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+                await execute_activity_with_eviction_retry(
+                    "act-name", max_eviction_retries=cap
+                )
+        finally:
+            run_flags._RUN_FLAGS.reset(token)
+        assert _is_worker_evicted(exc_info.value)
+        assert exec_mock.await_count == dispatches
+        assert history.recorded == []
+
+    async def test_replay_re_dispatches_where_history_did_even_under_a_zero_cap(
+        self, history: _FakeHistory
+    ) -> None:
+        history.replaying = True
+        evict = _make_activity_error_with_app_error_cause()
+        exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
+        with exec_patch, logger_patch:
+            result = await execute_activity_with_eviction_retry(
+                "act-name", max_eviction_retries=0
+            )
+        assert result == "ok"
+        assert exec_mock.await_count == 2
+
+
 # ---------------------------------------------------------------------------
 # retry policy: WorkerEvicted always non-retryable at Temporal layer
 # ---------------------------------------------------------------------------
@@ -290,28 +408,6 @@ class TestRetryPolicyWiresWorkerEvicted:
         types = temporal_policy.non_retryable_error_types or []
         assert types.count(WORKER_EVICTED_TYPE) == 1
 
-    def test_get_activity_options_appends_worker_evicted_for_default_policy(
-        self,
-    ) -> None:
-        from application_sdk.app.task import TaskMetadata
-
-        meta = TaskMetadata(
-            name="t",
-            app_name="_a",
-            func=lambda: None,
-            input_type=_EvIn,
-            output_type=_EvOut,
-            timeout_seconds=60,
-            retry_max_attempts=3,
-            retry_max_interval_seconds=300,
-            heartbeat_timeout_seconds=60,
-            auto_heartbeat_seconds=10,
-            retry_policy=None,
-        )
-        opts = get_activity_options(meta)
-        types = opts["retry_policy"].non_retryable_error_types or []
-        assert WORKER_EVICTED_TYPE in types
-
 
 # ---------------------------------------------------------------------------
 # Heartbeat details survive the eviction re-dispatch
@@ -336,13 +432,9 @@ class _CarryOut(Output, allow_unbounded_fields=True):
 
 class TestEvictionCarriesHeartbeatDetails:
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     @staticmethod

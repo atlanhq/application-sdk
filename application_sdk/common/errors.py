@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from typing_extensions import deprecated
+
 from application_sdk.errors.leaves import (
     DataIntegrityError,
     InvalidInputError,
@@ -63,9 +65,19 @@ class AtomicWriteModeError(InvalidInputError):
     field: str | None = "mode"
 
 
+@deprecated(
+    "application_sdk.common.errors.FileConverterNotFoundError is deprecated; "
+    "catch application_sdk.errors.UnimplementedError (its base) instead — will "
+    "be removed in v4.0."
+)
 @dataclass(kw_only=True)
 class FileConverterNotFoundError(UnimplementedError):
-    """No converter registered for the given file type."""
+    """No converter registered for the given file type.
+
+    .. deprecated:: 3.58.0
+        Raised only by the deprecated ``common.file_converter``. Catch
+        :class:`~application_sdk.errors.UnimplementedError`. Will be removed in v4.0.
+    """
 
     code: ClassVar[str] = "UNIMPLEMENTED_FILE_CONVERTER"
     message: str = "No converter found for file type"

@@ -10,7 +10,6 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App, TaskStateAccessor, _app_state, _app_state_lock
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import StorageCleanupInput, StorageCleanupOutput
 from application_sdk.contracts.storage import DownloadInput
@@ -45,31 +44,25 @@ def _make_app() -> App:
     return _CleanupApp()
 
 
-def _seed_tracked_refs(refs: list[FileReference], workflow_id: str = "wf-test") -> None:
-    """Seed _app_state with tracked FileReference objects under a fake workflow_id."""
-    with mock.patch(
-        "application_sdk.app.base._get_execution_id_from_task",
-        return_value=workflow_id,
-    ):
+_RUN = ("wf-test", "run-test")
+
+
+def _seed_tracked_refs(refs: list[FileReference], run: tuple[str, str] = _RUN) -> None:
+    """Seed _app_state with tracked FileReference objects under a fake run."""
+    with mock.patch("application_sdk.app.base._current_run_key", return_value=run):
         accessor = TaskStateAccessor()
         from application_sdk.constants import TRACKED_FILE_REFS_KEY
 
         accessor.set(TRACKED_FILE_REFS_KEY, refs)
 
 
-def _clear_app_state(workflow_id: str = "wf-test") -> None:
+def _clear_app_state(run: tuple[str, str] = _RUN) -> None:
     with _app_state_lock:
-        _app_state.pop(workflow_id, None)
+        _app_state.pop(run, None)
 
 
 class TestCleanupStorage:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     # ------------------------------------------------------------------
@@ -120,8 +113,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -163,8 +156,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -202,8 +195,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -237,8 +230,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -276,8 +269,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -322,8 +315,8 @@ class TestCleanupStorage:
             return _stream([])
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -369,8 +362,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -416,8 +409,8 @@ class TestCleanupStorage:
             return True
 
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             with mock.patch(
                 "application_sdk.storage.ops._resolve_store", return_value=store
@@ -461,8 +454,8 @@ async def _run_cleanup_capturing_deletes(
 
     with (
         mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ),
         mock.patch("application_sdk.storage.ops._resolve_store", return_value=store),
         mock.patch("application_sdk.storage.ops.delete", side_effect=_mock_delete),
@@ -487,13 +480,7 @@ class TestCleanupStorageNeverDeletesDurableAlias:
 
     _KEY = "artifacts/apps/test/workflows/wf-test/r1/transformed/table/entities.json"
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     @pytest.mark.parametrize("tier", [StorageTier.RETAINED, StorageTier.PERSISTENT])
@@ -570,13 +557,7 @@ class TestCleanupStorageDirectoryManifest:
     _DIR = "artifacts/apps/test/workflows/wf-test/r1/file_refs/d1/"
     _MANIFEST = "artifacts/apps/test/workflows/wf-test/r1/file_refs/m1.sdk-manifest"
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     async def test_transient_directory_ref_deletes_its_manifest(self) -> None:
@@ -625,13 +606,7 @@ class TestCleanupStorageSparesDownloadedKeys:
     _KEY = "artifacts/apps/producer/workflows/wf-0/run-0/output/part-0.json"
     _DATA = b'{"a": 1}\n'
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     def _app(self, deployment: Any, upstream: Any | None) -> App:
@@ -654,10 +629,10 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         dl = await app.download(input)
         # What the activity interceptor does with a task's output refs.
-        _track_file_refs("wf-test", dl.ref)
+        _track_file_refs(_RUN, dl.ref)
         with mock.patch(
-            "application_sdk.app.base._get_execution_id_from_task",
-            return_value="wf-test",
+            "application_sdk.app.base._current_run_key",
+            return_value=_RUN,
         ):
             return await app.cleanup_storage(StorageCleanupInput())
 
@@ -706,7 +681,7 @@ class TestCleanupStorageSparesDownloadedKeys:
         key = "file_refs/abc123.parquet"
         await _put(key, self._DATA, store)
         produced = FileReference(storage_path=key, is_durable=True)
-        _track_file_refs("wf-test", produced)
+        _track_file_refs(_RUN, produced)
 
         await self._download_then_cleanup(
             self._app(store, None), DownloadInput(ref=produced)
@@ -789,7 +764,7 @@ class TestCleanupStorageSparesDownloadedKeys:
         await _put(key, self._DATA, deployment)
         await _put(key, self._DATA, upstream)
         _track_file_refs(
-            "wf-test",
+            _RUN,
             FileReference(
                 storage_path=key,
                 is_durable=True,
@@ -800,8 +775,8 @@ class TestCleanupStorageSparesDownloadedKeys:
 
         with (
             mock.patch(
-                "application_sdk.app.base._get_execution_id_from_task",
-                return_value="wf-test",
+                "application_sdk.app.base._current_run_key",
+                return_value=_RUN,
             ),
             mock.patch(
                 "application_sdk.execution.build_output_path", return_value=run_prefix
@@ -827,3 +802,96 @@ class TestCleanupStorageSparesDownloadedKeys:
         )
 
         assert await self._exists(store, key)
+
+
+class TestCleanupStorageAcrossWorkers:
+    """FND-5220: refs tracked on one worker are cleaned by a cleanup on another.
+
+    Worker A ran the extract and tracked its refs in A's own ``_app_state``;
+    worker B runs ``cleanup_storage`` and has no slot for the run. The refs
+    reach B through ``StorageCleanupInput.file_refs``, which the workflow fills
+    from what it read off the extract's result. Real in-memory store, real
+    workflow-side sink, real delete.
+    """
+
+    _DATA = b'{"a": 1}\n'
+
+    def teardown_method(self) -> None:
+        _clear_app_state()
+
+    def _app(self, store: Any) -> App:
+        from application_sdk.app.context import AppContext
+
+        app = _make_app()
+        app._context = AppContext(
+            app_name="test", app_version="0.1.0", run_id="r1", _storage=store
+        )
+        return app
+
+    async def _cleanup_on_worker_b(
+        self, app: App, carried: list[FileReference]
+    ) -> StorageCleanupOutput:
+        with mock.patch("application_sdk.app.base._current_run_key", return_value=_RUN):
+            return await app.cleanup_storage(StorageCleanupInput(file_refs=carried))
+
+    async def test_transient_key_uploaded_on_another_worker_is_deleted(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+        from application_sdk.storage.ops import exists
+
+        store = create_memory_store()
+        key = "file_refs/from-worker-a.json"
+        await _put(key, self._DATA, store)
+        await _put(f"{key}.sha256", b"abc", store)
+        # What the extract activity returned on worker A, as the workflow
+        # decoded it from history.
+        sink = _RunStoredRefs()
+        sink.record(
+            [
+                FileReference(
+                    local_path="/worker-a/tmp/out.json",
+                    storage_path=key,
+                    is_durable=True,
+                )
+            ]
+        )
+
+        result = await self._cleanup_on_worker_b(self._app(store), sink.for_cleanup())
+
+        assert not await exists(key, store)
+        assert not await exists(f"{key}.sha256", store)
+        assert result.deleted_count == 2
+
+    async def test_durable_ref_from_another_worker_still_guards_its_key(
+        self,
+    ) -> None:
+        from application_sdk.storage.ops import exists
+
+        store = create_memory_store()
+        key = "artifacts/apps/test/workflows/wf-test/r1/transformed/0.json"
+        await _put(key, self._DATA, store)
+        # Worker B tracked a TRANSIENT alias; worker A delivered the key RETAINED.
+        _seed_tracked_refs([FileReference(storage_path=key)])
+        carried = [FileReference(storage_path=key, tier=StorageTier.RETAINED)]
+
+        result = await self._cleanup_on_worker_b(self._app(store), carried)
+
+        assert await exists(key, store)
+        assert result.deleted_count == 0
+
+    async def test_a_key_reaching_cleanup_by_both_routes_is_deleted_once(
+        self,
+    ) -> None:
+        store = create_memory_store()
+        key = "file_refs/both.json"
+        await _put(key, self._DATA, store)
+        await _put(f"{key}.sha256", b"abc", store)
+        local = FileReference(local_path="/tmp/both.json", storage_path=key)
+        carried = local.model_copy(
+            update={"local_path": None, "auto_materialize": False}
+        )
+        _seed_tracked_refs([local])
+
+        result = await self._cleanup_on_worker_b(self._app(store), [carried])
+
+        # One delete each for the key and its sidecar, not one per route.
+        assert (result.deleted_count, result.error_count) == (2, 0)

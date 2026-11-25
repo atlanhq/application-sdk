@@ -58,7 +58,7 @@ def _length(value: object) -> int:
         return 0
     if isinstance(value, (list, dict, str)):
         return len(value)
-    return abs(value) if isinstance(value, (int, float)) else 0  # type: ignore[return-value]
+    return abs(value) if isinstance(value, (int, float)) else 0  # pyright: ignore[reportReturnType]
 
 
 #: A JSON object as ``json.loads`` returns it.

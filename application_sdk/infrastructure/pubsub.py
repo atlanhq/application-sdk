@@ -17,15 +17,24 @@ from typing import Any, ClassVar, Protocol
 
 from typing_extensions import deprecated
 
-from application_sdk.errors import PUBSUB_ERROR, ErrorCode
+from application_sdk import _deprecation
+from application_sdk.errors import _legacy_codes
+from application_sdk.errors._legacy_codes import ErrorCode
+from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
 
-class PubSubError(DependencyUnavailableError):
-    """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
+@dataclass(kw_only=True)
+class PubSubError(_LegacyErrorCodeMixin, DependencyUnavailableError):
+    """Deprecated: use ``application_sdk.infrastructure.PubSubUnavailableError`` — removed in v4.0."""
 
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PUBSUB_ERROR
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_PUBSUB"
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("topic", "topic"),
+        ("operation", "operation"),
+    )
+    topic: str | None = None
+    operation: str | None = None
 
     def __init__(
         self,
@@ -37,7 +46,7 @@ class PubSubError(DependencyUnavailableError):
         error_code: ErrorCode | None = None,
     ) -> None:
         warnings.warn(
-            "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError "
+            "PubSubError is deprecated; use application_sdk.infrastructure.PubSubUnavailableError "
             "— will be removed in v4.0",
             DeprecationWarning,
             stacklevel=2,
@@ -45,25 +54,22 @@ class PubSubError(DependencyUnavailableError):
         DependencyUnavailableError.__init__(self, message=message, cause=cause)
         self.topic = topic
         self.operation = operation
-        self._error_code = error_code
+        self._set_legacy_error_code(error_code)
 
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._error_code
-            if self._error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
 
-    def __str__(self) -> str:
-        parts = [f"[{self.error_code.code}] {self.message}"]
-        if self.topic:
-            parts.append(f"topic={self.topic}")
-        if self.operation:
-            parts.append(f"operation={self.operation}")
-        if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
-        return " | ".join(parts)
+@dataclass(kw_only=True)
+class PubSubUnavailableError(PubSubError):
+    """Publishing to a pub/sub topic failed.
+
+    Raised by the SDK's own ``PubSub`` implementations. It subclasses the deprecated
+    ``PubSubError`` only until v4.0, so ``except PubSubError:`` clauses keep matching
+    what the SDK raises; constructing it does not warn. v4.0 deletes
+    ``PubSubError`` and re-bases this class onto ``DependencyUnavailableError``.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_PUBSUB"
+    topic: str | None = None
+    operation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,22 +93,21 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "SubscriptionConfig.handler in application_sdk.handler.contracts",
         "it typed PubSub.subscribe handlers, which DaprPubSub never called",
     ),
+    "PUBSUB_ERROR": (
+        "the code ClassVar of a typed application_sdk.errors.AppError subclass",
+        "AAF-* codes are a second error vocabulary beside code",
+    ),
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _MessageHandler
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda name: (
+        _MessageHandler if name == "MessageHandler" else getattr(_legacy_codes, name)
+    ),
+)
 
 
 @deprecated(

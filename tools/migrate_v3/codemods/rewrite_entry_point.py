@@ -148,7 +148,7 @@ def _prepend_todo(body: cst.IndentedBlock) -> cst.IndentedBlock:
     )
     # SimpleStatementLine and compound statements both have leading_lines.
     if isinstance(first, (cst.SimpleStatementLine, cst.BaseCompoundStatement)):
-        existing = list(first.leading_lines)  # type: ignore[attr-defined]
+        existing = list(first.leading_lines)
         updated = first.with_changes(leading_lines=[comment_line] + existing)
         return body.with_changes(body=[updated] + stmts[1:])
     return body

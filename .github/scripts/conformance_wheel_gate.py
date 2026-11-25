@@ -90,19 +90,29 @@ SLICE = (
     "test_prescriptions.py",
 )
 
+#: Tests inside SLICE files that compare package data against the SDK source
+#: tree, so they need the monorepo checkout. ``tests._helpers.sdk_root`` fails
+#: such a test under ``CI`` (FND-4948) rather than skipping it, and the gate
+#: runs with ``CI`` set from a copy outside the checkout. The PR job runs them
+#: from the checkout, where the comparison means something.
+DESELECT = (
+    "test_deprecations_manifest.py::test_committed_manifest_matches_fresh_scan",
+)
+
 
 def _run(argv: Sequence[str], cwd: Path) -> None:
     print(f"+ {' '.join(argv)}", flush=True)
     subprocess.run(argv, cwd=cwd, check=True)
 
 
-def _canonical(name: str) -> str:
+def canonical_name(name: str) -> str:
+    """PEP 503 normalised name, as uv.lock spells it."""
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _req(name: str, extras: Sequence[str], specifier: str) -> Req:
     specs = tuple(sorted(p.replace(" ", "") for p in specifier.split(",") if p.strip()))
-    return _canonical(name), tuple(sorted(_canonical(e) for e in extras)), specs
+    return canonical_name(name), tuple(sorted(canonical_name(e) for e in extras)), specs
 
 
 def declared_requirements(pyproject: Path, extras: Sequence[str]) -> set[Req]:
@@ -171,29 +181,50 @@ def locked_requirements(
     return None
 
 
+def _drift(lock_path: Path) -> list[tuple[str | None, str]]:
+    """(drifted dependency name or None, problem) for every mismatch.
+
+    The name is None when the lock has no entry for a LOCAL_PACKAGES package at
+    all, which no single dependency explains.
+    """
+    lock = read_lock(lock_path)
+    local = {canonical_name(n) for n in LOCAL_PACKAGES}
+    out: list[tuple[str | None, str]] = []
+    for name, source in LOCAL_PACKAGES.items():
+        extras = LOCAL_EXTRAS[name]
+        locked = locked_requirements(lock, name, extras)
+        if locked is None:
+            out.append((None, f"{lock_path} has no {name} entry"))
+            continue
+        declared = declared_requirements(source / "pyproject.toml", extras)
+        for req in sorted(r for r in declared - locked if r[0] not in local):
+            out.append((req[0], f"{name} declares {req} but {lock_path} does not"))
+        for req in sorted(r for r in locked - declared if r[0] not in local):
+            out.append(
+                (
+                    req[0],
+                    f"{lock_path} records {req} for {name}, which it no longer declares",
+                )
+            )
+    return out
+
+
 def lock_drift(lock_path: Path = PACKAGE_DIR / "uv.lock") -> list[str]:
     """Requirements the path-sourced packages declare that the lock has not seen.
 
     Requirements on the other LOCAL_PACKAGES are skipped: they pin the tree's
     own version, which moves on every release without changing a dependency.
     """
-    lock = read_lock(lock_path)
-    local = {_canonical(n) for n in LOCAL_PACKAGES}
-    problems: list[str] = []
-    for name, source in LOCAL_PACKAGES.items():
-        extras = LOCAL_EXTRAS[name]
-        locked = locked_requirements(lock, name, extras)
-        if locked is None:
-            problems.append(f"{lock_path} has no {name} entry")
-            continue
-        declared = declared_requirements(source / "pyproject.toml", extras)
-        for req in sorted(r for r in declared - locked if r[0] not in local):
-            problems.append(f"{name} declares {req} but {lock_path} does not")
-        for req in sorted(r for r in locked - declared if r[0] not in local):
-            problems.append(
-                f"{lock_path} records {req} for {name}, which it no longer declares"
-            )
-    return problems
+    return [problem for _, problem in _drift(lock_path)]
+
+
+def drifted_packages(lock_path: Path = PACKAGE_DIR / "uv.lock") -> set[str]:
+    """Canonical names of the dependencies behind ``lock_drift``'s problems.
+
+    renovate_conformance_lock_sync.py relocks exactly these, pinned to the
+    root lock's versions.
+    """
+    return {name for name, _ in _drift(lock_path) if name is not None}
 
 
 def find_wheel(wheel_dir: Path) -> Path:
@@ -278,7 +309,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = subprocess.run(
             [
                 str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                "-o", "asyncio_mode=auto", *(f"tests/{name}" for name in SLICE),
+                "-o", "asyncio_mode=auto",
+                *(arg for node in DESELECT for arg in ("--deselect", f"tests/{node}")),
+                *(f"tests/{name}" for name in SLICE),
             ],
             cwd=work,
         )  # fmt: skip

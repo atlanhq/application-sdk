@@ -8,16 +8,28 @@ import httpx
 import orjson
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
-from application_sdk.infrastructure.bindings import BindingError, BindingResponse
-from application_sdk.infrastructure.pubsub import PubSubError, _MessageHandler
+from application_sdk.infrastructure.bindings import (
+    BindingError,  # noqa: F401 — deprecated names kept importable from this module (shipped surface); removed with the class in v4.0
+    BindingResponse,
+    BindingUnavailableError,
+)
+from application_sdk.infrastructure.pubsub import (
+    PubSubError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    PubSubUnavailableError,
+    _MessageHandler,
+)
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
-from application_sdk.infrastructure.state import StateStoreError
+from application_sdk.infrastructure.state import (
+    StateStoreError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    StateStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -33,21 +45,18 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated ``MessageHandler`` alias with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _MessageHandler
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda _name: _MessageHandler,
+)
 
 
+@deprecated(
+    "create_dapr_secret_store is deprecated; construct "
+    "DaprSecretStore(client, store_name=...) directly. Will be removed in v4.0.0."
+)
 def create_dapr_secret_store(
     client: AsyncDaprClient,
     store_name: str = "secretstore",
@@ -89,10 +98,10 @@ class DaprStateStore:
                 key=key,
                 value=value,
             )
-        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed StateStoreUnavailableError with cause chain; traceback preserved
         except Exception as e:
-            raise StateStoreError(
-                f"Failed to save state: {e}",
+            raise StateStoreUnavailableError(
+                message=f"Failed to save state: {e}",
                 key=key,
                 operation="save",
                 cause=e,
@@ -108,10 +117,10 @@ class DaprStateStore:
             if data:
                 return orjson.loads(data)
             return None
-        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed StateStoreUnavailableError with cause chain; traceback preserved
         except Exception as e:
-            raise StateStoreError(
-                f"Failed to load state: {e}",
+            raise StateStoreUnavailableError(
+                message=f"Failed to load state: {e}",
                 key=key,
                 operation="load",
                 cause=e,
@@ -125,10 +134,10 @@ class DaprStateStore:
                 key=key,
             )
             return True
-        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed StateStoreUnavailableError with cause chain; traceback preserved
         except Exception as e:
-            raise StateStoreError(
-                f"Failed to delete state: {e}",
+            raise StateStoreUnavailableError(
+                message=f"Failed to delete state: {e}",
                 key=key,
                 operation="delete",
                 cause=e,
@@ -169,7 +178,7 @@ def is_dapr_transport_unavailable(exc: BaseException) -> bool:
 
 
 #: Upper bound on how much of a non-JSON Dapr error body is copied into a
-#: :class:`BindingError` message. Dapr's own bodies are one short JSON object;
+#: :class:`BindingUnavailableError` message. Dapr's own bodies are one short JSON object;
 #: anything longer is an HTML error page from a proxy in front of the sidecar.
 _DAPR_ERROR_BODY_MAX_CHARS = 512
 
@@ -195,8 +204,8 @@ def dapr_error_detail(exc: Exception) -> str | None:
         return None
     try:
         body = orjson.loads(text)
-    except Exception:
-        body = None
+    except orjson.JSONDecodeError:
+        body = None  # a non-JSON body is returned verbatim below
     if isinstance(body, dict) and (body.get("errorCode") or body.get("message")):
         code = body.get("errorCode") or "unknown"
         message = body.get("message") or ""
@@ -586,11 +595,11 @@ class DaprPubSub:
                 data=orjson.dumps(data).decode(),
                 metadata=metadata or {},
             )
-        # conformance: ignore[E007] re-raises as typed PubSubError with cause chain; no silent swallow
-        # conformance: ignore[E004] re-raises immediately as typed PubSubError; no information is discarded
+        # conformance: ignore[E007] re-raises as typed PubSubUnavailableError with cause chain; no silent swallow
+        # conformance: ignore[E004] re-raises immediately as typed PubSubUnavailableError; no information is discarded
         except Exception as e:
-            raise PubSubError(
-                f"Failed to publish message: {e}",
+            raise PubSubUnavailableError(
+                message=f"Failed to publish message: {e}",
                 topic=topic,
                 operation="publish",
                 cause=e,
@@ -706,7 +715,7 @@ class DaprBinding:
         # not a binding failure — wrapping it would bury the remedy.
         except DaprBinaryPayloadError:
             raise
-        # conformance: ignore[E004] re-raises as typed BindingError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed BindingUnavailableError with cause chain; traceback preserved
         except Exception as e:
             # The Dapr error body is the only place the real cause lives at
             # default sidecar log levels; without it a customer's log shows a
@@ -715,8 +724,8 @@ class DaprBinding:
             message = f"Failed to invoke binding: {type(e).__name__} {e}".rstrip()
             if detail:
                 message = f"{message} ({detail})"
-            raise BindingError(
-                message,
+            raise BindingUnavailableError(
+                message=message,
                 binding_name=self._binding_name,
                 operation=operation,
                 cause=e,
@@ -728,6 +737,11 @@ class DaprBinding:
 # ---------------------------------------------------------------------------
 
 
+@deprecated(
+    "is_dapr_component_registered is deprecated; check "
+    "`component_name in await get_dapr_component_types()` from "
+    "application_sdk.infrastructure._dapr.http instead. Will be removed in v4.0.0."
+)
 async def is_dapr_component_registered(component_name: str) -> bool:
     """Return ``True`` if a Dapr component with *component_name* is registered.
 

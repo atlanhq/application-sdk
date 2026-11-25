@@ -10,15 +10,10 @@ from __future__ import annotations
 
 import base64
 import json
-import sys
 import urllib.error
-from pathlib import Path
 
+import e2e_tenant_api as api
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import e2e_tenant_api as api  # noqa: E402
 
 _TENANT = "https://example-tenant.atlan.test"
 _SECRET = "super-secret-value"
@@ -221,7 +216,7 @@ def test_mint_error_reports_the_status_but_not_the_response_body(
             url=_TENANT,
             code=401,
             msg="Unauthorized",
-            hdrs=None,  # type: ignore[arg-type]
+            hdrs=None,  # pyright: ignore[reportArgumentType]
             fp=None,
         )
 

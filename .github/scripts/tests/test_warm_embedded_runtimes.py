@@ -8,13 +8,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+import warm_embedded_runtimes as warm
 from temporalio.testing import WorkflowEnvironment
 
 from application_sdk.dev import _embedded
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import warm_embedded_runtimes as warm
 
 _REPO = Path(__file__).resolve().parents[3]
 _CACHE_ACTION = "./.github/actions/embedded-runtimes-cache"
@@ -43,8 +40,8 @@ def test_warm_enters_and_leaves_both_runtimes(monkeypatch: pytest.MonkeyPatch) -
         return _ctx
 
     fake = types.ModuleType("application_sdk.dev")
-    fake.embedded_runtime = _tracking("temporal")  # type: ignore[attr-defined]
-    fake.embedded_dapr = _tracking("dapr")  # type: ignore[attr-defined]
+    fake.embedded_runtime = _tracking("temporal")  # pyright: ignore[reportAttributeAccessIssue]
+    fake.embedded_dapr = _tracking("dapr")  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, "application_sdk.dev", fake)
     monkeypatch.setattr(warm, "time_skipping_server", _tracking("test-server"))
 

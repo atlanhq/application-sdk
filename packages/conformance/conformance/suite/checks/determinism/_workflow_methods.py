@@ -28,7 +28,10 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import SDK_APP_BASE_NAMES
+from conformance.suite.checks._ast_common import (
+    base_names,
+    sdk_app_import_aliases,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
     collect_import_provenance,
@@ -37,39 +40,12 @@ from conformance.suite.checks.prescriptions._decorator_provenance import (
     is_task_decorator,
 )
 
-_SDK_PREFIX = "application_sdk"
-
-
 # ── App-subclass discovery ───────────────────────────────────────────────────
-
-
-def _sdk_app_aliases(tree: ast.AST) -> frozenset[str]:
-    """Return local names bound to an SDK ``App``-family base in this module."""
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom) or node.level > 0:
-            continue
-        module = node.module or ""
-        if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
-            for alias in node.names:
-                if alias.name in SDK_APP_BASE_NAMES:
-                    bound.add(alias.asname or alias.name)
-    return frozenset(bound)
-
-
-def _base_names(node: ast.ClassDef) -> set[str]:
-    names: set[str] = set()
-    for base in node.bases:
-        if isinstance(base, ast.Name):
-            names.add(base.id)
-        elif isinstance(base, ast.Attribute):
-            names.add(base.attr)
-    return names
 
 
 def _app_family_classes(tree: ast.AST) -> list[ast.ClassDef]:
     """Classes deriving from an SDK ``App``-family base, directly or via a local base."""
-    family = set(_sdk_app_aliases(tree))
+    family = set(sdk_app_import_aliases(tree))
     if not family:
         return []
     classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
@@ -78,7 +54,7 @@ def _app_family_classes(tree: ast.AST) -> list[ast.ClassDef]:
     while changed:
         changed = False
         for cls in classes:
-            if id(cls) not in found and _base_names(cls) & family:
+            if id(cls) not in found and family.intersection(base_names(cls)):
                 found[id(cls)] = cls
                 family.add(cls.name)
                 changed = True

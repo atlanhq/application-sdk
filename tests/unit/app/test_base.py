@@ -38,11 +38,11 @@ from application_sdk.app.base import (
     generate_workflow_class,
 )
 from application_sdk.app.entrypoint import (
-    EntryPointContractError,
+    EntryPointDeclarationError,
     EntryPointMetadata,
     entrypoint,
 )
-from application_sdk.app.registry import AppNotFoundError, AppRegistry
+from application_sdk.app.registry import AppNotRegisteredError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StoreTarget
@@ -220,32 +220,36 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(AppNotFoundError):
+        with pytest.raises(AppNotRegisteredError):
             registry.get("abstract-sub-app")
 
     def test_app_with_run_but_no_type_hints_raises_contract_error(self) -> None:
-        """An App subclass that overrides run() without type hints raises EntryPointContractError."""
+        """An App subclass that overrides run() without type hints raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="must have type annotations"):
+        with pytest.raises(
+            EntryPointDeclarationError, match="must have type annotations"
+        ):
 
             class NoHintsApp(App):
                 async def run(self, input):  # type: ignore[override]
                     return SimpleOutput()
 
     def test_app_with_run_using_base_input_raises_contract_error(self) -> None:
-        """Overriding run() with the base Input type (not narrowed) raises EntryPointContractError."""
+        """Overriding run() with the base Input type (not narrowed) raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="concrete subclass of Input"):
+        with pytest.raises(
+            EntryPointDeclarationError, match="concrete subclass of Input"
+        ):
 
             class BaseInputApp(App):
                 async def run(self, input: Input) -> SimpleOutput:  # type: ignore[override]
                     return SimpleOutput()
 
     def test_app_with_run_using_base_output_raises_contract_error(self) -> None:
-        """Overriding run() with the base Output type (not narrowed) raises EntryPointContractError."""
+        """Overriding run() with the base Output type (not narrowed) raises EntryPointDeclarationError."""
 
         with pytest.raises(
-            EntryPointContractError, match="concrete subclass of Output"
+            EntryPointDeclarationError, match="concrete subclass of Output"
         ):
 
             class BaseOutputApp(App):
@@ -291,18 +295,18 @@ class TestAppRegistration:
         assert VersionApp._app_version == "3.0.0"
 
     def test_app_with_wrong_input_type_raises_contract_error(self) -> None:
-        """App that overrides run() with a non-Input parameter raises EntryPointContractError."""
+        """App that overrides run() with a non-Input parameter raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="input type"):
+        with pytest.raises(EntryPointDeclarationError, match="input type"):
 
             class BadInputApp(App):
                 async def run(self, input: str) -> SimpleOutput:  # type: ignore[override]
                     return SimpleOutput()
 
     def test_app_with_wrong_output_type_raises_contract_error(self) -> None:
-        """App that overrides run() with a non-Output return type raises EntryPointContractError."""
+        """App that overrides run() with a non-Output return type raises EntryPointDeclarationError."""
 
-        with pytest.raises(EntryPointContractError, match="output type"):
+        with pytest.raises(EntryPointDeclarationError, match="output type"):
 
             class BadOutputApp(App):
                 async def run(self, input: SimpleInput) -> str:  # type: ignore[override]
@@ -340,7 +344,7 @@ class TestAppRegistration:
             pass
 
         registry = AppRegistry.get_instance()
-        with pytest.raises(AppNotFoundError):
+        with pytest.raises(AppNotRegisteredError):
             registry.get("no-run-app")
 
 
@@ -374,7 +378,7 @@ class _GateEligibleInput(Input, allow_unbounded_fields=True):
 
 
 @pytest.fixture(autouse=True)
-def _reset_app_base_state(clean_app_registry, clean_task_registry):
+def _reset_app_base_state():
     with _app_state_lock:
         _app_state.clear()
     _workflow_class_cache.clear()
@@ -973,6 +977,129 @@ class TestCreateTaskActivityWrapper:
         assert passed.maximum_attempts == 7
 
 
+class _RefIn(Input, allow_unbounded_fields=True):
+    ref: FileReference | None = None
+
+
+class _RefOut(Output, allow_unbounded_fields=True):
+    refs: list[FileReference] = []
+
+
+class TestRunStoredRefs:
+    """FND-5220: the workflow keeps the stored refs its tasks took and returned."""
+
+    def test_keeps_stored_refs_once_without_local_path_or_download(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        ref = FileReference(
+            local_path="/worker-a/out.json", storage_path="file_refs/a.json"
+        )
+        sink.record([ref, ref.model_copy(update={"local_path": "/worker-b/x"})])
+        sink.record([FileReference(local_path="/only/local.json")])
+
+        assert sink.for_cleanup() == [
+            FileReference(storage_path="file_refs/a.json", auto_materialize=False)
+        ]
+
+    def test_cut_keeps_durable_refs_first(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+        from application_sdk.contracts.types import StorageTier
+
+        sink = _RunStoredRefs()
+        sink.record(FileReference(storage_path=f"file_refs/{i}") for i in range(3))
+        sink.record([FileReference(storage_path="kept", tier=StorageTier.RETAINED)])
+
+        with (
+            mock.patch(
+                "application_sdk.contracts.cleanup.STORAGE_CLEANUP_FILE_REFS_MAX", 2
+            ),
+            mock.patch("application_sdk.app.base._safe_log") as log,
+        ):
+            refs = sink.for_cleanup()
+
+        assert [r.storage_path for r in refs] == ["kept", "file_refs/0"]
+        assert "Passing 2 of the run's 4 stored refs" in log.call_args.args[1]
+
+    async def test_task_wrapper_records_input_and_result_refs(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_RefOut,
+            context_data={},
+            stored_refs=sink,
+        )
+        out = _RefOut(refs=[FileReference(storage_path="file_refs/out.json")])
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=out,
+        ):
+            result = await wrapper(
+                _RefIn(ref=FileReference(storage_path="file_refs/in.json"))
+            )
+
+        assert result is out
+        assert [r.storage_path for r in sink.for_cleanup()] == [
+            "file_refs/in.json",
+            "file_refs/out.json",
+        ]
+
+    async def test_task_wrapper_records_input_refs_when_the_activity_fails(
+        self,
+    ) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        sink = _RunStoredRefs()
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_RefOut,
+            context_data={},
+            stored_refs=sink,
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity",
+                new_callable=mock.AsyncMock,
+                side_effect=RuntimeError("activity failed"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            await wrapper(_RefIn(ref=FileReference(storage_path="file_refs/in.json")))
+
+        assert [r.storage_path for r in sink.for_cleanup()] == ["file_refs/in.json"]
+
+    def test_wrap_instance_tasks_hands_every_task_the_runs_sink(self) -> None:
+        from application_sdk.app.base import _RunStoredRefs
+
+        class _SinkApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        instance = _SinkApp()
+        instance._run_stored_refs = _RunStoredRefs()
+        with mock.patch(
+            "application_sdk.app.base._create_task_activity_wrapper"
+        ) as factory:
+            _wrap_instance_tasks(instance, {"run_id": "r", "correlation_id": "c"})
+
+        assert factory.call_count > 0
+        assert all(
+            call.kwargs["stored_refs"] is instance._run_stored_refs
+            for call in factory.call_args_list
+        )
+
+
 # =============================================================================
 # generate_workflow_class — exercises the whole _run lifecycle end to end
 # =============================================================================
@@ -1252,6 +1379,51 @@ class TestGenerateWorkflowClass:
         assert exc.value.__cause__ is not None
         assert isinstance(exc.value.__cause__, ValueError)
         assert getattr(exc.value, "non_retryable", None) is True
+
+    async def test_run_reuses_binding_from_wf_init(self) -> None:
+        """When __init__ already bound the instance to the run, _run does not
+        wrap the tasks again: it sets the resolved correlation id on the same
+        context dict the task wrappers hold and on the instance's context."""
+        seen: dict[str, str] = {}
+
+        class CorrApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                seen["correlation_id"] = self.context.correlation_id
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(CorrApp, ep)
+
+        context_data = {"run_id": "r", "workflow_id": "w", "correlation_id": "r"}
+        wf_self = mock.MagicMock()
+        wf_self._app_instance = CorrApp()
+        wf_self._run_context_data = context_data
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=mock.MagicMock(correlation_id="corr"),
+            ),
+        ):
+            from application_sdk.app import base as _base
+
+            await wf_cls.run(wf_self, _BLDXInput())
+            wrap_mock = _base._wrap_instance_tasks
+            assert isinstance(wrap_mock, mock.MagicMock)
+            wrap_mock.assert_not_called()
+
+        assert context_data["correlation_id"] == "corr"
+        assert seen["correlation_id"] == "corr"
 
     async def test_run_lets_failure_error_propagate_unchanged(self) -> None:
         from temporalio.exceptions import FailureError
@@ -2046,6 +2218,105 @@ class TestWorkflowInteractionRelay:
         inst_b = wf_cls()
         assert inst_a._app_instance is not inst_b._app_instance
 
+    def test_wf_init_binds_app_instance_to_run_in_workflow(self) -> None:
+        """Inside a workflow, wf_cls() wraps @task methods and sets the run's
+        context before any handler runs. Temporal applies signal/update jobs
+        of the first activation (signal-with-start) after __init__ but before
+        the run coroutine; an unwrapped task would run inline in workflow code.
+        """
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        info_mock = mock.MagicMock(run_id="rid", workflow_id="wfid")
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.in_workflow", return_value=True
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.info", return_value=info_mock
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.patched", return_value=True
+            ) as patched,
+            mock.patch(
+                "application_sdk.app.base._safe_now",
+                return_value=datetime(2025, 1, 1, tzinfo=UTC),
+            ),
+        ):
+            wf_inst = wf_cls()
+
+        patched.assert_called_once_with("atlan-sdk/early-run-binding")
+        app_instance = wf_inst._app_instance
+        # The instance attribute shadows the class's plain coroutine.
+        assert "do_work" in vars(app_instance)
+        assert app_instance._context is not None
+        assert app_instance._context.run_id == "rid"
+        assert app_instance._run_stored_refs is not None
+        assert wf_inst._run_context_data == {
+            "run_id": "rid",
+            "workflow_id": "wfid",
+            "correlation_id": "rid",
+        }
+
+    def test_wf_init_replaying_pre_marker_history_leaves_binding_to_run(
+        self,
+    ) -> None:
+        """Replaying a history written before the early-binding marker existed
+        (``patched`` is False), wf_cls() binds nothing, so _run binds as it
+        did when that history was written and a first-activation handler
+        replays the same commands."""
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.in_workflow", return_value=True
+            ),
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=False),
+        ):
+            wf_inst = wf_cls()
+
+        assert "do_work" not in vars(wf_inst._app_instance)
+        assert wf_inst._app_instance._context is None
+        assert not hasattr(wf_inst, "_run_context_data")
+
+    def test_wf_init_outside_workflow_leaves_binding_to_run(self) -> None:
+        """Outside a workflow there is no run: wf_cls() only builds the instance."""
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        wf_inst = wf_cls()
+        assert "do_work" not in vars(wf_inst._app_instance)
+        assert wf_inst._app_instance._context is None
+        assert not hasattr(wf_inst, "_run_context_data")
+
 
 # =============================================================================
 # App.upload() — store routing
@@ -2054,18 +2325,6 @@ class TestWorkflowInteractionRelay:
 
 class TestUploadStoreRouting:
     """App.upload() routes to upstream_storage when configured, else storage."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     async def test_upload_dual_writes_when_both_stores_configured(self) -> None:
         """When both stores are distinct and mirror is enabled (default), _upload is

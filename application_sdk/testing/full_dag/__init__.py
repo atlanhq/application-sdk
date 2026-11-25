@@ -5,8 +5,9 @@
     :class:`~application_sdk.testing.e2e.BaseE2ETest` is what the codegen'd
     ``app/generated/_e2e_base.py`` subclasses, SQL connectors get
     :class:`~application_sdk.testing.e2e.SQLAppE2ETest` on top of it, and
-    :mod:`application_sdk.testing.e2e.client` / ``._errors`` are already the
-    canonical implementations this package re-exports.
+    :mod:`application_sdk.testing.harness.automation_engine` (the DAG types) and
+    ``application_sdk.testing.e2e._errors`` are already the canonical
+    implementations this package re-exports.
 
     ``BaseE2ETest`` is connector-agnostic — it is in production use on non-SQL
     connectors (BI, API and object-store apps alike), so "my connector is not

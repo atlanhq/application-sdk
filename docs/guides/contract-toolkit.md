@@ -32,10 +32,14 @@ app/generated/
 For the complete authoring reference, examples, and validation commands, see
 `contract-toolkit/README.md` and `contract-toolkit/docs/reference.md`.
 
-For public app-author examples, start with `contract-toolkit/examples/openapi`
-for URL/cloud import modes plus an extra credential configmap,
-`contract-toolkit/examples/postgres` for a basic SQL datasource, and
-`contract-toolkit/examples/trino` for multi-catalog SQL-tree filtering. The
-generic capability examples are `connection-ref`, `fanin`, and `publish-controls`.
+For public app-author examples, start with `contract-toolkit/examples/minimal`
+for the smallest possible contract, `contract-toolkit/examples/tree-filters` for
+include/exclude filter tree pickers, and `contract-toolkit/examples/full` for
+every overridable feature (JDBC URL auth, all pipeline steps, `extraNodes`). The
+generic capability examples include `connection-ref`, `fanin`, and
+`publish-controls`; the toolkit README lists them all.
 App-specific wiring examples should live with sample apps or the owning app
 repository; test-only scenarios live under `contract-toolkit/tests/fixtures`.
+
+For a step-by-step walkthrough of writing and generating a contract, see
+[PKL Contracts](pkl-contracts.md).

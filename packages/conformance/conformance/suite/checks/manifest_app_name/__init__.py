@@ -10,28 +10,21 @@ telemetry to AE.
 
 This is a **cross-artifact** check over the committed ``app/generated/`` and
 ``contract/generated/`` trees; per-Python-file scanning has no meaning here, so
-``scan_path`` is a no-op and ``scan_all`` does all the work — mirroring K006
+the module defines only ``scan_all`` — mirroring K006
 (``manifest_contract``).
 """
 
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from conformance.suite.checks._ast_common import discover, make_cli_main
-from conformance.suite.schema.findings import Finding
 
 from ._check import scan_all
 
 SERIES = "K"
 
-__all__ = ["SERIES", "discover", "main", "scan_all", "scan_path"]
-
-
-def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K013 reads the generated manifest tree; use :func:`scan_all`."""
-    return []
+__all__ = ["SERIES", "discover", "main", "scan_all"]
 
 
 main = make_cli_main(

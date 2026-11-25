@@ -39,9 +39,10 @@ from pathlib import Path
 
 import pytest
 
-from conformance.suite.checks.sdr import discover, scan_all, scan_path
+from conformance.suite.checks.sdr import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from tests._helpers import uv_lock
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -1333,15 +1334,6 @@ def test_p039_silent_on_non_sdr_app(tmp_path: Path) -> None:
     assert not _run(tmp_path)
 
 
-# ── scan_path no-op ──────────────────────────────────────────────────────────
-
-
-def test_scan_path_is_noop(tmp_path: Path) -> None:
-    f = tmp_path / "app.py"
-    f.write_text("pass\n")
-    assert scan_path(f, tmp_path) == []
-
-
 # ── P030: upload-bridge shapes (fleet-sweep hardening) ───────────────────────
 
 _NOOP_BRIDGE = (
@@ -1937,25 +1929,6 @@ def test_p030_positional_store_argument_is_a_transfer(tmp_path: Path) -> None:
 # ── P051: SDR app below the interactive-setup SDK floor ─────────────────────
 
 
-def _uv_lock(sdk_version: str | None) -> str:
-    """A minimal uv.lock. ``None`` omits the atlan-application-sdk entry."""
-    other = (
-        "[[package]]\n"
-        'name = "some-dep"\n'
-        'version = "1.2.3"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-    if sdk_version is None:
-        return other
-    sdk = (
-        "[[package]]\n"
-        'name = "atlan-application-sdk"\n'
-        f'version = "{sdk_version}"\n'
-        'source = { registry = "https://pypi.org/simple" }\n'
-    )
-    return f"{other}\n{sdk}"
-
-
 def test_p051_rule_metadata() -> None:
     rule = get_rule("P051")
     assert rule.name == "SdrPreflightUnavailable"
@@ -1972,7 +1945,7 @@ def test_p051_fires_when_locked_sdk_below_floor(tmp_path: Path) -> None:
         tmp_path,
         {
             "atlan.yaml": _SDR_ATLAN_YAML,
-            "uv.lock": _uv_lock("3.29.0"),
+            "uv.lock": uv_lock("3.29.0"),
         },
     )
     findings = [f for f in _run(tmp_path) if f.rule_id == "P051"]
@@ -1984,7 +1957,7 @@ def test_p051_fires_when_locked_sdk_below_floor(tmp_path: Path) -> None:
 def test_p051_fires_on_far_below_floor(tmp_path: Path) -> None:
     _write(
         tmp_path,
-        {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": _uv_lock("3.25.0")},
+        {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": uv_lock("3.25.0")},
     )
     assert any(f.rule_id == "P051" for f in _run(tmp_path))
 
@@ -1992,7 +1965,7 @@ def test_p051_fires_on_far_below_floor(tmp_path: Path) -> None:
 def test_p051_silent_at_exactly_the_floor(tmp_path: Path) -> None:
     _write(
         tmp_path,
-        {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": _uv_lock("3.30.0")},
+        {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": uv_lock("3.30.0")},
     )
     assert not any(f.rule_id == "P051" for f in _run(tmp_path))
 
@@ -2001,7 +1974,7 @@ def test_p051_silent_above_the_floor(tmp_path: Path) -> None:
     for version in ("3.30.1", "3.31.0", "4.0.0"):
         _write(
             tmp_path,
-            {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": _uv_lock(version)},
+            {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": uv_lock(version)},
         )
         assert not any(f.rule_id == "P051" for f in _run(tmp_path)), (
             f"should be silent at {version}"
@@ -2011,7 +1984,7 @@ def test_p051_silent_above_the_floor(tmp_path: Path) -> None:
 def test_p051_silent_on_non_sdr_app(tmp_path: Path) -> None:
     _write(
         tmp_path,
-        {"atlan.yaml": _NON_SDR_ATLAN_YAML, "uv.lock": _uv_lock("3.25.0")},
+        {"atlan.yaml": _NON_SDR_ATLAN_YAML, "uv.lock": uv_lock("3.25.0")},
     )
     assert not any(f.rule_id == "P051" for f in _run(tmp_path))
 
@@ -2026,7 +1999,7 @@ def test_p051_silent_when_no_lock(tmp_path: Path) -> None:
 def test_p051_silent_when_sdk_absent_from_lock(tmp_path: Path) -> None:
     _write(
         tmp_path,
-        {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": _uv_lock(None)},
+        {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": uv_lock(None)},
     )
     assert not any(f.rule_id == "P051" for f in _run(tmp_path))
 

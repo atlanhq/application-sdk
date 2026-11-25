@@ -47,6 +47,7 @@ import json
 from pathlib import Path
 from typing import Literal, get_args
 
+from conformance import __version__
 from conformance.scorecard.compute import build_scorecard
 from conformance.scorecard.readers import (
     parse_coverage_json,
@@ -186,8 +187,6 @@ def main(argv: list[str]) -> int:
         help="Output path for the scorecard JSON.",
     )
     args = parser.parse_args(argv)
-
-    from conformance import __version__
 
     unit_junit = args.unit_junit or args.junit
     unit_coverage = args.unit_coverage or args.coverage

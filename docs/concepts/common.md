@@ -488,18 +488,17 @@ cause is captured, by `sanitize_cause_repr`.
 ### Legacy error-code namespaces (backward-compat only)
 
 - **`application_sdk.common.error_codes`** — `ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}` HTTP-style codes. Do not use in new code.
-- **`application_sdk.errors` legacy constants** — `AAF-{COMP}-{NNN}` format (`APP_ERROR`, `HANDLER_ERROR`, etc.). Do not use in new code; retained for v3.x back-compat, removed in v4.0.
+- **`application_sdk.errors` legacy constants** — `ErrorCode` and the `AAF-{COMP}-{NNN}` constants (`APP_ERROR`, `HANDLER_ERROR`, etc.). Reading one from `application_sdk.errors` emits a `DeprecationWarning`; removed in v4.0.
 
-### Legacy constant usage (back-compat shim)
+An SDK error that had an `AAF-*` code still prints it as the `[AAF-…]` prefix of `str()`, so log text is unchanged. The code itself is no longer declared on the class: `Cls.DEFAULT_ERROR_CODE`, `err.error_code` and the `error_code=` constructor keyword keep working but warn. Use the class's `code` (or `qualified_code`) instead:
 
 ```python
-# Still works for existing code — do not use in new code
-from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, HANDLER_ERROR
+from application_sdk.storage.errors import StorageConfigError
 
-logger.error("Task failed [%s]", APP_ERROR, exc_info=exc)
-
-from application_sdk.execution import ApplicationError
-raise ApplicationError(str(APP_NON_RETRYABLE), non_retryable=True)
+try:
+    ...
+except StorageConfigError as exc:
+    logger.warning("Storage misconfigured [%s]", exc.qualified_code, exc_info=True)
 ```
 
 ## SQL Utilities
@@ -682,8 +681,8 @@ The return type is a typed model rather than a `Mapping[str, Any]` deliberately.
 
 | Function | Import | Description |
 |----------|--------|-------------|
-| `get_actual_cpu_count()` | `application_sdk.common` | CPU count respecting container limits |
-| `get_safe_num_threads()` | `application_sdk.common` | Reasonable thread count for parallel work (`cpu_count * 2`, min 2) |
+| `get_actual_cpu_count()` | `application_sdk.common` | Whole CPUs this process may use: the tighter of its affinity mask and the container's CPU quota (cgroup v1 or v2). A 1-CPU pod on a 16-core node gets 1. The same number the SDK sizes its own pools from |
+| `get_safe_num_threads()` | `application_sdk.common` | **Deprecated, removed in v4.0.** `get_actual_cpu_count() * 2`. Size the pool for your workload from `get_actual_cpu_count()`, or use `run_in_thread` |
 | `parse_credentials_extra(credentials)` | `application_sdk.credentials` | Parse the `extra` JSON field in a credentials dict |
 | `yaml_template_paths(templates_path, assets=None)` | `application_sdk.common.yaml_templates` | Map each `*.yaml` template under an app's directory (recursive) to its path, keyed by upper-cased basename (`table.yaml` → `"TABLE"`); `assets` filters the keys |
 | `flatten_yaml_columns(nested)` | `application_sdk.common.yaml_templates` | Flatten a template's nested `columns:` mapping into one dict per leaf column with a dotted `name` |

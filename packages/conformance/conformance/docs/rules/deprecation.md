@@ -24,9 +24,9 @@ reassigned.
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [B001](#b001) | `DeprecatedSdkSymbolUsage` | `warn` | `app` | `deprecated-symbol-usage` | — | 0.5.0 |
-| [B002](#b002) | `MalformedDeprecationNotice` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
+| [B002](#b002) | `MalformedDeprecationNotice` | `block` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B003](#b003) | `OverdueDeprecationRemoval` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
-| [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
+| [B004](#b004) | `UnmarkedDeprecationClaim` | `block` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
 | [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
@@ -76,15 +76,18 @@ AtlanError` site); B001 owns import / construct / subclass, so the two never
 double-report.
 
 Coverage limits (intentional, low-false-positive at WARN): deprecated *parameters* /
-*modes* are out of scope; method matching is attribute-name-anchored (a same-named
-method on an unrelated object is a known false-positive risk); re-export aliasing can
-produce false negatives.  All are suppressible with `# conformance: ignore[B001]`.
+*modes* are out of scope; method matching is attribute-name-anchored, except that a call
+on a receiver proven to be a module (bound only by `import x`, or by `from pkg import x`
+where `pkg/x.py` is in the app) is never matched, since it runs a module function.  A
+same-named method on any other unrelated object remains a known false-positive risk;
+re-export aliasing can produce false negatives.  All are suppressible with `#
+conformance: ignore[B001]`.
 
 ---
 
 ## B002 — `MalformedDeprecationNotice` {#b002}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A deprecation notice must name both a migration target and a removal version
 
@@ -93,7 +96,11 @@ that it must answer two questions: what to use instead, and by when the symbol
 disappears. A notice missing either is a dead end — callers see 'deprecated' with no
 path forward, and B001 cannot carry a migration hint to the fleet. Enforcing 'names a
 replacement AND a removal version' on the SDK's own notices keeps the whole deprecation
-pipeline actionable. WARN: the required wording is a guided edit, not mechanical.
+pipeline actionable. Customer impact: an app on a symbol whose notice names no
+replacement or date gets no usable warning, and its next upgrade past the removal breaks
+it. BLOCK since the SDK reached zero findings (FND-4300):
+application_sdk._deprecation.warn_deprecated builds a conforming notice from its
+arguments, so a new one is cheap to get right.
 
 Flags a `@deprecated(...)` or `DeprecationWarning` notice in SDK source whose message
 does not name *both*:
@@ -103,8 +110,10 @@ does not name *both*:
 * a **removal version** — when it goes away (`will be removed in v4.0`).
 
 Both are required so every deprecation is self-describing and B001 can propagate
-concrete guidance to consumers.  Only symbol-level markers are checked (decorator, or a
-class emitting `DeprecationWarning` from `__init__` / `__init_subclass__`).
+concrete guidance to consumers.  Every notice is checked: a `@deprecated` message, a
+`warnings.warn(..., DeprecationWarning)` (a message held in a local variable or built
+from a module-level string constant is read too), a `warn_deprecated(...)` call, an
+enum's `__deprecated_members__` and a `_DEPRECATED_CONSTANTS` shim.
 
 ---
 
@@ -132,7 +141,7 @@ cannot be determined the check is skipped (overdue-ness is undecidable).
 
 ## B004 — `UnmarkedDeprecationClaim` {#b004}
 
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+**Tier:** `block` · **Scope:** `sdk` · **Category:** `deprecation-hygiene` · **Autofixable:** — · **Since:** 0.5.0
 
 > A symbol's docstring claims deprecation but it carries no @deprecated / DeprecationWarning marker
 
@@ -142,13 +151,16 @@ nothing the manifest can pick up, so B001 never warns the fleet. The claim and t
 mechanism have drifted apart. Flagging a deprecation claim that lacks a real marker
 closes that gap so every stated deprecation is also a detectable one. Detect-only: which
 marker to add (decorator vs warning) is a small design choice for the author, routed to
-residue with a concrete suggestion.
+residue with a concrete suggestion. Customer impact: the manifest never lists the
+symbol, so B001 never warns the apps that use it, and they break on the release that
+removes it. BLOCK since the SDK reached zero findings (FND-4300).
 
-Flags a function / method / class whose docstring opens with `Deprecated` (or carries a
-`.. deprecated::` directive) but has no machine-readable marker — no `@deprecated`
-decorator and no `DeprecationWarning` emitted from `__init__` / `__init_subclass__`.
-Such a claim is invisible to consumers and to B001.  Detect-only: the remediation loop
-routes it to residue with a suggestion to add a marker.
+Flags a function / method / class whose docstring opens with `Deprecated:` (or carries a
+`.. deprecated::` directive) at the docstring's own indentation but has no
+machine-readable marker — no `@deprecated` decorator and no `DeprecationWarning` emitted
+from `__init__` / `__init_subclass__`. Such a claim is invisible to consumers and to
+B001.  Detect-only: the remediation loop routes it to residue with a suggestion to add a
+marker.
 
 Scoped to real symbol docstrings (not, e.g., a field literally named `deprecated`),
 biased toward low false positives at WARN.

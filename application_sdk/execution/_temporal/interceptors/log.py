@@ -23,7 +23,6 @@ import dataclasses
 import posixpath
 import time
 import traceback as tb_module
-import warnings
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -42,6 +41,7 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
+from application_sdk import _deprecation
 from application_sdk.errors.base import AppError, redact_secrets
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
@@ -137,8 +137,7 @@ def _failure_suffix(exc: BaseException | None, attrs: dict[str, Any]) -> str:
                 f" — at {posixpath.basename(str(last.filename))}"
                 f":{last.lineno} in {last.name}"
             )
-    # conformance: ignore[E004] best-effort message enrichment; a broken traceback must never block the ended log
-    except Exception:  # noqa: S110 — degrade to code+message, never drop the log
+    except Exception:  # noqa: S110, BLE001 — degrade to code+message, never drop the log; best-effort message enrichment; a broken traceback must never block the ended log
         pass
     return f"FAILED ({code}): {msg}{frame}" if msg else f"FAILED ({code}){frame}"
 
@@ -537,9 +536,6 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # ``is_replaying`` may still be True, preventing over-suppression.
         set_replay_predicate(workflow.unsafe.is_replaying_history_events)
 
-        if workflow.unsafe.is_replaying():
-            return await self.next.execute_workflow(input)
-
         identity: dict[str, str | int | float] = {
             "temporal.workflow.id": info.workflow_id or "",
             "temporal.workflow.run_id": info.run_id or "",
@@ -549,16 +545,24 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             "atlan.correlation_id": correlation_id,
         }
 
-        try:
-            started_msg = _lifecycle_message(
-                "workflow.started", str(identity["temporal.workflow.type"])
-            )
-            logger.info(started_msg, **identity)
-        # conformance: ignore[E004] best-effort observability guard; logging failure must never block workflow execution
-        except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
-            pass
+        # workflow.started / workflow.ended are run-level lines, but a run can
+        # span several workflow-instance lifetimes (cache eviction, a worker
+        # restart handing the run to another worker). ``started`` is logged by
+        # the lifetime that executes the first task live; a rehydrated lifetime
+        # enters here replaying and skips it. ``ended`` is logged by whichever
+        # lifetime finishes the run live, so it is gated at exit, not entry:
+        # eviction teardown and replay of a closed history both end with
+        # ``is_replaying()`` true and log nothing. Same rule as
+        # ``_MetricsWorkflowInboundInterceptor``.
+        if not workflow.unsafe.is_replaying():
+            try:
+                started_msg = _lifecycle_message(
+                    "workflow.started", str(identity["temporal.workflow.type"])
+                )
+                logger.info(started_msg, **identity)
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard; logging failure must never block workflow execution
+                pass
 
-        start_ns = time.monotonic_ns()
         status = "OK"
         exc_caught: BaseException | None = None
         try:
@@ -569,39 +573,52 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             exc_caught = e
             raise
         finally:
-            duration_ms = round((time.monotonic_ns() - start_ns) / 1_000_000, 1)
-            ended_attrs: dict[str, str | int | float] = {
-                **identity,
-                "otel.status_code": status,
-                "temporal.workflow.duration_ms": duration_ms,
-            }
             try:
-                wf_type = str(identity["temporal.workflow.type"])
-                if status == "ERROR":
-                    ended_attrs.update(_extract_failure_attrs(exc_caught))
-                    # A deliberate preflight-gate block is an expected, typed
-                    # outcome, not a crash — log it terse (no stack). Its
-                    # classification is already in ended_attrs via the failure
-                    # details. Real failures keep the ERROR traceback.
-                    if is_preflight_block(exc_caught):
-                        blocked_msg = _lifecycle_message(
-                            "workflow.ended", f"{wf_type} {_blocked_suffix(exc_caught)}"
-                        )
-                        logger.warning(blocked_msg, **ended_attrs)
-                    else:
-                        failed_msg = _lifecycle_message(
-                            "workflow.ended",
-                            f"{wf_type} {_failure_suffix(exc_caught, ended_attrs)}",
-                        )
-                        logger.error(failed_msg, exc_info=True, **ended_attrs)
-                else:
-                    ok_msg = _lifecycle_message(
-                        "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
-                    )
-                    logger.info(ok_msg, **ended_attrs)
-            # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion
-            except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
+                if not workflow.unsafe.is_replaying():
+                    self._log_workflow_ended(identity, info, status, exc_caught)
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the workflow on logging; best-effort observability guard in finally; logging failure must never block workflow completion
                 pass
+
+    @staticmethod
+    def _log_workflow_ended(
+        identity: dict[str, str | int | float],
+        info: workflow.Info,
+        status: str,
+        exc_caught: BaseException | None,
+    ) -> None:
+        # History time, not this process's clock: a rehydrated lifetime did
+        # not observe the run's start.
+        duration_ms = round(
+            (workflow.now() - info.start_time).total_seconds() * 1000, 1
+        )
+        ended_attrs: dict[str, str | int | float] = {
+            **identity,
+            "otel.status_code": status,
+            "temporal.workflow.duration_ms": duration_ms,
+        }
+        wf_type = str(identity["temporal.workflow.type"])
+        if status == "ERROR":
+            ended_attrs.update(_extract_failure_attrs(exc_caught))
+            # A deliberate preflight-gate block is an expected, typed
+            # outcome, not a crash — log it terse (no stack). Its
+            # classification is already in ended_attrs via the failure
+            # details. Real failures keep the ERROR traceback.
+            if is_preflight_block(exc_caught):
+                blocked_msg = _lifecycle_message(
+                    "workflow.ended", f"{wf_type} {_blocked_suffix(exc_caught)}"
+                )
+                logger.warning(blocked_msg, **ended_attrs)
+            else:
+                failed_msg = _lifecycle_message(
+                    "workflow.ended",
+                    f"{wf_type} {_failure_suffix(exc_caught, ended_attrs)}",
+                )
+                logger.error(failed_msg, exc_info=True, **ended_attrs)
+        else:
+            ok_msg = _lifecycle_message(
+                "workflow.ended", f"{wf_type} OK ({duration_ms}ms)"
+            )
+            logger.info(ok_msg, **ended_attrs)
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +679,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 execution_type="activity",
                 workflow_id=info.workflow_id or "",
                 workflow_run_id=info.workflow_run_id or "",
+                workflow_type=info.workflow_type or "",
                 activity_id=info.activity_id or "",
                 activity_type=info.activity_type or "",
                 task_queue=info.task_queue or "",
@@ -709,8 +727,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                 "activity.started", str(identity["temporal.activity.type"])
             )
             logger.info(started_msg, **identity)
-        # conformance: ignore[E004] best-effort observability guard; logging failure must never block activity execution
-        except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
+        except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the activity on logging; best-effort observability guard; logging failure must never block activity execution
             pass
 
         start_ns = time.monotonic_ns()
@@ -754,8 +771,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                         "activity.ended", f"{act_type} OK ({duration_ms}ms)"
                     )
                     logger.info(ok_msg, **ended_attrs)
-            # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion
-            except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
+            except Exception:  # noqa: S110, BLE001 — best-effort observability; never block the activity on logging; best-effort observability guard in finally; logging failure must never block activity completion
                 pass
 
 
@@ -819,20 +835,6 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 }
 
 
-def _deprecated_constant_value(name: str) -> object:
-    """The live value behind a deprecated constant alias.
-
-    Imported here rather than at module scope: a module-level re-export would
-    resolve before ``__getattr__`` ever ran, handing the name back silently and
-    leaving the caller with no migration signal at all. Keeping it lazy also
-    means this module no longer depends on ``constants`` for its own work,
-    which is the point of the change that removed the attributes.
-    """
-    from application_sdk import constants  # noqa: PLC0415 — see docstring
-
-    return getattr(constants, name)
-
-
 if TYPE_CHECKING:
     # PEP 562's ``__getattr__`` can only be typed ``-> object``, which is all a
     # type checker infers for every name it serves. Declaring the names here
@@ -843,16 +845,6 @@ if TYPE_CHECKING:
     COMMIT_SHA: str
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-exports once more, with a warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v3.41.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _deprecated_constant_value(name)
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="3.41.0"
+)

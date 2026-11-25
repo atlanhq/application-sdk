@@ -7,12 +7,6 @@ from collections.abc import Iterator
 import pytest
 
 from application_sdk.testing.e2e.base import FullDAGOutcome
-from application_sdk.testing.e2e.client import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-)
 from application_sdk.testing.e2e.payload import (
     AgentSpec,
     ConnectionSpec,
@@ -22,6 +16,11 @@ from application_sdk.testing.e2e.payload import (
     build_seed_dag,
 )
 from application_sdk.testing.e2e.sql_app import SQLAppE2ETest
+from application_sdk.testing.harness.automation_engine import (
+    DAGNodeStatus,
+    DAGRunStatus,
+)
+from tests.unit.testing._ae_fakes import numbered
 
 _CONNECTION = ConnectionSpec(
     name="e2e-ci-mysql-1",
@@ -41,24 +40,6 @@ _DATABASE = DatabaseSpec(
 _AGENT = AgentSpec(agent_name="mysql-e2e-ci-1")
 
 
-def _make_dag_result(
-    status: DAGRunStatus, *node_statuses: DAGNodeStatus
-) -> DAGRunResult:
-    nodes = [
-        DAGNodeResult(
-            name=f"node{i}",
-            status=s,
-            started_at_ms=None,
-            completed_at_ms=None,
-            error_message=None,
-        )
-        for i, s in enumerate(node_statuses)
-    ]
-    return DAGRunResult(
-        run_id="run-1", workflow_slug="slug-1", status=status, nodes=nodes
-    )
-
-
 # ---------------------------------------------------------------------------
 # FullDAGOutcome
 # ---------------------------------------------------------------------------
@@ -66,7 +47,7 @@ def _make_dag_result(
 
 class TestFullDAGOutcome:
     def test_succeeded_when_all_nodes_ok_and_connection_in_atlas(self) -> None:
-        result = _make_dag_result(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
+        result = numbered(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
         outcome = FullDAGOutcome(
             ae_result=result,
             connection_qualified_name="default/mysql/1",
@@ -75,7 +56,7 @@ class TestFullDAGOutcome:
         assert outcome.succeeded is True
 
     def test_not_succeeded_when_connection_missing(self) -> None:
-        result = _make_dag_result(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
+        result = numbered(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
         outcome = FullDAGOutcome(
             ae_result=result,
             connection_qualified_name="default/mysql/1",
@@ -84,7 +65,7 @@ class TestFullDAGOutcome:
         assert outcome.succeeded is False
 
     def test_not_succeeded_when_node_failed(self) -> None:
-        result = _make_dag_result(
+        result = numbered(
             DAGRunStatus.FAILED, DAGNodeStatus.SUCCEEDED, DAGNodeStatus.FAILED
         )
         outcome = FullDAGOutcome(
@@ -95,7 +76,7 @@ class TestFullDAGOutcome:
         assert outcome.succeeded is False
 
     def test_default_asset_counts_empty(self) -> None:
-        result = _make_dag_result(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
+        result = numbered(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
         outcome = FullDAGOutcome(
             ae_result=result,
             connection_qualified_name="default/mysql/1",
@@ -104,7 +85,7 @@ class TestFullDAGOutcome:
         assert outcome.asset_counts == {}
 
     def test_lineage_present_false_by_default(self) -> None:
-        result = _make_dag_result(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
+        result = numbered(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
         outcome = FullDAGOutcome(
             ae_result=result,
             connection_qualified_name="default/mysql/1",

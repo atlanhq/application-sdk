@@ -389,7 +389,7 @@ def fake_clock(start: float = 0.0) -> Iterator[FakeClock]:
     Yields:
         The :class:`FakeClock` in force for the duration of the block.
     """
-    global _monotonic, _sleep, _async_sleep  # noqa: PLW0603 — the swap is the point
+    global _monotonic, _sleep, _async_sleep  # the swap is the point
     fake = FakeClock(now=start)
     saved = (_monotonic, _sleep, _async_sleep)
     _monotonic, _sleep, _async_sleep = fake.monotonic, fake.sleep, fake.async_sleep

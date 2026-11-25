@@ -36,18 +36,11 @@ shape:
    ``[tool.uv.sources]`` (FND-4256), so there is no registry version for the
    bound to hold or move.
 
-3. **One commit, not three.** Each push to the branch re-fires the PR's entire
+3. **One commit, not two.** Each push to the branch re-fires the PR's entire
    required-check suite. Bounding every lock in a single commit costs one CI wave
    instead of one per file.
 
-4. **The npm lock is bounded too, by a different driver.** The lane rewrites a
-   third file, ``packages/conformance/conformance/package-lock.json``, and npm
-   can express none of the per-package retention ceilings the uv bound depends
-   on — so ``renovate_npm_lock_bounded`` gates the whole file instead: take the
-   bounded resolve, or restore the base branch's lock verbatim. FND-380. It rides
-   in the same commit for the same reason the two uv locks do.
-
-5. **A pyatlan move regenerates the table derived from it.** The conformance
+4. **A pyatlan move regenerates the table derived from it.** The conformance
    package commits ``relationship_directions.json``, built from the installed
    pyatlan's models and pinned to it by a drift test. A refresh that moves
    pyatlan without regenerating it is a red PR nobody on the lane can fix, so
@@ -60,9 +53,11 @@ Two halves, two jobs
 --------------------
 Regenerating the table installs and imports the freshly-resolved pyatlan. That
 must not happen in a job holding the push-capable App token, so the workflow
-splits: ``--no-commit`` bounds and regenerates in a job with a read-only token
-and hands the files over as an artifact, and ``--apply-from`` copies exactly
-``OUTPUT_PATHS`` out of that artifact and commits them in the job that pushes.
+splits (renovate-branch-fixup.yaml): ``--no-commit`` bounds and regenerates in
+a job with a read-only token, ``--stage-to`` copies ``OUTPUT_PATHS`` into one
+folder at their repo paths for the artifact upload, and ``--apply-from`` copies
+exactly ``OUTPUT_PATHS`` out of that artifact and commits them in the job that
+pushes.
 The second half runs no resolver and installs nothing.
 
 Fail-closed, like the driver it wraps. If any project's bound cannot be applied,
@@ -83,7 +78,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import renovate_npm_lock_bounded as npm_bounded
 import renovate_uv_lock_bounded as bounded
 
 COMMIT_MESSAGE = "chore(deps): bound the refreshed locks to the release-age window"
@@ -117,12 +111,6 @@ PROJECTS: tuple[Project, ...] = (
     Project(directory="packages/conformance", exempt=("pyatlan",)),
 )
 
-# The one npm project the refresh lane rewrites: dev-only devDependencies for the
-# remediation programs, never bundled in the published wheel. Its bound is a
-# different mechanism from the uv projects' (see renovate_npm_lock_bounded), so it
-# is declared separately rather than squeezed into Project.
-NPM_PROJECT = "packages/conformance/conformance"
-
 # The lock the relationship table is generated from. packages/conformance is the
 # project whose environment `gen-relationship-directions` runs in, so its lock —
 # not the root's — decides which pyatlan the table describes.
@@ -135,7 +123,6 @@ RELATIONSHIP_DIRECTIONS = (
 # commit. The workflow's artifact upload is pinned to this list by a drift test.
 OUTPUT_PATHS: tuple[str, ...] = (
     *(f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS),
-    f"{NPM_PROJECT}/{npm_bounded.LOCKFILE}",
     RELATIONSHIP_DIRECTIONS,
 )
 
@@ -161,26 +148,6 @@ def bound_project(project: Project, window: str, baseline_ref: str, root: Path) 
     for name in project.hold:
         argv += ["--hold", name]
     return bounded.main(argv)
-
-
-def bound_npm(window: str, baseline_ref: str, root: Path) -> int:
-    """Run the npm driver over the one npm project. Returns its exit code.
-
-    Same window as the uv projects deliberately — see the driver's docstring for
-    what that leaves on the table against the org checker's own threshold, and why
-    closing that gap is the checker's change to make rather than a second window
-    here.
-    """
-    return npm_bounded.main(
-        [
-            "--window",
-            window,
-            "--baseline-ref",
-            baseline_ref,
-            "--project-dir",
-            str(root / NPM_PROJECT),
-        ]
-    )
 
 
 def pyatlan_version(lock_text: str) -> str | None:
@@ -234,7 +201,7 @@ def apply_outputs(
     source: Path, root: Path, paths: tuple[str, ...] = OUTPUT_PATHS
 ) -> None:
     """Copy ``paths`` (default OUTPUT_PATHS) from an artifact directory into the
-    checkout. renovate_pyatlan_sync.py reuses this with its own output list.
+    checkout. renovate_conformance_lock_sync.py reuses this with its own output list.
 
     Only the declared paths are read, so nothing else in the artifact can reach
     a branch that auto-merges. Every one must be present: `bound` uploads all of
@@ -255,6 +222,40 @@ def apply_outputs(
             raise FileNotFoundError(f"missing artifact output: {path}")
     for path in paths:
         shutil.copyfile(source / path, root / path)
+
+
+def stage_outputs(
+    root: Path, dest: Path, paths: tuple[str, ...] = OUTPUT_PATHS
+) -> None:
+    """Copy ``paths`` from the checkout into ``dest`` at their repo paths.
+
+    renovate-branch-fixup.yaml uploads ``dest`` as the artifact's one folder,
+    so the artifact holds ``packages/conformance/uv.lock`` and not just
+    ``uv.lock``. renovate_conformance_lock_sync.py reuses this with its own
+    output list. Given
+    several file paths, upload-artifact roots the artifact at their least
+    common ancestor and drops that prefix, which ``apply_outputs`` (correctly)
+    reads as a missing output (FND-5015). One folder has no such rule to trip.
+
+    Same guards as ``apply_outputs``, in the other direction: every path must
+    exist, a symlink along a path is refused rather than followed, ``dest``
+    must be empty so nothing stale rides along, and everything is checked
+    before anything is copied.
+    """
+    for path in paths:
+        src = root
+        for part in Path(path).parts:
+            src = src / part
+            if src.is_symlink():
+                raise ValueError(f"refusing symlinked output: {path}")
+        if not src.is_file():
+            raise FileNotFoundError(f"missing output to stage: {path}")
+    if dest.exists() and any(dest.iterdir()):
+        raise FileExistsError(f"staging folder is not empty: {dest}")
+    for path in paths:
+        target = dest / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / path, target)
 
 
 def stage_and_commit(
@@ -317,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
         "another job to commit.",
     )
     mode.add_argument(
+        "--stage-to",
+        type=Path,
+        metavar="DIR",
+        help="Skip the bound: copy OUTPUT_PATHS into DIR at their repo paths, "
+        "for the artifact upload.",
+    )
+    mode.add_argument(
         "--apply-from",
         type=Path,
         metavar="DIR",
@@ -326,6 +334,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path.cwd()
+    if args.stage_to is not None:
+        stage_outputs(root, args.stage_to)
+        return 0
+
     if args.apply_from is not None:
         apply_outputs(args.apply_from, root)
         stage_and_commit(root, list(OUTPUT_PATHS))
@@ -344,15 +356,6 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return code
-
-    code = bound_npm(args.window, args.baseline_ref, root)
-    if code != 0:
-        print(
-            f"npm bound failed for {NPM_PROJECT!r}; committing nothing so the "
-            "unbounded locks cannot merge.",
-            file=sys.stderr,
-        )
-        return code
 
     if pyatlan_moved(args.baseline_ref, root):
         code = regenerate_relationship_directions(root)

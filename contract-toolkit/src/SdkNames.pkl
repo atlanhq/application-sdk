@@ -4,13 +4,16 @@
 /// Names the generated `_input.py` takes from the SDK.
 ///
 /// `App.pkl` decides from these sets which generated fields to skip or refuse
-/// and which nested class names to refuse. Each set copies names the SDK
-/// declares, so it goes stale when the SDK adds or renames one.
-/// `scripts/test-sdk-import.py` evaluates this module and checks it against the
-/// installed SDK: the field sets must equal the SDK models' fields, and every
-/// class-shaped name a generated example's `_input.py` imports must be in
-/// `inputModuleNames`. A stale field set fails CI instead of letting a generated
-/// field shadow an SDK one.
+/// and which nested class names to refuse, which class attributes the generated
+/// e2e base may assign, and which values an artifact declaration may use. Each
+/// set copies names the SDK declares, so it goes stale when the SDK adds or
+/// renames one. `scripts/test-sdk-import.py` evaluates this module and checks it
+/// against the installed SDK: the field sets must equal the SDK models' fields,
+/// every e2e attribute must be declared on `BaseE2ETest`, the artifact
+/// vocabularies must equal the SDK's constants, and every class-shaped name a
+/// generated example's `_input.py` imports must be in `inputModuleNames`. A stale
+/// set fails CI instead of letting a generated field shadow an SDK one.
+@ModuleInfo { minPklVersion = "0.33.0" }
 module com.atlan.app.contract.SdkNames
 
 /// Fields `application_sdk.contracts.base.Input` declares: a system app's
@@ -83,3 +86,79 @@ inputModuleNames: Set<String> = Set(
   "ClassVar",
   "Literal"
 )
+
+/// Fields `application_sdk.testing.e2e.substitutions.MustacheSubstitutions`
+/// declares: the parent of every generated `_e2e_substitutions.py` class.
+///
+/// A UI field with one of these names is not redeclared in the generated
+/// subclass. Redeclaring it would shadow the SDK field with the toolkit's
+/// inferred type and default.
+mustacheSubstitutionFields: Set<String> = Set(
+  "credential",
+  "credential_guid",
+  "connection"
+)
+
+/// Fields `application_sdk.testing.e2e.substitutions.SQLMustacheSubstitutions`
+/// declares: the parent of a SQL-family app's generated substitutions class.
+sqlMustacheSubstitutionFields: Set<String> = mustacheSubstitutionFields + Set(
+  "extraction_method",
+  "agent_json",
+  "include_filter",
+  "exclude_filter",
+  "exclude_table_regex",
+  "preflight_check"
+)
+
+/// Class attributes a generated `_e2e_base.py` assigns. Each one must be
+/// declared on `application_sdk.testing.e2e.BaseE2ETest`: an assignment to a
+/// name the SDK renamed or dropped is a dead class attribute the harness never
+/// reads. `App.pkl` refuses to emit a name that is not listed here.
+e2eBaseAttributes: Set<String> = Set(
+  "connector_short_name",
+  "argo_package_name",
+  "argo_template_name",
+  "app_service_url",
+  "connection_type",
+  "connection_category",
+  "connector_config_name",
+  "manifest_path",
+  "entrypoint",
+  "required_dag_nodes",
+  "expect_connection",
+  "require_nonempty_assets",
+  "expect_lineage"
+)
+
+/// `BaseE2ETest.connection_category`'s default. The generated e2e base leaves
+/// the attribute out when the connector's category equals it.
+e2eConnectionCategoryDefault: String = "warehouse"
+
+/// Members of `application_sdk.validation.artifacts.ARTIFACT_FIELD_TYPES`.
+/// `App.ArtifactFieldType` must accept exactly these
+/// (`tests/artifact_schemas_test.pkl`).
+artifactFieldTypes: Set<String> = Set(
+  "string",
+  "int",
+  "float",
+  "bool",
+  "timestamp",
+  "date",
+  "json",
+  "any"
+)
+
+/// Members of `application_sdk.validation.artifacts.ARTIFACT_FIELD_TYPES_EXTENDED`.
+/// `App.ArtifactFieldTypeExtended` must accept exactly these.
+artifactFieldTypesExtended: Set<String> = artifactFieldTypes + Set(
+  "decimal",
+  "binary",
+  "time",
+  "array",
+  "struct",
+  "map"
+)
+
+/// Members of `application_sdk.validation.artifacts.ARTIFACT_FORMATS`.
+/// `App.ArtifactFormat` must accept exactly these.
+artifactFormats: Set<String> = Set("ndjson", "parquet")

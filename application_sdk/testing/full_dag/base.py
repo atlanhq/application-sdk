@@ -59,13 +59,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.observability.logger_adaptor import get_logger as _get_logger
-from application_sdk.testing.e2e.client import (
-    DAGRunResult as _DAGRunResult,
-)
-from application_sdk.testing.e2e.client import (
-    cold_start_submit_kwargs as _cold_start_submit_kwargs,
-)
 from application_sdk.testing.full_dag._errors import (
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
@@ -82,6 +77,12 @@ from application_sdk.testing.full_dag.payload import (
     build_ae_payload,
     build_seed_dag,
 )
+from application_sdk.testing.harness.automation_engine import (
+    DAGRunResult as _DAGRunResult,
+)
+from application_sdk.testing.harness.automation_engine import (
+    cold_start_submit_kwargs as _cold_start_submit_kwargs,
+)
 
 if TYPE_CHECKING:
     # Type checkers only: binds nothing at runtime, so access still goes through
@@ -91,7 +92,7 @@ if TYPE_CHECKING:
         AtlanLoggerAdapter,
         get_logger,
     )
-    from application_sdk.testing.e2e.client import (  # noqa: F401
+    from application_sdk.testing.harness.automation_engine import (  # noqa: F401
         DAGRunResult,
         cold_start_submit_kwargs,
     )
@@ -998,11 +999,11 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
     ),
     "DAGRunResult": (
-        "application_sdk.testing.e2e.client.DAGRunResult",
+        "application_sdk.testing.harness.automation_engine.DAGRunResult",
         "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
     ),
     "cold_start_submit_kwargs": (
-        "application_sdk.testing.e2e.client.cold_start_submit_kwargs",
+        "application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs",
         "application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659)",
     ),
 }
@@ -1010,9 +1011,12 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 #: Where each served name is defined. Read by the symbol gate to follow it to
 #: its definition, so a served class's methods are surface too.
 _LAZY: dict[str, tuple[str, str]] = {
-    "DAGRunResult": ("application_sdk.testing.e2e.client", "DAGRunResult"),
+    "DAGRunResult": (
+        "application_sdk.testing.harness.automation_engine",
+        "DAGRunResult",
+    ),
     "cold_start_submit_kwargs": (
-        "application_sdk.testing.e2e.client",
+        "application_sdk.testing.harness.automation_engine",
         "cold_start_submit_kwargs",
     ),
 }
@@ -1025,16 +1029,6 @@ _SERVED: dict[str, object] = {
 }
 
 
-def __getattr__(name: str) -> object:
-    """Serve the deprecated names once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return _SERVED[name]
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0", resolve=_SERVED.__getitem__
+)

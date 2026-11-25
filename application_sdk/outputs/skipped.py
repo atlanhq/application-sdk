@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import re
 import tempfile
 import uuid
@@ -64,6 +65,7 @@ import orjson
 from pydantic import BaseModel
 
 from application_sdk._logging import get_logger
+from application_sdk.errors.leaves import InternalError
 from application_sdk.outputs.models import Metric
 
 _logger = get_logger(__name__)
@@ -255,8 +257,18 @@ def reason_metric_name(reason: SkipReason) -> str:
     return f"{SKIPPED_RECORDS_METRIC}-{reason.value.replace('_', '-')}"
 
 
-class _RollbackFailedError(Exception):
+@dataclass(kw_only=True)
+class _RollbackFailedError(InternalError):
     """A failed append could not be rolled back; the file may end mid-line."""
+
+    code: ClassVar[str] = "INTERNAL_SKIPPED_RECORDS_ROLLBACK"
+    message: str = (
+        "A failed append to the skipped-records file could not be rolled back"
+    )
+    component: str | None = "skipped_records"
+    #: The worker-local file that may now end mid-line. The truncate's own
+    #: OSError can be descriptor-level and name no file, so it rides here.
+    path: str | None = None
 
 
 def _append_lines(path: Path, chunk: bytes) -> None:
@@ -277,7 +289,13 @@ def _append_lines(path: Path, chunk: bytes) -> None:
             try:
                 fh.truncate(start)
             except OSError as exc:
-                raise _RollbackFailedError(str(path)) from exc
+                raise _RollbackFailedError(
+                    message=(
+                        "A failed append to the skipped-records file could not "
+                        f"be rolled back: {path}"
+                    ),
+                    path=str(path),
+                ) from exc
             raise
 
 
@@ -366,10 +384,12 @@ class SkippedRecordSink:
             lost = self.kept
             self.kept = 0
             self._poisoned = True
+            # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write skipped records and could not roll the local "
-                "file back; %d record(s) are counted but missing from the "
+                "file %s back; %d record(s) are counted but missing from the "
                 "run's skipped-records file",
+                self.path,
                 lost,
                 exc_info=True,
             )
@@ -378,6 +398,7 @@ class SkippedRecordSink:
         except Exception:
             # _append_lines rolled the file back, so earlier lines stay valid.
             self.kept -= lines
+            # conformance: ignore[L022] the write failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
             _logger.error(
                 "Failed to write %d skipped record(s) to the local file; they "
                 "are counted but missing from the run's skipped-records file",
@@ -398,6 +419,20 @@ def _count_unpersisted(n: int) -> None:
 current_skipped_records: contextvars.ContextVar[SkippedRecordSink | None] = (
     contextvars.ContextVar("skipped_records", default=None)
 )
+
+
+def activity_part_stem(activity_id: str) -> str:
+    """An object-name-safe stem for one activity's part, unique per activity ID.
+
+    Unsafe characters become ``_``. When that changed the ID, a short hash of
+    the original is appended, so two IDs that differ only in unsafe characters
+    (``fetch/a`` and ``fetch?a``) never share a part and overwrite each other.
+    """
+    stem = _UNSAFE_KEY_CHARS.sub("_", activity_id)
+    if stem == activity_id:
+        return stem
+    digest = hashlib.sha256(activity_id.encode()).hexdigest()[:12]
+    return f"{stem}-{digest}"
 
 
 def new_activity_sink() -> SkippedRecordSink | None:
@@ -428,7 +463,7 @@ def _new_sink() -> SkippedRecordSink:
         )
 
         info = activity.info()
-        name = _UNSAFE_KEY_CHARS.sub("_", info.activity_id)
+        name = activity_part_stem(info.activity_id)
         # The local file is per attempt: run_temp_dir() and the activity ID
         # are both stable across retries, and a failed attempt's file stays
         # behind. The part keeps the activity's name, so a retry's upload
@@ -562,6 +597,7 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
         await upload_file(key, sink.path)
     # conformance: ignore[E004] fail-open by design (FND-4881): logged at ERROR and counted in skipped-records-unpersisted
     except Exception:
+        # conformance: ignore[L022] the persist failed and these records are lost from the run's file; fail-open keeps the run going (FND-4881)
         _logger.error(
             "Failed to persist %d skipped record(s); they are counted but "
             "missing from the run's skipped-records file",
@@ -587,14 +623,56 @@ def _append_capped(part: Path, merged: Path, room: int) -> int:
 
 @dataclass(frozen=True)
 class MergeResult:
-    """What :func:`merge_run_skips` produced."""
+    """What :func:`merge_run_skips` (or the fetch-failure merge) produced."""
 
     key: str | None
     kept: int
 
 
+@dataclass(frozen=True)
+class RunLogLayout:
+    """Where one per-run NDJSON log lives and how it is surfaced.
+
+    Shared by the skipped-records log and the fetch-failures log
+    (:mod:`application_sdk.outputs.fetch_failures`): both upload one part per
+    activity under ``{run prefix}/{parts_dir}/`` and merge them into
+    ``{run prefix}/{file_name}`` at run end.
+
+    Attributes:
+        parts_dir: Parts directory under the run prefix.
+        file_name: Merged file name under the run prefix.
+        artifact: Run-artifact name the merged file is registered under.
+        display_name: The artifact's UI label.
+    """
+
+    parts_dir: str
+    file_name: str
+    artifact: str
+    display_name: str
+
+
+SKIPPED_RECORDS_LAYOUT: Final = RunLogLayout(
+    parts_dir=SKIPPED_RECORDS_PARTS_DIR,
+    file_name=SKIPPED_RECORDS_FILE,
+    artifact=SKIPPED_RECORDS_ARTIFACT,
+    display_name="Skipped records",
+)
+
+
 async def merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult:
-    """Concatenate the run's parts into one capped file and register the artifact.
+    """Concatenate the run's skipped-record parts into one capped file and register the artifact.
+
+    Parts are merged in key order. At most :data:`MAX_SKIPPED_RECORDS` lines
+    are kept. Returns ``key=None`` when there were no parts to merge, in which
+    case no artifact is added.
+    """
+    return await merge_run_log(run_prefix, scratch_dir, SKIPPED_RECORDS_LAYOUT)
+
+
+async def merge_run_log(
+    run_prefix: str, scratch_dir: str, layout: RunLogLayout
+) -> MergeResult:
+    """Concatenate one run log's parts into one capped file and register the artifact.
 
     Parts are merged in key order. At most :data:`MAX_SKIPPED_RECORDS` lines
     are kept. Returns ``key=None`` when there were no parts to merge, in which
@@ -611,12 +689,12 @@ async def merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult:
         upload_file,
     )
 
-    parts = sorted(await list_data_keys(f"{run_prefix}/{SKIPPED_RECORDS_PARTS_DIR}/"))
+    parts = sorted(await list_data_keys(f"{run_prefix}/{layout.parts_dir}/"))
     if not parts:
         return MergeResult(key=None, kept=0)
 
-    work = Path(scratch_dir) / "skipped-records-merge"
-    merged = work / SKIPPED_RECORDS_FILE
+    work = Path(scratch_dir) / f"{layout.artifact}-merge"
+    merged = work / layout.file_name
     await run_in_thread(work.mkdir, parents=True, exist_ok=True)
     await run_in_thread(merged.write_bytes, b"")  # truncate a retried attempt's file
 
@@ -629,11 +707,9 @@ async def merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult:
         await download_file(part_key, local_part)
         kept += await run_in_thread(_append_capped, local_part, merged, room)
 
-    key = f"{run_prefix}/{SKIPPED_RECORDS_FILE}"
+    key = f"{run_prefix}/{layout.file_name}"
     await upload_file(key, merged)
     get_outputs().add_artifact(
-        Artifact(
-            name=SKIPPED_RECORDS_ARTIFACT, path=key, display_name="Skipped records"
-        )
+        Artifact(name=layout.artifact, path=key, display_name=layout.display_name)
     )
     return MergeResult(key=key, kept=kept)

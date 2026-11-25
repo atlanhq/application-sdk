@@ -87,7 +87,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -109,7 +108,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="UnclosedBaseClient",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="client-lifecycle",
         autofixable=True,
         orthogonal_gate="tests",
@@ -176,7 +174,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P056]\n"
             "<reason>`` records a deliberate exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p056",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -196,7 +193,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="CloseOverrideSkipsSuper",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="client-lifecycle",
         autofixable=True,
         orthogonal_gate="tests",
@@ -258,7 +254,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P057]\n"
             "<reason>`` records a deliberate exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p057",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",

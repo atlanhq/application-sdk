@@ -21,6 +21,18 @@ class ValidationInputError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
+class OutputSchemaDeclarationError(InvalidInputError):
+    """An output-schema declaration, or a pandera YAML read into one, is unusable.
+
+    Raised at declaration time — a malformed :class:`FieldRule`, or a pandera key
+    the reader does not translate — never for output that fails its schema, which
+    is an ``AssertionError`` from ``assert_output_matches``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_OUTPUT_SCHEMA"
+
+
+@dataclass(kw_only=True)
 class ComparisonInputError(InvalidInputError):
     """Expected-data file for asset comparison has an invalid structure."""
 

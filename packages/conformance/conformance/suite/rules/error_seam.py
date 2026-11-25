@@ -43,7 +43,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -60,7 +59,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="NonPublicErrorControlFlow",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -109,7 +107,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P043]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p043",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -127,7 +124,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="PrivateErrorClassImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-seam",
         autofixable=False,
         orthogonal_gate="tests",
@@ -171,7 +167,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``WARN``: a justified inline ``# conformance: ignore[P045]\n"
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p045",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

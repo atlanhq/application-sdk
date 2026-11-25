@@ -533,6 +533,35 @@ report that site the same way.
   to delete the `bind()` call instead; no reference app calls it, and
   `atlan-metabase-app app/handler.py` uses the module-level logger directly.
 
+- **L022 HandledFailureLoggedAtError** — a `logger.error()` sits in an
+  `except` handler that has no `raise`, no process-exit call, and no return of
+  a failure result (a call or dict carrying `success=False`,
+  `status=<Enum>.FAILURE|FAILED|ERROR`, any `status=AuthStatus.<member>` other
+  than `SUCCESS` (the SDK contract's `is_success` is False for each), or a 5xx
+  `status_code`). A
+  call to a module-level helper, bound nowhere else in the module, counts only when its
+  sole normal return is such a failure result; an `async` helper counts only
+  when awaited. A nonzero integer status counts only when every call of the
+  enclosing function sends its result to a process exit, such as
+  `raise SystemExit(asyncio.run(main()))`; plain `return 1` remains a
+  sentinel. Otherwise the code recovered and the customer
+  log view — which filters at ERROR — shows a failed run that did not fail.
+  Change `.error(` to `.warning(` and keep
+  every argument, `exc_info=True` included (L004 still applies):
+  `logger.error("close failed", exc_info=True)` →
+  `logger.warning("close failed", exc_info=True)`.  Mirror
+  `atlan-openapi-app app/api_client.py`'s `_parse_zip`, which logs an
+  unparseable ZIP entry at WARNING and moves on.  Leave the level alone and
+  fix the return instead when the handler should have reported the failure:
+  if E007 or E020 also fires on the handler, apply that fix first — a handler
+  that now raises or returns a failure result (`atlan-mysql-app
+  app/handler.py`'s `test_auth` returns `AuthOutput(status=AuthStatus.FAILED,
+  ...)`) keeps its ERROR and clears L022.  When the handler records the
+  failure and the run fails later (the exception is collected and raised
+  after other work completes), or the failure loses data the run cannot
+  recover, keep ERROR and route the site to residue with a suggested
+  `# conformance: ignore[L022] <why the operation failed>` directive.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and `finding.disposition == "warning"`, the model may

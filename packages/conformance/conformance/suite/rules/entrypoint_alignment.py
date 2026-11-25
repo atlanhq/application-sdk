@@ -30,7 +30,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -54,7 +53,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="EntryPointContractCodeDrift",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="entrypoint-alignment",
         autofixable=False,
         since="0.6.0",
@@ -164,10 +162,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Land as ``BLOCK``: a justified inline ``# conformance: ignore[P016]\n"
             "<reason>`` on the decorator line (or the comment-only line directly above"
             " it) records the exception and stays visible in SARIF.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p016"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

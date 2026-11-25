@@ -18,7 +18,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import repo_module_file
+from conformance.suite.checks._ast_common import load_source, repo_module_file
 
 _SDK_ERRORS_MODULE = "application_sdk.errors"
 
@@ -43,11 +43,12 @@ class _Resolver:
         self._trees: dict[Path, ast.Module | None] = {}
 
     def load(self, path: Path) -> ast.Module | None:
+        # A resolver lives for one scanned file, but the modules it follows are
+        # the same few for every file: load_source shares their trees across
+        # the whole run (inside the runner's source cache).
         if path not in self._trees:
-            try:
-                self._trees[path] = ast.parse(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, SyntaxError):
-                self._trees[path] = None
+            source = load_source(path)
+            self._trees[path] = source.tree if source is not None else None
         return self._trees[path]
 
     def module_file(

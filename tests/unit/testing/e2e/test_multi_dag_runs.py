@@ -50,51 +50,20 @@ from application_sdk.testing.e2e.base import (
     FullDAGOutcome,
     ResolvedDAG,
 )
-from application_sdk.testing.e2e.client import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-    PublishedVersion,
-)
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas as atlas_api
-from application_sdk.testing.harness.automation_engine import AEClient
+from application_sdk.testing.harness.automation_engine import (
+    DAGRunResult,
+    PublishedVersion,
+)
 from application_sdk.testing.harness.identity import Minter
 from application_sdk.testing.harness.outcome import Settled
 from application_sdk.testing.harness.teardown import CONNECTION_DELETE_NODE_ID
+from tests.unit.testing._ae_fakes import FakeAE, failed, succeeded
 
 # ---------------------------------------------------------------------------
 # Fixtures for the two things a run reads from outside itself
 # ---------------------------------------------------------------------------
-
-
-def _node(name: str, status: DAGNodeStatus) -> DAGNodeResult:
-    return DAGNodeResult(
-        name=name,
-        status=status,
-        started_at_ms=None,
-        completed_at_ms=None,
-        error_message=None,
-    )
-
-
-def _succeeded(*names: str) -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[_node(n, DAGNodeStatus.SUCCEEDED) for n in names],
-    )
-
-
-def _failed(*names: str) -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.FAILED,
-        nodes=[_node(n, DAGNodeStatus.FAILED) for n in names],
-    )
 
 
 CRAWLER_MANIFEST = "app/generated/crawler/manifest.json"
@@ -127,70 +96,16 @@ def _manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
 
-@dataclass
-class _Submit:
-    """One AE submit, as the fake client saw it."""
+def _entrypoints(ae: FakeAE) -> list[str]:
+    """The entrypoint each connector submit named, in order.
 
-    slug: str
-    entrypoint: str
-
-
-class _FakeAE:
-    """Records the AE writes, and answers each poll from a scripted queue."""
-
-    def __init__(self, *results: DAGRunResult) -> None:
-        self._results = list(results)
-        self.created_names: list[str] = []
-        self.published: list[tuple[str, int]] = []
-        self.submits: list[_Submit] = []
-        self.submitted_versions: list[str] = []
-
-    async def create_workflow(self, *, name: str, description: str) -> str:
-        self.created_names.append(name)
-        return f"slug-{len(self.created_names)}"
-
-    async def wait_for_slug(self, slug: str) -> None:
-        return None
-
-    async def create_version(self, slug: str, body: dict[str, Any]) -> int:
-        return int(body["version"])
-
-    async def publish_version(self, slug: str, version: int) -> None:
-        self.published.append((slug, version))
-
-    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
-        self.submits.append(
-            _Submit(
-                slug=str(kwargs.get("slug", "")),
-                entrypoint=str(payload.get("metadata", {}).get("entrypoint", "")),
-            )
-        )
-        return f"run-{len(self.submits)}"
-
-    async def submit_published_version(self, slug: str, **_kwargs: Any) -> str:
-        """The teardown's submit since FND-1775 — its own list, not
-        :attr:`submits`, because it is a different endpoint with no envelope to
-        read an entrypoint off. The connector's own submit stays on
-        ``submit_workflow`` above, so a test can tell which path a call took.
-        """
-        self.submitted_versions.append(slug)
-        return f"run-{len(self.submits) + len(self.submitted_versions)}"
-
-    async def poll_native_status(self, run_id: str, **_kwargs: Any) -> DAGRunResult:
-        return self._results.pop(0) if len(self._results) > 1 else self._results[0]
-
-    async def get_published_version(self, slug: str) -> None:
-        return None
-
-    # The real guard, over this fake's scripted read — see
-    # ``_PublishingAE``, which is the subclass that makes it answer something.
-    foreign_published_dag = AEClient.foreign_published_dag
-
-    async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
-        return None
-
-    async def aclose(self) -> None:
-        return None
+    Read off ``submit_workflow`` only: the teardown submits through
+    ``submit_published_version``, which has no envelope to name one.
+    """
+    return [
+        str(payload.get("metadata", {}).get("entrypoint", ""))
+        for payload in ae.args("submit_workflow", "payload")
+    ]
 
 
 @dataclass
@@ -266,7 +181,7 @@ async def _null_atlas_client() -> AsyncIterator[object]:
 
 def _wire(
     harness: BaseE2ETest,
-    ae: _FakeAE,
+    ae: FakeAE,
     monkeypatch: pytest.MonkeyPatch,
     **atlas_overrides: Any,
 ) -> _AtlasCalls:
@@ -378,7 +293,7 @@ class TestTheDefaultIsUnchanged:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _Crawler()
-        _wire(harness, _FakeAE(_succeeded("extract")), monkeypatch)
+        _wire(harness, FakeAE(succeeded("extract")), monkeypatch)
 
         assert harness._ae_workflow_name_suffix() == ""
         assert harness._ae_workflow_spec().name == "bundle-e2e-full-ci-7"
@@ -388,13 +303,13 @@ class TestTheDefaultIsUnchanged:
     ) -> None:
         """The signature grew an optional parameter; no caller has to pass it."""
         harness = _Miner()
-        ae = _FakeAE(_succeeded("extract"))
+        ae = FakeAE(succeeded("extract"))
         _wire(harness, ae, monkeypatch)
 
         outcome = harness.run_full_dag()
 
         assert outcome.succeeded is True
-        assert [s.entrypoint for s in ae.submits] == ["miner"]
+        assert _entrypoints(ae) == ["miner"]
 
 
 # ---------------------------------------------------------------------------
@@ -473,14 +388,14 @@ class TestRunFullDagWithASpec:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _Miner()
-        ae = _FakeAE(_succeeded("extract", "publish"))
+        ae = FakeAE(succeeded("extract", "publish"))
         _wire(harness, ae, monkeypatch)
 
         harness.run_full_dag(
             DAGSpec(manifest_path=CRAWLER_MANIFEST, expect_connection=True)
         )
 
-        assert [s.entrypoint for s in ae.submits] == ["crawler"]
+        assert _entrypoints(ae) == ["crawler"]
         # The seed DAG came from the spec's manifest, not the class's.
         assert set(harness._expected_node_identities) == {"extract", "publish"}
 
@@ -491,7 +406,7 @@ class TestRunFullDagWithASpec:
         to observe the connection it landed, and the class says it never will."""
         harness = _Miner()
         calls = _wire(
-            harness, _FakeAE(_succeeded("extract", "publish")), monkeypatch, total=12
+            harness, FakeAE(succeeded("extract", "publish")), monkeypatch, total=12
         )
 
         outcome = harness.run_full_dag(
@@ -507,7 +422,7 @@ class TestRunFullDagWithASpec:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _Miner()
-        _wire(harness, _FakeAE(_succeeded("extract", "publish")), monkeypatch)
+        _wire(harness, FakeAE(succeeded("extract", "publish")), monkeypatch)
 
         harness.run_full_dag(
             DAGSpec(manifest_path=CRAWLER_MANIFEST, expect_connection=True)
@@ -522,13 +437,13 @@ class TestRunFullDagWithASpec:
         """``create_workflow`` reuses a workflow of the same name, so without the
         suffix the second run would publish its DAG over the first's."""
         harness = _Miner()
-        ae = _FakeAE(_succeeded("extract", "publish"))
+        ae = FakeAE(succeeded("extract", "publish"))
         _wire(harness, ae, monkeypatch)
 
         harness.run_full_dag(DAGSpec(manifest_path=CRAWLER_MANIFEST))
         harness.run_full_dag()
 
-        assert ae.created_names == [
+        assert ae.args("create_workflow", "name") == [
             "bundle-e2e-full-ci-7-crawler",
             "bundle-e2e-full-ci-7",
         ]
@@ -583,12 +498,12 @@ class TestDeclaredRuns:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = FakeAE(succeeded("extract", "publish"), succeeded("extract"))
         _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
 
-        assert [s.entrypoint for s in ae.submits] == ["crawler", "miner"]
+        assert _entrypoints(ae) == ["crawler", "miner"]
 
     def test_one_outcome_per_run_graded_on_its_own_terms(
         self, monkeypatch: pytest.MonkeyPatch
@@ -596,7 +511,7 @@ class TestDeclaredRuns:
         """Not merged into a composite: the crawl observed a connection and
         assets, the mine observed neither and passes on its DAG."""
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = FakeAE(succeeded("extract", "publish"), succeeded("extract"))
         _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
@@ -611,7 +526,7 @@ class TestDeclaredRuns:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = FakeAE(succeeded("extract", "publish"), succeeded("extract"))
         _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
@@ -637,23 +552,25 @@ class TestDeclaredRuns:
         ``delete_connection`` reports as a supersede rather than as a delete.
         """
         harness = _CrawlThenMine()
-        ae = _FakeAE(
-            _succeeded("extract", "publish"),
-            _succeeded("extract"),
-            _succeeded(CONNECTION_DELETE_NODE_ID),
+        ae = FakeAE(
+            succeeded("extract", "publish"),
+            succeeded("extract"),
+            succeeded(CONNECTION_DELETE_NODE_ID),
         )
         calls = _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
         harness.teardown_method(None)
 
-        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        teardowns = [
+            name for name in ae.args("create_workflow", "name") if "-teardown-" in name
+        ]
         assert len(teardowns) == 1
         assert calls.purged == []
         # And it went to AE's own submit, not through Heracles: the delete's
         # graph is the one the harness published, which is FND-1775.
-        assert len(ae.submitted_versions) == 1
-        assert [s.entrypoint for s in ae.submits] == ["crawler", "miner"]
+        assert len(ae.args("submit_published_version", "slug")) == 1
+        assert _entrypoints(ae) == ["crawler", "miner"]
 
     def test_a_submit_that_times_out_still_gets_its_connection_back(
         self, monkeypatch: pytest.MonkeyPatch
@@ -668,7 +585,7 @@ class TestDeclaredRuns:
         rather than presetting the flag.
         """
         harness = _Crawler()
-        ae = _FakeAE(_succeeded(CONNECTION_DELETE_NODE_ID))
+        ae = FakeAE(succeeded(CONNECTION_DELETE_NODE_ID))
 
         async def _times_out(_payload: dict[str, Any], **_kwargs: Any) -> str:
             raise TimeoutError("read timeout on submit")
@@ -680,7 +597,9 @@ class TestDeclaredRuns:
             harness.run_full_dag()
         harness.teardown_method(None)
 
-        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        teardowns = [
+            name for name in ae.args("create_workflow", "name") if "-teardown-" in name
+        ]
         assert len(teardowns) == 1
         assert calls.purged == []
 
@@ -692,14 +611,16 @@ class TestDeclaredRuns:
         nothing. The run's own QN was never created, so the only teardown is
         the seeded one — in its own ordinal slot (2), not the run's (1)."""
         harness = _SelectingUtility()
-        ae = _FakeAE(_succeeded("extract"), _succeeded(CONNECTION_DELETE_NODE_ID))
+        ae = FakeAE(succeeded("extract"), succeeded(CONNECTION_DELETE_NODE_ID))
         calls = _wire(harness, ae, monkeypatch)
         harness._seeded_connection_qns = [_SELECTED_QN]  # type: ignore[attr-defined]
 
         harness.run_full_dag()
         harness.teardown_method(None)
 
-        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        teardowns = [
+            name for name in ae.args("create_workflow", "name") if "-teardown-" in name
+        ]
         assert len(teardowns) == 1
         assert teardowns[0].endswith("-teardown-2")
         assert calls.purged == []
@@ -717,8 +638,8 @@ class TestDeclaredRuns:
             required_dag_nodes = ("extract", "publish")
 
         harness = _CrawlerThatSelects()
-        ae = _FakeAE(
-            _succeeded("extract", "publish"), _succeeded(CONNECTION_DELETE_NODE_ID)
+        ae = FakeAE(
+            succeeded("extract", "publish"), succeeded(CONNECTION_DELETE_NODE_ID)
         )
         _wire(harness, ae, monkeypatch)
         harness._seeded_connection_qns = [_SELECTED_QN]  # type: ignore[attr-defined]
@@ -726,7 +647,9 @@ class TestDeclaredRuns:
         harness.run_full_dag()
         harness.teardown_method(None)
 
-        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        teardowns = [
+            name for name in ae.args("create_workflow", "name") if "-teardown-" in name
+        ]
         assert [name[-1] for name in teardowns] == ["1", "2"]
 
     def test_a_non_publishing_run_with_no_selector_still_tears_down(
@@ -736,13 +659,15 @@ class TestDeclaredRuns:
         pointing elsewhere, the harness cannot tell which connection a miner
         enriches, and a missed delete leaks onto a shared tenant."""
         harness = _Miner()
-        ae = _FakeAE(_succeeded("extract"), _succeeded(CONNECTION_DELETE_NODE_ID))
+        ae = FakeAE(succeeded("extract"), succeeded(CONNECTION_DELETE_NODE_ID))
         _wire(harness, ae, monkeypatch)
 
         harness.run_full_dag()
         harness.teardown_method(None)
 
-        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        teardowns = [
+            name for name in ae.args("create_workflow", "name") if "-teardown-" in name
+        ]
         assert len(teardowns) == 1
 
     def test_a_selector_naming_the_own_qn_still_tears_down(
@@ -750,13 +675,15 @@ class TestDeclaredRuns:
     ) -> None:
         harness = _SelectingUtility()
         harness.selected_qn = "default/bundle/1"
-        ae = _FakeAE(_succeeded("extract"), _succeeded(CONNECTION_DELETE_NODE_ID))
+        ae = FakeAE(succeeded("extract"), succeeded(CONNECTION_DELETE_NODE_ID))
         _wire(harness, ae, monkeypatch)
 
         harness.run_full_dag()
         harness.teardown_method(None)
 
-        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        teardowns = [
+            name for name in ae.args("create_workflow", "name") if "-teardown-" in name
+        ]
         assert len(teardowns) == 1
         assert teardowns[0].endswith("-teardown-1")
 
@@ -767,13 +694,13 @@ class TestDeclaredRuns:
         suite that skipped before ``run_full_dag`` submits no teardown DAG and
         does not fall back to the runner purge either."""
         harness = _Crawler()
-        ae = _FakeAE(_succeeded(CONNECTION_DELETE_NODE_ID))
+        ae = FakeAE(succeeded(CONNECTION_DELETE_NODE_ID))
         calls = _wire(harness, ae, monkeypatch)
 
         harness.teardown_method(None)
 
-        assert ae.created_names == []
-        assert ae.submitted_versions == []
+        assert ae.args("create_workflow", "name") == []
+        assert ae.args("submit_published_version", "slug") == []
         assert calls.purged == []
 
     def test_a_failing_run_stops_the_sequence(
@@ -782,13 +709,13 @@ class TestDeclaredRuns:
         """A mine whose prerequisite crawl failed has nothing left to prove, and
         running it anyway would report the crawl's failure as the miner's."""
         harness = _CrawlThenMine()
-        ae = _FakeAE(_failed("extract"), _succeeded("extract"))
+        ae = FakeAE(failed("extract"), succeeded("extract"))
         _wire(harness, ae, monkeypatch)
 
         with pytest.raises(AssertionError):
             harness.test_full_dag_runs_end_to_end()
 
-        assert [s.entrypoint for s in ae.submits] == ["crawler"]
+        assert _entrypoints(ae) == ["crawler"]
 
     def test_a_crawl_that_lands_nothing_fails_the_leg(
         self, monkeypatch: pytest.MonkeyPatch
@@ -796,25 +723,25 @@ class TestDeclaredRuns:
         """The prerequisite is graded, not merely executed — a green DAG that
         published nothing is exactly the shape FND-1147 found."""
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = FakeAE(succeeded("extract", "publish"), succeeded("extract"))
         _wire(harness, ae, monkeypatch, total=0)
 
         with pytest.raises(AssertionError) as exc:
             harness.test_full_dag_runs_end_to_end()
 
         assert "did not meet expectations" in str(exc.value)
-        assert [s.entrypoint for s in ae.submits] == ["crawler"]
+        assert _entrypoints(ae) == ["crawler"]
 
     def test_each_run_gets_its_own_ae_workflow(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _CrawlThenMine()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = FakeAE(succeeded("extract", "publish"), succeeded("extract"))
         _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
 
-        assert ae.created_names == [
+        assert ae.args("create_workflow", "name") == [
             "bundle-e2e-full-ci-7-crawler",
             "bundle-e2e-full-ci-7",
         ]
@@ -835,7 +762,7 @@ class TestDeclaredRuns:
                 super().assert_dag_outcome(dag, outcome)
 
         harness = _Seeding()
-        ae = _FakeAE(_succeeded("extract", "publish"), _succeeded("extract"))
+        ae = FakeAE(succeeded("extract", "publish"), succeeded("extract"))
         _wire(harness, ae, monkeypatch, total=4)
 
         harness.test_full_dag_runs_end_to_end()
@@ -864,7 +791,7 @@ class TestAssertDagOutcome:
         harness = _Custom()
         _wire(
             harness,
-            _FakeAE(_succeeded("extract", "publish"), _succeeded("extract")),
+            FakeAE(succeeded("extract", "publish"), succeeded("extract")),
             monkeypatch,
             total=4,
         )
@@ -890,7 +817,7 @@ class TestAssertDagOutcome:
         harness = _LineageAsserting()
         _wire(
             harness,
-            _FakeAE(_succeeded("extract", "publish"), _succeeded("extract")),
+            FakeAE(succeeded("extract", "publish"), succeeded("extract")),
             monkeypatch,
             total=4,
         )
@@ -912,7 +839,7 @@ class TestAssertDagOutcome:
                 graded.append(dag.label)
 
         harness = _Custom()
-        _wire(harness, _FakeAE(_succeeded("extract")), monkeypatch)
+        _wire(harness, FakeAE(succeeded("extract")), monkeypatch)
 
         harness.test_full_dag_runs_end_to_end()
 
@@ -930,7 +857,7 @@ class TestConnectionIsMintedOnce:
     ) -> None:
         """A duplicate would survive the single purge teardown performs."""
         harness = _Miner()
-        calls = _wire(harness, _FakeAE(_succeeded("extract")), monkeypatch)
+        calls = _wire(harness, FakeAE(succeeded("extract")), monkeypatch)
 
         first = harness.seed_connection()
         second = harness.seed_connection()
@@ -943,7 +870,7 @@ class TestConnectionIsMintedOnce:
     ) -> None:
         """It is a wait, not a create: a caller that passed one is owed it."""
         harness = _Miner()
-        _wire(harness, _FakeAE(_succeeded("extract")), monkeypatch)
+        _wire(harness, FakeAE(succeeded("extract")), monkeypatch)
         probes = 0
 
         def _probe() -> None:
@@ -1010,20 +937,18 @@ class TestDagRunsValidation:
 # ---------------------------------------------------------------------------
 
 
-class _PublishingAE(_FakeAE):
+class _PublishingAE(FakeAE):
     """An AE that supersedes the seed with a DAG the caller chooses."""
 
     def __init__(self, published_dag: dict[str, Any], *results: DAGRunResult) -> None:
         super().__init__(*results)
         self._published_dag = published_dag
-        self._seed = 0
-
-    async def create_version(self, slug: str, body: dict[str, Any]) -> int:
-        self._seed = int(body["version"])
-        return self._seed
 
     async def get_published_version(self, slug: str) -> PublishedVersion:
-        return PublishedVersion(version=self._seed + 1, dag=dict(self._published_dag))
+        await super().get_published_version(slug)
+        return PublishedVersion(
+            version=(self.seed_version or 0) + 1, dag=dict(self._published_dag)
+        )
 
 
 def _published_dag(*nodes: str) -> dict[str, Any]:
@@ -1051,7 +976,7 @@ class TestManifestIdentityIsPerRun:
         harness.deployed_manifest_timeout_seconds = 1  # type: ignore[misc]
         harness.deployed_manifest_poll_interval_seconds = 0  # type: ignore[misc]
         ae = _PublishingAE(
-            _published_dag("extract", "publish"), _succeeded("extract", "publish")
+            _published_dag("extract", "publish"), succeeded("extract", "publish")
         )
         _wire(harness, ae, monkeypatch)
 
@@ -1059,7 +984,7 @@ class TestManifestIdentityIsPerRun:
             DAGSpec(manifest_path=CRAWLER_MANIFEST, expect_connection=True)
         )
 
-        assert [s.entrypoint for s in ae.submits] == ["crawler"]
+        assert _entrypoints(ae) == ["crawler"]
 
     def test_the_classs_manifest_is_not_what_is_compared(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1071,7 +996,7 @@ class TestManifestIdentityIsPerRun:
         harness.deployed_manifest_timeout_seconds = 1  # type: ignore[misc]
         harness.deployed_manifest_poll_interval_seconds = 0  # type: ignore[misc]
         ae = _PublishingAE(
-            _published_dag("extract", "publish"), _succeeded("extract", "publish")
+            _published_dag("extract", "publish"), succeeded("extract", "publish")
         )
         _wire(harness, ae, monkeypatch)
 
@@ -1104,7 +1029,7 @@ class TestEvidenceNamesTheRun:
                 readings.append(dict(self._failure_evidence(failure, outcome).readings))
 
         harness = _Recording()
-        _wire(harness, _FakeAE(_failed("extract")), monkeypatch)
+        _wire(harness, FakeAE(failed("extract")), monkeypatch)
 
         with pytest.raises(AssertionError):
             harness.test_full_dag_runs_end_to_end()

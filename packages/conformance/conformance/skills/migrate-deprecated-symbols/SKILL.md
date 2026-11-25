@@ -234,18 +234,36 @@ fixed in this skill, except the **owner decisions**.
   moving the **import** to the public `application_sdk.execution.build_output_path`
   (the same object) is a **swap**; replacing the **call** changes published
   keys — leave the call.
-- **error** — `CredentialVaultError` → `application_sdk.errors.DependencyUnavailableError`
-  (its parent class: an `except` / `isinstance` now also matches the
-  parent's other subclasses; narrow it if the code must not catch those).
-  A subclass of `CredentialVaultError` takes it as its base. Pass the
-  message and cause as `message=` and `cause=` (the typed classes take
-  keyword arguments only; a positional message raises `TypeError`). Drop the
-  `credential_guid=` and `error_code=` arguments: `DependencyUnavailableError`
-  does not take them, and a call that keeps one raises `TypeError` when it
-  runs, hiding the vault failure. The failure code becomes
-  `DEPENDENCY_UNAVAILABLE` (was `DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT` or the
-  custom `error_code`) and `str()` loses the `[CODE]` prefix and the
-  `credential_guid=` / `caused_by=` parts; the PR notes both.
+- **error** — each deprecated SDK error class has a same-code leaf; swap the
+  name in every raise, except, isinstance and base-class list:
+  `BindingError` → `BindingUnavailableError`, `CredentialVaultError` →
+  `CredentialVaultUnavailableError`, `StateStoreError` →
+  `StateStoreUnavailableError`, `PubSubError` → `PubSubUnavailableError`
+  (all from `application_sdk.infrastructure`); `ContractValidationError` →
+  `application_sdk.contracts.ContractDeclarationError`;
+  `EntryPointContractError` → `application_sdk.app.entrypoint.EntryPointDeclarationError`;
+  `TaskContractError` → `application_sdk.app.task.TaskDeclarationError`;
+  `AppNotFoundError` / `TaskNotFoundError` / `AppAlreadyRegisteredError` →
+  `AppNotRegisteredError` / `TaskNotRegisteredError` /
+  `AppVersionAlreadyRegisteredError` (`application_sdk.app.registry`).
+  Each leaf subclasses the class it replaces until v4.0 and keeps its
+  `code`, category and `str()`, so an `except` keeps matching what it matched.
+  The leaves take keyword arguments only: pass the message as `message=` (a
+  positional message raises `TypeError`) and keep the context arguments the
+  class took (`credential_guid=`, `binding_name=`, `key=`, `topic=`,
+  `operation=`, `cause=`; `contract_type=`, `field_name=`, `expected_type=`,
+  `actual_type=` on `ContractDeclarationError`); drop `error_code=`, which
+  no leaf takes. The three registry classes built their message from
+  positional arguments; their leaves take that text as `message=` plus the
+  same values as keywords, so a dropped one goes missing from
+  `FailureDetails.evidence`:
+  `AppNotFoundError(name, version)` →
+  `AppNotRegisteredError(message=f"App '{name}' version '{version}' not found", name=name, version=version)`
+  (`f"App '{name}' not found"` when there is no version);
+  `AppAlreadyRegisteredError(name, version)` →
+  `AppVersionAlreadyRegisteredError(message=f"App '{name}' version '{version}' is already registered", name=name, version=version)`;
+  `TaskNotFoundError(app_name, task_name)` →
+  `TaskNotRegisteredError(message=f"Task '{task_name}' not found in app '{app_name}'", app_name=app_name, task_name=task_name)`.
   `HandlerError` → an `application_sdk.errors.AppError` subclass whose
   category keeps the HTTP status the handler returns today (its
   `http_status`, 500 when not passed; the handler routes map each category
@@ -402,7 +420,7 @@ a fix shape for a Step 1 class as its `fix_shape`: `public-reexport` and
 `public-rename` (safe swap, swap), `own-method-ignore` (false positive),
 `base-to-app` (base),
 `transformer-wrapper`, `workflow-identity` (identity), `error-typed-leaf` and
-`error-parent-class` (error), `writer-rolling` and
+`error-same-code-leaf` (error), `writer-rolling` and
 `reader-file-reference` (storage). A row with `block` is an owner decision:
 `match` is a pattern on the finding message or source line, `fix_shape` a
 pattern on the planned shape; such a site waits for the person the `brief`
@@ -415,7 +433,7 @@ asks.
 {"rule": "B001", "fix_shape": "transformer-wrapper", "decision": "Drop the TransformerInterface or QueryBasedTransformer base from a class that does its own mapping (no call reaches the base transform_metadata, no YAML template, no super() call). Delete an override that exists only to satisfy the base, with the error class and the test that only covered it. An annotation of the base becomes the app's own class.", "why": "Nothing the app runs uses the base, so removing it changes no output."}
 {"rule": "B008", "fix_shape": "workflow-identity", "decision": "get_workflow_id() becomes input.workflow_id when the task's typed Input is in scope, else self.context.workflow_id; get_workflow_run_id() becomes self.run_id or self.context.run_id. Keep every key, path and log field built from the value.", "why": "App.run_id is the workflow run id and the task context carries the same workflow and run ids the private helpers read, so the values do not change."}
 {"rule": "B001", "fix_shape": "error-typed-leaf", "decision": "Replace HandlerError with the application_sdk.errors subclass whose category the handler routes map to the HTTP status this raise answers with today: its http_status argument, or 500 when none is passed (InternalError). For example 400 InvalidInputError, 401 AuthError, 403 AppPermissionDeniedError, 404 NotFoundError, 503 DependencyUnavailableError or SourceUnavailableError (pick by what failed). A raise reachable only from a route that ignores http_status (/warmup) answers 500 today. A class that subclasses HandlerError takes the new class as its base. Keep the message and the cause, passed as message= and cause= (the typed classes take keyword arguments only, so a positional message raises TypeError), and drop the http_status=, handler_name= and error_code= arguments: the typed classes do not take them (only SourceUnavailableError takes http_status), and a kept one raises TypeError when the error is raised. Pass retryable=False when the new class retries by default (DependencyUnavailableError, SourceUnavailableError, ResourceExhaustedError, RateLimitedError, AppTimeoutError), because HandlerError does not retry. Update every except and isinstance that named HandlerError, and the tests that assert it. When no subclass maps to today's status, the site is the error-status-change owner decision.", "why": "HandlerError is deprecated with its category varying by raise site; the routes answer a typed AppError with the status of its category, so a subclass of the same status keeps the response status. The PR notes what changes: on the auth and metadata routes the detail loses the [CODE] ... | handler=... text HandlerError added (the preflight route already drops it), a custom error_code is dropped, and the failure category is no longer INTERNAL.", "pr_note": true}
-{"rule": "B001", "fix_shape": "error-parent-class", "decision": "Replace CredentialVaultError with application_sdk.errors.DependencyUnavailableError, its parent class, in every raise, except and isinstance; a class that subclasses CredentialVaultError takes it as its base. Keep the message and the cause, passed as message= and cause= (DependencyUnavailableError takes keyword arguments only, so a positional message raises TypeError), and drop the credential_guid= and error_code= arguments: DependencyUnavailableError does not take them, and a kept one raises TypeError when the error is raised, hiding the vault failure. Where an except or isinstance must not also catch the parent's other subclasses, narrow it to the check the code needs.", "why": "CredentialVaultError is a subclass of DependencyUnavailableError, so a raise keeps its category, status and retry default; a broader except is the only control-flow change, and the decision narrows it. The PR notes what changes: the failure code becomes DEPENDENCY_UNAVAILABLE instead of DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT (or a custom error_code), and str() of the error loses the [CODE] prefix and the credential_guid= and caused_by= parts, so a log or test that reads either changes.", "pr_note": true}
+{"rule": "B001", "fix_shape": "error-same-code-leaf", "decision": "Replace each deprecated SDK error class with its same-code leaf in every raise, except, isinstance and base-class list: CredentialVaultError -> CredentialVaultUnavailableError, BindingError -> BindingUnavailableError, StateStoreError -> StateStoreUnavailableError, PubSubError -> PubSubUnavailableError (application_sdk.infrastructure); ContractValidationError -> application_sdk.contracts.ContractDeclarationError; EntryPointContractError -> application_sdk.app.entrypoint.EntryPointDeclarationError; TaskContractError -> application_sdk.app.task.TaskDeclarationError; AppNotFoundError -> AppNotRegisteredError, TaskNotFoundError -> TaskNotRegisteredError, AppAlreadyRegisteredError -> AppVersionAlreadyRegisteredError (application_sdk.app.registry). None of the app leaves is importable from application_sdk.app itself: import each from the module named. Pass the message as message= (the leaves take keyword arguments only, so a positional message raises TypeError), keep the context arguments (credential_guid=, binding_name=, key=, topic=, operation=, cause=; contract_type=, field_name=, expected_type=, actual_type= on ContractDeclarationError) and drop error_code=, which no leaf takes. The registry classes built their message from positional arguments; pass that text as message= and the same values as keywords, or they go missing from FailureDetails.evidence: AppNotFoundError(name, version) -> AppNotRegisteredError(message=f\"App '{name}' version '{version}' not found\" (f\"App '{name}' not found\" without a version), name=name, version=version); AppAlreadyRegisteredError(name, version) -> AppVersionAlreadyRegisteredError(message=f\"App '{name}' version '{version}' is already registered\", name=name, version=version); TaskNotFoundError(app_name, task_name) -> TaskNotRegisteredError(message=f\"Task '{task_name}' not found in app '{app_name}'\", app_name=app_name, task_name=task_name).", "why": "Each leaf subclasses the class it replaces until v4.0 and keeps its code, category, retry default and str(), so the wire code, the HTTP status and every except that matched before are unchanged. The PR notes one change: type(exc).__name__, and so ApplicationError.type on the Temporal wire, names the leaf.", "pr_note": true}
 {"rule": "B001", "fix_shape": "^error-status-change$", "block": "The HandlerError raise answers with an HTTP status that no application_sdk.errors subclass maps to, so any typed replacement changes the status the route returns.", "brief": "Which status should this error return after the move to a typed error, given that the current one has no typed equivalent?"}
 {"rule": "B001", "fix_shape": "writer-rolling", "decision": "Replace ParquetFileWriter / JsonFileWriter with RollingFileWriter and a flush_fn that writes one chunk per batch, or with a local write, in the task's own scratch directory; return FileReference.from_local(<dir>, tier=StorageTier.RETAINED) on the task Output. Keep the counts the task returned (count the rows appended; RollingFileWriter.chunk_count). RollingFileWriter chunk names and no statistics sidecar are kept only where no reader matches file names; where one does, write the old names with a local write. Files a reader outside the run reads are delivered from run() with upload_refs at the same prefix.", "why": "The deprecated writers wrote and uploaded each chunk; the interceptor now persists the returned ref, and the explicit delivery keeps the same keys for outside readers."}
 {"rule": "B001", "fix_shape": "reader-file-reference", "decision": "The reading task declares the producer's FileReference on its typed Input and reads the chunk files from .local_path through run_in_thread the way the deprecated reader did: for parquet read_batches, pyarrow.parquet.ParquetFile(path).iter_batches(batch_size=<same size>) with each batch converted to pandas on its own; for parquet read(), one pyarrow table of all files converted once; for JSON, an orjson line loop. Data already in the store before this run is downloaded in run() and its ref handed to the task. A reader that caught the missing-prefix error today keeps that behaviour for a missing ref.", "why": "The interceptor materialises the ref before the task runs; the old reader downloaded the prefix itself."}

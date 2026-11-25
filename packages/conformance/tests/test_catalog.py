@@ -27,6 +27,21 @@ def test_catalog_loads_without_error() -> None:
     assert len(rules) > 0
 
 
+def test_mechanism_defaults_to_static_and_still_reaches_sarif() -> None:
+    """A rule that leaves ``mechanism`` unset is ``static``, and the SARIF
+    descriptor still carries ``atlan/mechanism`` — the default changes no output."""
+    rule = RuleDefinition(
+        id="Z999",
+        name="DefaultMechanism",
+        tier=EnforcementTier.WARN,
+        scope=RuleScope.APP,
+        category="test",
+        rationale="r",
+    )
+    assert rule.mechanism is RuleMechanism.STATIC
+    assert rule.to_reporting_descriptor().properties["atlan/mechanism"] == "static"
+
+
 def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
@@ -432,6 +447,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # atlan.yaml; the SDK has neither.
     # K030: deploy.dapr.secretstore disabled on a credential app — same inputs
     # as K029.
+    # K031: a pinned ATLAN_TASK_QUEUE — reads an app's contract/ and atlan.yaml;
+    # the SDK has neither.
+    # K032/K033: @task(pool=) names vs the app's deploy.pools — the pools live in
+    # an app's contract/ and atlan.yaml, which the SDK does not have.
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -485,6 +504,12 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P064/P065: offload cancel — they describe consumer code that offloads raw
     # cursor statements or iterates batched results, and the version gate reads
     # a consumed SDK version the SDK repo does not have (FND-4707).
+    # P066: httpx transport without proxy= — the SDK's BaseClient default
+    # transport applies the environment proxy itself and its other transports
+    # only reach localhost; hand-built transports to customer sources live in
+    # consumer apps.
+    # P067: tempfile's system temp dir in app code — App.run_scratch_dir is the
+    # consumer-facing replacement; the SDK composes its own run scratch dir.
     assert app_scoped == {
         "B001",
         "B007",
@@ -509,6 +534,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P059",
         "P064",
         "P065",
+        "P066",
+        "P067",
         "C002",
         "D001",
         "D002",
@@ -547,6 +574,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K027",
         "K029",
         "K030",
+        "K031",
+        "K032",
+        "K033",
         "P004",
         "P005",
         "P008",
@@ -673,6 +703,7 @@ def test_catalog_e_series_present() -> None:
         "E019",
         "E020",
         "E021",
+        "E022",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
@@ -704,6 +735,7 @@ def test_catalog_l_series_present() -> None:
         "L019",
         "L020",
         "L021",
+        "L022",
     }
     missing = expected - l_ids
     assert not missing, f"Missing L-series rules: {missing}"
@@ -816,6 +848,10 @@ def test_catalog_p_series_present() -> None:
     (a run_in_thread cursor statement with no driver cancel registered) and
     BatchedResultsIteratedOnLoop (get_batched_results read with a sync for in an
     async def); gated on the SDK release that ships FND-4707.
+    P066 is HttpxTransportWithoutProxy — an httpx transport built without
+    ``proxy=``, so its client ignores HTTPS_PROXY / NO_PROXY.
+    P067 is TempDirOutsideRunScratch — tempfile.gettempdir() (or mkdtemp /
+    mkstemp with no dir=) in app code instead of App.run_scratch_dir.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -878,6 +914,8 @@ def test_catalog_p_series_present() -> None:
         "P060",
         "P064",
         "P065",
+        "P066",
+        "P067",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -979,7 +1017,9 @@ def test_catalog_k_series_present() -> None:
     writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
     contract classes under one bare class name) (FND-3140), and K029 (the
     deployment object store disabled in deploy.dapr), and K030 (the secret store
-    disabled on an app that resolves credentials)."""
+    disabled on an app that resolves credentials), and K031 (a pinned
+    ATLAN_TASK_QUEUE in the deploy env), and K032/K033 (a @task(pool=) naming a
+    pool the app does not deploy, and a deployed pool no task routes to)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -1007,6 +1047,9 @@ def test_catalog_k_series_present() -> None:
         "K027",
         "K029",
         "K030",
+        "K031",
+        "K032",
+        "K033",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

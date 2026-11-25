@@ -23,7 +23,7 @@
 /// | preview | | (Optional) Whether the package should be labeled as an early preview in the UI (true) or not (false). | `false` |
 /// | connectorType | | (Optional) If the package needs to configure a connector, specify its type here. | |
 /// | category | | Name of the pill under which the package should be categorized in the marketplace in the UI. | `custom` |
-@ModuleInfo { minPklVersion = "0.25.1" }
+@ModuleInfo { minPklVersion = "0.33.0" }
 open module com.atlan.app.contract.Config
 
 import "pkl:semver"
@@ -183,6 +183,10 @@ class UIConfig {
   )
 }
 
+/// Returns [inputs] unchanged: an identity fold that nothing in the toolkit calls.
+@Deprecated {
+  message = "An identity fold with no callers; use the mapping directly. Will be removed in a future release."
+}
 const function resolveInputs(inputs: Mapping<String, UIElement>): Mapping<String, UIElement> = inputs.fold(new Mapping {}, (acc: Mapping<String, UIElement>, inputKey, input) ->
   (acc) {
     [inputKey] = input
@@ -2030,6 +2034,23 @@ class ConditionalInput extends UIElement {
   /// Python/Input value type for this conditional field. Set to `"object"` when
   /// a condition renders an object-producing widget such as `dsnTreeMap`.
   hidden outputValueType: String = if (baseWidgetType == "sqltree" || baseWidgetType == "apitree" || baseWidgetType == "apiTreeSelect" || baseWidgetType == "dsnTreeMap") "object" else "string"
+
+  /// For an object-valued conditional (`outputValueType = "object"`) whose widget
+  /// stores a flat string-to-string map, such as `dsnTreeMap` (DSN name ->
+  /// connection qualified name). Types the generated `_input.py` field as
+  /// `Annotated[dict[str, str], MaxItems(1000)]` instead of
+  /// `Annotated[dict[str, Any], MaxItems(1000)]`, which the SDK's payload-safety
+  /// check (AAF-CTR-002) rejects at import time.
+  ///
+  /// The field also gets its own `mode="before"` validator: a JSON object string
+  /// is decoded to a dict, and `None`, a blank string or any string that is not a JSON
+  /// object (for example `"false"` or `"[]"`) becomes `{}`, so saved configs that
+  /// hold a stray scalar keep validating. Non-string map values still fail
+  /// validation. The config JSON, manifest and wire format do not change.
+  ///
+  /// Evaluation fails if this is set while `outputValueType` is not `"object"`.
+  /// Default `false` keeps the existing `dict[str, Any]` type and coercion.
+  hidden stringMap: Boolean = false
 
   /// Generic UI `type` for base widgets such as InfoBanner.
   hidden uiType: String?

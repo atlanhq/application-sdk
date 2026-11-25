@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import sync_dapr_version as sdv  # noqa: E402
+import sync_dapr_version as sdv
 
 VERSION_PY = '''"""Docs mention the pin::
 

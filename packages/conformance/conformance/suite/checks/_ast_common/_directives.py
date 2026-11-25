@@ -21,13 +21,13 @@ _SUPPRESS_RE = re.compile(
 
 # A noqa comment is accepted ONLY when it names at least one mapped code AND
 # supplies non-empty justification text after a visual separator (—, –, or -).
-# Bare "# noqa" and "# noqa: CODE" with no justification are rejected.
+# A bare noqa, or noqa with a code but no justification, is rejected.
 _NOQA_RE = re.compile(
     r"^#\s*noqa\s*:\s*([A-Z][A-Z0-9]*(?:\s*,\s*[A-Z][A-Z0-9]*)*)\s*[—–\-]+\s*(.+)$",
     re.IGNORECASE,
 )
 
-# noqa-code → conformance-rule-id mapping.  Only series that have a recognised
+# Mapping from noqa code to conformance rule id.  Only series that have a recognised
 # noqa equivalent appear here (today: E-series try/except shorthands).  Other
 # series have no noqa form, so a noqa comment never suppresses their findings —
 # the mapping being E-only is incidental, not a coupling to the E-series.
@@ -119,7 +119,7 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
             )
             continue
 
-        # ── # noqa: CODE — justification ─────────────────────────────────────
+        # ── noqa shorthand: CODE plus a justification ────────────────────────
         m = _NOQA_RE.search(tok_string)
         if not m:
             continue

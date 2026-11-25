@@ -112,13 +112,13 @@ _CASES: list[tuple[str, Any, type[AppError], FailureCategory]] = [
             'connection to server at "db.example.invalid" failed: timeout expired'
         ),
         SqlClientConnectTimeoutError,
-        FailureCategory.TIMEOUT,
+        FailureCategory.SOURCE_UNAVAILABLE,
     ),
     (
         "pyodbc-hyt00",
         _pyodbc_login_timeout,
         SqlClientConnectTimeoutError,
-        FailureCategory.TIMEOUT,
+        FailureCategory.SOURCE_UNAVAILABLE,
     ),
     (
         "mysql-1045",

@@ -9,7 +9,6 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -25,7 +24,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="BareExceptPass",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="silent-swallow",
         autofixable=True,
         orthogonal_gate="tests",
@@ -46,7 +44,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "error with ``exc_info=True``.  Never acceptable — even cleanup paths\n"
             "should log at DEBUG.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -70,7 +67,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="TypedExceptPass",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="silent-swallow",
         autofixable=True,
         orthogonal_gate="tests",
@@ -90,7 +86,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "100% expected AND the surrounding code handles the missing result, AND\n"
             "there is a comment explaining the reasoning.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -107,7 +102,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="BroadContextlibSuppress",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="silent-swallow",
         autofixable=True,
         orthogonal_gate="tests",
@@ -124,7 +118,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "acceptable.  The checker must inspect the suppressed exception type before\n"
             "classifying.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e003",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -144,7 +137,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="BroadExceptClause",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="overly-broad-catch",
         autofixable=True,
         orthogonal_gate="tests",
@@ -350,7 +342,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "and returning the failure as typed data remains the preferred "
             "shape for a probe arm."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -366,7 +357,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfo",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="missing-traceback",
         autofixable=True,
         orthogonal_gate="tests",
@@ -400,7 +390,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "would serialize the raw exception past the sanitizer and can leak\n"
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -416,7 +405,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="BareExceptWithBody",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="silent-swallow",
         autofixable=True,
         orthogonal_gate="tests",
@@ -434,7 +422,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Like P001 but the block may have a body.  Still catches KeyboardInterrupt\n"
             "and SystemExit.  Always specify at least ``except Exception:``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -507,7 +494,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-to-return-value",
         autofixable=True,
         orthogonal_gate="tests",
@@ -576,7 +562,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "judgment residue, never a raise.  E020 gives the same advice for HTTP\n"
             "response guards.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -595,7 +580,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ImportErrorWithoutLogging",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="optional-import",
         autofixable=True,
         orthogonal_gate="tests",
@@ -628,7 +612,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "* Keep the import where it is: moving it to module level or into a function changes when the app loads its drivers, and the repo's ruff rules then reject the new shape.\n\n"
             "* Never add ``noqa`` to get past ruff; if ruff objects, the shape is wrong — log at the original site.\n\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -637,14 +620,15 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E009",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` binds the "
-            "routing error, logs it, and then takes the inline-credentials path. A bound "
-            "name that is never read is the tell that the handler is a placeholder."
+            "atlan-metabase-app app/handler.py — `_authentication_check` binds the "
+            "exception, logs it at DEBUG through `sanitize_cause_repr`, and only then "
+            "assigns `check` from `_failed_check`, which carries the failure out as a "
+            "typed row. A bound name that is never read is the tell that the handler is "
+            "a placeholder."
         ),
         scope=RuleScope.BOTH,
         name="ExceptBlockOnlyAssigns",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-to-return-value",
         autofixable=True,
         orthogonal_gate="tests",
@@ -665,7 +649,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``error = exc`` ... ``if error is not None: raise error``), the same\n"
             "predicate E004 uses — the failure is deferred, not hidden.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -687,7 +670,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="AsyncioGatherExceptionsUnexamined",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="asyncio-unexamined",
         autofixable=True,
         orthogonal_gate="tests",
@@ -705,7 +687,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "instances, errors vanish silently.  The pattern is only a bug when results\n"
             "are not checked; ``return_exceptions=True`` itself is acceptable.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e010",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -724,7 +705,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="LoggingFilterUnsafeBody",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="filter-safety",
         autofixable=True,
         orthogonal_gate="tests",
@@ -746,7 +726,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``getattr(record, 'field', default)`` for optional record attributes.\n"
             "Never acceptable — filter methods must never let exceptions propagate.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -764,7 +743,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="untyped-raise",
         autofixable=True,
         orthogonal_gate="tests",
@@ -801,7 +779,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "build and dev tooling that never reaches the error envelope and are not\n"
             "checked; an app package with the same name (``app/tools/``) still is.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -817,7 +794,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="LegacyAtlanErrorRaise",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="legacy-raise",
         autofixable=True,
         orthogonal_gate="tests",
@@ -838,7 +814,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "wire envelope.  Scheduled for removal in v4.0.  Replace with the\n"
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e013",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -856,7 +831,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="silent-swallow",
         autofixable=True,
         orthogonal_gate="tests",
@@ -878,7 +852,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "genuine unexpected error, re-raise or log at WARNING/ERROR with\n"
             "``exc_info=True``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -894,7 +867,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ExceptionTextInErrorMessage",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-message-hygiene",
         autofixable=True,
         orthogonal_gate="tests",
@@ -918,7 +890,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "field (``cause=exc``, ``network_error=str(exc)``) and keep ``message=`` a\n"
             "stable human summary.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e015",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -934,7 +905,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="MissingExceptionChaining",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="exception-chaining",
         autofixable=True,
         orthogonal_gate="tests",
@@ -974,8 +944,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "member keeps its own ``__cause__``, which ``from group`` would overwrite.\n"
             "Only a proven group counts: an app class that merely exposes an\n"
             "``exceptions`` sequence (``except AggregateError as group``) still fires.\n"
+            "The same member reached through a local is accepted when every binding\n"
+            "of that local is a plain assignment inside the handler: ``raise fault``\n"
+            "where ``fault`` is only ever ``group`` or ``<group or fault>.exceptions[i]``\n"
+            "(the walk down nested groups to a leaf), and ``raise leaves[i]`` where\n"
+            "``leaves`` is only ever ``group.exceptions``.  The walk's seed binds the\n"
+            "group itself; re-raising that object is the caught exception, not a\n"
+            "replacement.  Any other binding of the local (a new exception in one\n"
+            "branch, a wrapper call, a parameter, a loop target) still fires.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -992,7 +969,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="SecretNamedEvidenceKey",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="security",
         autofixable=True,
         orthogonal_gate="tests",
@@ -1017,7 +993,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "caught before any code runs.  Rename the evidence field to a safe key (e.g.\n"
             "``credential_name``, ``token_type``) or pass the value via ``cause=exc``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e017",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1036,7 +1011,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="BareParentLeafRaise",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="untyped-raise",
         autofixable=True,
         orthogonal_gate="tests",
@@ -1062,7 +1036,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "legitimate in small apps or during active migration.  Review findings\n"
             "before suppressing.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e018",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1081,7 +1054,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="ExceptionTextInContractField",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-message-hygiene",
         autofixable=True,
         orthogonal_gate="tests",
@@ -1122,7 +1094,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Extending both rules to those shapes is a deliberate future follow-up kept\n"
             "symmetric across E015/E019.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1172,7 +1143,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="HttpFailureToEmptyReturn",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="error-to-return-value",
         autofixable=True,
         orthogonal_gate="tests",
@@ -1260,7 +1230,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "skip also still reports: whether a permission denial should skip or\n"
             "raise is a site-level judgment that this rule does not make.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",
@@ -1277,7 +1246,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="DependencyUnavailableOverriddenToUser",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="failure-category",
         autofixable=True,
         orthogonal_gate="tests",
@@ -1324,7 +1292,59 @@ RULES: tuple[RuleDefinition, ...] = (
             "the rule matches the structural pattern and does not infer intent from\n"
             "names.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="E022",
+        canonical_reference=(
+            "atlan-mysql-app app/failures.py — each error class names its failure "
+            "with its own `code` ClassVar and nothing else; none of the three "
+            "reference apps binds DEFAULT_ERROR_CODE or imports an AAF-* constant."
+        ),
+        scope=RuleScope.BOTH,
+        name="LegacyDefaultErrorCode",
+        tier=EnforcementTier.WARN,
+        category="legacy-error-code",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.60.0",
+        rationale=(
+            "An error class that binds DEFAULT_ERROR_CODE in the SDK's AAF-* "
+            "vocabulary carries two codes: the code ClassVar the wire envelope and "
+            "dashboards read, and an AAF-* code only str() shows. The SDK dropped "
+            "the second vocabulary (FND-4299): its AAF-* names warn on access and "
+            "are removed in v4.0.0, when such a class stops importing. "
+            "Customer impact: a failure is filed under one code on the dashboard and "
+            "another in the log line, so on-call matching a log to an alert, or "
+            "grouping incidents by code, gets two answers for one fault."
+        ),
+        short_description=(
+            "Class binds DEFAULT_ERROR_CODE in the SDK's deprecated AAF-* vocabulary — "
+            "the code ClassVar is the one error vocabulary"
+        ),
+        full_description=(
+            "A class body binds ``DEFAULT_ERROR_CODE`` and either:\n"
+            "\n"
+            "* reaches an SDK class that carries an AAF-* code (``StorageError``,\n"
+            "  ``CredentialError``, ``SecretStoreError``, …) through its bases, so it\n"
+            "  overrides that code.  The base may be imported from ``application_sdk``\n"
+            "  by name or through a module alias, or be an app-defined intermediate in\n"
+            "  the same module or imported from the scanned repo; or\n"
+            "* binds it to the SDK's ``ErrorCode`` or an AAF-* constant (``APP_ERROR``,\n"
+            "  ``STORAGE_CONFIG``, …) from ``application_sdk.errors``, in the value or\n"
+            "  the annotation.\n"
+            "\n"
+            "An app's own ``DEFAULT_ERROR_CODE`` on its own class, typed with its own\n"
+            "code class, is not flagged: it is not the SDK's legacy vocabulary.\n"
+            "\n"
+            "Fix: delete the ``DEFAULT_ERROR_CODE`` line and give the class its own\n"
+            "``code: ClassVar[str]`` (prefixed with its category, see P003).  The\n"
+            "class keeps its ``[AAF-…]`` ``str()`` prefix from the SDK base until\n"
+            "v4.0.0, so log text does not change.\n"
+        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",

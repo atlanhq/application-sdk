@@ -77,7 +77,6 @@ from conformance.suite.schema.catalog import (
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
-    RuleMechanism,
     RuleScope,
 )
 
@@ -105,7 +104,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="SdrManifestMissingAgentJson",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=True,
         orthogonal_gate="tests",
@@ -189,10 +187,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "  the deployed image ships it.  A merged PR alone does not clear the\n"
             "  runtime failure.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p029"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
@@ -212,7 +206,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -390,10 +383,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "app has nothing to hand the extracted assets off to, so the absence\n"
             "of an upload call is by design, not a gap.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p030"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -402,15 +391,15 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P037",
         canonical_reference=(
-            "atlan-metabase-app app/credentials.py — `build_credential_ref` routes through "
-            "`CredentialRef.resolve`, which covers direct (credential_guid) and agent "
-            "(agent_json) modes from one call. Resolving by credential_guid alone works in "
-            "direct mode and silently ignores agent_json in SDR mode."
+            "atlan-metabase-app app/connector.py — `extract_metadata` calls the SDK's "
+            "`route_credentials(input)` once, which goes through `CredentialRef.resolve` "
+            "and so covers direct (credential_guid) and agent (agent_json) modes from one "
+            "call. Resolving by credential_guid alone works in direct mode and silently "
+            "ignores agent_json in SDR mode."
         ),
         scope=RuleScope.APP,
         name="SdrAgentJsonNotConsumed",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -471,10 +460,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "``agent_json`` and pick the correct route), keeping the direct\n"
             "``credential_guid`` path only as a fallback after the agent-aware call.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p037"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -493,7 +478,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="SdrArtifactMisrooted",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -566,10 +550,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "application_name=APPLICATION_NAME, ...)``), or default the contract field\n"
             "to the app name; never derive it from an empty-defaulting workflow arg.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p038"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -598,7 +578,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="SdrAgentJsonDroppedByInputContract",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -672,10 +651,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "family (which declares it), or set ``allow_unbounded_fields=True`` on the\n"
             "contract — as the passing counterexample connectors in fleet testing do.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p039"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -694,7 +669,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="SdrHandRolledUploadBridge",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -783,10 +757,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "is why the rule carries ``superseded_by: sdk>=4.0.0``.  It retires when\n"
             "that removal lands and the shape stops being expressible.\n"
         ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p042"
-        ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
@@ -805,7 +775,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="SdrPreflightUnavailable",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
         autofixable=False,
         orthogonal_gate="tests",
@@ -890,10 +859,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "  version can't be read) the picker falls back to a plain text box. This\n"
             "  follows the same floor gate automatically — no per-connector change\n"
             "  beyond declaring the filter widget.\n"
-        ),
-        help_uri=(
-            "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/prescriptions.md#p051"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

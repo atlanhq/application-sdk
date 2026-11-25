@@ -285,7 +285,7 @@ class AzureClient(ClientInterface):
             logger.info("Azure client closed successfully")
 
         except Exception:
-            logger.error("Error closing Azure client", exc_info=True)
+            logger.warning("Error closing Azure client", exc_info=True)
 
     async def health_check(self) -> HealthStatus:
         """

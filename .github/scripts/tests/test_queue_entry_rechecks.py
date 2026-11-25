@@ -13,26 +13,20 @@ gate is evaluated here, through the real expressions, for both directions:
 * the skipping jobs keep a static `name:` so the skipped check run carries the
   context string the rulesets require.
 
-The three `queue-diff` jobs are also pinned to the same steps, so a fix to one
-cannot silently miss the other two.
+The three `queue-diff` jobs call one reusable, queue-diff-reusable.yaml
+(FND-4928), so a fix lands once; the tests below pin each caller to it and pin
+the reusable's outputs to the names the gates read.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+from _bump_skip import without_bump_skip
+from _gha_expr import evaluate
+from _workflows import REPO_ROOT, job, load_workflow
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-from _gha_expr import evaluate  # noqa: E402
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 SCRIPT = REPO_ROOT / ".github" / "scripts" / "queue_tree_diff.py"
 
 #: reusable -> (output its gates read, the value that means skip, the gated jobs
@@ -48,15 +42,11 @@ GATED = {
 }
 
 
-def _load(name: str) -> dict[str, Any]:
-    return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
-
-
 @pytest.mark.parametrize("name", sorted(GATED))
 @pytest.mark.parametrize("answer", ["", "true", "false"])
 def test_gated_jobs_skip_only_on_the_skip_answer(name: str, answer: str) -> None:
     output, skip_value, jobs = GATED[name]
-    workflow = _load(name)
+    workflow = load_workflow(name)
     for job_id in jobs:
         job = workflow["jobs"][job_id]
         assert "queue-diff" in job["needs"], f"{name}:{job_id} must wait on queue-diff"
@@ -77,7 +67,7 @@ def test_gated_jobs_skip_only_on_the_skip_answer(name: str, answer: str) -> None
 @pytest.mark.parametrize("name", sorted(GATED))
 def test_gated_jobs_keep_a_static_name(name: str) -> None:
     _, _, jobs = GATED[name]
-    workflow = _load(name)
+    workflow = load_workflow(name)
     for job_id, context in jobs.items():
         assert workflow["jobs"][job_id]["name"] == context
 
@@ -95,7 +85,7 @@ def _queue_diff_contexts(event: str) -> dict[str, Any]:
     "event", ["pull_request", "push", "merge_group", "schedule", "workflow_dispatch"]
 )
 def test_queue_diff_runs_only_on_a_queue_entry(name: str, event: str) -> None:
-    gate = _load(name)["jobs"]["queue-diff"]["if"]
+    gate = job(load_workflow(name), "queue-diff")["if"]
     assert evaluate(gate, _queue_diff_contexts(event)) is (event == "merge_group")
 
 
@@ -112,7 +102,7 @@ def test_queue_diff_runs_only_on_a_queue_entry(name: str, event: str) -> None:
 def test_scan_never_skips_for_a_prebuilt_image_or_explicit_ref(
     inputs: dict[str, str], runs: bool
 ) -> None:
-    gate = _load("build-and-scan.yaml")["jobs"]["queue-diff"]["if"]
+    gate = job(load_workflow("build-and-scan.yaml"), "queue-diff")["if"]
     contexts = {
         "github": {"event_name": "merge_group"},
         "inputs": inputs,
@@ -121,21 +111,34 @@ def test_scan_never_skips_for_a_prebuilt_image_or_explicit_ref(
     assert evaluate(gate, contexts) is runs
 
 
-def test_the_three_queue_diff_jobs_are_the_same_job() -> None:
-    def shape(job: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{k: v for k, v in step.items() if k != "name"} for step in job["steps"]]
+QUEUE_DIFF = "queue-diff-reusable.yaml"
 
-    jobs = {name: _load(name)["jobs"]["queue-diff"] for name in GATED}
-    reference = shape(jobs["checks-reusable.yaml"])
-    for name, job in jobs.items():
-        assert shape(job) == reference, f"{name}'s queue-diff steps drifted"
-        assert job["runs-on"] == "ubuntu-slim"
-        assert job["permissions"] == {"contents": "read"}
+
+@pytest.mark.parametrize("name", sorted(GATED))
+def test_every_queue_diff_job_is_the_one_reusable(name: str) -> None:
+    queue_diff = load_workflow(name)["jobs"]["queue-diff"]
+    assert queue_diff["uses"] == f"./.github/workflows/{QUEUE_DIFF}"
+    # A called workflow can only narrow its caller's grant.
+    assert queue_diff["permissions"] == {"contents": "read"}
+    assert "steps" not in queue_diff
+
+
+@pytest.mark.parametrize("name", sorted(GATED))
+def test_the_reusable_exports_the_answer_each_gate_reads(name: str) -> None:
+    output, _, _ = GATED[name]
+    # YAML 1.1 reads a bare `on` as True, so the keys are not all strings.
+    reusable: dict[Any, Any] = load_workflow(QUEUE_DIFF)
+    exported = reusable[True]["workflow_call"]["outputs"][output]["value"]
+    assert exported == f"${{{{ jobs.diff.outputs.{output} }}}}"
+    diff = reusable["jobs"]["diff"]
+    assert diff["outputs"][output] == f"${{{{ steps.diff.outputs.{output} }}}}"
 
 
 def test_queue_diff_runs_the_script_it_fetches() -> None:
     assert SCRIPT.is_file()
-    job = _load("checks-reusable.yaml")["jobs"]["queue-diff"]
+    job = load_workflow(QUEUE_DIFF)["jobs"]["diff"]
+    assert job["runs-on"] == "ubuntu-slim"
+    assert job["permissions"] == {"contents": "read"}
     fetch = job["steps"][1]
     assert fetch["with"]["sparse-checkout"] == ".github/scripts/queue_tree_diff.py"
     assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"

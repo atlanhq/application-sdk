@@ -86,6 +86,8 @@ permissions:
 jobs:
   build:
     runs-on: "ubuntu-26.04"
+    # Builds the calling app's image, whose size varies across the fleet.
+    timeout-minutes: 45
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +104,7 @@ jobs:
         # dependency repo varies per caller, same as build-and-scan.yaml's
         # git_token mint.
         id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}

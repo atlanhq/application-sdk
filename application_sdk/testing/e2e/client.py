@@ -19,7 +19,12 @@ a bare ``RuntimeError`` from deep in asyncio, while ``run_sync`` raises
 naming the ``_async`` twin to await instead.
 
 .. deprecated:: 3.31
-    Removed in v4.0. Call the ``async`` harness functions —
+    Removed in v4.0, with :class:`AEWorkflowClient`, the one thing it defines.
+    The DAG types it also exports (``DAGRunResult``, ``DAGNodeStatus``,
+    ``PublishedVersion``, ``cold_start_submit_kwargs`` and the rest) are
+    re-exports kept for old imports only: import them from
+    :mod:`application_sdk.testing.harness.automation_engine`, which defines
+    them. Call the ``async`` harness functions —
     :mod:`application_sdk.testing.harness.atlas` and
     :mod:`application_sdk.testing.harness.automation_engine` — and reach them
     from synchronous code through

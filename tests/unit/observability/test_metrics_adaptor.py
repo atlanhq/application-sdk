@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest import mock
 
 import pytest
@@ -12,7 +12,34 @@ from application_sdk.observability.metrics_adaptor import (
     get_metrics,
 )
 from application_sdk.observability.models import MetricRecord, MetricType
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import get_metric_labels
+
+#: Stands in for a running metrics flush: registered as the class's owner, it
+#: keeps ``AtlanMetricsAdapter()`` from starting one.
+_FLUSH_ALREADY_RUNNING = mock.MagicMock(spec=AtlanMetricsAdapter)
+
+
+@contextmanager
+def metrics_flush_owner(
+    owner: AtlanObservability[MetricRecord] | None,
+) -> Generator[None, None, None]:
+    """Register *owner* as the metrics flush's sink (``None``: no flush
+    running), and put back what was registered before on exit, so a later
+    test that builds an adapter sees the class state this one found."""
+    owners = AtlanObservability._periodic_flush_owners
+    previous = owners.get(AtlanMetricsAdapter)
+    if owner is None:
+        owners.pop(AtlanMetricsAdapter, None)
+    else:
+        owners[AtlanMetricsAdapter] = owner
+    try:
+        yield
+    finally:
+        if previous is None:
+            owners.pop(AtlanMetricsAdapter, None)
+        else:
+            owners[AtlanMetricsAdapter] = previous
 
 
 @pytest.fixture
@@ -31,11 +58,13 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
 
     The periodic flush is stubbed out, so no real flusher can swap the buffer
     between a ``record_metric`` call and the test's assertion on it. The
-    ``_flush_task_started`` flag is restored on exit so a later test that
+    class's flush registration is restored on exit so a later test that
     builds an adapter sees the class state this fixture found.
     """
-    flush_task_started = AtlanMetricsAdapter._flush_task_started
     with (
+        metrics_flush_owner(
+            AtlanObservability._periodic_flush_owners.get(AtlanMetricsAdapter)
+        ),
         mock.patch.dict(
             "os.environ",
             {
@@ -55,20 +84,15 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
         mock_meter = mock.MagicMock()
 
         # Mock the meter provider setup
-        try:
-            with mock.patch("opentelemetry.metrics.set_meter_provider"):
-                with mock.patch(
-                    "opentelemetry.sdk.metrics.MeterProvider"
-                ) as mock_provider:
-                    mock_provider.return_value.get_meter.return_value = mock_meter
+        with mock.patch("opentelemetry.metrics.set_meter_provider"):
+            with mock.patch("opentelemetry.sdk.metrics.MeterProvider") as mock_provider:
+                mock_provider.return_value.get_meter.return_value = mock_meter
 
-                    # Create adapter after mocks are in place
-                    adapter = AtlanMetricsAdapter()
-                    # Set the meter directly
-                    adapter.meter = mock_meter
-                    yield adapter
-        finally:
-            AtlanMetricsAdapter._flush_task_started = flush_task_started
+                # Create adapter after mocks are in place
+                adapter = AtlanMetricsAdapter()
+                # Set the meter directly
+                adapter.meter = mock_meter
+                yield adapter
 
 
 @pytest.fixture
@@ -82,7 +106,7 @@ def test_process_record_with_metric_record():
     """Test process_record() method with MetricRecord instance."""
     with create_metrics_adapter() as metrics_adapter:
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.COUNTER,
@@ -103,7 +127,7 @@ def test_process_record_with_dict():
     """Test process_record() method with dictionary input."""
     with create_metrics_adapter() as metrics_adapter:
         record = {
-            "timestamp": datetime.now().timestamp(),
+            "timestamp": datetime.now(UTC).timestamp(),
             "name": "test_metric",
             "value": 42.0,
             "type": MetricType.COUNTER.value,
@@ -118,7 +142,7 @@ def test_process_record_with_dict():
 def test_metric_record_exposes_otel_safe_metadata():
     """Unset SDK metric metadata should map to OTel's empty-string defaults."""
     record = MetricRecord(
-        timestamp=datetime.now().timestamp(),
+        timestamp=datetime.now(UTC).timestamp(),
         name="test_metric",
         value=1.0,
         type=MetricType.COUNTER,
@@ -201,28 +225,63 @@ def test_record_metric_does_not_mutate_caller_labels():
 def test_init_starts_flusher_on_the_shared_loop():
     """``__init__`` starts the flush on the shared observability loop
     (FND-4648), not on a thread of its own, and starts it once."""
-    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
-    AtlanMetricsAdapter._flush_task_started = False
-    try:
+    with metrics_flush_owner(None):
         with mock.patch(
             "application_sdk.observability.observability.observability_loop"
         ) as shared_loop:
-            AtlanMetricsAdapter()
+            first = AtlanMetricsAdapter()
             AtlanMetricsAdapter()
 
         shared_loop.start.assert_called_once()
         shared_loop.start.call_args.args[0].close()
-        assert AtlanMetricsAdapter._flush_task_started is True
-    finally:
-        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
+        assert AtlanObservability._periodic_flush_owners[AtlanMetricsAdapter] is first
+        assert first._periodic_flush_task is shared_loop.start.return_value
 
 
-def test_create_metrics_adapter_starts_no_flusher_and_restores_flag():
-    """The fixture must never start a real flusher, and must leave
-    ``_flush_task_started`` as it found it."""
-    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
-    AtlanMetricsAdapter._flush_task_started = False
-    try:
+def test_reset_stops_the_flush():
+    """The reset cancels the running flush and releases the class, so the
+    next adapter starts one flush, not a second beside the first."""
+    with metrics_flush_owner(None):
+        with mock.patch(
+            "application_sdk.observability.observability.observability_loop"
+        ) as shared_loop:
+            AtlanMetricsAdapter()
+        shared_loop.start.call_args.args[0].close()
+        handle = shared_loop.start.return_value
+
+        AtlanMetricsAdapter._reset_for_testing()
+
+        handle.cancel.assert_called_once()
+        assert AtlanMetricsAdapter not in AtlanObservability._periodic_flush_owners
+
+
+def test_reset_stops_a_batch_flush_on_an_adapter_that_does_not_own_the_flush():
+    """A second adapter's in-flight batch flush is cancelled too, not only the
+    flush owner's: left running it uploads into a later test's patched store."""
+    with metrics_flush_owner(None):
+        with mock.patch(
+            "application_sdk.observability.observability.observability_loop"
+        ) as shared_loop:
+            owner = AtlanMetricsAdapter()
+            second = AtlanMetricsAdapter()
+        shared_loop.start.call_args.args[0].close()
+        assert AtlanObservability._periodic_flush_owners[AtlanMetricsAdapter] is owner
+        batch_flush = mock.MagicMock(name="second adapter's batch flush")
+        second._flush_tasks.add(batch_flush)
+
+        with mock.patch(
+            "application_sdk.observability.observability._cancel_flush_task_for_testing"
+        ) as cancel:
+            AtlanMetricsAdapter._reset_for_testing()
+
+        cancelled = [call.args[0] for call in cancel.call_args_list]
+        assert batch_flush in cancelled
+
+
+def test_create_metrics_adapter_starts_no_flusher_and_restores_registration():
+    """The fixture must never start a real flusher, and must leave the
+    class's flush registration as it found it."""
+    with metrics_flush_owner(None):
         with mock.patch(
             "application_sdk.observability.observability.observability_loop"
         ) as shared_loop:
@@ -230,9 +289,7 @@ def test_create_metrics_adapter_starts_no_flusher_and_restores_flag():
                 pass
 
         shared_loop.start.assert_not_called()
-        assert AtlanMetricsAdapter._flush_task_started is False
-    finally:
-        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
+        assert AtlanMetricsAdapter not in AtlanObservability._periodic_flush_owners
 
 
 def test_export_record_sends_to_otel_and_console():
@@ -240,7 +297,7 @@ def test_export_record_sends_to_otel_and_console():
     logger after the consolidation — Prometheus is unconditional."""
     with create_metrics_adapter() as metrics_adapter:
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.COUNTER,
@@ -263,7 +320,7 @@ def test_send_to_otel_counter():
             mock_create.return_value = mock_counter
 
             record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="test_counter",
                 value=42.0,
                 type=MetricType.COUNTER,
@@ -289,7 +346,7 @@ def test_send_to_otel_gauge():
             mock_create.return_value = mock_gauge
 
             record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="test_gauge",
                 value=42.0,
                 type=MetricType.GAUGE,
@@ -317,7 +374,7 @@ def test_send_to_otel_histogram():
         mock_create.return_value = mock_histogram
 
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_histogram",
             value=42.0,
             type=MetricType.HISTOGRAM,
@@ -353,21 +410,21 @@ def test_send_to_otel_normalizes_optional_metadata():
             mock_histogram.return_value = mock_histogram_instance
 
             counter_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="optional_counter",
                 value=1.0,
                 type=MetricType.COUNTER,
                 labels={},
             )
             gauge_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="optional_gauge",
                 value=2.0,
                 type=MetricType.GAUGE,
                 labels={},
             )
             histogram_record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="optional_histogram",
                 value=3.0,
                 type=MetricType.HISTOGRAM,
@@ -402,14 +459,12 @@ def test_record_metric_with_optional_metadata_uses_real_otel_meter():
     """Regression test for OTel rejecting None unit or description."""
     from opentelemetry.sdk.metrics import MeterProvider
 
-    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
-    AtlanMetricsAdapter._flush_task_started = True
-    try:
+    with metrics_flush_owner(_FLUSH_ALREADY_RUNNING):
         metrics_adapter = AtlanMetricsAdapter()
         metrics_adapter.meter = MeterProvider().get_meter("test_optional_metadata")
 
         with mock.patch(
-            "application_sdk.observability.metrics_adaptor.logging.error"
+            "application_sdk.observability.metrics_adaptor.self_failure_logger.warning"
         ) as mock_error:
             metrics_adapter.record_metric(
                 name="optional_metadata_counter",
@@ -419,8 +474,6 @@ def test_record_metric_with_optional_metadata_uses_real_otel_meter():
             )
 
         mock_error.assert_not_called()
-    finally:
-        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
 
 
 def test_send_to_otel_filters_non_scalar_labels():
@@ -431,7 +484,7 @@ def test_send_to_otel_filters_non_scalar_labels():
             mock_create.return_value = mock_counter
 
             record = MetricRecord(
-                timestamp=datetime.now().timestamp(),
+                timestamp=datetime.now(UTC).timestamp(),
                 name="test_counter",
                 value=1.0,
                 type=MetricType.COUNTER,
@@ -468,7 +521,7 @@ def test_log_to_console():
 
         # Create a test metric record
         metric_record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.GAUGE,
@@ -525,7 +578,7 @@ def test_export_record_with_segment_write_key():
                 adapter = AtlanMetricsAdapter()
 
                 record = MetricRecord(
-                    timestamp=datetime.now().timestamp(),
+                    timestamp=datetime.now(UTC).timestamp(),
                     name="test_metric",
                     value=42.0,
                     type=MetricType.COUNTER,
@@ -554,7 +607,7 @@ def test_export_record_without_segment_write_key():
         mock.patch.object(metrics_adapter, "_log_to_console") as mock_log,
     ):
         record = MetricRecord(
-            timestamp=datetime.now().timestamp(),
+            timestamp=datetime.now(UTC).timestamp(),
             name="test_metric",
             value=42.0,
             type=MetricType.COUNTER,
@@ -665,8 +718,8 @@ class TestPrometheusMetrics:
     """
 
     def test_prometheus_reader_attached_to_meter_provider(self):
-        AtlanMetricsAdapter._flush_task_started = False
         with (
+            metrics_flush_owner(_FLUSH_ALREADY_RUNNING),
             mock.patch(
                 "application_sdk.observability.metrics_adaptor.metrics.set_meter_provider"
             ),
@@ -689,8 +742,8 @@ class TestPrometheusMetrics:
 
     def test_otel_setup_failure_disables_metric_send_spam(self):
         AtlanMetricsAdapter._reset_for_testing()
-        AtlanMetricsAdapter._flush_task_started = True
         with (
+            metrics_flush_owner(_FLUSH_ALREADY_RUNNING),
             mock.patch(
                 "application_sdk.observability.metrics_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
@@ -700,7 +753,7 @@ class TestPrometheusMetrics:
                 side_effect=RuntimeError("reader boom"),
             ),
             mock.patch(
-                "application_sdk.observability.metrics_adaptor.logging.error"
+                "application_sdk.observability.metrics_adaptor.logging.warning"
             ) as mock_error,
         ):
             adapter = AtlanMetricsAdapter()
@@ -713,8 +766,12 @@ class TestPrometheusMetrics:
                 labels={},
             )
 
-        assert mock_error.call_count == 1
-        assert mock_error.call_args.args[0] == "Failed to setup OTel meter provider"
+        setup_failures = [
+            call
+            for call in mock_error.call_args_list
+            if call.args[0] == "Failed to setup OTel meter provider"
+        ]
+        assert len(setup_failures) == 1
 
 
 # ---------------------------------------------------------------------------

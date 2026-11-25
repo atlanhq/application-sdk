@@ -143,18 +143,21 @@ class TestStateStoreError:
 
     def test_default_error_code(self) -> None:
         """Test that default error code is STATE_STORE_ERROR."""
-        from application_sdk.errors import STATE_STORE_ERROR
+        from application_sdk.errors._legacy_codes import STATE_STORE_ERROR
 
         err = StateStoreError("test")
-        assert err.error_code == STATE_STORE_ERROR
+        with pytest.warns(DeprecationWarning, match="error_code is deprecated"):
+            assert err.error_code == STATE_STORE_ERROR
 
     def test_custom_error_code(self) -> None:
         """Test that a custom error code can be provided."""
-        from application_sdk.errors import ErrorCode
+        from application_sdk.errors._legacy_codes import ErrorCode
 
-        custom = ErrorCode("TST", 99)
-        err = StateStoreError("test", error_code=custom)
-        assert err.error_code == custom
+        with pytest.warns(DeprecationWarning, match="ErrorCode is deprecated"):
+            custom = ErrorCode("TST", 99)
+        with pytest.warns(DeprecationWarning, match="error_code= keyword"):
+            err = StateStoreError("test", error_code=custom)
+        assert str(err).startswith("[AAF-TST-099] test")
 
     @pytest.mark.parametrize(
         "key,op",

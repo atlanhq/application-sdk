@@ -50,6 +50,19 @@ class TestEventInterceptor:
         result = interceptor.workflow_interceptor_class(mock_input)
         assert result is EventWorkflowInboundInterceptor
 
+    def test_activity_events_off_leaves_activities_unwrapped(self) -> None:
+        """The worker's events-off value still stops activity start/end
+        events; those are not workflow commands, so replay is unaffected."""
+        mock_next = mock.MagicMock()
+        interceptor = EventInterceptor(activity_events=False)
+        assert interceptor.intercept_activity(mock_next) is mock_next
+        # The workflow side stays, so the worker can replay a run that had
+        # events on.
+        assert (
+            interceptor.workflow_interceptor_class(mock.MagicMock())
+            is EventWorkflowInboundInterceptor
+        )
+
     def test_workflow_interceptor_class_never_returns_none(self) -> None:
         interceptor = EventInterceptor()
         mock_input = mock.MagicMock()
@@ -797,6 +810,49 @@ class TestPublishEventViaBinding:
 class TestEventWorkflowInboundInterceptor:
     """Tests for EventWorkflowInboundInterceptor.execute_workflow."""
 
+    async def test_a_run_pinned_with_events_off_publishes_nothing(self) -> None:
+        """The run's pinned flag decides, not the worker's: this interceptor
+        is registered on every worker, so a run pinned off schedules no
+        publish_event even though the interceptor is in the chain."""
+        from application_sdk.execution._temporal.run_flags import _RUN_FLAGS, RunFlags
+
+        next_iface = mock.AsyncMock()
+        next_iface.execute_workflow = mock.AsyncMock(return_value="ok")
+        interceptor = EventWorkflowInboundInterceptor(next_iface)
+        execute_activity = mock.AsyncMock()
+        token = _RUN_FLAGS.set(RunFlags(events=False, cleanup=True))
+        try:
+            with mock.patch.object(
+                events_module.workflow, "execute_activity", new=execute_activity
+            ):
+                result = await interceptor.execute_workflow(mock.MagicMock())
+        finally:
+            _RUN_FLAGS.reset(token)
+
+        assert result == "ok"
+        execute_activity.assert_not_awaited()
+
+    async def test_a_run_pinned_with_events_on_publishes_start_and_end(self) -> None:
+        from application_sdk.execution._temporal.run_flags import _RUN_FLAGS, RunFlags
+
+        next_iface = mock.AsyncMock()
+        next_iface.execute_workflow = mock.AsyncMock(return_value="ok")
+        interceptor = EventWorkflowInboundInterceptor(next_iface)
+        execute_activity = mock.AsyncMock()
+        token = _RUN_FLAGS.set(RunFlags(events=True, cleanup=False))
+        try:
+            with (
+                mock.patch.object(events_module.workflow, "time", return_value=1.0),
+                mock.patch.object(
+                    events_module.workflow, "execute_activity", new=execute_activity
+                ),
+            ):
+                await interceptor.execute_workflow(mock.MagicMock())
+        finally:
+            _RUN_FLAGS.reset(token)
+
+        assert execute_activity.await_count == 2
+
     async def test_success_emits_start_and_end_events(self) -> None:
         next_iface = mock.AsyncMock()
         next_iface.execute_workflow = mock.AsyncMock(return_value="ok")
@@ -892,7 +948,7 @@ class TestEventWorkflowInboundInterceptor:
 # ---------------------------------------------------------------------------
 
 from application_sdk.infrastructure.bindings import (  # noqa: E402 — test-section import
-    BindingError,
+    BindingUnavailableError,
 )
 
 _NON_DELIVERY = 'Failed to invoke binding: 500 (dapr errorCode=ERR_INVOKE_OUTPUT_BINDING: Post "https://t/api/eventingress/": EOF)'
@@ -995,7 +1051,9 @@ class TestDirectHttpFallback:
     ):
         _component(tmp_path)
         infra = self._infra(
-            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+            BindingUnavailableError(
+                message=_NON_DELIVERY, binding_name="eventstore", operation="create"
+            )
         )
         client = _http_client()
         token_service = mock.MagicMock()
@@ -1041,7 +1099,9 @@ class TestDirectHttpFallback:
     async def test_worker_start_budget_is_passed_through(self, tmp_path):
         _component(tmp_path)
         infra = self._infra(
-            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+            BindingUnavailableError(
+                message=_NON_DELIVERY, binding_name="eventstore", operation="create"
+            )
         )
         client = _http_client()
         p = self._patches(infra, client)
@@ -1065,7 +1125,9 @@ class TestDirectHttpFallback:
         double-deliver, so the fallback must not fire."""
         _component(tmp_path)
         infra = self._infra(
-            BindingError(_AMBIGUOUS, binding_name="eventstore", operation="create")
+            BindingUnavailableError(
+                message=_AMBIGUOUS, binding_name="eventstore", operation="create"
+            )
         )
         client = _http_client()
         p = self._patches(infra, client)
@@ -1076,7 +1138,7 @@ class TestDirectHttpFallback:
             mock.patch("httpx.AsyncClient", return_value=client) as http_client,
             p[4] as log,
         ):
-            with pytest.raises(BindingError):
+            with pytest.raises(BindingUnavailableError):
                 await _publish_event_via_binding(self._event())
         http_client.assert_not_called()
         assert any(
@@ -1087,7 +1149,9 @@ class TestDirectHttpFallback:
     async def test_fallback_disabled_reraises(self, tmp_path):
         _component(tmp_path)
         infra = self._infra(
-            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+            BindingUnavailableError(
+                message=_NON_DELIVERY, binding_name="eventstore", operation="create"
+            )
         )
         client = _http_client()
         p = self._patches(infra, client, enabled=False)
@@ -1098,15 +1162,15 @@ class TestDirectHttpFallback:
             mock.patch("httpx.AsyncClient", return_value=client) as http_client,
             p[4],
         ):
-            with pytest.raises(BindingError):
+            with pytest.raises(BindingUnavailableError):
                 await _publish_event_via_binding(self._event())
         http_client.assert_not_called()
 
     async def test_fallback_failure_keeps_dapr_cause_and_suspends(self, tmp_path):
         _component(tmp_path)
         dapr_cause = RuntimeError("EOF from daprd")
-        err = BindingError(
-            _NON_DELIVERY,
+        err = BindingUnavailableError(
+            message=_NON_DELIVERY,
             binding_name="eventstore",
             operation="create",
             cause=dapr_cause,
@@ -1122,10 +1186,10 @@ class TestDirectHttpFallback:
             mock.patch("httpx.AsyncClient", return_value=client) as http_client,
             p[4] as log,
         ):
-            with pytest.raises(BindingError) as exc:
+            with pytest.raises(BindingUnavailableError) as exc:
                 await _publish_event_via_binding(self._event())
             # second event during the backoff: no HTTP attempt, logged as suspended
-            with pytest.raises(BindingError):
+            with pytest.raises(BindingUnavailableError):
                 await _publish_event_via_binding(self._event())
         assert exc.value.__cause__ is dapr_cause  # original Dapr cause preserved
         assert any("tunnel closed" in n for n in getattr(exc.value, "__notes__", []))
@@ -1142,7 +1206,9 @@ class TestDirectHttpFallback:
         never guess a URL for it."""
         _component(tmp_path, type_="bindings.localstorage", url=None)
         infra = self._infra(
-            BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+            BindingUnavailableError(
+                message=_NON_DELIVERY, binding_name="eventstore", operation="create"
+            )
         )
         client = _http_client()
         p = self._patches(infra, client)
@@ -1156,7 +1222,7 @@ class TestDirectHttpFallback:
                 "application_sdk.constants.ATLAN_BASE_URL", "https://should-not-be-used"
             ),
         ):
-            with pytest.raises(BindingError):
+            with pytest.raises(BindingUnavailableError):
                 await _publish_event_via_binding(self._event())
         http_client.assert_not_called()
         assert str(log.error.call_args.args[0]).startswith("FALLBACK UNAVAILABLE")
@@ -1228,7 +1294,10 @@ class TestDirectHttpFallback:
         ],
     )
     def test_non_delivery_classifier(self, text, expected):
-        assert events_module._proves_non_delivery(BindingError(text)) is expected
+        assert (
+            events_module._proves_non_delivery(BindingUnavailableError(message=text))
+            is expected
+        )
 
 
 class TestPublishEventIsAtLeastOnce:
@@ -1245,7 +1314,9 @@ class TestPublishEventIsAtLeastOnce:
             EventPublishError,
         )
 
-        err = BindingError(text, binding_name="eventstore", operation="create")
+        err = BindingUnavailableError(
+            message=text, binding_name="eventstore", operation="create"
+        )
         with mock.patch.object(
             events_module,
             "_publish_event_via_binding",

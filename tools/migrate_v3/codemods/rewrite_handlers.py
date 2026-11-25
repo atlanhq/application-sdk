@@ -21,12 +21,10 @@ from __future__ import annotations
 
 import libcst as cst
 
+from tools.migrate_v3 import HANDLER_BASE_NAMES
 from tools.migrate_v3.codemods import BaseCodemod
 from tools.migrate_v3.contract_mapping import resolve_method_contract
 
-_HANDLER_BASES = frozenset(
-    {"Handler", "BaseHandler", "DefaultHandler", "BaseSQLHandler", "HandlerInterface"}
-)
 _HANDLER_METHODS = frozenset({"test_auth", "preflight_check", "fetch_metadata"})
 
 
@@ -54,7 +52,7 @@ class RewriteHandlersCodemod(BaseCodemod):
 
     def visit_ClassDef(self, node: cst.ClassDef) -> bool:
         is_handler = any(
-            _extract_base_name(base) in _HANDLER_BASES for base in node.bases
+            _extract_base_name(base) in HANDLER_BASE_NAMES for base in node.bases
         )
         self._handler_class_stack.append(is_handler)
         return True

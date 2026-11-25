@@ -16,7 +16,6 @@ import pytest
 
 from application_sdk.app import base as base_module
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import (
     DeclaredFile,
@@ -52,17 +51,7 @@ def _ref(entity: str, *, prefix: str = SOURCE) -> FileReference:
     )
 
 
-class _ResetsRegistries:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-
-class TestUploadRefs(_ResetsRegistries):
+class TestUploadRefs:
     @pytest.fixture(autouse=True)
     def _validation(self):
         # The pre-handoff validation hook is covered in
@@ -382,7 +371,7 @@ class TestUploadRefs(_ResetsRegistries):
         verify.assert_not_awaited()
 
 
-class TestUploadRefsFeedsTheStallWatchdog(_ResetsRegistries):
+class TestUploadRefsFeedsTheStallWatchdog:
     """``upload_refs`` takes the ADR-0018 backstop (pinned in
     ``test_framework_task_timeouts.py``) and adds no progress hook of its own,
     because the transfer layer already emits one per file. Pin that premise."""
@@ -406,7 +395,7 @@ class TestUploadRefsFeedsTheStallWatchdog(_ResetsRegistries):
         )
 
 
-class TestDeliveredDirectoryRefsStayVerifiable(_ResetsRegistries):
+class TestDeliveredDirectoryRefsStayVerifiable:
     """``upload_refs`` verifies its own delivery, and that check tells a
     directory from a file partly by the trailing slash on the key.
 

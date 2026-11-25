@@ -496,6 +496,55 @@ use the install path, and neither can the single-tenant fallback (which has no
 entry to add the field to); the `E2E Tenant Install` workflow's `tenant_id` input
 covers one-off runs in both cases.
 
+### A failed install restores the previous version
+
+The e2e tenants are a shared pool, so `prepare-tenant` must not leave a broken
+build behind. Before it publishes anything, `e2e_tenant_app.py install` records
+the version the tenant runs (`previous_version`, `previous_version_id`). If any
+later step fails, *Restore the previous version* runs
+`e2e_tenant_app.py restore`. That force-installs the recorded version_id and
+fails unless the tenant's install record names it again and the app pod no
+longer reports the build under test. The install record alone is not proof,
+because the install writes it and nothing revisits it. The prior version is
+recorded by UUID even when its version string cannot be read. The step is skipped
+when the app was not installed before, because uninstall is not reliable
+(DISTR-921). It has its own 15-minute timeout on top of the install budget,
+which is why the job allows 65 minutes and the lease TTL is 16800s. The install
+step has its own 45-minute timeout so that a hung install fails the step rather
+than timing out the job: `failure()` is false on a timed-out (cancelled) job, so
+the restore would otherwise be skipped.
+
+This was added after an ai-memory test build failed `prepare-tenant` and was
+left installed on two pool tenants. Its own `ClusterIP` Service clashed with the
+host-side `ExternalName` left by the API server consolidation, and the vcluster
+syncer recreated the Service many times a second until it was rolled back by
+hand (CONAT-7994).
+
+### What the e2e registration sends
+
+`prepare-tenant` registers the version under test through the same body builder
+the release path uses (`.github/scripts/marketplace_publish_body.py`; the
+release's `build_and_publish/publish.py` maps its env onto the same
+`PublishRequest`), so the e2e validates the registration shape that ships. Its
+inputs come from the same producers as a release's: `parse_atlan_yaml.py` for
+`deploy_config`, `self_deployed_runtime` (`enable_sdr`), `sdk_version`,
+`entrypoints` and `release_model`, and `build_and_publish/prepare.py app-configs`
+for the connector forms under `app/generated/`.
+
+Three fields differ from a release, each on purpose:
+
+| Field | Release | e2e | Why |
+|---|---|---|---|
+| `allowed_tenants` / `target_channel` | channel, or the dispatch's tenants | always `allowed_tenants: [<this tenant>]` | A per-PR version must never reach a real tenant. |
+| `commit_sha` | sent | never sent | An application-sdk PR dispatches e2e runs that build a connector at its unchanged HEAD — the commit its release came from. Sending it would register e2e versions GM cannot tell apart from that release when it resolves a worker's `commit_sha`. The e2e image does not bake `app/atlan_build.json` either, so nothing on that path would read it. |
+| `config` | `deploy:` block | `deploy:` block plus the tenant's store-assertion override | FND-3571; scoped to the e2e tenant's own key. |
+
+`test_prepare_tenant_wiring.py::test_install_step_passes_every_release_field`
+fails when a `PublishRequest` field is neither passed by the install step nor
+listed there with its reason, so a new release field cannot silently go missing
+from the e2e registration. The manual `E2E Tenant Install` workflow is a one-off
+operator tool that takes its fields as dispatch inputs, and is not held to it.
+
 ### When the FAILED verdict is about somebody else's pod
 
 LM's deployment health check is **namespace-scoped**: it reports `Pods failed in
@@ -1979,7 +2028,7 @@ Three `ClassVar`s tune it, and the defaults suit every connector:
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
-2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on a `/e2e` PR comment or a `run_e2e=true` dispatch input). Re-run `bootstrap --resync` rather than copying by hand: it also writes `test-commands.yaml`, which `/e2e` needs.
+2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on a `/e2e` PR comment or a `run_e2e=true` dispatch input). Re-run `bootstrap --resync` rather than copying by hand: it also writes `test-commands.yaml`, which `/e2e` needs, and `connector-reviewer.yaml`, which `/review` (the connector reviewer) needs.
 3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`. On a bundle app whose entrypoints need different source containers, name the overlay per suite instead — `.github/e2e/<suite>-docker-compose.yaml`, see [When the entrypoints are not equally testable](#when-the-entrypoints-are-not-equally-testable-fnd-1865).
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2ETest` subclass for SQL connectors, otherwise the generated `BaseE2ETest` subclass — see [Which harness](#which-harness)). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 5. **Repo secrets**: set the 7 entries from the table above.

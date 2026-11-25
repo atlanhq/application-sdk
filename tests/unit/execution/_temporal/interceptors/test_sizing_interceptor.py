@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -24,6 +24,7 @@ from application_sdk.observability import sizing_inputs as sizing_inputs_module
 from application_sdk.observability.cgroup import ContainerTrace
 from application_sdk.observability.sizing import SizingObservation
 from application_sdk.observability.sizing_inputs import report_input_bytes
+from tests.unit._doubles import ActivityInfo, ExecuteInput
 
 _ACTIVITY_TARGET = "application_sdk.execution._temporal.interceptors.sizing.activity"
 _TRACKER_TARGET = (
@@ -43,25 +44,12 @@ _LOGGER_TARGET = "application_sdk.execution._temporal.interceptors.sizing.logger
 
 
 @dataclass
-class MockActivityInfo:
+class MockActivityInfo(ActivityInfo):
+    """A ``merge`` activity, the one the interceptor under test is told to size."""
+
     activity_type: str = "merge"
-    activity_id: str = "act-id"
     task_queue: str = "app-worker"
-    workflow_id: str = "wf-id"
-    workflow_run_id: str = "run-id"
     workflow_type: str = "MergeWorkflow"
-    attempt: int = 1
-    started_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    scheduled_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    start_to_close_timeout: timedelta | None = None
-    schedule_to_close_timeout: timedelta | None = None
-    heartbeat_timeout: timedelta | None = None
-
-
-@dataclass
-class MockExecuteActivityInput:
-    headers: dict = field(default_factory=dict)
-    args: list = field(default_factory=list)
 
 
 def _tracker(trace: ContainerTrace, *, fill_on_exit: ContainerTrace | None = None):
@@ -274,12 +262,6 @@ class TestRecordObservation:
 
 
 class TestSizingInterceptor:
-    @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
-
     async def test_returns_the_activity_result(self, mock_next):
         interceptor = _SizingActivityInboundInterceptor(
             mock_next, 1.0, frozenset({"merge"})
@@ -290,9 +272,7 @@ class TestSizingInterceptor:
             patch(_RECORD_TARGET),
         ):
             mock_act.info.return_value = MockActivityInfo()
-            assert (
-                await interceptor.execute_activity(MockExecuteActivityInput()) == "ok"
-            )
+            assert await interceptor.execute_activity(ExecuteInput()) == "ok"
 
     async def test_reads_the_trace_after_the_tracker_exits(self, mock_next):
         """Recording inside the ``async with`` would capture an empty trace and
@@ -332,7 +312,7 @@ class TestSizingInterceptor:
         ):
             mock_act.info.return_value = MockActivityInfo()
             with pytest.raises(ValueError, match="boom"):
-                await interceptor.execute_activity(MockExecuteActivityInput())
+                await interceptor.execute_activity(ExecuteInput())
 
         obs = mock_record.call_args[0][0]
         assert obs.outcome == "ERROR"
@@ -351,7 +331,7 @@ class TestSizingInterceptor:
             mock_act.info.return_value = MockActivityInfo(
                 activity_type="fetch_entities", task_queue="heavy", attempt=3
             )
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         obs = mock_record.call_args[0][0]
         assert obs.activity_type == "fetch_entities"
@@ -380,7 +360,7 @@ class TestSizingInterceptor:
             patch(_RECORD_TARGET),
         ):
             mock_act.info.return_value = MockActivityInfo()
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         assert captured["interval"] == 0.25
 
@@ -389,19 +369,13 @@ class TestTelemetryNeverChangesTheOutcome:
     """The row is recorded after the activity finished; nothing there may replace
     its result, or Temporal retries work whose side effects already ran."""
 
-    @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
-
     @staticmethod
     def _interceptor(mock_next):
         return _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset({"merge"}))
 
     @staticmethod
     def _input():
-        return MockExecuteActivityInput(args=[object(), object()])
+        return ExecuteInput(args=[object(), object()])
 
     async def test_a_raising_describe_inputs_still_returns_the_result(self, mock_next):
         trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
@@ -562,19 +536,13 @@ class TestWalkBudget:
 
 
 class TestWalkIsolation:
-    @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
-
     @staticmethod
     def _interceptor(mock_next):
         return _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset({"merge"}))
 
     @staticmethod
     def _input():
-        return MockExecuteActivityInput(args=[object(), object()])
+        return ExecuteInput(args=[object(), object()])
 
     async def test_no_time_left_skips_the_walk(self, mock_next):
         info = MockActivityInfo(
@@ -685,9 +653,7 @@ class TestAgainstTheRealTracker:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo()
-            assert (
-                await interceptor.execute_activity(MockExecuteActivityInput()) == "ok"
-            )
+            assert await interceptor.execute_activity(ExecuteInput()) == "ok"
 
         obs = mock_record.call_args[0][0]
         assert obs.peak_memory_bytes == 15000
@@ -717,7 +683,7 @@ class TestAgainstTheRealTracker:
             patch(_HISTOGRAM_TARGET) as mock_histogram,
         ):
             mock_act.info.return_value = MockActivityInfo()
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         mock_log.info.assert_not_called()
         mock_histogram.assert_not_called()
@@ -725,12 +691,6 @@ class TestAgainstTheRealTracker:
 
 class TestInputSizeReachesTheRecord:
     """The driver variable has to arrive on the same row as the peak."""
-
-    @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
 
     def _input_with(self, tmp_path, size: int):
         from pydantic import BaseModel
@@ -745,9 +705,7 @@ class TestInputSizeReachesTheRecord:
 
         # args[0] is TaskContext, args[1] is the Input — matching the v3
         # activity signature the interceptor reads.
-        return MockExecuteActivityInput(
-            args=[object(), _In(ref=FileReference(local_path=str(f)))]
-        )
+        return ExecuteInput(args=[object(), _In(ref=FileReference(local_path=str(f)))])
 
     async def _run(self, mock_next, activity_input):
         interceptor = _SizingActivityInboundInterceptor(
@@ -770,15 +728,13 @@ class TestInputSizeReachesTheRecord:
 
     async def test_no_input_args_is_not_an_error(self, mock_next):
         """Activities with no Input still produce a peak row, just no driver."""
-        obs = await self._run(mock_next, MockExecuteActivityInput())
+        obs = await self._run(mock_next, ExecuteInput())
         assert obs.input_bytes is None
         assert obs.peak_memory_bytes == 3000
 
     async def test_unsizeable_input_still_records_the_peak(self, mock_next):
         """An input the sizer cannot read must not cost the peak measurement."""
-        obs = await self._run(
-            mock_next, MockExecuteActivityInput(args=[object(), "not a model"])
-        )
+        obs = await self._run(mock_next, ExecuteInput(args=[object(), "not a model"]))
         assert obs.input_bytes is None
         assert obs.peak_memory_bytes == 3000
 
@@ -794,12 +750,6 @@ class TestConcurrencyAttribution:
         yield
         CENSUS._reset_for_testing()
 
-    @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
-
     async def test_alone_allows_the_watermark_reset(self, mock_next):
         tracker = _tracker(ContainerTrace(peak_memory_bytes=1))
         interceptor = _SizingActivityInboundInterceptor(
@@ -811,7 +761,7 @@ class TestConcurrencyAttribution:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         assert tracker.calls[0]["allow_watermark_reset"] is True
         obs = mock_record.call_args[0][0]
@@ -842,12 +792,10 @@ class TestConcurrencyAttribution:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            task = asyncio.create_task(
-                first.execute_activity(MockExecuteActivityInput())
-            )
+            task = asyncio.create_task(first.execute_activity(ExecuteInput()))
             await started.wait()
             # Second activity enters while the first is still in flight.
-            await second.execute_activity(MockExecuteActivityInput())
+            await second.execute_activity(ExecuteInput())
             release.set()
             await task
 
@@ -880,11 +828,9 @@ class TestConcurrencyAttribution:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            task = asyncio.create_task(
-                first.execute_activity(MockExecuteActivityInput())
-            )
+            task = asyncio.create_task(first.execute_activity(ExecuteInput()))
             await started.wait()
-            await second.execute_activity(MockExecuteActivityInput())
+            await second.execute_activity(ExecuteInput())
             release.set()
             await task
 
@@ -904,7 +850,7 @@ class TestConcurrencyAttribution:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         obs = mock_record.call_args[0][0]
         assert obs.pod == "ae-heavy-7f9c"
@@ -923,7 +869,7 @@ class TestConcurrencyAttribution:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         assert mock_record.call_args[0][0].pod == "worker-abc"
 
@@ -942,7 +888,7 @@ class TestConcurrencyAttribution:
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
             with pytest.raises(ValueError):
-                await interceptor.execute_activity(MockExecuteActivityInput())
+                await interceptor.execute_activity(ExecuteInput())
 
         assert CENSUS.active() == 0
 
@@ -976,13 +922,11 @@ class TestConcurrencyAttribution:
         ):
             # An activity NOT on the allow-list, holding the pod.
             mock_act.info.return_value = MockActivityInfo(activity_type="write_state")
-            task = asyncio.create_task(
-                untracked.execute_activity(MockExecuteActivityInput())
-            )
+            task = asyncio.create_task(untracked.execute_activity(ExecuteInput()))
             await started.wait()
             # Now a measured one runs alongside it.
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            await tracked.execute_activity(MockExecuteActivityInput())
+            await tracked.execute_activity(ExecuteInput())
             release.set()
             await task
 
@@ -1001,7 +945,7 @@ class TestConcurrencyAttribution:
         )
         with patch(_ACTIVITY_TARGET) as mock_act:
             mock_act.info.return_value = MockActivityInfo(activity_type="other")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
 
         assert CENSUS.active() == 0
 
@@ -1010,17 +954,11 @@ async def interceptor_execute(mock_next):
     interceptor = _SizingActivityInboundInterceptor(
         mock_next, 1.0, frozenset({"merge"})
     )
-    return await interceptor.execute_activity(MockExecuteActivityInput())
+    return await interceptor.execute_activity(ExecuteInput())
 
 
 class TestActivityAllowList:
     """Only the activities a dev names get measured."""
-
-    @pytest.fixture
-    def mock_next(self):
-        n = AsyncMock()
-        n.execute_activity = AsyncMock(return_value="ok")
-        return n
 
     async def test_unselected_activity_is_never_measured(self, mock_next):
         interceptor = _SizingActivityInboundInterceptor(
@@ -1032,9 +970,7 @@ class TestActivityAllowList:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="write_state")
-            assert (
-                await interceptor.execute_activity(MockExecuteActivityInput()) == "ok"
-            )
+            assert await interceptor.execute_activity(ExecuteInput()) == "ok"
 
         # Asserting on the tracker, not the record: filtering later would also
         # record nothing while still paying setup on every activity.
@@ -1051,7 +987,7 @@ class TestActivityAllowList:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
         mock_record.assert_called_once()
 
     async def test_empty_allow_list_measures_nothing(self, mock_next):
@@ -1063,7 +999,7 @@ class TestActivityAllowList:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
         mock_tracker.assert_not_called()
         mock_record.assert_not_called()
 
@@ -1077,7 +1013,7 @@ class TestActivityAllowList:
             patch(_RECORD_TARGET) as mock_record,
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="anything")
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
         mock_record.assert_called_once()
 
     async def test_bare_name_matches_the_qualified_activity_type(self, mock_next):
@@ -1094,7 +1030,7 @@ class TestActivityAllowList:
             mock_act.info.return_value = MockActivityInfo(
                 activity_type="automation-engine:merge"
             )
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
         mock_record.assert_called_once()
         assert mock_record.call_args[0][0].activity_type == "automation-engine:merge"
 
@@ -1111,7 +1047,7 @@ class TestActivityAllowList:
             mock_act.info.return_value = MockActivityInfo(
                 activity_type="automation-engine:merge"
             )
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
         mock_record.assert_called_once()
 
     async def test_qualified_entry_does_not_match_another_app(self, mock_next):
@@ -1127,7 +1063,7 @@ class TestActivityAllowList:
             mock_act.info.return_value = MockActivityInfo(
                 activity_type="publish-app:merge"
             )
-            await interceptor.execute_activity(MockExecuteActivityInput())
+            await interceptor.execute_activity(ExecuteInput())
         mock_tracker.assert_not_called()
         mock_record.assert_not_called()
 
@@ -1140,7 +1076,7 @@ class TestActivityAllowList:
         with patch(_ACTIVITY_TARGET) as mock_act:
             mock_act.info.return_value = MockActivityInfo(activity_type="other")
             with pytest.raises(ValueError, match="boom"):
-                await interceptor.execute_activity(MockExecuteActivityInput())
+                await interceptor.execute_activity(ExecuteInput())
 
 
 class TestSizingSettings:

@@ -34,19 +34,13 @@ class TestSqlQueryExtractorStructure:
     def test_run_accepts_query_extraction_input(self) -> None:
         from typing import get_type_hints
 
-        original_run = getattr(
-            SqlQueryExtractor, "_original_run", SqlQueryExtractor.run
-        )
-        hints = get_type_hints(original_run)
+        hints = get_type_hints(SqlQueryExtractor.run)
         assert hints.get("input") is QueryExtractionInput
 
     def test_run_returns_query_extraction_output(self) -> None:
         from typing import get_type_hints
 
-        original_run = getattr(
-            SqlQueryExtractor, "_original_run", SqlQueryExtractor.run
-        )
-        hints = get_type_hints(original_run)
+        hints = get_type_hints(SqlQueryExtractor.run)
         assert hints.get("return") is QueryExtractionOutput
 
     def test_get_query_batches_input_type(self) -> None:

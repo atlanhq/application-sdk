@@ -4,7 +4,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import (
@@ -24,18 +25,18 @@ from application_sdk.clients.sql_errors import (
     UnsupportedSqlCursorError,
 )
 from application_sdk.testing.hypothesis.strategies.clients.sql import (
+    sql_connection_string_strategy,
     sql_credentials_strategy,
+    sql_error_strategy,
     sqlalchemy_connect_args_strategy,
 )
-from application_sdk.testing.hypothesis.strategies.sql_client import (
-    mock_sql_query_result_strategy,
-    sql_connection_string_strategy,
-    sql_error_strategy,
-)
+from tests.unit._doubles import FakeClock, StopConnect, record_connect_params
 
 
-@pytest.fixture
-def sql_client():
+def _make_sql_client() -> BaseSQLClient:
+    """A fresh client. Property tests build one per example: a function-scoped
+    fixture is created once per test, so every example would mutate the same
+    client."""
     client = BaseSQLClient()
     client.DB_CONFIG = DatabaseConfig(
         template="test://{username}:{password}@{host}:{port}/{database}",
@@ -44,6 +45,11 @@ def sql_client():
     )
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
+
+
+@pytest.fixture
+def sql_client() -> BaseSQLClient:
+    return _make_sql_client()
 
 
 @patch("sqlalchemy.create_engine")
@@ -129,13 +135,12 @@ async def test_load_uses_run_in_thread_for_ping(
 @given(
     credentials=sql_credentials_strategy, connect_args=sqlalchemy_connect_args_strategy
 )
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_load_property_based(
-    sql_client: BaseSQLClient,
     credentials: dict[str, Any],
     connect_args: dict[str, Any],
 ):
     """Property-based test for loading with various credentials and connection arguments"""
+    sql_client = _make_sql_client()
     with patch("sqlalchemy.create_engine") as mock_create_engine:
         # Mock the engine and connection
         mock_engine = MagicMock()
@@ -291,11 +296,9 @@ async def test_run_query_with_error(
 
 
 @given(connection_string=sql_connection_string_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_connection_string_property_based(
-    sql_client: BaseSQLClient, connection_string: str
-):
+def test_connection_string_property_based(connection_string: str):
     """Property-based test for various connection string formats"""
+    sql_client = _make_sql_client()
     with patch("sqlalchemy.create_engine") as mock_create_engine:
         # Mock the engine and connection
         mock_engine = MagicMock()
@@ -331,60 +334,64 @@ def test_connection_string_property_based(
         assert sql_client.connection is None
 
 
-@given(query_result=mock_sql_query_result_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-@pytest.mark.skip(reason="Failing due to KeyError: 'col1'")
-async def test_run_query_property_based(
-    sql_client: BaseSQLClient,
-    query_result: dict[str, Any],
-):
-    """Property-based test for query execution with various result structures"""
+_COLUMN_NAMES = ("COL1", "COL2", "COL3")
+
+# Non-empty batches of rows shaped to the cursor's columns: an empty batch is
+# how ``fetchmany`` signals the end, so it can only come last.
+_query_batches_strategy = st.lists(
+    st.lists(
+        st.tuples(*(st.text() for _ in _COLUMN_NAMES)),
+        min_size=1,
+        max_size=5,
+    ),
+    max_size=5,
+)
+
+
+@given(batches=_query_batches_strategy)
+@settings(max_examples=25)
+async def test_run_query_property_based(batches: list[list[tuple[str, ...]]]):
+    """Every fetched row comes back once, in order, keyed by lower-cased column."""
+    sql_client = _make_sql_client()
+    sql_client.engine = MagicMock()
     with (
-        patch("sqlalchemy.text") as mock_text,
+        patch("sqlalchemy.text"),
         patch(
             "application_sdk.clients.sql.run_in_thread",
             new_callable=AsyncMock,
         ) as mock_run_in_thread,
     ):
-        # Mock the query text
-        query = "SELECT * FROM test_table"
-        mock_text.return_value = query
-
-        # Create mock cursor with dynamic column descriptions
+        mock_connection = MagicMock()
         mock_cursor = MagicMock()
-        mock_cursor.cursor.description = [
-            MagicMock(name=col["name"]) for col in query_result["columns"]
+        descriptions = []
+        for name in _COLUMN_NAMES:
+            description = MagicMock()
+            description.name = name
+            descriptions.append(description)
+        mock_cursor.cursor.description = descriptions
+
+        mock_run_in_thread.side_effect = [
+            mock_connection,  # engine.connect
+            mock_cursor,  # connection.execute
+            *batches,  # fetchmany, one batch per call
+            [],  # fetchmany: end of data
+            None,  # close
         ]
 
-        # Set up the connection
-        sql_client.connection = MagicMock()
-        sql_client.connection.execute.return_value = mock_cursor
+        yielded: list[list[dict[str, Any]]] = []
+        async for batch in sql_client.run_query("SELECT * FROM test_table"):
+            yielded.append(batch)
 
-        # Mock run_in_thread to return cursor and then batches
-        mock_run_in_thread.side_effect = [mock_cursor] + query_result["batches"] + [[]]
-
-        # Run run_query and collect all results
-        results: list[dict[str, Any]] = []
-        async for batch in sql_client.run_query(query):
-            results.extend(batch)
-
-        # Verify the results
-        expected_results: list[dict[str, Any]] = []
-        for batch in query_result["batches"]:
-            expected_results.extend(batch)
-
-        assert len(results) == len(expected_results)
-        for result_row, expected_row in zip(results, expected_results):
-            assert all(result_row[key] == value for key, value in expected_row.items())
+    keys = [name.lower() for name in _COLUMN_NAMES]
+    assert yielded == [[dict(zip(keys, row)) for row in batch] for batch in batches]
 
 
 @given(error_type=sql_error_strategy)
-@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_run_query_error_property_based(
-    sql_client: BaseSQLClient,
     error_type: str,
 ):
     """Property-based test for query execution with various error scenarios"""
+    sql_client = _make_sql_client()
     with (
         patch("sqlalchemy.text") as mock_text,
         patch(
@@ -630,38 +637,6 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
     assert (
         exc_info.value.message == "aws_role_arn is required for IAM role authentication"
     )
-
-
-@pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
-def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_config):
-    """Test connection string generation with compiled url"""
-    credentials = {
-        "extra": {
-            "compiled_url": "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-        }
-    }
-    sql_client_with_db_config.resolved_credentials = credentials
-
-    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-    assert conn_str == expected
-
-
-@pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
-def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect(
-    sql_client_with_db_config,
-):
-    """Test connection string generation with compiled url with invalid dialect"""
-    credentials = {
-        "extra": {
-            "compiled_url": "postgresql+psycopg2://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-        }
-    }
-    sql_client_with_db_config.resolved_credentials = credentials
-
-    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
-    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
-    assert conn_str == expected
 
 
 def test_get_sqlalchemy_connection_string_omits_none_parameters(
@@ -1378,32 +1353,9 @@ def test_sql_pandas_result_error_class_default_is_non_retryable():
 # --- RDS IAM token refresh on new connections ---------------------------------
 
 
-class _StopConnect(Exception):
-    """Raised by the recorder so no connect ever reaches a socket."""
-
-
-def _record_connect_params(engine: Any) -> list[dict[str, Any]]:
-    """Record each connect's driver keyword arguments, then stop it before any socket opens.
-
-    Registered after the refresh listener, so it sees what the driver would get.
-    """
-    from sqlalchemy import event
-
-    seen: list[dict[str, Any]] = []
-
-    def _record(
-        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
-    ) -> None:
-        seen.append(dict(cparams))
-        raise _StopConnect
-
-    event.listen(engine, "do_connect", _record)
-    return seen
-
-
 def _connect_params(engine: Any) -> dict[str, Any]:
-    seen = _record_connect_params(engine)
-    with pytest.raises(_StopConnect):
+    seen = record_connect_params(engine)
+    with pytest.raises(StopConnect):
         engine.raw_connection()
     from sqlalchemy import event
 
@@ -1415,14 +1367,6 @@ def _connect_params(engine: Any) -> dict[str, Any]:
 
 def _url(token: str) -> str:
     return f"postgresql+psycopg2://iam_user:{token}@127.0.0.1:1/db"
-
-
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 class _Tokens:
@@ -1446,7 +1390,7 @@ class TestFreshIamToken:
 
         return create_engine(_url("token-0"), connect_args=connect_args or {})
 
-    def _listen(self, engine: Any, tokens: _Tokens, clock: _Clock) -> None:
+    def _listen(self, engine: Any, tokens: _Tokens, clock: FakeClock) -> None:
         from sqlalchemy import event
 
         from application_sdk.clients.sql import _FreshIamToken
@@ -1458,7 +1402,7 @@ class TestFreshIamToken:
         )
 
     def test_keeps_the_engine_token_while_it_is_fresh(self) -> None:
-        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        engine, tokens, clock = self._engine(), _Tokens(), FakeClock()
         self._listen(engine, tokens, clock)
         clock.now += 9 * 60
 
@@ -1466,7 +1410,7 @@ class TestFreshIamToken:
         assert tokens.calls == 0
 
     def test_a_connect_after_the_token_ages_gets_a_new_one(self) -> None:
-        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        engine, tokens, clock = self._engine(), _Tokens(), FakeClock()
         self._listen(engine, tokens, clock)
         clock.now += 10 * 60
 
@@ -1479,7 +1423,7 @@ class TestFreshIamToken:
         assert params["dbname"] == "db"
 
     def test_the_new_token_is_reused_until_it_ages_too(self) -> None:
-        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        engine, tokens, clock = self._engine(), _Tokens(), FakeClock()
         self._listen(engine, tokens, clock)
         clock.now += 11 * 60
         assert _connect_params(engine)["password"] == "token-1"
@@ -1495,7 +1439,7 @@ class TestFreshIamToken:
         engine, tokens, clock = (
             self._engine({"password": "from-connect-args"}),
             _Tokens(),
-            _Clock(),
+            FakeClock(),
         )
         self._listen(engine, tokens, clock)
         clock.now += 11 * 60
@@ -1503,7 +1447,7 @@ class TestFreshIamToken:
         assert _connect_params(engine)["password"] == "from-connect-args"
 
     def test_a_failed_build_fails_the_connect(self) -> None:
-        engine, clock = self._engine(), _Clock()
+        engine, clock = self._engine(), FakeClock()
 
         def _fail() -> str:
             raise SqlAwsCredentialsError(message="no role")
@@ -1531,7 +1475,7 @@ def test_concurrent_connects_share_one_refresh() -> None:
 
     from application_sdk.clients.sql import _FreshIamToken
 
-    clock = _Clock()
+    clock = FakeClock()
     started, release = threading.Event(), threading.Event()
     calls: list[int] = []
 
@@ -1547,11 +1491,11 @@ def test_concurrent_connects_share_one_refresh() -> None:
         "do_connect",
         _FreshIamToken(_build, _url("token-0"), clock.now, clock=clock),
     )
-    seen = _record_connect_params(engine)
+    seen = record_connect_params(engine)
     clock.now += 11 * 60
 
     def _connect() -> None:
-        with pytest.raises(_StopConnect):
+        with pytest.raises(StopConnect):
             engine.raw_connection()
 
     first = threading.Thread(target=_connect)
@@ -1573,7 +1517,7 @@ def test_a_connect_waiting_on_a_failed_refresh_tries_itself() -> None:
 
     from application_sdk.clients.sql import _FreshIamToken
 
-    clock = _Clock()
+    clock = FakeClock()
     outcomes = iter([SqlAwsCredentialsError(message="sts down"), _url("token-1")])
 
     def _build() -> str:

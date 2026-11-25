@@ -49,7 +49,6 @@ Run these from the SDK repo root when the relevant files changed:
 
 ```bash
 contract-toolkit/scripts/regenerate-all.sh
-contract-toolkit/scripts/check-invariants.sh
 (cd contract-toolkit && pkl test tests/*.pkl)
 uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py
 git diff --check

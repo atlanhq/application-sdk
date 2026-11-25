@@ -36,13 +36,7 @@ from conformance.suite.schema.catalog import (
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
-    RuleMechanism,
     RuleScope,
-)
-
-_HELP_BASE = (
-    "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
-    "conformance/docs/rules/deprecation.md"
 )
 
 RULES: tuple[RuleDefinition, ...] = (
@@ -57,7 +51,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DeprecatedSdkSymbolUsage",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="deprecated-symbol-usage",
         autofixable=False,
         orthogonal_gate="tests",
@@ -100,11 +93,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Coverage limits (intentional, low-false-positive at WARN): deprecated\n"
             "*parameters* / *modes* are out of scope; method matching is\n"
-            "attribute-name-anchored (a same-named method on an unrelated object is a\n"
-            "known false-positive risk); re-export aliasing can produce false\n"
+            "attribute-name-anchored, except that a call on a receiver proven to be\n"
+            "a module (bound only by ``import x``, or by ``from pkg import x`` where\n"
+            "``pkg/x.py`` is in the app) is never matched, since it runs a module\n"
+            "function.  A same-named method on any other unrelated object remains a\n"
+            "known false-positive risk; re-export aliasing can produce false\n"
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b001",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-deprecated-symbols",
@@ -114,8 +109,7 @@ RULES: tuple[RuleDefinition, ...] = (
         id="B002",
         scope=RuleScope.SDK,
         name="MalformedDeprecationNotice",
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
+        tier=EnforcementTier.BLOCK,
         category="deprecation-hygiene",
         autofixable=False,
         orthogonal_gate="tests",
@@ -127,7 +121,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "— callers see 'deprecated' with no path forward, and B001 cannot carry a "
             "migration hint to the fleet. Enforcing 'names a replacement AND a removal "
             "version' on the SDK's own notices keeps the whole deprecation pipeline "
-            "actionable. WARN: the required wording is a guided edit, not mechanical."
+            "actionable. Customer impact: an app on a symbol whose notice names no "
+            "replacement or date gets no usable warning, and its next upgrade past "
+            "the removal breaks it. BLOCK since the SDK reached zero findings "
+            "(FND-4300): application_sdk._deprecation.warn_deprecated builds a "
+            "conforming notice from its arguments, so a new one is cheap to get right."
         ),
         short_description=(
             "A deprecation notice must name both a migration target and a removal "
@@ -143,18 +141,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``will be removed in v4.0``).\n"
             "\n"
             "Both are required so every deprecation is self-describing and B001 can\n"
-            "propagate concrete guidance to consumers.  Only symbol-level markers are\n"
-            "checked (decorator, or a class emitting ``DeprecationWarning`` from\n"
-            "``__init__`` / ``__init_subclass__``).\n"
+            "propagate concrete guidance to consumers.  Every notice is checked: a\n"
+            "``@deprecated`` message, a ``warnings.warn(..., DeprecationWarning)``\n"
+            "(a message held in a local variable or built from a module-level string\n"
+            "constant is read too), a ``warn_deprecated(...)`` call, an enum's\n"
+            "``__deprecated_members__`` and a ``_DEPRECATED_CONSTANTS`` shim.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b002",
     ),
     RuleDefinition(
         id="B003",
         scope=RuleScope.SDK,
         name="OverdueDeprecationRemoval",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="deprecation-hygiene",
         autofixable=False,
         since="0.5.0",
@@ -179,14 +177,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "to residue in the remediation loop.  When the SDK version cannot be\n"
             "determined the check is skipped (overdue-ness is undecidable).\n"
         ),
-        help_uri=f"{_HELP_BASE}#b003",
     ),
     RuleDefinition(
         id="B004",
         scope=RuleScope.SDK,
         name="UnmarkedDeprecationClaim",
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
+        tier=EnforcementTier.BLOCK,
         category="deprecation-hygiene",
         autofixable=False,
         since="0.5.0",
@@ -198,7 +194,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Flagging a deprecation claim that lacks a real marker closes that gap so "
             "every stated deprecation is also a detectable one. Detect-only: which "
             "marker to add (decorator vs warning) is a small design choice for the "
-            "author, routed to residue with a concrete suggestion."
+            "author, routed to residue with a concrete suggestion. Customer impact: "
+            "the manifest never lists the symbol, so B001 never warns the apps that "
+            "use it, and they break on the release that removes it. BLOCK since the "
+            "SDK reached zero findings (FND-4300)."
         ),
         short_description=(
             "A symbol's docstring claims deprecation but it carries no @deprecated / "
@@ -206,7 +205,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         full_description=(
             "Flags a function / method / class whose docstring opens with\n"
-            "``Deprecated`` (or carries a ``.. deprecated::`` directive) but has no\n"
+            "``Deprecated:`` (or carries a ``.. deprecated::`` directive) at the\n"
+            "docstring's own indentation but has no\n"
             "machine-readable marker — no ``@deprecated`` decorator and no\n"
             "``DeprecationWarning`` emitted from ``__init__`` / ``__init_subclass__``.\n"
             "Such a claim is invisible to consumers and to B001.  Detect-only: the\n"
@@ -215,7 +215,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Scoped to real symbol docstrings (not, e.g., a field literally named\n"
             "``deprecated``), biased toward low false positives at WARN.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b004",
     ),
     RuleDefinition(
         id="B005",
@@ -276,7 +275,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="NonAdditiveContractChange",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-backwards-compatibility",
         autofixable=True,
         since="0.7.0",
@@ -393,7 +391,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "not the in-place\n"
             "``Any`` replacement P001 mandates, which keeps the outer shape.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/deprecation.prose.md",
@@ -419,7 +416,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.BOTH,
         name="StaleContractLedger",
         tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.STATIC,
         category="contract-backwards-compatibility",
         autofixable=True,
         since="0.7.0",
@@ -488,7 +484,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "Only appropriate when the contract is pre-deployment (no consumers) and\n"
             "the ledger will be regenerated before the first deploy.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.COMMAND,
             target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
@@ -510,7 +505,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="DaftOnlyDataframeApiUsage",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="daft-removal",
         autofixable=False,
         orthogonal_gate="tests",
@@ -570,7 +564,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "accepted at WARN.  Suppress with ``# conformance: ignore[B007]\n"
             "<reason>`` where the receiver is genuinely not an SDK reader frame.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b007",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-off-daft",
@@ -588,7 +581,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="PrivateModuleImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="sdk-private-surface",
         autofixable=False,
         orthogonal_gate="tests",
@@ -666,7 +658,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "object returned by a factory — is not matched, biased toward zero\n"
             "false positives.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-deprecated-symbols",
@@ -683,7 +674,6 @@ RULES: tuple[RuleDefinition, ...] = (
         scope=RuleScope.APP,
         name="RemovedSdkImport",
         tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
         category="sdk-removed-surface",
         autofixable=False,
         orthogonal_gate="tests",
@@ -738,7 +728,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "or delete it: it has not run since the module was removed, so check\n"
             "whether a newer file already covers it before porting.\n"
         ),
-        help_uri=f"{_HELP_BASE}#b009",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/deprecation.prose.md",

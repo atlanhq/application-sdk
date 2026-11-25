@@ -28,6 +28,7 @@ from application_sdk.app.registry import (
     get_activity_name,
     resolve_pool_queue,
 )
+from application_sdk.common._env import env_str
 from application_sdk.constants import (
     _LOCK_METADATA_KEY,
     APP_BUILD_ID,
@@ -37,8 +38,9 @@ from application_sdk.constants import (
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
-from application_sdk.execution.sandbox import SandboxConfig
+from application_sdk.execution.sandbox import SandboxConfig, host_library_modules
 from application_sdk.execution.settings import (
+    InterceptorSettings,
     _derive_max_concurrent_activities,
     _explicit_max_concurrent_activities,
     load_execution_settings,
@@ -138,6 +140,7 @@ async def read_core_poller_counts() -> dict[str, float] | None:
             timeout_s=TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS,
             max_bytes=TEMPORAL_CORE_METRICS_MAX_BYTES,
         )
+    # conformance: ignore[E004] an unreachable exporter is the expected "disabled" case; the poll-state observer warns once when the reading turns unknown
     except Exception:
         logger.debug(
             "Temporal-core metrics endpoint %s unreachable; poller count unknown",
@@ -172,7 +175,10 @@ async def read_core_poller_counts() -> dict[str, float] | None:
                 )
                 counts[key] = counts.get(key, 0.0) + sample.value
     except Exception:
-        logger.debug(
+        # Unlike an unreachable endpoint (exporter disabled, expected), a body
+        # the exporter served but this parser cannot read is a fault: it blinds
+        # zombie-worker detection, so it is logged where it will be seen.
+        logger.warning(
             "Could not parse Temporal-core metrics from %s; poller count unknown",
             url,
             exc_info=True,
@@ -286,7 +292,11 @@ class AppWorker:
         self._credential_sweeper: asyncio.Task[None] | None = None
 
     def _start_credential_sweeper(self) -> None:
-        """Start removing this worker's credential directories of closed runs."""
+        """Start releasing this worker's state of closed runs.
+
+        Credential directories and ``_app_state`` slots (tracked files,
+        cached clients), on every worker that ran one of the run's tasks.
+        """
         from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: worker startup only
             run_sweeper,
         )
@@ -296,13 +306,15 @@ class AppWorker:
         )
 
     async def _stop_credential_sweeper(self) -> None:
-        """Stop the sweeper and remove every credential directory still tracked.
+        """Stop the sweeper and release every run's state still held.
 
-        Runs after the Temporal worker has stopped, so no task on this worker
-        can still need one. Best-effort: shutdown must not fail on it.
+        Removes every credential directory still tracked and releases every
+        ``_app_state`` slot, closing the clients in it. Runs after the
+        Temporal worker has stopped, so no task on this worker can still need
+        one. Best-effort: shutdown must not fail on it.
         """
         from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: shutdown only
-            remove_all_credential_dirs,
+            release_all_runs,
         )
 
         sweeper, self._credential_sweeper = self._credential_sweeper, None
@@ -311,12 +323,10 @@ class AppWorker:
             with contextlib.suppress(asyncio.CancelledError):
                 await sweeper
         try:
-            await remove_all_credential_dirs()
+            await release_all_runs()
         # conformance: ignore[E004] shutdown path; a failed removal is logged and must not block shutdown
         except Exception:
-            logger.warning(
-                "Removing credential directories at shutdown failed", exc_info=True
-            )
+            logger.warning("Releasing run state at shutdown failed", exc_info=True)
 
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
@@ -416,7 +426,7 @@ class AppWorker:
         try:
             await self._start_metrics_push()
         except Exception:
-            logger.error(
+            logger.warning(
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
@@ -448,7 +458,7 @@ class AppWorker:
         try:
             await self._start_metrics_push()
         except Exception:
-            logger.error(
+            logger.warning(
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
@@ -501,10 +511,10 @@ async def _emit_worker_start_event(
         get_dapr_component_types,
     )
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-        BindingError,
+        BindingUnavailableError,
     )
 
-    deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
+    deployment_name = env_str("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
 
     # Discover which Dapr binding types back the object/secret stores. Best-effort
@@ -549,7 +559,7 @@ async def _emit_worker_start_event(
             event,
             direct_publish_timeout=WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
         )
-    except BindingError:
+    except BindingUnavailableError:
         logger.warning(
             "eventstore binding unavailable — worker_start event not emitted",
             exc_info=True,
@@ -618,6 +628,126 @@ def _publish_activity_slots_limit(client: Client, task_queue: str, slots: int) -
             ACTIVITY_SLOTS_LIMIT_METRIC,
             exc_info=True,
         )
+
+
+def build_interceptors(
+    interceptor_settings: InterceptorSettings,
+    *,
+    interceptors: list[TemporalInterceptor] | None = None,
+    on_activity: Callable[[], None] | None = None,
+) -> list[TemporalInterceptor]:
+    """The worker's interceptor chain, in order, for ``interceptor_settings``.
+
+    :func:`create_worker` registers exactly this list, and the workflow replay
+    tests replay committed histories through it, so the shape replayed in CI is
+    the shape that runs in production.
+
+    ``RunFlagsInterceptor`` is first: it pins the run-shaping flags at the
+    run's first workflow task, ahead of every interceptor that reads them. The
+    event interceptor is always present; whether a run publishes its workflow
+    events is decided per run from the pinned flag, so a worker with events
+    off can still replay a run that started with them on.
+    """
+    # The three observability interceptors are unconditional and run first so
+    # ContextVars (ExecutionContext, CorrelationContext) and tracing spans are
+    # set before product-feature interceptors or user code observe them.
+    from application_sdk.execution._temporal.interceptors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        LogInterceptor,
+        MetricsInterceptor,
+        TraceInterceptor,
+    )
+    from application_sdk.execution._temporal.run_flags import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        RunFlagsInterceptor,
+    )
+
+    # Guard against double-registration: callers migrating from v2 may pass
+    # one of these explicitly via ``interceptors=...``. Running them twice
+    # would double-count metrics and emit duplicate lifecycle log lines —
+    # silent corruption that's hard to diagnose. Fail loudly at startup.
+    _builtin_types = (LogInterceptor, MetricsInterceptor, TraceInterceptor)
+    _duplicates = [
+        type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
+    ]
+    if _duplicates:
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerInterceptorDuplicateError,
+        )
+
+        raise WorkerInterceptorDuplicateError(
+            message=f"Duplicate interceptor types: {_duplicates}. The SDK adds "
+            "LogInterceptor / MetricsInterceptor / TraceInterceptor automatically. "
+            "Remove them from your `interceptors` list.",
+            field="interceptors",
+        )
+
+    all_interceptors: list[TemporalInterceptor] = [
+        RunFlagsInterceptor(
+            events=interceptor_settings.enable_event_interceptor,
+            cleanup=interceptor_settings.enable_cleanup_interceptor,
+        ),
+        LogInterceptor(),
+        MetricsInterceptor(),
+        TraceInterceptor(),
+    ]
+
+    # Liveness recording is appended after the SDK's own Log/Metrics/Trace
+    # interceptors but before the user-supplied interceptors and the
+    # OutputInterceptor, so a stall in any of those downstream interceptors
+    # still counts as "activity observed" — the goal is to detect a dead poll
+    # loop, not to gate on downstream success.
+    if on_activity is not None:
+        from application_sdk.execution._temporal.interceptors.liveness import (  # noqa: PLC0415 — cold path: only when a liveness callback is wired
+            LivenessInterceptor,
+        )
+
+        all_interceptors.append(LivenessInterceptor(on_activity))
+
+    # Before user interceptors, so what they hold is inside the measured window.
+    if interceptor_settings.enable_sizing_telemetry:
+        _sizing_activities = interceptor_settings.sizing_telemetry_activities
+        if not _sizing_activities:
+            # Fail-closed is silent, so say so.
+            logger.warning(
+                "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "
+                "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES is empty, so nothing "
+                "will be collected. Name the activities to measure, or set '*' to "
+                "measure all of them."
+            )
+        else:
+            from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
+                SizingTelemetryInterceptor,
+            )
+
+            all_interceptors.append(
+                SizingTelemetryInterceptor(
+                    poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds,
+                    activities=_sizing_activities,
+                )
+            )
+            logger.info(
+                "Activity sizing telemetry enabled for %s (poll interval %ss). "
+                "Measurement only — no routing decisions are made from it.",
+                sorted(_sizing_activities),
+                interceptor_settings.sizing_telemetry_poll_seconds,
+            )
+
+    all_interceptors.extend(interceptors or [])
+
+    if interceptor_settings.enable_output_interceptor:
+        from application_sdk.execution._temporal.interceptors.outputs import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            OutputInterceptor,
+        )
+
+        all_interceptors.append(OutputInterceptor())
+
+    from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        EventInterceptor,
+    )
+
+    all_interceptors.append(
+        EventInterceptor(activity_events=interceptor_settings.enable_event_interceptor)
+    )
+    return all_interceptors
 
 
 def create_worker(
@@ -970,91 +1100,9 @@ def create_worker(
     task_activities = [*task_activities, store_assert_activity]
 
     interceptor_settings = load_interceptor_settings()
-
-    # The three observability interceptors are unconditional and run first so
-    # ContextVars (ExecutionContext, CorrelationContext) and tracing spans are
-    # set before product-feature interceptors or user code observe them.
-    from application_sdk.execution._temporal.interceptors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-        LogInterceptor,
-        MetricsInterceptor,
-        TraceInterceptor,
+    all_interceptors = build_interceptors(
+        interceptor_settings, interceptors=interceptors, on_activity=on_activity
     )
-
-    # Guard against double-registration: callers migrating from v2 may pass
-    # one of these explicitly via ``interceptors=...``. Running them twice
-    # would double-count metrics and emit duplicate lifecycle log lines —
-    # silent corruption that's hard to diagnose. Fail loudly at startup.
-    _builtin_types = (LogInterceptor, MetricsInterceptor, TraceInterceptor)
-    _duplicates = [
-        type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
-    ]
-    if _duplicates:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            WorkerInterceptorDuplicateError,
-        )
-
-        raise WorkerInterceptorDuplicateError(
-            message=f"Duplicate interceptor types: {_duplicates}. The SDK adds "
-            "LogInterceptor / MetricsInterceptor / TraceInterceptor automatically. "
-            "Remove them from your `interceptors` list.",
-            field="interceptors",
-        )
-
-    all_interceptors: list[TemporalInterceptor] = [
-        LogInterceptor(),
-        MetricsInterceptor(),
-        TraceInterceptor(),
-    ]
-
-    # Liveness recording is appended after the SDK's own Log/Metrics/Trace
-    # interceptors but before the user-supplied interceptors and the
-    # OutputInterceptor, so a stall in any of those downstream interceptors
-    # still counts as "activity observed" — the goal is to detect a dead poll
-    # loop, not to gate on downstream success.
-    if on_activity is not None:
-        from application_sdk.execution._temporal.interceptors.liveness import (  # noqa: PLC0415 — cold path: only when a liveness callback is wired
-            LivenessInterceptor,
-        )
-
-        all_interceptors.append(LivenessInterceptor(on_activity))
-
-    # Before user interceptors, so what they hold is inside the measured window.
-    if interceptor_settings.enable_sizing_telemetry:
-        _sizing_activities = interceptor_settings.sizing_telemetry_activities
-        if not _sizing_activities:
-            # Fail-closed is silent, so say so.
-            logger.warning(
-                "APPLICATION_SDK_ENABLE_SIZING_TELEMETRY is on but "
-                "APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES is empty, so nothing "
-                "will be collected. Name the activities to measure, or set '*' to "
-                "measure all of them."
-            )
-        else:
-            from application_sdk.execution._temporal.interceptors.sizing import (  # noqa: PLC0415 — cold path: only when sizing collection is enabled
-                SizingTelemetryInterceptor,
-            )
-
-            all_interceptors.append(
-                SizingTelemetryInterceptor(
-                    poll_interval_seconds=interceptor_settings.sizing_telemetry_poll_seconds,
-                    activities=_sizing_activities,
-                )
-            )
-            logger.info(
-                "Activity sizing telemetry enabled for %s (poll interval %ss). "
-                "Measurement only — no routing decisions are made from it.",
-                sorted(_sizing_activities),
-                interceptor_settings.sizing_telemetry_poll_seconds,
-            )
-
-    all_interceptors.extend(interceptors or [])
-
-    if interceptor_settings.enable_output_interceptor:
-        from application_sdk.execution._temporal.interceptors.outputs import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            OutputInterceptor,
-        )
-
-        all_interceptors.append(OutputInterceptor())
 
     registry = AppRegistry.get_instance()
     registered_apps = registry.list_all()
@@ -1101,14 +1149,13 @@ def create_worker(
             _locked_tasks,
         )
 
-    if interceptor_settings.enable_event_interceptor:
-        from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            EventInterceptor,
-            publish_event,
-        )
+    # Always registered, whatever the event setting: a run pinned with events on
+    # schedules publish_event wherever it continues (see run_flags).
+    from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        publish_event,
+    )
 
-        all_interceptors.append(EventInterceptor())
-        task_activities = [*task_activities, publish_event]
+    task_activities = [*task_activities, publish_event]
 
     # Build sandbox configuration
     config = SandboxConfig()
@@ -1120,13 +1167,17 @@ def create_worker(
     if app_modules:
         config = config.with_passthrough_modules(*app_modules)
 
-    # Pass through all app module paths to prevent re-registration in sandbox
-    app_module_paths: set[str] = set()
-    for app_meta in registered_apps:
-        if app_meta.module_path:
-            app_module_paths.add(app_meta.module_path)
-    if app_module_paths:
-        config = config.with_passthrough_modules(*app_module_paths)
+    # App packages are deliberately NOT passed through: the sandbox re-imports
+    # them for every run, so run() and the helpers it imports are checked for
+    # non-determinism. Registration is sandbox-aware (_apply_app_registration),
+    # so the re-import leaves the registries alone. Every library the host has
+    # already imported is passed through instead; see host_library_modules.
+    app_packages = {
+        app_meta.module_path.partition(".")[0]
+        for app_meta in registered_apps
+        if app_meta.module_path
+    }
+    config = config.with_passthrough_modules(*host_library_modules(app_packages))
 
     workflow_runner = SandboxedWorkflowRunner(
         restrictions=config.to_temporal_restrictions()
@@ -1196,6 +1247,7 @@ def create_worker(
         try:
             await _log_worker_fatal_error(exc)
         except BaseException:
+            # conformance: ignore[L022] the worker's fatal crash record: the poll loop has already failed, this handler only lost the cause chain
             logger.error(
                 "Temporal worker poll loop failed fatally (cause chain "
                 "unavailable: rendering the exception raised %s)",

@@ -108,6 +108,20 @@ separate `suite.checks.offload_cancel` check, which is silent unless the app's
 `uv.lock` resolves `atlan-application-sdk` at or above the floor in that
 module — see its module docs.)
 
+The httpx-proxy rule (P066) is also P-series and suggest-only.  The fix adds a
+`proxy=` resolved from the environment to the transport, or drops the custom
+transport, but which one is right depends on why the app built the transport
+(TLS trust, pool limits, retries) and whether it ever reaches a non-local host,
+so it drafts a proposal for human review.  (This rule is backed by a separate
+`suite.checks.httpx_proxy` check — see its module docs.)
+
+The run-scratch rule (P067) is also P-series and suggest-only.  The fix moves
+a path from the system temp dir to `self.run_scratch_dir`, which changes where
+the files land, and whether that is safe depends on what else reads the path,
+so it drafts a proposal for human review.  (This rule is backed by a separate
+`suite.checks.run_scratch` check, silent below the SDK release that ships
+`App.run_scratch_dir` — see its module docs.)
+
 The determinism / async-correctness rules (P020–P024) are also P-series
 and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
 concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
@@ -1039,6 +1053,50 @@ package): `docs/concepts/apps.md`, *Offloading Blocking Work*.
   `application_sdk/storage/formats/__init__.py`
   `Writer._write_batched_dataframe`, which reads the same result with
   `async for`.
+
+**httpx-proxy rule (P066)** — scope=app, WARN-tier.  httpx applies
+`HTTPS_PROXY` / `NO_PROXY` only when the client builds its own transport, so a
+hand-built transport opts the client out of the proxy.  Read the enclosing
+function and find what the transport is for, and which URLs its client
+requests, before drafting.
+
+- **P066 HttpxTransportWithoutProxy** — `classification` is `"judgment"`.  An
+  `httpx.AsyncHTTPTransport(...)` / `httpx.HTTPTransport(...)` is built with no
+  `proxy=`.  If the client only ever reaches localhost (a sidecar, a local
+  emulator), draft an explicit `proxy=None` on the call.  If the transport
+  exists only to carry `verify=` / `limits=`, draft moving those onto
+  `httpx.AsyncClient(...)` and dropping `transport=`, which lets httpx apply
+  the proxy itself.  Otherwise draft a helper that resolves the proxy for the
+  request URL with `urllib.request.getproxies_environment()` and
+  `urllib.request.proxy_bypass_environment()` (so `NO_PROXY` is respected),
+  and pass its result as `proxy=`; when one transport serves many hosts, the
+  proxy has to be chosen per request.  Cite as evidence
+  `application_sdk/clients/base.py` `_EnvProxyHTTPTransport`, the
+  `BaseClient` default transport, which does the per-request choice.  Never
+  propose a suppression for a transport that reaches a customer source.
+
+**Run-scratch rule (P067)** — scope=app, WARN-tier.  `tempfile`'s system temp
+dir is refused by the workflow sandbox, never removed by `cleanup_files`, and
+outside the `./local/tmp/...` object-store mapping.  Read the enclosing
+function and every reader of the path it builds before drafting.
+
+- **P067 TempDirOutsideRunScratch** — `classification` is `"judgment"`.
+  `tempfile.gettempdir()` (or `mkdtemp` / `mkstemp` with no `dir=`) in app
+  code.  In an App method (`run()`, a `@task`, an interaction handler) draft
+  `self.run_scratch_dir` in place of the system temp dir path, dropping any
+  `<app-name>/<run_id>` suffix the app appended by hand: the property is
+  already per-run.  For `mkdtemp` / `mkstemp` in a task, draft
+  `dir=self.run_scratch_dir` after an `os.makedirs(self.run_scratch_dir,
+  exist_ok=True)`, which keeps a fresh directory per attempt.  In a helper
+  or client with no `self`, draft a `dir` / `scratch_dir` parameter its App
+  caller fills from `self.run_scratch_dir`.  Never draft `os.makedirs` in
+  `run()`: workflow code must not touch the filesystem.  The path moves from
+  `/tmp/...` to `./local/tmp/...`, so check whether it is also handed to
+  other code (an output prefix, a subprocess argument) and say so in the
+  proposal.  Code that runs outside any workflow run (an HTTP handler, a
+  CLI) has no run scratch directory; there, draft a justified
+  `# conformance: ignore[P067]` and confirm the code removes what it makes.
+  Cite as evidence `application_sdk/app/base.py` `App.run_scratch_dir`.
 
 **Determinism / async-correctness rules (P020–P024)** — all suggest-only,
 scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing

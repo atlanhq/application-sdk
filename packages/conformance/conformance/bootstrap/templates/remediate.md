@@ -35,9 +35,11 @@ in-loop `bootstrap`, which is per-finding and gated by recheck.
 
    `--resync` is a superset of a bare run, not an alternative to it: the
    always-overwrite set runs either way, and `--resync` adds the write-if-absent
-   scaffolds (tests.yaml, renovate.json) plus the connector review kit. So it is
-   always the right call here. `.gitignore` and `contract_schema.lock.json` are
-   deliberately outside its scope.
+   scaffolds (tests.yaml, renovate.json) plus the connector review kit: the
+   managed review block in `CLAUDE.md` and the repository's principles folder
+   for the connector reviewer. So it is always the right call here.
+   `.gitignore` and `contract_schema.lock.json` are deliberately outside its
+   scope.
 
 3. **Read both outputs** — the JSON manifest *and* stdout:
 
@@ -144,7 +146,10 @@ rule's `remediation_reference` — for the connector's per-rule sub-issue. See
 Only after Phase 0 has converged (or been recorded as residue):
 
 1. Resolve programs dir:
-   - Inside a connector repo: `PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)`
+   - Inside a connector repo, or the SDK monorepo (which source-pins the
+     package to its own `packages/conformance` checkout, so unreleased rule
+     and program changes are the ones that run):
+     `PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)`
    - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
 2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
 3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.

@@ -68,7 +68,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import make_cli_main
+from conformance.suite.checks._ast_common import (
+    discover_root_file,
+    make_cli_main,
+    make_scan_path,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "I"
@@ -698,17 +702,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     return findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Dockerfile, producing repo-root-relative URIs."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        rel = path.relative_to(root)
-    except ValueError:
-        rel = path
-    return scan_text(text, str(rel))
+scan_path = make_scan_path(scan_text)
 
 
 def discover(root: Path) -> list[Path]:
@@ -717,8 +711,7 @@ def discover(root: Path) -> list[Path]:
     Returns an empty list when no ``Dockerfile`` is present, so the I-series
     simply no-ops on repos that have not yet added a Dockerfile.
     """
-    df = root / "Dockerfile"
-    return [df] if df.is_file() else []
+    return discover_root_file(root, "Dockerfile")
 
 
 # ---------------------------------------------------------------------------

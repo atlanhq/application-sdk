@@ -385,7 +385,7 @@ def _load_pyarrow() -> tuple[Callable[..., object], object] | BaseException | No
         # ImportError traceback stays out of the log — exactly the shape the
         # rocksdict degrade in `validation/assets.py` uses.
         return None  # conformance: ignore[E007] optional-dep probe; the caller warns and reports `unsupported`
-    except Exception as exc:  # noqa: BLE001 - a broken install must never reach the hand-off
+    except Exception as exc:  # a broken install must never reach the hand-off
         # Not benign, so unlike absence it keeps its traceback. Anything an
         # incompatible pyarrow raises on import lands here; the alternative is this
         # escaping into a hand-off that a direct caller has no wrapper to catch.
@@ -587,7 +587,7 @@ def _child(container: object, name: str) -> object | None:
     # `container` is typed `object` because the arrow types are only imported inside
     # `_load_pyarrow`, so there is no annotation to narrow it to. Both `pa.Schema`
     # and `pa.StructType` iterate their fields at runtime.
-    for field in container:  # type: ignore[attr-defined]  # Schema/StructType are iterable
+    for field in container:  # pyright: ignore[reportGeneralTypeIssues]  # Schema/StructType are iterable
         if getattr(field, "name", None) == name:
             return field
     return None

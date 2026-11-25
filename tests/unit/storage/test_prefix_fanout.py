@@ -1,7 +1,7 @@
 """Failure, cancellation and mirror contracts of the storage prefix primitives.
 
-``download_prefix``, ``upload_prefix``, ``delete_prefix`` (per-key fallback)
-and ``_gather_with_semaphore`` all fan out through ``_run_bounded``. The drain
+``download_prefix``, ``upload_prefix`` and ``delete_prefix`` (per-key
+fallback) all fan out through ``_run_bounded``. The drain
 tests pin the property ``asyncio.gather`` lacked: once the error or the
 cancellation reaches the caller, no ``run_in_thread`` work the fan-out started
 is still running.
@@ -29,10 +29,9 @@ from application_sdk._runtime.offload import (
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.common._listing import INTERNAL_DIRNAMES, SYNC_INDEX_DIRNAME
 from application_sdk.storage import batch as batch_module
-from application_sdk.storage._concurrency import _gather_with_semaphore, _run_bounded
+from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix, list_keys, upload_prefix
 from application_sdk.storage.errors import StorageConfigError, StorageError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 
 #: How long the offloaded "slow" call blocks its thread. Long enough that an
@@ -54,11 +53,6 @@ async def _wait_started(event: threading.Event) -> None:
     """
     if not await asyncio.to_thread(event.wait, _START_TIMEOUT):
         raise AssertionError("offloaded call did not start")
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 class _BlockingCall:
@@ -94,7 +88,7 @@ async def _cancel_once_started(
 
 
 # ---------------------------------------------------------------------------
-# _run_bounded / _gather_with_semaphore
+# _run_bounded
 # ---------------------------------------------------------------------------
 
 
@@ -200,16 +194,6 @@ class TestRunBounded:
 
         assert await _run_bounded([item(i) for i in range(5)], 2) == list(range(5))
         assert peak == 2
-
-    async def test_gather_with_semaphore_drains_on_failure(self) -> None:
-        call = _BlockingCall()
-
-        with pytest.raises(StorageError):
-            await _gather_with_semaphore(
-                [run_in_thread(call), _fail_once_started(call)], asyncio.Semaphore(4)
-            )
-
-        assert call.finished.is_set()
 
     async def test_offloads_outside_a_fanout_are_untracked(self) -> None:
         """A plain ``run_in_thread`` keeps its old behaviour: no scope, no marker."""

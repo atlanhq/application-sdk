@@ -8,6 +8,8 @@ import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from application_sdk import _deprecation
+from application_sdk.errors._legacy_codes import ErrorCode, legacy_code_for
 from application_sdk.errors.categories import Audience, FailureCategory
 
 if TYPE_CHECKING:
@@ -103,7 +105,25 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # it only applies when ``***`` is the whole value, so it can never stop short
 # of a real secret. The negative lookahead after ``=`` likewise leaves a quoted
 # value :data:`_QUOTED_SECRET_RE` already masked (``password='***'``) intact.
-_SECRET_NAMES = r"(?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])(?:sig|token|auth))"
+#
+# Object-store credentials, as obstore's S3 / Azure / GCS config, boto, minio
+# and the Azure SDKs name them. Each is a full name, never a looser ``key`` or
+# ``token`` suffix, so the cursors above still survive. Suffix matching covers
+# the prefixed forms: ``access_key`` / ``accesskey`` cover ``secret_access_key``,
+# ``aws_secret_access_key``, ``SecretAccessKey`` and
+# ``azure_storage_access_key``; ``account_key`` covers ``azure_storage_account_key``
+# and GCS ``service_account_key``; ``session_token`` / ``sessiontoken`` cover
+# ``aws_session_token``, ``fabric_session_token`` and STS ``SessionToken``.
+# ``sas_token``, ``sas_key``, ``bearer_token`` and ``security_token`` are listed
+# because ``token`` carries the lookbehind above and so misses them.
+# ``access_key`` on its own is masked on purpose: in obstore's Azure config it
+# *is* the storage account key (``AzureAccessKey.access_key``). The AWS access
+# key *id* is an identifier, not a secret, and stays readable under the names it
+# actually travels as — ``access_key_id``, ``aws_access_key_id``,
+# ``AWSAccessKeyId`` — which end in ``id`` and so match nothing here; a
+# wrong-key error stays diagnosable. ``private_key_id``, ``client_email`` and
+# ``sse_kms_key_id`` are likewise identifiers and are not listed.
+_SECRET_NAMES = r"(?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|account_key|access_key|accesskey|secret_key|sas_token|sastoken|sas_key|session_token|sessiontoken|security_token|bearer_token|encryption_key|(?<![a-z0-9_])(?:sig|token|auth))"
 # A credential-bearing HTTP header. Matched as a suffix like the names above, so
 # ``proxy-authorization``, ``set-cookie``, ``x-api-key`` and ``x-auth-token``
 # are covered by ``authorization``, ``cookie``, ``api-key`` and ``auth-token``.
@@ -114,7 +134,7 @@ _SECRET_HEADER_NAMES = r"(?:authorization|cookie|api-key|auth-token)"
 # which made the quoted pass ~6x faster on a 20 KB traceback. A name added to
 # either list must start with one of these letters
 # (``test_every_secret_name_passes_the_first_letter_gate`` checks).
-_SECRET_NAME_START = r"(?=[aiprsct])"
+_SECRET_NAME_START = r"(?=[abceiprst])"
 _SECRET_PARAM_RE = re.compile(
     r"(?i)(" + _SECRET_NAME_START + _SECRET_NAMES + r"=)(?!(['\"])\*\*\*\2)"
     r"(?:\*\*\*(?=['\"<>]?(?:[\s&,;#]|$))|\{[^}]*\}|[^\s&,;#]+)",
@@ -250,7 +270,10 @@ def redact_secrets(text: str) -> str:
       → ``Authorization: Bearer ***``, masked to the end of the line.
     * A bare ``Bearer <token>`` → ``Bearer ***``.
     * Bare ``key=value`` pairs outside a URL whose key is a known credential
-      name (``password``, ``token``, ``apikey``, ``pwd``, ``sig``, …).
+      name (``password``, ``token``, ``apikey``, ``pwd``, ``sig``, …),
+      including object-store credentials (``secret_access_key``,
+      ``account_key``, ``sas_token``, ``session_token``, ``access_key``, …).
+      The AWS access-key *id* (``access_key_id``) is an identifier and is kept.
 
     Why a URL query is redact-by-default but bare text is redact-by-name: a
     URL's ``?`` marks exactly where its params start, so every value can be
@@ -428,9 +451,104 @@ def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)
     return text
 
 
-# Backward-compat alias: the helper is load-bearing across clients/sql.py and
-# credentials/errors.py, so it is public. Kept for existing internal/test imports.
-_sanitize_cause_repr = sanitize_cause_repr
+class _DeprecatedDefaultErrorCode:
+    """``Cls.DEFAULT_ERROR_CODE``: the class's legacy ``AAF-*`` code, with a warning.
+
+    Classes no longer declare ``DEFAULT_ERROR_CODE``; the code comes from the
+    one table in ``errors._legacy_codes``. This descriptor keeps the name
+    readable on the class and on an instance until v4.0.0 (FND-4299).
+    """
+
+    def __get__(self, obj: object, owner: type) -> ErrorCode | None:
+        _deprecation.warn_deprecated(
+            "DEFAULT_ERROR_CODE",
+            "the error class's code ClassVar",
+            "4.0.0",
+            note="AAF-* codes are a second error vocabulary beside code",
+        )
+        return legacy_code_for(owner)
+
+
+class _LegacyErrorCodeMixin:
+    """The back-compat ``AAF-*`` surface of an ``AppError`` that had a legacy ``ErrorCode``.
+
+    Put it before the categorical leaf in the bases so its ``__str__`` wins
+    over ``AppError.__str__``. A subclass names the evidence ``str()`` prints
+    in ``_STR_FIELDS`` as ``(attribute, label)`` pairs. Its ``AAF-*`` code is
+    not declared on the class: ``errors._legacy_codes._CLASS_CODES`` records
+    it, once, and ``code`` is the class's only vocabulary (FND-4299).
+
+    The text is ``[AAF-…] message | label=value | … | caused_by=…``. Falsy
+    values are left out. The cause always goes through
+    :func:`sanitize_cause_repr`, because ``str(exc)`` reaches HTTP responses
+    (``detail=str(e)``) and logs, and a driver message can embed a connection
+    string. Before this mixin each class copied the body, and most copies
+    printed the cause raw (FND-4917).
+
+    ``DEFAULT_ERROR_CODE``, ``error_code`` and the ``error_code=`` keyword
+    still work and warn. A constructor that accepts the keyword hands it to
+    :meth:`_set_legacy_error_code`, the one place it is handled.
+
+    A plain class, not a dataclass, so ``_error_code`` never becomes a field
+    and never reaches ``to_failure_details().evidence``. Removed with
+    ``ErrorCode`` in v4.0.
+    """
+
+    DEFAULT_ERROR_CODE = _DeprecatedDefaultErrorCode()
+    _STR_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = ()
+    #: Per-instance override from the deprecated ``error_code=`` keyword. The
+    #: class's own code applies when it is ``None``.
+    _error_code: ErrorCode | None = None
+
+    # Supplied by AppError, which every user of this mixin also inherits.
+    message: str
+    cause: BaseException | None
+
+    def _set_legacy_error_code(self, error_code: ErrorCode | None) -> None:
+        """Record the deprecated ``error_code=`` keyword a constructor received.
+
+        ``None`` (the keyword's default) records nothing and does not warn.
+        """
+        if error_code is None:
+            return
+        # stacklevel 3: this helper, then the constructor, then the raise site.
+        _deprecation.warn_deprecated(
+            "the error_code= keyword of an SDK error",
+            "an AppError subclass whose code ClassVar names the failure",
+            "4.0.0",
+            note="AAF-* codes are a second error vocabulary beside code",
+            stacklevel=3,
+        )
+        self._error_code = error_code
+
+    def _legacy_code(self) -> ErrorCode | None:
+        """The per-instance override, else the class's ``AAF-*`` code. Never warns."""
+        if self._error_code is not None:
+            return self._error_code
+        return legacy_code_for(type(self))
+
+    @property
+    def error_code(self) -> ErrorCode | None:
+        """Deprecated legacy ``AAF-…`` code: the per-instance override, else the class's."""
+        _deprecation.warn_deprecated(
+            "error_code",
+            "the error's code (or qualified_code)",
+            "4.0.0",
+            note="AAF-* codes are a second error vocabulary beside code",
+        )
+        return self._legacy_code()
+
+    def __str__(self) -> str:
+        legacy = self._legacy_code()
+        head = f"[{legacy.code}] {self.message}" if legacy else self.message
+        parts = [head]
+        for attr, label in self._STR_FIELDS:
+            value = getattr(self, attr, None)
+            if value:
+                parts.append(f"{label}={value}")
+        if self.cause:
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
+        return " | ".join(parts)
 
 
 @dataclass(kw_only=True)

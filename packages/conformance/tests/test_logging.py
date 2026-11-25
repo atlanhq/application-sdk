@@ -21,6 +21,7 @@ from conformance.suite.checks.logging._constants import (
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition, EnforcementTier
+from tests._helpers import scan_files
 
 # Smoke-check that the constants are tuples (guards against silent import errors)
 assert isinstance(CREDENTIAL_VALUE_SUFFIXES, tuple)
@@ -46,17 +47,6 @@ def _scan_one(tmp_path: Path, src: str) -> list:
     p = tmp_path / "m.py"
     p.write_text(src)
     return scan_all([p], tmp_path)
-
-
-def _scan_files(tmp_path: Path, files: dict[str, str]) -> list:
-    """Write each entry in *files* and run the cross-file scanner."""
-    paths: list[Path] = []
-    for name, src in files.items():
-        path = tmp_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(src)
-        paths.append(path)
-    return scan_all(paths, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1689,7 +1679,7 @@ def test_l016_fires_for_two_calls_across_files(tmp_path: Path) -> None:
         "a.py": "import logging\nlogging.basicConfig(level=logging.INFO)\n",
         "b.py": "import logging\nlogging.basicConfig(format='%(message)s')\n",
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     l016 = [f for f in findings if f.rule_id == "L016"]
     assert len(l016) == 1  # only the 2nd call is flagged
 
@@ -1737,6 +1727,441 @@ def test_l017_silent_in_adapter_file() -> None:
 def test_l017_silent_for_error_method() -> None:
     src = "from loguru import logger\nlogger.error('failed', exc_info=True)\n"
     assert "L017" not in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L022 HandledFailureLoggedAtError
+# ---------------------------------------------------------------------------
+
+
+def _l022(body: str, prefix: str = "") -> list[str]:
+    """L022 findings for *body* as the handler of ``try: work()``."""
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        f"{prefix}"
+        "async def f(items):\n"
+        "    try:\n"
+        "        work()\n"
+        f"{body}"
+    )
+    return [rule_id for rule_id in _ids(src) if rule_id == "L022"]
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "    except Exception:\n        logger.error('close failed', exc_info=True)\n",
+        (
+            "    except Exception:\n"
+            "        logger.error('lookup failed', exc_info=True)\n"
+            "        return None\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('validation failed', exc_info=True)\n"
+            "        return False\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('bad filter', exc_info=True)\n"
+            "        return empty_default\n"
+        ),
+        # 4xx: the client's mistake, answered — the service did not fail.
+        (
+            "    except ValueError:\n"
+            "        logger.error('bad request', exc_info=True)\n"
+            "        return JSONResponse(content={}, status_code=400)\n"
+        ),
+        # A raise inside a nested scope does not run in the handler.
+        (
+            "    except Exception:\n"
+            "        def cb():\n"
+            "            raise RuntimeError('later')\n"
+            "        logger.error('deferred', exc_info=True)\n"
+            "        register(cb)\n"
+        ),
+    ],
+    ids=[
+        "bare",
+        "return-none",
+        "return-false",
+        "return-default",
+        "4xx",
+        "nested-raise",
+    ],
+)
+def test_l022_fires_when_the_handler_absorbs_the_failure(handler: str) -> None:
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_fires_on_stdlib_logging_error() -> None:
+    src = (
+        "import logging\n"
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        logging.error('exporter failed', exc_info=True)\n"
+    )
+    assert "L022" in _ids(src)
+
+
+def test_l022_fires_per_item_in_a_loop() -> None:
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "def f(rows):\n"
+        "    for row in rows:\n"
+        "        try:\n"
+        "            transform(row)\n"
+        "        except Exception:\n"
+        "            logger.error('row failed', exc_info=True)\n"
+        "            continue\n"
+    )
+    assert "L022" in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "    except Exception:\n        logger.error('failed', exc_info=True)\n        raise\n",
+        (
+            "    except Exception as exc:\n"
+            "        logger.error('failed', exc_info=True)\n"
+            "        if fatal(exc):\n"
+            "            raise\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('fatal', exc_info=True)\n"
+            "        sys.exit(1)\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('fatal', exc_info=True)\n"
+            "        os._exit(1)\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('request failed', exc_info=True)\n"
+            "        return {'success': False, 'error': 'boom'}\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('start failed', exc_info=True)\n"
+            "        return JSONResponse(content={'status': 'RETRY'}, status_code=500)\n"
+        ),
+        (
+            "    except Exception:\n"
+            "        logger.error('prime failed', exc_info=True)\n"
+            "        return PrimeOutput(success=False)\n"
+        ),
+        # Built from atlan-mysql-app app/handler.py `test_auth`.
+        (
+            "    except Exception as e:\n"
+            "        logger.error('MySQL auth test failed: %s', safe_traceback(e))\n"
+            "        err = transient_failure(e) or PreflightAuthError(cause=e)\n"
+            "        return AuthOutput(status=AuthStatus.FAILED, error=err.to_failure_details())\n"
+        ),
+        # Built from atlan-openapi-app app/api_client.py `_parse_zip`.
+        (
+            "    except Exception:\n"
+            "        logger.warning('skipping file in ZIP file=%s', name, exc_info=True)\n"
+        ),
+    ],
+    ids=[
+        "bare-raise",
+        "conditional-raise",
+        "sys-exit",
+        "os-exit",
+        "dict-success-false",
+        "http-5xx",
+        "call-success-false",
+        "mysql-test-auth",
+        "openapi-parse-zip-warning",
+    ],
+)
+def test_l022_silent_when_the_failure_propagates_or_is_a_warning(handler: str) -> None:
+    assert _l022(handler) == []
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["AuthStatus.FAILED", "AuthStatus.EXPIRED", "AuthStatus.INVALID_CREDENTIALS"],
+)
+def test_l022_silent_when_a_non_success_auth_status_is_returned(status: str) -> None:
+    # Every AuthStatus member but SUCCESS is a failure the caller sees
+    # (AuthStatus.is_success), whatever HTTP code the contract maps it to.
+    handler = (
+        "    except AuthenticationError:\n"
+        "        logger.error('authentication rejected', exc_info=True)\n"
+        f"        return AuthOutput(status={status}, message='rejected')\n"
+    )
+    assert _l022(handler) == []
+
+
+def test_l022_still_fires_for_auth_success_status() -> None:
+    handler = (
+        "    except AuthenticationError:\n"
+        "        logger.error('authentication rejected', exc_info=True)\n"
+        "        return AuthOutput(status=AuthStatus.SUCCESS)\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_still_fires_for_a_non_sdk_enum_named_like_an_auth_status() -> None:
+    # Only the SDK's AuthStatus carries the is_success contract; an app enum
+    # with an EXPIRED member says nothing about the caller seeing a failure.
+    handler = (
+        "    except CacheError:\n"
+        "        logger.error('cache entry stale', exc_info=True)\n"
+        "        return CacheResult(status=CacheStatus.EXPIRED)\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_silent_outside_an_except_block() -> None:
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "def f(typename):\n"
+        "    logger.error('Unknown typename: %s', typename)\n"
+        "    return None\n"
+    )
+    assert "L022" not in _ids(src)
+
+
+def test_l022_silent_for_nonzero_cli_status_consumed_by_system_exit() -> None:
+    src = (
+        "import asyncio\n"
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        "async def main():\n"
+        "    try:\n"
+        "        publish()\n"
+        "    except Exception:\n"
+        "        logger.error('registration failed', exc_info=True)\n"
+        "        return 1\n"
+        'if __name__ == "__main__":\n'
+        "    raise SystemExit(asyncio.run(main()))\n"
+    )
+    assert "L022" not in _ids(src)
+
+
+def test_l022_still_fires_for_unconsumed_nonzero_integer_return() -> None:
+    handler = (
+        "    except Exception:\n"
+        "        logger.error('operation failed', exc_info=True)\n"
+        "        return 1\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_silent_when_local_helper_returns_typed_failure() -> None:
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+class OutcomeStatus:
+    FAILED = "FAILED"
+
+def make_failure(event):
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+def sync_event(event):
+    try:
+        process(event)
+    except Exception as exc:
+        logger.error("event sync failed: %s", exc, exc_info=True)
+        return make_failure(event)
+"""
+    assert "L022" not in _ids(src)
+
+
+def test_l022_still_fires_for_helper_returning_diagnostic_flag() -> None:
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+def make_diagnostic_result():
+    return ScopeResult(chunks=[], discovery_failed=True)
+
+def list_scope():
+    try:
+        discover()
+    except Exception as exc:
+        logger.error("scope discovery failed: %s", exc, exc_info=True)
+        return make_diagnostic_result()
+"""
+    assert "L022" in _ids(src)
+
+
+def test_l022_still_fires_for_helper_with_a_success_return_path() -> None:
+    # One branch returns a typed failure, but another returns success, so the
+    # call is not proof that the caller receives a failure.
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+def make_outcome(event):
+    if event.retryable:
+        return OutcomeRecord(status=OutcomeStatus.SUCCEEDED)
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+def sync_event(event):
+    try:
+        publish(event)
+    except Exception:
+        logger.error("sync failed", exc_info=True)
+        return make_outcome(event)
+"""
+    assert "L022" in _ids(src)
+
+
+_L022_CLI_MAIN = """
+import asyncio, sys
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+async def main():
+    try:
+        publish()
+    except Exception:
+        logger.error("registration failed", exc_info=True)
+        return 1
+"""
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param("raise SystemExit(asyncio.run(main()))", id="raise-SystemExit"),
+        pytest.param("raise SystemExit(code=asyncio.run(main()))", id="code-kw"),
+        pytest.param("sys.exit(asyncio.run(main()))", id="sys-exit"),
+    ],
+)
+def test_l022_silent_for_every_exit_sink_shape(entry: str) -> None:
+    src = _L022_CLI_MAIN + f'if __name__ == "__main__":\n    {entry}\n'
+    assert "L022" not in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        # Constructing SystemExit without raising it exits nothing.
+        pytest.param("SystemExit(asyncio.run(main()))", id="unraised-SystemExit"),
+        pytest.param("err = SystemExit(asyncio.run(main()))", id="assigned-SystemExit"),
+        # One call site reaches the exit; the other discards the status.
+        pytest.param(
+            "if sys.argv[1:]:\n        raise SystemExit(asyncio.run(main()))\n"
+            "    asyncio.run(main())",
+            id="one-discarding-call-site",
+        ),
+        # The function escapes as a value, so its callers are unknown.
+        pytest.param(
+            "raise SystemExit(asyncio.run(main()))\n    register(main)",
+            id="escapes-as-value",
+        ),
+    ],
+)
+def test_l022_still_fires_when_status_does_not_always_reach_exit(entry: str) -> None:
+    src = _L022_CLI_MAIN + f'if __name__ == "__main__":\n    {entry}\n'
+    assert "L022" in _ids(src)
+
+
+def test_l022_silent_for_awaited_async_failure_helper() -> None:
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+async def make_failure():
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+async def sync_event(event):
+    try:
+        await publish(event)
+    except Exception:
+        logger.error("sync failed", exc_info=True)
+        return await make_failure()
+"""
+    assert "L022" not in _ids(src)
+
+
+def test_l022_still_fires_for_unawaited_async_failure_helper() -> None:
+    # The un-awaited call returns a coroutine, not the failure result.
+    src = """
+from application_sdk.observability import get_logger
+logger = get_logger(__name__)
+
+async def make_failure():
+    return OutcomeRecord(status=OutcomeStatus.FAILED)
+
+async def sync_event(event):
+    try:
+        await publish(event)
+    except Exception:
+        logger.error("sync failed", exc_info=True)
+        return make_failure()
+"""
+    assert "L022" in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        # The handler's call resolves to the import, not the nested def.
+        pytest.param(
+            "from diagnostics import make_failure\n"
+            "def outer():\n"
+            "    def make_failure():\n"
+            "        return OutcomeRecord(status=OutcomeStatus.FAILED)\n"
+            "    return make_failure\n",
+            id="import-vs-nested-def",
+        ),
+        pytest.param(
+            "def make_failure():\n"
+            "    return OutcomeRecord(status=OutcomeStatus.FAILED)\n"
+            "make_failure = diagnostic_result\n",
+            id="rebound-at-module-level",
+        ),
+    ],
+)
+def test_l022_still_fires_when_helper_name_is_not_uniquely_bound(shadow: str) -> None:
+    src = (
+        "from application_sdk.observability import get_logger\n"
+        "logger = get_logger(__name__)\n"
+        f"{shadow}"
+        "def sync_event(event):\n"
+        "    try:\n"
+        "        publish(event)\n"
+        "    except Exception:\n"
+        "        logger.error('sync failed', exc_info=True)\n"
+        "        return make_failure()\n"
+    )
+    assert "L022" in _ids(src)
+
+
+def test_l022_judges_the_innermost_handler() -> None:
+    # The outer handler raises; the inner one, which holds the call, does not.
+    handler = (
+        "    except Exception:\n"
+        "        try:\n"
+        "            cleanup()\n"
+        "        except Exception:\n"
+        "            logger.error('cleanup failed', exc_info=True)\n"
+        "        raise\n"
+    )
+    assert _l022(handler) == ["L022"]
+
+
+def test_l022_respects_an_inline_suppression() -> None:
+    handler = (
+        "    except Exception:\n"
+        "        # conformance: ignore[L022] fatal: collected and raised after the other targets\n"
+        "        logger.error('upload failed', exc_info=True)\n"
+    )
+    assert _l022(handler) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1990,13 +2415,13 @@ _SDK_LOGGER = (
 
 def test_l002_silent_sdk_adapter(tmp_path: Path) -> None:
     files = {"a.py": _SDK_LOGGER, "b.py": _SDK_LOGGER}
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_fires_stdlib_getlogger(tmp_path: Path) -> None:
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert l002
     assert "stdlib" in l002[0].message
@@ -2004,13 +2429,13 @@ def test_l002_fires_stdlib_getlogger(tmp_path: Path) -> None:
 
 def test_l002_fires_structlog(tmp_path: Path) -> None:
     src = "import structlog\nlogger = structlog.get_logger()\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_fires_loguru_direct(tmp_path: Path) -> None:
     src = "from loguru import logger\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert any(f.rule_id == "L002" for f in findings)
 
 
@@ -2021,7 +2446,7 @@ def test_l002_silent_adapter_definition_file(tmp_path: Path) -> None:
         "def get_logger(name: str):\n"
         "    return logger.bind(name=name)\n"
     )
-    findings = _scan_files(tmp_path, {"logger_adaptor.py": src})
+    findings = scan_files(scan_all, tmp_path, {"logger_adaptor.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
@@ -2032,7 +2457,7 @@ def test_l002_fires_mixed_only_non_sdk_flagged(tmp_path: Path) -> None:
         "b.py": _SDK_LOGGER,
         "c.py": "import logging\nlogger = logging.getLogger(__name__)\n",
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert "c.py" in l002[0].file
@@ -2044,7 +2469,7 @@ def test_l002_suppression_directive(tmp_path: Path) -> None:
         "import logging\n"
         "logger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"legacy.py": src})
+    findings = scan_files(scan_all, tmp_path, {"legacy.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert all(f.suppressed for f in l002)
 
@@ -2079,7 +2504,7 @@ def test_l002_suppression_after_shebang_or_coding_header(
         "import logging\n"
         "logger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"tool.py": src})
+    findings = scan_files(scan_all, tmp_path, {"tool.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert l002[0].line == line
@@ -2096,7 +2521,7 @@ def test_l002_line_1_directive_before_coding_line_still_suppresses(
         "import logging\n"
         "logger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"legacy.py": src})
+    findings = scan_files(scan_all, tmp_path, {"legacy.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert l002[0].line == 1
@@ -2105,7 +2530,7 @@ def test_l002_line_1_directive_before_coding_line_still_suppresses(
 
 def test_l002_stays_on_line_1_for_comment_without_coding_line(tmp_path: Path) -> None:
     src = "# generated\nimport logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert [f.line for f in findings if f.rule_id == "L002"] == [1]
 
 
@@ -2113,7 +2538,7 @@ def test_l002_fires_after_shebang_without_directive(tmp_path: Path) -> None:
     src = (
         "#!/usr/bin/env python3\nimport logging\nlogger = logging.getLogger(__name__)\n"
     )
-    findings = _scan_files(tmp_path, {"tool.py": src})
+    findings = scan_files(scan_all, tmp_path, {"tool.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert l002[0].line == 2
@@ -2122,7 +2547,7 @@ def test_l002_fires_after_shebang_without_directive(tmp_path: Path) -> None:
 
 def test_l002_reported_at_line_1_without_header(tmp_path: Path) -> None:
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"a.py": src})
+    findings = scan_files(scan_all, tmp_path, {"a.py": src})
     assert [f.line for f in findings if f.rule_id == "L002"] == [1]
 
 
@@ -2138,7 +2563,9 @@ def test_l002_block_disposition_failing(tmp_path: Path) -> None:
     from conformance.suite.schema.findings import findings_to_report
 
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = [f for f in _scan_files(tmp_path, {"prod.py": src}) if not f.suppressed]
+    findings = [
+        f for f in scan_files(scan_all, tmp_path, {"prod.py": src}) if not f.suppressed
+    ]
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert l002
 
@@ -2154,28 +2581,28 @@ def test_l002_block_disposition_failing(tmp_path: Path) -> None:
 def test_l002_silent_scripts_dir(tmp_path: Path) -> None:
     """Files under scripts/ are dev harnesses — exempt from L002."""
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"scripts/seed_store.py": src})
+    findings = scan_files(scan_all, tmp_path, {"scripts/seed_store.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_silent_run_dev_harness(tmp_path: Path) -> None:
     """run_dev*.py files are dev harnesses — exempt from L002."""
     src = "from loguru import logger\n"
-    findings = _scan_files(tmp_path, {"run_dev_combined.py": src})
+    findings = scan_files(scan_all, tmp_path, {"run_dev_combined.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_silent_nested_scripts_dir(tmp_path: Path) -> None:
     """A ``scripts/`` segment at any path depth is exempt, not just top-level."""
     src = "import logging\nlogger = logging.getLogger(__name__)\n"
-    findings = _scan_files(tmp_path, {"app/scripts/db_helper.py": src})
+    findings = scan_files(scan_all, tmp_path, {"app/scripts/db_helper.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
 def test_l002_silent_nested_run_dev_harness(tmp_path: Path) -> None:
     """``run_dev*.py`` is matched by basename at any depth (e.g. ``app/run_dev.py``)."""
     src = "from loguru import logger\n"
-    findings = _scan_files(tmp_path, {"app/run_dev.py": src})
+    findings = scan_files(scan_all, tmp_path, {"app/run_dev.py": src})
     assert not any(f.rule_id == "L002" for f in findings)
 
 
@@ -2187,7 +2614,7 @@ def test_l002_harness_exemption_does_not_leak_to_prod(tmp_path: Path) -> None:
         "run_dev.py": src,
         "app/auth.py": src,
     }
-    findings = _scan_files(tmp_path, files)
+    findings = scan_files(scan_all, tmp_path, files)
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert len(l002) == 1
     assert "app/auth.py" in l002[0].file

@@ -182,6 +182,16 @@ def test_by_id_directive_keeps_the_series_comment_syntax(tmp_path) -> None:
     assert "# conformance: ignore[E010]" in (tmp_path / "by-id" / "E010.md").read_text()
 
 
+def test_python_anchored_k_rule_prints_a_python_directive(tmp_path) -> None:
+    """K032 anchors on ``@task(pool=)`` in Python, where ``//`` is a SyntaxError."""
+    from conformance.tools import generate_rule_docs as g
+
+    g.main(["--outdir", str(tmp_path)])
+    text = (tmp_path / "by-id" / "K032.md").read_text()
+    assert "\n# conformance: ignore[K032]" in text
+    assert "// conformance: ignore[K032]" not in text
+
+
 def test_check_mode_catches_an_orphaned_by_id_file(tmp_path) -> None:
     """A by-id file whose rule id has left the catalog is invisible to the
     expected-file loop; only an orphan sweep can fail it."""
@@ -207,3 +217,22 @@ def test_regeneration_removes_an_orphaned_by_id_file(tmp_path) -> None:
     g.main(["--outdir", str(tmp_path)])
     assert not orphan.exists()
     g.main(["--outdir", str(tmp_path), "--check"])
+
+
+def test_committed_rule_docs_are_up_to_date(capsys) -> None:
+    """Freshness gate for the committed docs/rules/ tree.
+
+    Remediation agents read these files one rule at a time, so a rule edit that
+    skips regeneration ships stale guidance.  Running --check against the
+    default (committed) directory here puts that gate on every suite-tests leg,
+    and on the wheel gate, where the default directory is the installed copy.
+    """
+    from conformance.tools import generate_rule_docs as g
+
+    try:
+        g.main(["--check"])
+    except SystemExit as exc:
+        raise AssertionError(
+            "Committed rule docs are stale, missing or orphaned:\n"
+            f"{capsys.readouterr().err}"
+        ) from exc

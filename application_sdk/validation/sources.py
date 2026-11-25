@@ -262,7 +262,7 @@ def _parse_field(raw: object, *, field_key: str, path: Path) -> DeclaredField:
         path=name,
         # Widened on purpose: an unrecognised member from a newer toolkit is passed
         # through for the validator to report, per the comment above.
-        type=declared_type,  # type: ignore[arg-type]
+        type=declared_type,  # pyright: ignore[reportArgumentType]
         required=required,
         description=description,
     )
