@@ -16,10 +16,15 @@ and runs:
 
 | Layer | Command | Skips when |
 |-------|---------|------------|
-| **v3 shape** | `tools.migrate_v3.check_migration` — no deprecated imports, `@task`-only, typed `Input`/`Output`, async clients, … | SDK install fails (annotated as incomplete) |
+| **v3 shape** | `tools.migrate_v3.check_migration` — no deprecated imports, `@task`-only, typed `Input`/`Output`, async clients, … | never: it runs on the runner's `python3` from the SDK checkout, with no install |
 | **Contract drift** | the SDK's contract regeneration must leave the whole working tree clean — see [Contract drift: the whole-tree rule](#contract-drift-the-whole-tree-rule) | no pkl contract under `contract/` (fails, not skips, when the contract does not regenerate) |
 | **Unit tests** | `pytest tests/unit --cov=app --cov-report=term` | no `tests/unit/` directory |
 | **Coverage threshold** | `coverage report --fail-under=85` | unit tests skipped or failed |
+
+`check_migration` is stdlib only (no SDK import), so the SDK checkout is
+never installed for it. Its rules come from SDK `main`, not the SDK version
+the app pins: `tools/` is not in the published package. Conformance B001
+overlaps only its deprecated-import rule, so it does not replace the check.
 
 Unit tests need the app's dependencies installed
 (`uv sync --all-extras --all-groups --frozen`). If that install fails, they

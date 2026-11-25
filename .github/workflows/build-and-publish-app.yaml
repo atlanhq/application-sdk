@@ -562,7 +562,8 @@ jobs:
 
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
-        # pinned to main so the check tracks the latest released rules.
+        # pinned to main so the check tracks the latest released rules. The
+        # checker is stdlib only, so nothing from this checkout is installed.
         # application-sdk is public, so the caller's GITHUB_TOKEN could clone
         # it (as every tokenless "Checkout SDK helper scripts" step does); the
         # token below (the SDK-scoped App token minted above) is not what makes
@@ -593,16 +594,11 @@ jobs:
           version: "0.13.9"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
-      - name: Install SDK (migration tooling)
-        id: sdk_install
-        continue-on-error: true
-        working-directory: sdk
-        run: uv sync --all-extras
-
+      # check_migration is stdlib only, so it runs on the runner's python3
+      # from the SDK checkout: no SDK install (FND-4675).
       # Warn-only until FND-4785 flips it (see app-certification.md, Exit plan).
       - name: "v3 shape — check_migration"
         id: check_migration
-        if: steps.sdk_install.outcome == 'success'
         continue-on-error: true
         working-directory: sdk
         run: python3 .github/scripts/build_and_publish/certify.py check-migration
@@ -732,7 +728,6 @@ jobs:
           CD: ${{ steps.contract_drift.outcome }}
           UT: ${{ steps.unit.outputs.outcome }}
           COV: ${{ steps.coverage_threshold.outcome }}
-          SDK_INSTALL: ${{ steps.sdk_install.outcome }}
           APP_INSTALL: ${{ steps.app_install.outcome }}
         run: python3 sdk/.github/scripts/build_and_publish/certify.py verdict
 
