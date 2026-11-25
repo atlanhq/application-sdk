@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import ssl
 import threading
 import time
 from pathlib import Path
@@ -1114,7 +1115,7 @@ class TestS3RegionLookup:
         monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
         monkeypatch.setenv("no_proxy", "amazonaws.com.cn")
         monkeypatch.delenv("NO_PROXY", raising=False)
-        sentinel = object()
+        sentinel = ssl.create_default_context()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
         clients: list[dict] = []
         real_init = httpx.AsyncClient.__init__
@@ -1131,6 +1132,36 @@ class TestS3RegionLookup:
             assert client_kwargs["verify"] is sentinel
             assert client_kwargs["trust_env"] is False
             assert client_kwargs["timeout"] == 10.0
+
+    async def test_lookup_keeps_ssl_cert_file_trust(self, monkeypatch):
+        """httpx's ``trust_env`` is off for the lookup, but a CA bundle in
+        ``SSL_CERT_FILE`` is still trusted: the context is built with
+        ``trust_env=True`` from the SDK's own verify setting."""
+        import httpx
+
+        from application_sdk.clients import ssl_utils
+
+        monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: True)
+        built: list[dict] = []
+        context = ssl.create_default_context()
+
+        def _create(**kwargs):
+            built.append(kwargs)
+            return context
+
+        monkeypatch.setattr(httpx, "create_ssl_context", _create)
+        clients: list[dict] = []
+        real_init = httpx.AsyncClient.__init__
+
+        def _init(self, **kwargs):
+            clients.append(kwargs)
+            real_init(self, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
+        self._stub_head(monkeypatch, headers={"x-amz-bucket-region": "eu-west-1"})
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == "eu-west-1"
+        assert built == [{"verify": True, "trust_env": True}]
+        assert clients[0]["verify"] is context
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
         from application_sdk import _obstore_config

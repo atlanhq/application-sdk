@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 import socket as _socket
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any
 from unittest import mock
@@ -698,12 +700,19 @@ class TestTemporalProxyConfig:
         return mock.AsyncMock(return_value=mock.MagicMock())
 
     @staticmethod
-    def _proxy_env(proxies: dict[str, str]):
+    @contextmanager
+    def _proxy_env(proxies: dict[str, str], **env: str) -> Iterator[None]:
         """Set ``<scheme>_proxy`` for each entry of *proxies* (``"no"`` is
-        ``no_proxy``), with every other proxy variable unset."""
-        env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
-        env.update({f"{scheme}_proxy": url for scheme, url in proxies.items()})
-        return mock.patch.dict(os.environ, env, clear=True)
+        ``no_proxy``), with every other proxy variable unset; *env* sets more
+        variables by name. pytest's monkeypatch restores only these variables."""
+        with pytest.MonkeyPatch.context() as mp:
+            for name in [n for n in os.environ if n.lower().endswith("_proxy")]:
+                mp.delenv(name)
+            for scheme, url in proxies.items():
+                mp.setenv(f"{scheme}_proxy", url)
+            for name, value in env.items():
+                mp.setenv(name, value)
+            yield
 
     async def test_no_proxy_config_when_env_unset(self) -> None:
         """No proxy in the environment -> connect directly (no proxy kwarg)."""

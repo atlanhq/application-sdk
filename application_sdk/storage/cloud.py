@@ -743,7 +743,9 @@ async def _lookup_bucket_region(bucket: str) -> str:
     The proxy comes from :mod:`application_sdk._proxy`, the rule every SDK
     connection follows, resolved per lookup host so ``NO_PROXY`` applies.
     httpx's own ``trust_env`` handling is off: it also reads operating-system
-    proxy settings, which no other SDK connection does.
+    proxy settings, which no other SDK connection does. The TLS context is
+    built here with ``trust_env=True``, so ``SSL_CERT_FILE`` and
+    ``SSL_CERT_DIR`` are still trusted as httpx would trust them.
     """
     try:
         from application_sdk._proxy import (  # noqa: PLC0415
@@ -753,7 +755,9 @@ async def _lookup_bucket_region(bucket: str) -> str:
         from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
 
         proxies = environment_proxies()
-        ssl_context = get_ssl_context()
+        # trust_env=False below would also drop httpx's SSL_CERT_FILE handling;
+        # build the context as httpx would, so that CA bundle is still trusted.
+        ssl_context = httpx.create_ssl_context(verify=get_ssl_context(), trust_env=True)
         for host in _region_lookup_hosts():
             url = _S3_REGION_LOOKUP_URL.format(host=host, bucket=quote(bucket, safe=""))
             async with httpx.AsyncClient(
