@@ -1398,20 +1398,6 @@ def _looks_like_scan_gate_text(text: str) -> bool:
     )
 
 
-def _looks_like_scan_gate(response: Response) -> bool:
-    """True when a failed install looks like GM's release-scan gate refusing.
-
-    Matched on the rendered body rather than a status code: GM does not document
-    a distinct status for this, and a false positive only changes the wording of
-    an error that is failing anyway.
-    """
-    rendered = json.dumps(response.body).lower() if response.body else ""
-    return any(
-        marker in rendered
-        for marker in (_SCAN_PENDING, _SCAN_FAILED, "scan", "not active", "draft")
-    )
-
-
 def _release_status(client: TenantClient, app_id: str, release_id: str) -> str:
     """Return GM's release status, or "" when it cannot be read.
 
