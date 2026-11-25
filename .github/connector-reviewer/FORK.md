@@ -722,17 +722,22 @@ context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
   of a changed Python file, the new one in a head copy (a def, class, variable,
   parameter or exception name, never a name bound only by an import), or modules
   of the changed paths (`triage.definitions`). A name after a dot must be a member
-  defined here: a method, class attribute, `self.x`/`cls.x`, or a module-level def
-  or class (`Definitions.renames(member=True)`). So `json` -> `orjson`,
+  defined here (a method, class attribute, `self.x`/`cls.x`, or a module-level def
+  or class), after a receiver of this repository: `self`, `cls`, a class defined
+  here or a changed path's module (`Definitions.renames(receiver=…)`; lens F-80e1ac:
+  pooled member names let an unrelated rename of `error` to `warning` bless
+  `logger.error` -> `logger.warning`). So `json` -> `orjson`,
   `logger.error` -> `logger.warning` and `client.get` -> `client.post` go to the line
-  review however many files repeat them. A hunk whose imports swap one module for
-  another (`import json` -> `import orjson`, `from a import f` -> `from b import f`) is
-  not "imports only" (`hunk_imports_only`), unless the old module is a file the pull
-  request renames to the new one (`triage.renamed_modules`); imports added,
+  review however many files repeat them. A hunk whose imports drop one binding and
+  add another, as (module, name, alias) (`import json` -> `import orjson`,
+  `from a import f` -> `from b import f`, `from m import f as send` -> `from m import g
+  as send`), is not "imports only" (`hunk_imports_only`), unless the only difference
+  is a module the pull request renames (`triage.renamed_modules`); imports added,
   regrouped or reordered still are. `baseline.py`, `diff.py` and `index.py` are
   unchanged and still byte-identical between the copies. Tests adapted: the
-  rename cases now hand triage the renamed function's definition on each side (the
-  100-file case adds its def site, so it counts 101 files), and the two
+  rename cases now hand triage the renamed function's definition on each side and
+  its diff, so the def site counts as a renamed file too (the 100-file case counts
+  101 files), and the two
   `test_import_only_means_nothing_but_import_statements` cases that swapped `os`
   for `sys` and `a` for `b` now expect a line review, with same-module cases added.
 
@@ -749,8 +754,9 @@ context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
   same left side gained in the same function, a deleted test counts only with a
   lost expectation, a new skip counts unless one like it was removed. Helper
   functions in a test file are compared too, as the line rules did through the
-  hunk header. A file whose copy is missing or does not parse falls back to the
-  diff lines.
+  hunk header. When any changed test file's copy is missing or does not parse,
+  every file falls back to the diff lines: a move between a file read one way and
+  a file read the other was otherwise reported as a removal (lens F-0290b2).
 
 - **Principles (connector-reviewer only).** `PrincipleSet.in_order` gives a bundle's
   principles room in this order: those whose `applies-to` names one of its files,

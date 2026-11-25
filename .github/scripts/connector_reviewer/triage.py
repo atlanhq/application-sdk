@@ -178,44 +178,49 @@ def _import_line(line: str) -> bool:
     return bool(body) and all(isinstance(n, (ast.Import, ast.ImportFrom)) for n in body)
 
 
-def _imported_modules(line: str) -> set[str]:
-    """The modules an import line imports from: `import a.b, c` -> {a.b, c};
-    `from .m import x` -> {.m}; the opening line `from m import (` -> {m}."""
+def _imported_bindings(line: str) -> set[tuple[str, str, str]]:
+    """What an import line binds, as (module, name, alias): `import a.b as c`
+    -> (a.b, "", c); `from .m import x as y` -> (.m, x, y); the opening line
+    `from m import (` -> (m, "(", "")."""
     text = line.strip()
     try:
         body = ast.parse(text).body
     except (SyntaxError, ValueError):
         m = _IMPORT_OPEN.fullmatch(text)
-        return {text.split()[1]} if m else set()
-    out: set[str] = set()
+        return {(text.split()[1], "(", "")} if m else set()
+    out: set[tuple[str, str, str]] = set()
     for n in body:
         if isinstance(n, ast.Import):
-            out.update(a.name for a in n.names)
+            out.update((a.name, "", a.asname or "") for a in n.names)
         elif isinstance(n, ast.ImportFrom):
-            out.add("." * n.level + (n.module or ""))
+            module = "." * n.level + (n.module or "")
+            out.update((module, a.name, a.asname or "") for a in n.names)
     return out
 
 
 def hunk_imports_only(h: Hunk, renamed_modules: dict[str, str] | None = None) -> bool:
     """Every changed line is an import statement and nothing else, at least
-    one is added, and no module is swapped for another. A hunk that only
-    removes imports is not proven mechanical: it can drop a re-export (a
-    deleted `__init__.py`) or an import kept for its side effect. A hunk that
-    drops one module's import and adds another's (`import json` -> `import
-    orjson`, `from a import f` -> `from b import f`) changes which code runs
-    (FND-5316), unless the old module is a file this pull request renames to
-    the new one (`renamed_modules`: old dotted name -> new)."""
+    one is added, and nothing imported is swapped for something else. A hunk
+    that only removes imports is not proven mechanical: it can drop a
+    re-export (a deleted `__init__.py`) or an import kept for its side effect.
+    A hunk that drops one import and adds another (`import json` -> `import
+    orjson`, `from a import f` -> `from b import f`, `from m import f as send`
+    -> `from m import g as send`) changes which code runs (FND-5316), unless
+    the only difference is a module this pull request renames
+    (`renamed_modules`: old dotted name -> new). Imports added, regrouped or
+    reordered are still mechanical."""
     rem, add = _sides(h)
     changed = [x for x in rem + add if x.strip()]
     if not (any(x.strip() for x in add) and all(_import_line(x) for x in changed)):
         return False
-    old = set().union(*(_imported_modules(x) for x in rem if x.strip()))
-    new = set().union(*(_imported_modules(x) for x in add if x.strip()))
+    old = set().union(*(_imported_bindings(x) for x in rem if x.strip()))
+    new = set().union(*(_imported_bindings(x) for x in add if x.strip()))
     gone, came = old - new, new - old
-    if not gone or not came:
-        return True  # imports added, regrouped or reordered: no module swapped
+    if not gone:
+        return True  # imports added, regrouped or reordered: nothing swapped
     moves = renamed_modules or {}
-    return {moves.get(m) for m in gone} >= came and all(m in moves for m in gone)
+    moved = {(moves[m], n, a) for m, n, a in gone if m in moves}
+    return len(moved) == len(gone) and moved == came
 
 
 def _renameable(token: str) -> bool:
@@ -259,22 +264,31 @@ def hunk_swaps(
         if s is None:
             return None
         if defined is not None and not all(
-            defined.renames(x, y, member=m) for x, y, m in _swap_positions(o, n)
+            defined.renames(x, y, receiver=r) for x, y, r in _swap_positions(o, n)
         ):
             return None
         out.update(s)
     return out
 
 
-def _swap_positions(old: str, new: str) -> list[tuple[str, str, bool]]:
-    """Each swap of a pure-swap line pair, and whether it sits after a dot
-    (an attribute or method: `logger.error`), on either side."""
+def _swap_positions(old: str, new: str) -> list[tuple[str, str, str | None]]:
+    """Each swap of a pure-swap line pair, with its receiver when it sits
+    after a dot (`logger` for `logger.error`; "" when the dot follows no
+    name, such as `f().error`), or None when it is a plain name."""
     a, b = _TOKEN.findall(old), _TOKEN.findall(new)
-    return [
-        (x, y, (i > 0 and (a[i - 1] == "." or b[i - 1] == ".")))
-        for i, (x, y) in enumerate(zip(a, b))
-        if x != y
-    ]
+    out: list[tuple[str, str, str | None]] = []
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x == y:
+            continue
+        side = (
+            a if i > 0 and a[i - 1] == "." else b if i > 0 and b[i - 1] == "." else None
+        )
+        if side is None:
+            out.append((x, y, None))
+        else:
+            before = side[i - 2] if i > 1 else ""
+            out.append((x, y, before if re.match(r"[A-Za-z_]\w*$", before) else ""))
+    return out
 
 
 @dataclass
@@ -285,19 +299,30 @@ class Definitions:
     `names`: functions, classes, variables, parameters and exception names,
     and the module names of the changed paths. `members`: what may follow a
     dot: methods and attributes of a class defined here, `self.x`/`cls.x`
-    assignments, and module-level defs and classes (`module.f`). A name bound
-    only by an import is in neither: it names code outside the repository."""
+    assignments, and module-level defs and classes (`module.f`). `receivers`:
+    what such a member may follow, the changed paths' modules and the classes
+    defined here (`self` and `cls` always). A name bound only by an import is
+    in none of them: it names code outside the repository."""
 
     old_names: set[str] = field(default_factory=set)
     new_names: set[str] = field(default_factory=set)
     old_members: set[str] = field(default_factory=set)
     new_members: set[str] = field(default_factory=set)
+    receivers: set[str] = field(default_factory=lambda: {"self", "cls"})
 
-    def renames(self, old: str, new: str, *, member: bool) -> bool:
+    def renames(self, old: str, new: str, *, receiver: str | None = None) -> bool:
         """Whether `old -> new` is a rename of names defined here: the old
-        name on the base side, the new one on the head side."""
-        if member:
-            return old in self.old_members and new in self.new_members
+        name on the base side, the new one on the head side. After a dot
+        (`receiver` not None), the receiver must be this repository's too
+        (`self`, a class or a module defined here): `logger.error` ->
+        `logger.warning` is never a rename, even when some changed file
+        defines an `error` and a `warning` of its own."""
+        if receiver is not None:
+            return (
+                receiver in self.receivers
+                and old in self.old_members
+                and new in self.new_members
+            )
         return old in self.old_names and new in self.new_names
 
 
@@ -311,14 +336,16 @@ def _module_names(path: str) -> set[str]:
     return {parts[-1], ".".join(parts)} if parts else set()
 
 
-def _defined_in(text: str) -> tuple[set[str], set[str]]:
-    """(names, members) one Python file defines; empty when it does not parse."""
+def _defined_in(text: str) -> tuple[set[str], set[str], set[str]]:
+    """(names, members, classes) one Python file defines; empty when it does
+    not parse."""
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
-        return set(), set()
+        return set(), set(), set()
     names: set[str] = set()
     members: set[str] = set()
+    classes: set[str] = set()
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             members.add(node.name)  # reached as `module.name`
@@ -338,6 +365,7 @@ def _defined_in(text: str) -> tuple[set[str], set[str]]:
             if isinstance(node.value, ast.Name) and node.value.id in ("self", "cls"):
                 members.add(node.attr)
         if isinstance(node, ast.ClassDef):
+            classes.add(node.name)
             for stmt in node.body:
                 if isinstance(
                     stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -351,7 +379,7 @@ def _defined_in(text: str) -> tuple[set[str], set[str]]:
                     else []
                 )
                 members.update(t.id for t in targets if isinstance(t, ast.Name))
-    return names, members
+    return names, members, classes
 
 
 def definitions(
@@ -366,15 +394,17 @@ def definitions(
         d.new_names |= _module_names(fd.path)
         d.old_members |= _module_names(fd.old_path or fd.path)
         d.new_members |= _module_names(fd.path)
+        d.receivers |= _module_names(fd.old_path or fd.path) | _module_names(fd.path)
     # Python files only: `timeout = 30` in a TOML file parses as Python too.
     for path, text, names, members in (
         *((p, t, d.old_names, d.old_members) for p, t in old_text.items()),
         *((p, t, d.new_names, d.new_members) for p, t in new_text.items()),
     ):
         if text and path.endswith(_INDENTED):
-            n, m = _defined_in(text)
+            n, m, c = _defined_in(text)
             names |= n
             members |= m
+            d.receivers |= c
     return d
 
 

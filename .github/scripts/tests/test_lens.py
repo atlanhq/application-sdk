@@ -1904,6 +1904,7 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
             _file_diff(f"d{i}.yaml", ["timeout: 30"], ["timeout: 60"]) for i in range(3)
         )  # duplicate x3
         + _file_diff("real.py", ["    return a"], ["    return a / b"])  # real change
+        + _GET_X_DEF  # the renamed function's own definition
     )
     t = triage(files, _GET_X_OLD, _GET_X_NEW)
     assert [f.path for f in t.reviewed] == [
@@ -1913,7 +1914,12 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
     assert t.renames == [("get_x", "fetch_x")]
     assert set(t.duplicate_of) == {"d1.yaml", "d2.yaml"}
     assert "imports only" in t.mechanical and "whitespace-only" in t.mechanical
-    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+    assert set(t.mechanical["mechanical rename"]) == {
+        "r0.py",
+        "r1.py",
+        "r2.py",
+        "x_def.py",
+    }
 
 
 def test_a_one_off_swap_is_an_edit_not_a_rename():
@@ -1938,6 +1944,8 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
 # head copies are among the changed files.
 _GET_X_OLD = {"x_def.py": "def get_x(i):\n    return i\n"}
 _GET_X_NEW = {"x_def.py": "def fetch_x(i):\n    return i\n"}
+# ... and its diff, which every test that hands triage those copies includes.
+_GET_X_DEF = _file_diff("x_def.py", ["def get_x(i):"], ["def fetch_x(i):"])
 
 
 def test_a_library_name_swapped_across_files_is_line_reviewed_not_a_rename():
@@ -2026,16 +2034,23 @@ def test_a_rename_of_a_repo_function_or_method_stays_mechanical():
         _file_diff(f"r{i}.py", [f"x = get_x({i})"], [f"x = fetch_x({i})"])
         for i in range(3)
     )
-    t = triage(parse_unified_diff(calls), _GET_X_OLD, _GET_X_NEW)
+    t = triage(parse_unified_diff(calls + _GET_X_DEF), _GET_X_OLD, _GET_X_NEW)
     assert t.renames == [("get_x", "fetch_x")]
-    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+    assert set(t.mechanical["mechanical rename"]) == {
+        "r0.py",
+        "r1.py",
+        "r2.py",
+        "x_def.py",
+    }
     methods = "".join(
         _file_diff(
             f"c{i}.py",
-            [f"    y = self.client.read_all({i})"],
-            [f"    y = self.client.read_every({i})"],
+            [f"        y = self.read_all({i})"],
+            [f"        y = self.read_every({i})"],
         )
         for i in range(3)
+    ) + _file_diff(
+        "client.py", ["    def read_all(self, i):"], ["    def read_every(self, i):"]
     )
     old = {"client.py": "class Client:\n    def read_all(self, i):\n        return i\n"}
     new = {
@@ -2044,7 +2059,61 @@ def test_a_rename_of_a_repo_function_or_method_stays_mechanical():
     t = triage(parse_unified_diff(methods), old, new)
     assert t.renames == [("read_all", "read_every")] and t.reviewed == []
     # The same swap with no definition on either side is an edit.
-    assert len(triage(parse_unified_diff(methods), {}, {}).reviewed) == 3
+    assert len(triage(parse_unified_diff(methods), {}, {}).reviewed) == 4
+
+
+def test_a_library_member_swap_is_not_blessed_by_an_unrelated_rename():
+    """lens F-80e1ac: member names were pooled across files, so a changed
+    helper that renames its own `error` to `warning` made `logger.error` ->
+    `logger.warning` at three call sites a "rename". A member swap is a rename
+    only after a receiver of this repository: `self`, `cls`, a class or a
+    changed module defined here."""
+    calls = "".join(
+        _file_diff(
+            f"application_sdk/m{i}.py",
+            [f'    logger.error("failed %s", e{i})'],
+            [f'    logger.warning("failed %s", e{i})'],
+        )
+        for i in range(3)
+    ) + _file_diff("application_sdk/levels.py", ["def error():"], ["def warning():"])
+    old = {"application_sdk/levels.py": "def error():\n    return 1\n"}
+    new = {"application_sdk/levels.py": "def warning():\n    return 1\n"}
+    t = triage(parse_unified_diff(calls), old, new)
+    assert sorted(f.path for f in t.reviewed if "/m" in f.path) == [
+        "application_sdk/m0.py",
+        "application_sdk/m1.py",
+        "application_sdk/m2.py",
+    ]
+    # Through the module that defines it, the same rename is mechanical.
+    via_module = "".join(
+        _file_diff(
+            f"application_sdk/u{i}.py",
+            [f"    levels.error({i})"],
+            [f"    levels.warning({i})"],
+        )
+        for i in range(3)
+    ) + _file_diff("application_sdk/levels.py", ["def error():"], ["def warning():"])
+    t = triage(parse_unified_diff(via_module), old, new)
+    assert t.reviewed == []
+
+
+def test_an_import_that_swaps_a_name_or_alias_is_not_imports_only():
+    """lens F-f160ec: `from m import f as send` -> `from m import g as send`
+    keeps the module but binds `send` to other code."""
+    for old, new in (
+        ("from m import f as send", "from m import g as send"),
+        ("from pkg import safe", "from pkg import unsafe"),
+        ("import a.b as c", "import a.d as c"),
+    ):
+        diff = parse_unified_diff(_file_diff("application_sdk/x.py", [old], [new]))
+        assert [f.path for f in triage(diff, {}, {}).reviewed] == [
+            "application_sdk/x.py"
+        ]
+    # A name added to an import list is still imports only.
+    added = parse_unified_diff(
+        _file_diff("application_sdk/x.py", ["from m import f"], ["from m import f, g"])
+    )
+    assert triage(added, {}, {}).reviewed == []
 
 
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
@@ -9288,7 +9357,7 @@ def test_a_real_rename_across_files_is_still_mechanical():
         for i in range(3)
     )
     # The function's definition, renamed in the PR, is defined on each side.
-    t = triage(parse_unified_diff(diff), _GET_X_OLD, _GET_X_NEW)
+    t = triage(parse_unified_diff(diff + _GET_X_DEF), _GET_X_OLD, _GET_X_NEW)
     assert t.reviewed == [] and t.renames == [("get_x", "fetch_x")]
 
 

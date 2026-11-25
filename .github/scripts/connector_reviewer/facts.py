@@ -215,8 +215,9 @@ def weakened_expectations(
     assertions of each test, as syntax trees. Re-wrapping `assert x, msg` over
     three lines, reformatting or reordering reports nothing; an assertion
     gone or changed still does (FND-5316: a re-wrap was reported as two
-    assertions removed and one expectation changed). A file whose copies are
-    missing or do not parse is compared by its diff lines, as below.
+    assertions removed and one expectation changed). When any file's copy is
+    missing or does not parse, every file is compared by its diff lines, as
+    below.
 
     By diff lines: a removed assertion counts unless the same line (whitespace aside) is added
     back in the same test, in any test file of the pull request, or in a test
@@ -237,18 +238,15 @@ def weakened_expectations(
                 _tests_in(old_text.get(fd.old_path or fd.path)),
                 _tests_in(new_text.get(fd.path)),
             )
-            if sides[0] is not None and sides[1] is not None:
-                trees[fd.path] = (sides[0], sides[1])
-    by_lines = _by_lines(test_files)
+            if sides[0] is None or sides[1] is None:
+                # One file read by lines and another by trees would each miss
+                # an assertion moved between them: all or none (lens F-0290b2).
+                trees = {}
+                break
+            trees[fd.path] = (sides[0], sides[1])
     if not trees:
-        return by_lines
-    structural = _structural(trees, [fd.path for fd in test_files])
-    return [
-        e
-        for fd in test_files
-        for e in (structural if fd.path in trees else by_lines)
-        if e.path == fd.path
-    ]
+        return _by_lines(test_files)
+    return _structural(trees, [fd.path for fd in test_files])
 
 
 def _by_lines(test_files: list[FileDiff]) -> list[Expectation]:

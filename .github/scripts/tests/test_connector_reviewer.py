@@ -3666,6 +3666,7 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
             _file_diff(f"d{i}.yaml", ["timeout: 30"], ["timeout: 60"]) for i in range(3)
         )  # duplicate x3
         + _file_diff("real.py", ["    return a"], ["    return a / b"])  # real change
+        + _GET_X_DEF  # the renamed function's own definition
     )
     t = triage(files, _GET_X_OLD, _GET_X_NEW)
     assert [f.path for f in t.reviewed] == [
@@ -3675,7 +3676,12 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
     assert t.renames == [("get_x", "fetch_x")]
     assert set(t.duplicate_of) == {"d1.yaml", "d2.yaml"}
     assert "imports only" in t.mechanical and "whitespace-only" in t.mechanical
-    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+    assert set(t.mechanical["mechanical rename"]) == {
+        "r0.py",
+        "r1.py",
+        "r2.py",
+        "x_def.py",
+    }
 
 
 def test_a_one_off_swap_is_an_edit_not_a_rename():
@@ -3700,6 +3706,8 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
 # head copies are among the changed files.
 _GET_X_OLD = {"x_def.py": "def get_x(i):\n    return i\n"}
 _GET_X_NEW = {"x_def.py": "def fetch_x(i):\n    return i\n"}
+# ... and its diff, which every test that hands triage those copies includes.
+_GET_X_DEF = _file_diff("x_def.py", ["def get_x(i):"], ["def fetch_x(i):"])
 
 
 def test_a_library_name_swapped_across_files_is_line_reviewed_not_a_rename():
@@ -3780,16 +3788,23 @@ def test_a_rename_of_a_repo_function_or_method_stays_mechanical():
         _file_diff(f"r{i}.py", [f"x = get_x({i})"], [f"x = fetch_x({i})"])
         for i in range(3)
     )
-    t = triage(parse_unified_diff(calls), _GET_X_OLD, _GET_X_NEW)
+    t = triage(parse_unified_diff(calls + _GET_X_DEF), _GET_X_OLD, _GET_X_NEW)
     assert t.renames == [("get_x", "fetch_x")]
-    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+    assert set(t.mechanical["mechanical rename"]) == {
+        "r0.py",
+        "r1.py",
+        "r2.py",
+        "x_def.py",
+    }
     methods = "".join(
         _file_diff(
             f"c{i}.py",
-            [f"    y = self.client.read_all({i})"],
-            [f"    y = self.client.read_every({i})"],
+            [f"        y = self.read_all({i})"],
+            [f"        y = self.read_every({i})"],
         )
         for i in range(3)
+    ) + _file_diff(
+        "client.py", ["    def read_all(self, i):"], ["    def read_every(self, i):"]
     )
     old = {"client.py": "class Client:\n    def read_all(self, i):\n        return i\n"}
     new = {
@@ -3798,7 +3813,57 @@ def test_a_rename_of_a_repo_function_or_method_stays_mechanical():
     t = triage(parse_unified_diff(methods), old, new)
     assert t.renames == [("read_all", "read_every")] and t.reviewed == []
     # The same swap with no definition on either side is an edit.
-    assert len(triage(parse_unified_diff(methods), {}, {}).reviewed) == 3
+    assert len(triage(parse_unified_diff(methods), {}, {}).reviewed) == 4
+
+
+def test_a_library_member_swap_is_not_blessed_by_an_unrelated_rename():
+    """lens F-80e1ac: member names were pooled across files, so a changed
+    helper that renames its own `error` to `warning` made `logger.error` ->
+    `logger.warning` at three call sites a "rename". A member swap is a rename
+    only after a receiver of this repository: `self`, `cls`, a class or a
+    changed module defined here."""
+    calls = "".join(
+        _file_diff(
+            f"app/m{i}.py",
+            [f'    logger.error("failed %s", e{i})'],
+            [f'    logger.warning("failed %s", e{i})'],
+        )
+        for i in range(3)
+    ) + _file_diff("app/levels.py", ["def error():"], ["def warning():"])
+    old = {"app/levels.py": "def error():\n    return 1\n"}
+    new = {"app/levels.py": "def warning():\n    return 1\n"}
+    t = triage(parse_unified_diff(calls), old, new)
+    assert sorted(f.path for f in t.reviewed if "/m" in f.path) == [
+        "app/m0.py",
+        "app/m1.py",
+        "app/m2.py",
+    ]
+    # Through the module that defines it, the same rename is mechanical.
+    via_module = "".join(
+        _file_diff(
+            f"app/u{i}.py", [f"    levels.error({i})"], [f"    levels.warning({i})"]
+        )
+        for i in range(3)
+    ) + _file_diff("app/levels.py", ["def error():"], ["def warning():"])
+    t = triage(parse_unified_diff(via_module), old, new)
+    assert t.reviewed == []
+
+
+def test_an_import_that_swaps_a_name_or_alias_is_not_imports_only():
+    """lens F-f160ec: `from m import f as send` -> `from m import g as send`
+    keeps the module but binds `send` to other code."""
+    for old, new in (
+        ("from m import f as send", "from m import g as send"),
+        ("from pkg import safe", "from pkg import unsafe"),
+        ("import a.b as c", "import a.d as c"),
+    ):
+        diff = parse_unified_diff(_file_diff("app/x.py", [old], [new]))
+        assert [f.path for f in triage(diff, {}, {}).reviewed] == ["app/x.py"]
+    # A name added to an import list is still imports only.
+    added = parse_unified_diff(
+        _file_diff("app/x.py", ["from m import f"], ["from m import f, g"])
+    )
+    assert triage(added, {}, {}).reviewed == []
 
 
 def test_the_mechanical_box_lists_only_files_the_model_never_saw(
@@ -11273,6 +11338,23 @@ def test_structural_expectations_keep_the_line_rules_for_moves_skips_and_deleted
     ]
 
 
+def test_one_test_file_without_both_copies_puts_every_file_on_the_line_rules():
+    """lens F-0290b2: an assertion moved from a file compared as trees into a
+    new test of a file compared by lines was reported removed: each half saw
+    only its own side of the move."""
+    diff = _udiff(
+        "tests/unit/test_a.py",
+        [" def test_a():", "     assert f() == 1", "-    assert g() == 2"],
+    ) + _udiff("tests/unit/test_b.py", ["+def test_b():", "+    assert g() == 2"])
+    files = parse_unified_diff(diff)
+    old = {
+        "tests/unit/test_a.py": "def test_a():\n    assert f() == 1\n    assert g() == 2\n"
+    }
+    new = {"tests/unit/test_a.py": "def test_a():\n    assert f() == 1\n"}
+    # test_b.py's copies were not read: the move is still seen.
+    assert facts_mod.weakened_expectations(files, old, new) == []
+
+
 def test_the_review_reads_both_copies_of_a_changed_test_for_the_facts(repo: Path):
     """End to end: the run hands weakened_expectations the base and head copies,
     so the re-wrap reaches neither the trace nor the prompt as a weakening."""
@@ -13461,7 +13543,7 @@ def test_a_real_rename_across_files_is_still_mechanical():
         for i in range(3)
     )
     # The function's definition, renamed in the PR, is defined on each side.
-    t = triage(parse_unified_diff(diff), _GET_X_OLD, _GET_X_NEW)
+    t = triage(parse_unified_diff(diff + _GET_X_DEF), _GET_X_OLD, _GET_X_NEW)
     assert t.reviewed == [] and t.renames == [("get_x", "fetch_x")]
 
 
