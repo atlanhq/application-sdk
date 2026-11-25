@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    ac00247a9b169b07054fdcec2979eb9e8007bf54
-source-date:   2026-11-25T14:25:23Z
+source-sha:    627464673e45f0a77043fc11a9495c352f8695d6
+source-date:   2026-11-25T14:52:46Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1226,9 +1226,9 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `canonical_type_str`
 
 - **Import:** `from application_sdk.contracts.compat import canonical_type_str`
-- **Signature:** `canonical_type_str(tp: object) -> str`
+- **Signature:** `canonical_type_str(tp: object)`
 - **Summary:** Return a normalized string representation of a type annotation.
-- **Defined in:** `application_sdk/contracts/compat.py`
+- **Defined in:** `application_sdk/contracts/base.py`
 
 #### `check_backwards_compatible`
 

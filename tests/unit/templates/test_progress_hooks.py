@@ -2,13 +2,13 @@
 
 Covers the two shapes in the SQL templates (ADR-0018 → *Feeding the tracker*):
 
-* ``SqlApp._extract_entity`` — fetch a page, write a batch, repeat. Marking at
+* ``SqlApp.extract_entity`` — fetch a page, write a batch, repeat. Marking at
   the page boundary is what makes the read loop need no hold: only a *single*
   fetch+write cycle slower than ``max_no_progress_seconds`` needs one.
 * ``SqlMetadataExtractor.fetch_*`` — page loops with no write side at all, so
   nothing else would carry the signal for them.
 
-Also pins the deliberate *absence* of a hook in ``_transform_entity``.
+Also pins the deliberate *absence* of a hook in ``transform_entity``.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ async def test_an_extract_that_yields_no_pages_marks_nothing(
 async def test_transform_deliberately_records_no_progress(
     tmp_path: Path, progress_marks: RecordingProgressTracker
 ) -> None:
-    """``_transform_entity`` is covered by a hold, not by a framework hook.
+    """``transform_entity`` is covered by a hold, not by a framework hook.
 
     FND-282 offloaded the whole record map to a single ``run_in_thread`` hop, so
     it is FND-290's unbounded auto-hold that vouches for it — mechanism 2, not

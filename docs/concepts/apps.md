@@ -1213,7 +1213,7 @@ The marker does two things at once, and neither of them is "turn the check off":
 
 **You almost certainly do not need to write this.** `ExtractionOutput.transformed_files` is the
 SDK's own field — declared by the SDK, populated by `SqlApp.run()`, written by
-`SqlApp._transform_entity` — so every SQL connector inherits the marker and needs no
+`SqlApp.transform_entity` — so every SQL connector inherits the marker and needs no
 `artifactSchemas` entry for it. Your `MyExtractionOutput(ExtractionOutput)` is covered with no
 change, and stays covered if you **redeclare** the field to narrow its type or attach your own
 `Field(...)`: the marker is resolved across the contract's MRO, so a subclass cannot silently
@@ -1551,6 +1551,8 @@ class MyConnector(App):
     @task(retry_policy=RetryPolicy(max_attempts=10, backoff_coefficient=1.5))
     async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
 ```
+
+A `retry_policy` replaces the `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds` arguments: the task is dispatched with the policy and those three are never read. Put the values on the policy instead. Passing any of them together with `retry_policy` warns at decoration today and raises `TaskDeclarationError` from v4.0.0.
 
 `RetryPolicy` is a frozen dataclass with fluent builder methods:
 

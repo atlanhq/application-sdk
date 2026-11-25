@@ -4960,3 +4960,191 @@ def test_p015_exempts_optional_and_literal_scalar_items(annotation: str) -> None
 )
 def test_p015_still_fires_on_keyed_or_any_items(annotation: str) -> None:
     assert _p015_on(annotation) == ["P015"]
+
+
+# ── P068 SqlAppRunOverrideUnverified ─────────────────────────────────────────
+
+_P068_LOCK = '[[package]]\nname = "atlan-application-sdk"\nversion = "3.59.0"\n'
+
+
+def _p068(tmp_path: Path, files: dict[str, str], lock: str | None = _P068_LOCK) -> list:
+    paths = []
+    for name, src in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(src)
+        paths.append(path)
+    if lock is not None:
+        (tmp_path / "uv.lock").write_text(lock)
+    return [f for f in scan_all(paths, tmp_path) if f.rule_id == "P068"]
+
+
+_SQL_IMPORT = "from application_sdk.templates import SqlApp\n"
+
+
+def test_p068_fires_on_a_run_replacement_that_never_verifies(tmp_path: Path) -> None:
+    src = _SQL_IMPORT + (
+        "class Connector(SqlApp):\n"
+        "    async def run(self, input):\n"
+        "        out = await self.transform_tables(input)\n"
+        "        return ExtractionOutput(transformed_data_prefix='p')\n"
+    )
+    [finding] = _p068(tmp_path, {"app/connector.py": src})
+    assert finding.line == 3
+    assert "Connector.run()" in finding.message
+    assert "finalize_extraction" in finding.message
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "        return await super().run(input)\n",
+        "        base = await super().run(input)\n        return base\n",
+        "        return await SqlApp.run(self, input)\n",
+        "        return await self.finalize_extraction(base, [out])\n",
+        "        if input.x:\n            return await self.finalize_extraction(b)\n"
+        "        return await super().run(input)\n",
+    ],
+)
+def test_p068_silent_when_the_override_verifies(tmp_path: Path, body: str) -> None:
+    src = (
+        _SQL_IMPORT
+        + "class Connector(SqlApp):\n    async def run(self, input):\n"
+        + body
+    )
+    assert _p068(tmp_path, {"app/connector.py": src}) == []
+
+
+def test_p068_follows_the_app_s_own_base_across_files(tmp_path: Path) -> None:
+    files = {
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    [finding] = _p068(tmp_path, files)
+    assert finding.file == "app/connector.py"
+
+
+def test_p068_accepts_the_intermediate_base_by_name(tmp_path: Path) -> None:
+    files = {
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return await Base.run(self, input)\n"
+        ),
+    }
+    assert _p068(tmp_path, files) == []
+
+
+def test_p068_silent_on_a_class_that_is_not_the_sdk_sqlapp(tmp_path: Path) -> None:
+    src = (
+        "from elsewhere import SqlApp\n"
+        "class Connector(SqlApp):\n"
+        "    async def run(self, input):\n"
+        "        return None\n"
+        "class Plain(App):\n"
+        "    async def run(self, input):\n"
+        "        return None\n"
+    )
+    assert _p068(tmp_path, {"app/connector.py": src}) == []
+
+
+def test_p068_silent_on_a_subclass_that_does_not_define_run(tmp_path: Path) -> None:
+    src = _SQL_IMPORT + "class Connector(SqlApp):\n    fetch_table_sql = 'x'\n"
+    assert _p068(tmp_path, {"app/connector.py": src}) == []
+
+
+@pytest.mark.parametrize(
+    "lock",
+    [None, '[[package]]\nname = "atlan-application-sdk"\nversion = "3.33.1"\n'],
+)
+def test_p068_silent_below_the_sdk_that_ships_finalize_extraction(
+    tmp_path: Path, lock: str | None
+) -> None:
+    src = _SQL_IMPORT + (
+        "class Connector(SqlApp):\n    async def run(self, input):\n        return None\n"
+    )
+    assert _p068(tmp_path, {"app/connector.py": src}, lock=lock) == []
+
+
+def test_p068_suppressed_by_directive(tmp_path: Path) -> None:
+    src = _SQL_IMPORT + (
+        "class Connector(SqlApp):\n"
+        "    # conformance: ignore[P068] verifies via its own manifest check\n"
+        "    async def run(self, input):\n"
+        "        return None\n"
+    )
+    [finding] = _p068(tmp_path, {"app/connector.py": src})
+    assert finding.suppressed is True
+
+
+def test_p068_is_warn_tier() -> None:
+    assert get_rule("P068").tier is EnforcementTier.WARN
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Not awaited: builds a coroutine and verifies nothing.
+        "        self.finalize_extraction(base, [out])\n        return base\n",
+        "        super().run(input)\n        return None\n",
+        # In a nested scope run() never calls.
+        "        async def later():\n"
+        "            return await self.finalize_extraction(base)\n"
+        "        return None\n",
+        "        class Helper:\n"
+        "            async def run(self):\n"
+        "                return await super().run()\n"
+        "        return None\n",
+        "        f = lambda: self.finalize_extraction(base)\n        return None\n",
+        # Not the app's own finalize / run.
+        "        return await other.finalize_extraction(base)\n",
+        "        return await client.run(input)\n",
+        "        return await SqlApp.run(other, input)\n",
+    ],
+)
+def test_p068_fires_when_the_verification_is_inert(tmp_path: Path, body: str) -> None:
+    src = (
+        _SQL_IMPORT
+        + "class Connector(SqlApp):\n    async def run(self, input):\n"
+        + body
+    )
+    assert len(_p068(tmp_path, {"app/connector.py": src})) == 1
+
+
+def test_p068_resolves_a_colliding_base_name_by_import(tmp_path: Path) -> None:
+    """An unrelated ``Base`` scanned first must not hide the imported one."""
+    files = {
+        "app/aaa.py": "class Base:\n    pass\n",
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    [finding] = _p068(tmp_path, files)
+    assert finding.file == "app/connector.py"
+
+
+def test_p068_does_not_follow_a_colliding_base_it_cannot_place(
+    tmp_path: Path,
+) -> None:
+    """Two ``Base`` classes and no import naming one: a miss, not a guess."""
+    files = {
+        "app/aaa.py": "class Base:\n    pass\n",
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    assert _p068(tmp_path, files) == []

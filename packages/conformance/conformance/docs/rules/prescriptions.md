@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**58 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), `suite.checks.run_scratch` (P067, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**59 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059; P068 gated on the app's locked SDK), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), `suite.checks.run_scratch` (P067, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -81,6 +81,7 @@ reassigned.
 | [P065](#p065) | `BatchedResultsIteratedOnLoop` | `warn` | `app` | `async-correctness` | — | 0.56.0 |
 | [P066](#p066) | `HttpxTransportWithoutProxy` | `warn` | `app` | `client-seam` | — | 0.59.0 |
 | [P067](#p067) | `TempDirOutsideRunScratch` | `warn` | `app` | `workflow-sandbox` | — | 0.61.0 |
+| [P068](#p068) | `SqlAppRunOverrideUnverified` | `warn` | `app` | `orchestration-seam` | — | 0.62.0 |
 
 ---
 
@@ -773,7 +774,7 @@ bounded equivalents `Annotated[dict[str, str], MaxItems(N)]` — is considered a
 unmodeled boundary.  Even though the bounded form satisfies the payload-safety gate
 (P001), the container has no schema: keys and values are opaque strings, typos are
 runtime-only failures, and the field is invisible to contract diffing and the SDK's
-`is_backwards_compatible` checker.
+`application_sdk.contracts.compat.check_backwards_compatible` checker.
 
 The SDK contract guidance (`make-contract` skill, §6) prefers typed properties over
 arbitrary string keys.  The target depends on the key set the app writes: a fixed key
@@ -3564,5 +3565,58 @@ https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/apps.md.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P067] <reason>` records a
 deliberate exception and stays visible in SARIF.
+
+---
+
+## P068 — `SqlAppRunOverrideUnverified` {#p068}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.62.0
+
+> SqlApp subclass's run() awaits neither super().run() nor finalize_extraction()
+
+**Rationale:** SqlApp.run() ends in finalize_extraction, which checks that every transformed file the
+transforms declared is under the prefix handed to publish. A run() that replaces it
+without that call returns a prefix nothing has checked: a tree short by one entity looks
+like a source with none, and publish archives those assets as removed from source
+(FND-4686).
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/mysql.py — `run()` calls `super().run(input)`, extracts and
+  transforms its extra entities, then folds them in with `await
+  self.finalize_extraction(base_result, extra_transforms)`. A replacement that drives
+  its own sequencing ends the same way: application_sdk/templates/sql_app.py documents
+  the shape in the SqlApp class docstring.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+A class that subclasses `SqlApp` (imported from `application_sdk`, directly or through
+the app's own bases) defines `run()`, and its body never awaits `super().run()`,
+`<Ancestor>.run(self, ...)` or `self.finalize_extraction(...)`. A call that is not
+awaited, or one inside a nested function or class, does not count: it verifies nothing
+when `run()` returns.
+
+`SqlApp.run()` ends in `finalize_extraction`, which asserts that every
+`transformed_file` the transforms declared is present under the
+`transformed_data_prefix` it returns.  An override that skips both returns a prefix
+nothing has checked, and publish cannot tell a lost entity from an absent one: it
+archives the missing assets.
+
+Replacing `run()` is a documented path — the rule does not ask for `super().run()`.
+Fix: keep the override and end it in `finalize_extraction`, passing every transform
+output it drove:
+
+```python
+base = ExtractionOutput(..., transformed_data_prefix=prefix)
+return await self.finalize_extraction(base, transform_results)
+```
+
+A connector bridging the tree to another store passes the finalised output on to
+`App.upload_refs`.
+
+Silent unless the app's `uv.lock` resolves an `atlan-application-sdk` that ships
+`finalize_extraction`.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P068] <reason>` on the `def
+run` line records an override that verifies its output another way.
 
 ---

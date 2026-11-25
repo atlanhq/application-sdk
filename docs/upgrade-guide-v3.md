@@ -307,7 +307,12 @@ class MyIncrementalExtractor(SqlApp):
 
 `SqlApp` does not provide the v2 4-phase sequence (marker → fetch → diff →
 finalize). Write the phases the connector needs as `@task` methods and call
-them from `run()`.
+them from `run()`. With SDK ≥ 3.60.0, build each entity's tasks on
+`extract_entity` / `transform_entity` (older SDKs name them
+`_extract_entity` / `_transform_entity`), and end the `run()` in
+`finalize_extraction` (SDK ≥ 3.33.2), which
+verifies the transformed tree before publish reads it (conformance rule P068
+flags a `run()` that calls neither it nor `super().run()`).
 
 ---
 
@@ -1454,6 +1459,19 @@ An SDK error class names its failure with one vocabulary, its `code` ClassVar (`
 | `Cls.DEFAULT_ERROR_CODE`, `err.error_code` | `Cls.code`, `err.qualified_code` |
 | the `error_code=` keyword of an SDK error constructor | raise an `AppError` subclass whose `code` names the failure |
 | `DEFAULT_ERROR_CODE = …` on your own subclass of an SDK error | delete it, and give the class its own `code: ClassVar[str]` |
+
+---
+
+## `retry_policy` together with the `@task` retry scalars (warns now, an error in v4.0.0)
+
+`retry_policy` replaces `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds`. The task is dispatched with the policy as-is and the three scalars are never read, so `@task(retry_policy=RetryPolicy(max_attempts=2), retry_max_attempts=5)` ran with 2 attempts and the 5 was dropped without a word. `@task` now emits a `DeprecationWarning` and logs a WARNING at decoration when `retry_policy` is passed together with any of the three, even when the value passed equals the default. From v4.0.0 it raises `TaskDeclarationError`. Retry behaviour is unchanged: the policy still wins.
+
+| Instead of | Do this |
+|---|---|
+| `@task(retry_policy=policy, retry_max_attempts=5)` | `@task(retry_policy=policy.with_max_attempts(5))` |
+| `@task(retry_policy=policy, retry_initial_interval_seconds=5)` | `@task(retry_policy=policy.with_initial_interval(timedelta(seconds=5)))` |
+| `@task(retry_policy=policy, retry_max_interval_seconds=60)` | `RetryPolicy(..., max_interval=timedelta(seconds=60))` |
+| `@task(retry_policy=RetryPolicy(), retry_max_attempts=1)` | `@task(retry_policy=RetryPolicy())` to keep what runs today, or `@task(retry_max_attempts=1)` for what the scalar asked for |
 
 ---
 

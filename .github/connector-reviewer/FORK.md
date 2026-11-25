@@ -253,7 +253,7 @@ function of facts GitHub reports, names four classes that are not reviewed:
 
 | Class | Holds when |
 |---|---|
-| dependency update | the author is in `dependency_bots`, the branch starts with one of `dependency_branches`, and every commit's author is in `dependency_bots` |
+| dependency update | the author is in `dependency_bots`, the branch starts with one of `dependency_branches`, and every commit's author is in `dependency_bots`; or (FND-5321) the author is in `vuln_bots`, the branch starts with one of `vuln_branches`, every commit's author is in `vuln_bots`, and every changed file matches `dependency_files` |
 | conformance resync | the author is in `resync_bots`, every commit is by one of them, and every changed file matches `bootstrap_managed` |
 | version bump | the branch starts with one of `version_bump_branches`. The summary reminds that it still needs `/gate-check` |
 | docs only | every changed file ends in `.md` or is under `docs/`, and none is under `.github/connector-reviewer/` or `.claude/`, or named `CLAUDE.md` or `AGENTS.md` at any depth |
