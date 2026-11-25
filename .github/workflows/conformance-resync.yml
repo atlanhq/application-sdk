@@ -122,53 +122,20 @@ jobs:
             --diffs-dir resync-diffs
 
       - name: Upload conformance-resync-results
-        id: upload-results
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: conformance-resync-results
           path: resync-results.json
-          overwrite: true
-          retention-days: 14
-
-      - name: Wait before the conformance-resync-results retry
-        if: always() && steps.upload-results.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload conformance-resync-results (retry)
-        if: always() && steps.upload-results.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: conformance-resync-results-retry
-          path: resync-results.json
-          overwrite: true
           retention-days: 14
 
       - name: Upload conformance-resync-diffs
-        id: upload-diffs
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: conformance-resync-diffs
           path: resync-diffs/
           if-no-files-found: ignore
-          overwrite: true
-          retention-days: 14
-
-      - name: Wait before the conformance-resync-diffs retry
-        if: always() && steps.upload-diffs.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload conformance-resync-diffs (retry)
-        if: always() && steps.upload-diffs.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: conformance-resync-diffs-retry
-          path: resync-diffs/
-          if-no-files-found: ignore
-          overwrite: true
           retention-days: 14

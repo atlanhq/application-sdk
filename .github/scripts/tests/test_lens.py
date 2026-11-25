@@ -2844,7 +2844,7 @@ def test_a_failed_request_is_recorded_with_a_redacted_error():
 def test_workflow_uploads_the_run_report_even_on_failure():
     wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
     upload = wf.split("- name: Upload the run report", 1)[1]
-    assert "if: always()" in upload and "actions/upload-artifact@" in upload
+    assert "if: always()" in upload and "/actions/upload-artifact-retry@" in upload
     assert "LENS_REPORT_PATH: ${{ runner.temp }}/lens-run.json" in wf
 
 

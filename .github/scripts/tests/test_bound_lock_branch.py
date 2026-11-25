@@ -543,7 +543,7 @@ class TestJobSplit:
         assert "--no-commit" in bound_step["run"]
 
     def test_the_artifact_carries_exactly_the_drivers_outputs(self):
-        upload = self._step("bound", "actions/upload-artifact@")
+        upload = self._step("bound", "/.github/actions/upload-artifact-retry@")
         assert upload["with"]["path"].split() == list(orchestrator.OUTPUT_PATHS)
 
     def test_the_token_job_installs_and_resolves_nothing(self):

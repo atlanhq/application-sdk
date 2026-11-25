@@ -320,12 +320,45 @@ that stopped reporting the rule fails instead of matching an emptied baseline.
 The `ann401-baseline` pre-commit hook runs the check on every change under
 `application_sdk/`.
 
-## An artifact upload retry must use a DIFFERENT artifact name
+## Artifacts move through the retry composites
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
-as non-retryable and fails the step, so every upload on a gating path is paired
-with a retry (first attempt `continue-on-error: true`, companion step guarded on
-`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+as non-retryable and fails the step, and `actions/download-artifact` does the
+same with a `ListArtifacts` 403. So every upload and download goes through one
+of two composites that hold the retry:
+
+```yaml
+- name: Upload test results
+  if: always()
+  continue-on-error: true        # only when a lost artifact must not fail the job
+  uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+  with:
+    name: integration-test-results
+    path: results/
+    retention-days: 14
+
+- name: Download test results
+  uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+  with:
+    pattern: integration-test-results*
+    path: results/
+```
+
+Each composite runs a first attempt with `continue-on-error: true`, a 20-second
+wait and a retry, both guarded on the first attempt's outcome. The step fails
+only when both attempts fail. The caller's `if:` gates the whole thing. A
+workflow that only ever runs in this repo, on a checkout of it, may use the
+relative `./.github/actions/...` ref (`codeql.yaml` does, so a PR exercises its
+own version of the upload composite); reusable workflows and composites must
+use `atlanhq/...@main`, because a relative ref resolves against a consumer's
+workspace.
+
+`conformance-reusable.yaml` still writes its 12 SARIF pairs by hand: this
+repo's own PR CI runs it, and an `@main` ref to a composite that is not yet on
+`main` fails the job at setup. It moves in a follow-up once the composites
+merge.
+
+The upload composite follows these rules:
 
 1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
    leaves an artifact record that holds the name for the rest of the run but
@@ -371,11 +404,11 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    "nothing matched" as **success**, so any step gated on
    `steps.<download>.outcome` has to move onto `hashFiles(...)`.
 
-`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
-every workflow, composite action and script in this repo — including a
-cross-file check that no consumer addresses a retried artifact by its base name
-alone — and `EXEMPT` there carries the reason for each upload that does not need
-the hardening.
+`.github/scripts/tests/test_artifact_upload_retry.py` and
+`test_artifact_download_retry.py` pin these rules on the composites, fail on any
+direct `actions/upload-artifact` or `actions/download-artifact` step elsewhere,
+and check that no consumer addresses a retried artifact by its base name alone.
+`EXEMPT` in each carries the reason for a direct call that needs no retry.
 
 ## Test legs are requested by PR comment, never by label
 

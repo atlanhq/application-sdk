@@ -315,7 +315,7 @@ class TestUpstreamResultsAreTruthful:
 
     `missing_results_reason` reads a green upstream job as proof that job
     published its artifact, and says so — "the results were produced and the
-    download of them failed twice … re-run this job." An upload retry marked
+    download of them failed twice … re-run this job." An upload marked
     `continue-on-error` breaks that: a double finalize-403 leaves the producing
     job green with nothing published, and the gate then blames the download and
     advises re-running itself, which can never find an artifact the run never
@@ -326,12 +326,15 @@ class TestUpstreamResultsAreTruthful:
     with `continue-on-error` so nothing needed to fail at the upload. The gate
     fails regardless when the results are absent; all the tolerance bought was
     the wrong diagnosis. Build and scan are one job since FND-3319, so that
-    job's upload is the one this pins.
+    job's upload is the one this pins. The upload goes through
+    `upload-artifact-retry`, whose own guard pins that its retry is not
+    `continue-on-error`, so a lost artifact fails the step; this pins that the
+    calling step does not swallow that failure either.
     """
 
     GATING_JOBS = ("build",)
 
-    def _upload_retries(self, job_id: str) -> list[dict[str, Any]]:
+    def _uploads(self, job_id: str) -> list[dict[str, Any]]:
         workflow = (
             Path(__file__).resolve().parents[2] / "workflows" / "build-and-scan.yaml"
         )
@@ -339,22 +342,21 @@ class TestUpstreamResultsAreTruthful:
         return [
             step
             for step in job["steps"]
-            if "actions/upload-artifact" in str(step.get("uses", ""))
-            and "outcome" in str(step.get("if", ""))
+            if "/.github/actions/upload-artifact-retry@" in str(step.get("uses", ""))
         ]
 
     @pytest.mark.parametrize("job_id", GATING_JOBS)
-    def test_the_guard_finds_the_retry_it_is_meant_to_check(self, job_id: str) -> None:
-        assert self._upload_retries(job_id), (
-            f"no upload retry found in `{job_id}` — the discovery below matched "
+    def test_the_guard_finds_the_upload_it_is_meant_to_check(self, job_id: str) -> None:
+        assert self._uploads(job_id), (
+            f"no upload found in `{job_id}` — the discovery below matched "
             "nothing and would pass vacuously"
         )
 
     @pytest.mark.parametrize("job_id", GATING_JOBS)
-    def test_no_gating_upload_retry_swallows_its_own_failure(self, job_id: str) -> None:
+    def test_no_gating_upload_swallows_its_own_failure(self, job_id: str) -> None:
         swallowed = [
             step.get("name")
-            for step in self._upload_retries(job_id)
+            for step in self._uploads(job_id)
             if step.get("continue-on-error") is True
         ]
         assert not swallowed, (

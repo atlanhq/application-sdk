@@ -811,7 +811,7 @@ class TestWiring:
         uploads = [
             (i, step) for i, step in enumerate(steps) if "upload-artifact" in step.uses
         ]
-        assert len(uploads) == 2  # the first try and the retry
+        assert len(uploads) == 1  # upload-artifact-retry holds the retry
         for i, step in uploads:
             assert i > staging[0], step.name
             # One folder, never a list of files: several paths make

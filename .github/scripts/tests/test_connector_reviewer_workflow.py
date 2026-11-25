@@ -341,9 +341,9 @@ def test_the_review_step_times_out_before_the_job(job: dict[str, Any]) -> None:
 def test_the_run_report_is_uploaded_even_when_the_review_fails(
     job: dict[str, Any],
 ) -> None:
-    uploads = _uses(job, "actions/upload-artifact")
-    assert len(uploads) == 2
+    uploads = _uses(
+        job, "atlanhq/application-sdk/.github/actions/upload-artifact-retry"
+    )
+    assert len(uploads) == 1
     assert all(str(u["if"]).startswith("always()") for u in uploads)
     assert all(u.get("continue-on-error") is True for u in uploads)
-    names = [u["with"]["name"] for u in uploads]
-    assert names[0] != names[1], "a retry must use a different artifact name"
