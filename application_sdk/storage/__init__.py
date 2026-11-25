@@ -34,16 +34,19 @@ truncated artifact reach a parser. See ``application_sdk.storage.integrity``.
 
 Which entry point to use
 ------------------------
-Pick by what you hold and where it goes. Every row below the ``App`` ones ends
-in the same two primitives — ``upload_file`` / ``upload_bytes`` for writes,
+Pick by what you hold and where it goes. Every row except ``put_json`` ends
+in the same primitives — ``upload_file`` / ``upload_bytes`` for writes,
 ``download_file`` / ``download_file_chunked`` for reads — so integrity
-(FND-306) is the same whichever you call.
+(FND-306) is the same whichever of those you call. ``put_json`` is the
+exception: a plain PUT for small configs, with no post-write size check and
+no ``.sha256`` sidecar.
 
 =====================================  ============================================
 You have / want                        Use
 =====================================  ============================================
 Bytes in memory → one key              ``upload_bytes(key, data)``
-A JSON value → one key                 ``put_json(key, obj)``
+A JSON value → one key                 ``put_json(key, obj)`` (no readback,
+                                       no sidecar)
 A local file → one key                 ``upload_file(key, local_path)``
 One key → a local file                 ``download_file(key, local_path)``
 One GB-class key → a local file        ``download_file_chunked(key, local_path)``

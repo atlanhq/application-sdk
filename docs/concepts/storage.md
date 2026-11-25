@@ -78,7 +78,7 @@ Bytes already in memory go through `upload_bytes(key, data)`, the one byte-put p
 | You have / want | Use |
 |---|---|
 | Bytes in memory → one key | `upload_bytes(key, data)` |
-| A JSON value → one key | `put_json(key, obj)` |
+| A JSON value → one key | `put_json(key, obj)`: a plain PUT, with no post-write size check and no sidecar |
 | A local file → one key | `upload_file(key, local_path)` |
 | One key → a local file | `download_file(key, local_path)`; `download_file_chunked` for GB-class objects |
 | A directory, from a `@task` or `run()` | `App.upload` / `App.download` (adds validation and `FileReference` tagging) |
@@ -86,7 +86,7 @@ Bytes already in memory go through `upload_bytes(key, data)`, the one byte-put p
 | A state directory mirrored as-is (RocksDB, DuckDB, a parquet dataset) | `upload_prefix` / `download_prefix` (no local markers, no manifest) |
 | A customer's own bucket | `CloudStore` |
 
-Every row ends in the same primitives: `upload_file` / `upload_bytes` for writes and `download_file` / `download_file_chunked` for reads, so transfer integrity is the same whichever you call. The same table is in the `application_sdk.storage` module docstring.
+Every row except `put_json` ends in the same primitives: `upload_file` / `upload_bytes` for writes and `download_file` / `download_file_chunked` for reads, so transfer integrity is the same whichever of those you call. `put_json` writes small configs with a plain PUT and skips both the readback and the sidecar; use `upload_bytes(key, orjson.dumps(obj))` when a JSON object needs them. The same table is in the `application_sdk.storage` module docstring.
 
 ### Additional operations
 
@@ -504,7 +504,7 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 | `extra.conditional_put`, `extra.copy_if_not_exists`, `extra.checksum_algorithm` | obstore's `aws_conditional_put`, `aws_copy_if_not_exists`, `aws_checksum_algorithm` |
 | `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
 
-`CloudStore` has no transfer code of its own. `upload` and `upload_bytes` call `upload_file` and `upload_bytes`, `upload_dir` runs on the same tree upload as `upload_prefix`, and `download` runs on the same engine as `download_prefix`. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no `.sha256` is written, and a `.sha256` file in the bucket or the local directory is moved as ordinary data. The post-write size check still runs.
+`CloudStore` has no transfer code of its own. `upload` and `upload_bytes` call `upload_file` and `upload_bytes`, `upload_dir` runs on the same tree upload as `upload_prefix`, and `download` runs on the same engine as `download_prefix`. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no `.sha256` is written, and a `.sha256` file in the bucket or the local directory is moved as ordinary data. The post-write size check still runs, so every `CloudStore` write needs the credential to be allowed to HEAD the object it just wrote (`s3:GetObject`, `storage.objects.get`, or Blob read), as `upload` already did. `upload_bytes` needed only PUT before this.
 
 ADLS also accepts `extra.endpoint` (`https://` only). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
 

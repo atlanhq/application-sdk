@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -940,12 +940,13 @@ async def upload_prefix(
             "would delete every key in the store that this call did not upload."
         )
 
+    async def _upload_one(key: str, path: Path) -> object:
+        return await upload_file(
+            key, path, store, normalize=False, retain_local_copy=retain_local_copy
+        )
+
     uploaded = await _upload_tree(
-        local,
-        prefix,
-        store,
-        retain_local_copy=retain_local_copy,
-        max_concurrency=max_concurrency,
+        local, prefix, _upload_one, max_concurrency=max_concurrency
     )
 
     if prune:
@@ -964,24 +965,27 @@ async def upload_prefix(
 async def _upload_tree(
     local: Path,
     prefix: str,
-    store: BoundStore | ObjectStore | None,
+    upload_one: Callable[[str, Path], Awaitable[object]],
     *,
-    retain_local_copy: bool = True,
     max_concurrency: int = 4,
     sidecars: bool = True,
     unwrap_lone_failure: bool = False,
 ) -> list[str]:
     """Upload every regular file under *local* to *prefix*, key used as given.
 
-    The engine under :func:`upload_prefix` and ``CloudStore.upload_dir``.
-    Symlinks are skipped and SDK working directories are not descended into.
+    The engine under :func:`upload_prefix` and ``CloudStore.upload_dir``: the
+    walk and the bounded fan-out. Each file goes through *upload_one(key,
+    path)*, so a caller keeps its own per-file contract — ``CloudStore`` maps a
+    401/403 and wraps a local read failure in a keyed ``StorageError`` per
+    file, before a sibling's failure can group with it. Symlinks are skipped
+    and SDK working directories are not descended into.
 
-    *sidecars* selects the SDK integrity protocol: when ``True`` each upload
-    records a ``{key}.sha256`` sidecar and local ``.sha256`` files are skipped,
-    so a stale local digest cannot replace the one the upload writes. A
-    customer bucket (``CloudStore``) passes ``False``: no sidecars are written,
-    and a local ``.sha256`` file is ordinary data that uploads like any other.
-    *unwrap_lone_failure* is passed to :func:`_run_bounded`.
+    *sidecars* says whether the uploads take part in the SDK integrity
+    protocol. When ``True`` local ``.sha256`` files are skipped, so a stale
+    local digest cannot replace the sidecar the upload writes. A customer
+    bucket (``CloudStore``) passes ``False``: a local ``.sha256`` file is
+    ordinary data that uploads like any other. *unwrap_lone_failure* is passed
+    to :func:`_run_bounded`.
     """
 
     def _collect_files() -> list[tuple[str, Path]]:
@@ -1008,21 +1012,14 @@ async def _upload_tree(
     # activity's auto-heartbeat — for the entire traversal (ADR-0010).
     files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
-    async def _upload_one(key: str, path: Path) -> str:
-        await upload_file(
-            key,
-            path,
-            store,
-            normalize=False,
-            retain_local_copy=retain_local_copy,
-            compute_hash=sidecars,
-        )
+    async def _one(key: str, path: Path) -> str:
+        await upload_one(key, path)
         return key
 
     # Generator: the bounded pool pulls lazily, so a large tree does not build
     # every coroutine up front.
     return await _run_bounded(
-        (_upload_one(k, p) for k, p in files),
+        (_one(k, p) for k, p in files),
         max_concurrency,
         unwrap_lone_failure=unwrap_lone_failure,
     )

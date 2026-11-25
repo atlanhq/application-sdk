@@ -444,13 +444,45 @@ class CloudStore:
         """Await *op*, turning a 401/403 ``StorageError`` into a typed USER error.
 
         The key named is the failing object's when the error carries one, else
-        *key*.
+        *key*. A fan-out whose failures mix a ``StorageError`` with another
+        type surfaces as an exception group (see ``_run_bounded``); each
+        ``StorageError`` leaf in it is mapped the same way and the group is
+        re-raised with the mapped leaves.
         """
         try:
             return await op
         except StorageError as exc:
             self._raise_if_denied(exc, action, exc.key or key)
             raise
+        except BaseExceptionGroup as group:
+            mapped = self._map_denied_leaves(group, action, key)
+            if mapped is group:
+                raise
+            raise mapped from group
+
+    def _map_denied_leaves(
+        self, group: BaseExceptionGroup, action: str, key: str
+    ) -> BaseExceptionGroup:
+        """Return *group* with each 401/403 ``StorageError`` leaf typed.
+
+        Returns *group* itself when no leaf changed.
+        """
+        leaves: list[BaseException] = []
+        changed = False
+        for leaf in group.exceptions:
+            new: BaseException = leaf
+            if isinstance(leaf, BaseExceptionGroup):
+                new = self._map_denied_leaves(leaf, action, key)
+            elif isinstance(leaf, StorageError):
+                try:
+                    self._raise_if_denied(leaf, action, leaf.key or key)
+                except StorageError as typed:
+                    new = typed
+            changed = changed or new is not leaf
+            leaves.append(new)
+        if not changed:
+            return group
+        return group.derive(leaves)
 
     def _raise_if_denied(self, exc: Exception, action: str, key: str) -> None:
         """Raise a typed USER error from *exc* when it is a 401/403.
@@ -652,6 +684,12 @@ class CloudStore:
         here. The key is used exactly as supplied and no ``.sha256`` sidecar is
         written.
 
+        The credential therefore needs read-metadata (HEAD) access to the key
+        as well as PUT, as :meth:`upload` already did: a PUT-only bucket policy
+        fails here with :class:`StoragePermissionError` from the readback.
+        ``ATLAN_STORAGE_VERIFY_TRANSFERS=false`` turns the readback off for the
+        whole process.
+
         Args:
             key: Destination object key.
             data: Bytes to upload.
@@ -708,21 +746,24 @@ class CloudStore:
                 directory.
         """
         await self._ensure_region()
+
+        async def _upload_one(key: str, path: Path) -> int:
+            # Per file, so each failure is typed before it can group with a
+            # sibling's: a 401/403 becomes a USER error, and a file that
+            # vanished or became unreadable after the walk a keyed StorageError.
+            return await self.upload(path, key)
+
         # batch's tree engine with the sidecar protocol off: no sidecars and no
         # key normalisation, and a local ``.sha256`` file uploads as data. The
         # first failure cancels and drains the remaining uploads before it
         # propagates, so none lands in the bucket after the caller saw it fail.
-        uploaded = await self._mapping_denied(
-            "writing",
+        uploaded = await _upload_tree(
+            Path(local_dir),
             prefix,
-            _upload_tree(
-                Path(local_dir),
-                prefix,
-                BoundStore(self._store, self._put_attributes),
-                max_concurrency=max_concurrency,
-                sidecars=False,
-                unwrap_lone_failure=True,
-            ),
+            _upload_one,
+            max_concurrency=max_concurrency,
+            sidecars=False,
+            unwrap_lone_failure=True,
         )
         _log().info("Uploaded %d files to prefix=%s", len(uploaded), prefix)
         return uploaded

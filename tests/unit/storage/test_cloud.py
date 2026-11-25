@@ -1805,14 +1805,13 @@ class TestFirstFailureStopsSiblings:
         probe = SiblingProbe(siblings=2)
         order = {"a.txt": 0, "c.txt": 1}
 
-        async def _upload(key, path, *args, **kwargs):
+        async def _upload(self, path, key):
             if key == "bad.txt":
                 await probe.fail(ValueError("not a storage failure"))
             await probe.sibling(order[key])
 
-        # upload_dir runs on batch's tree engine.
         with (
-            patch.object(_batch_module, "upload_file", _upload),
+            patch.object(CloudStore, "upload", _upload),
             pytest.raises(ValueError, match="not a storage failure") as exc_info,
         ):
             await store.upload_dir(src)
@@ -1881,3 +1880,60 @@ class TestCloudStoreDelegatesToBatch:
             pytest.raises(StorageError, match="absent from the store"),
         ):
             await store.upload_bytes("out/x.bin", b"data")
+
+    async def test_upload_dir_file_vanishing_after_walk_is_a_keyed_storage_error(
+        self, tmp_path
+    ):
+        """A source file gone before its upload surfaces typed, not as OSError."""
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "gone.txt").write_bytes(b"x")
+        real_walk = batch_module.os.walk
+
+        def _walk_then_delete(*args, **kwargs):
+            entries = list(real_walk(*args, **kwargs))
+            (src / "gone.txt").unlink()
+            return iter(entries)
+
+        with (
+            patch.object(batch_module.os, "walk", _walk_then_delete),
+            pytest.raises(StorageError) as ei,
+        ):
+            await store.upload_dir(src, "out")
+        assert "gone.txt" in str(ei.value)
+        assert isinstance(ei.value.__cause__, FileNotFoundError)
+
+    async def test_mixed_prefix_download_failure_still_types_the_403(
+        self, monkeypatch, tmp_path
+    ):
+        """A 403 grouped with a non-storage failure is still a USER error."""
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/a.json", b"{}")
+        await store.upload_bytes("p/b.json", b"{}")
+        both_started = asyncio.Event()
+        started: list[str] = []
+
+        async def _fail(key, *_a, **_k):
+            started.append(key)
+            if len(started) == 2:
+                both_started.set()
+            await both_started.wait()
+            if key == "p/a.json":
+                raise StorageError(
+                    "denied", key=key, cause=PermissionDeniedError(_GCS_VPC_SC_403)
+                )
+            raise RuntimeError("local failure")
+
+        monkeypatch.setattr(batch_module, "download_file_chunked", _fail)
+        with pytest.raises(BaseExceptionGroup) as ei:
+            await store.download(prefix="p", output_dir=tmp_path, max_concurrency=2)
+        denied, rest = ei.value.split(StoragePermissionError)
+        assert denied is not None and rest is not None
+        (leaf,) = denied.exceptions
+        assert leaf.key == "p/a.json"
+        assert leaf.audience.name == "USER"
