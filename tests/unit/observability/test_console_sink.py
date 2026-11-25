@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import threading
+from collections import deque
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import TextIO
@@ -232,3 +233,77 @@ def test_failed_drop_warning_is_retried() -> None:
     writer.put(stream, "after\n")
     assert writer.flush(timeout=5.0)
     assert any("dropped 1 records" in line for line in stream.lines)
+
+
+class _ReenteringQueue(deque):
+    """A queue whose first ``append`` logs again, as a garbage-collector finalizer can.
+
+    Python can run a finalizer on any allocation, including one inside
+    ``put``'s critical section. asyncio reports a destroyed pending task
+    through ``logging``, which routes back into this same sink on the same
+    thread while ``put`` still holds the writer's lock.
+    """
+
+    def __init__(self, writer: ConsoleWriter, stream: TextIO) -> None:
+        super().__init__()
+        self._writer = writer
+        self._stream = stream
+        self._reentered = False
+
+    def append(self, item) -> None:  # type: ignore[override]
+        if not self._reentered:
+            self._reentered = True
+            self._writer.put(self._stream, "logged from a finalizer\n")
+        super().append(item)
+
+
+def test_a_put_reentered_on_the_same_thread_does_not_deadlock() -> None:
+    writer = ConsoleWriter()
+    stream = _GatedStream()
+    stream.release.set()
+    writer._queue = _ReenteringQueue(writer, stream)
+
+    done = threading.Event()
+
+    def log_once() -> None:
+        writer.put(stream, "first line\n")
+        done.set()
+
+    thread = threading.Thread(target=log_once, daemon=True)
+    thread.start()
+    assert done.wait(5.0), "a re-entrant put deadlocked on the writer's lock"
+    assert writer.flush(5.0)
+    assert sorted(stream.lines) == ["first line\n", "logged from a finalizer\n"]
+
+
+def test_a_put_reentered_while_the_writer_thread_is_built_starts_one_thread() -> None:
+    """A finalizer that logs during ``threading.Thread(...)`` must not start a second writer."""
+    writer = ConsoleWriter()
+    stream = _GatedStream()
+    stream.release.set()
+    started: list[threading.Thread] = []
+    real_thread = threading.Thread
+
+    class _ReenteringThread(real_thread):
+        def __init__(self, *args, **kwargs) -> None:
+            if not started and writer._thread is None and not reentered.is_set():
+                reentered.set()
+                writer.put(stream, "logged from a finalizer\n")
+            super().__init__(*args, **kwargs)
+
+        def start(self) -> None:
+            started.append(self)
+            super().start()
+
+    reentered = threading.Event()
+    with mock.patch(
+        "application_sdk.observability.console_sink.threading.Thread",
+        _ReenteringThread,
+    ):
+        writer.put(stream, "first line\n")
+
+    assert reentered.is_set()
+    assert len(started) == 1
+    assert writer._thread is started[0]
+    assert writer.flush(5.0)
+    assert sorted(stream.lines) == ["first line\n", "logged from a finalizer\n"]

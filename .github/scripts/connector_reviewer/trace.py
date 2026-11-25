@@ -22,21 +22,13 @@ from typing import Any, Iterator
 from .typed import objects
 
 _lock = threading.Lock()
-_enabled = True
 
 
 def _in_actions() -> bool:
     return os.environ.get("GITHUB_ACTIONS") == "true"
 
 
-def set_enabled(on: bool) -> None:
-    global _enabled
-    _enabled = on
-
-
 def line(msg: str) -> None:
-    if not _enabled:
-        return
     with _lock:
         print(f"connector-reviewer: {msg}", file=sys.stderr, flush=True)
 
@@ -44,9 +36,6 @@ def line(msg: str) -> None:
 @contextmanager
 def group(title: str) -> Iterator[None]:
     """A collapsible section in the Actions log (a plain header elsewhere)."""
-    if not _enabled:
-        yield
-        return
     with _lock:
         print(
             f"::group::connector-reviewer · {title}"

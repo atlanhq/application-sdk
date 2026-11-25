@@ -146,6 +146,13 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # application-sdk at ``main`` and runs it from there, so the vendored copy has
 # nothing left to do. The workflow itself stays managed.
 #
+# ``dep-cooldown.yml``: never bootstrap-managed. A per-repo caller of
+# ``atlanhq/.github``'s ``reusable-dep-cooldown.yml`` that enforced the
+# dependency release-age window. The GitHub Security App now enforces the
+# cooldown (its ``checks/dep-cooldown`` run), so the caller only spent a
+# runner job per PR. Retired here so the removal reaches every repo that
+# carries a copy without a hand-raised PR per repo.
+#
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, or a config bootstrap supersedes, not
 # only a workflow.
@@ -156,6 +163,7 @@ RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/renovate-auto-approve.yml",
     ".github/workflows/porter-bundle-cnab.yaml",
     ".github/workflows/connector-review-gate.yaml",
+    ".github/workflows/dep-cooldown.yml",
     ".github/scripts/connector_review_gate.py",
     ".github/scripts/release_gate.py",
     ".github/dependabot.yml",
@@ -211,6 +219,10 @@ RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
     "connector-review-gate.yaml": (
         "an inline job that ran the vendored connector_review_gate.py; called"
         " no SDK reusable"
+    ),
+    "dep-cooldown.yml": (
+        "never bootstrap-managed; called atlanhq/.github's"
+        " reusable-dep-cooldown.yml, not an SDK reusable"
     ),
 }
 

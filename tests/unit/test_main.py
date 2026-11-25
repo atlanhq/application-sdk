@@ -119,6 +119,26 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(args)
         assert config.mode == "handler"
 
+    def test_empty_env_values_keep_their_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-5223: an empty value used to replace the default."""
+        monkeypatch.setenv("ATLAN_APP_MODE", "handler")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        for key in (
+            "ATLAN_TEMPORAL_NAMESPACE",
+            "ATLAN_HANDLER_HOST",
+            "ATLAN_LOG_LEVEL",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_NAMESPACE", "")
+        monkeypatch.setenv("ATLAN_APP_HTTP_HOST", " ")
+        monkeypatch.setenv("LOG_LEVEL", "")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.temporal_namespace == "default"
+        assert config.handler_host == "0.0.0.0"
+        assert config.log_level == "INFO"
+
     def test_app_module_from_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")

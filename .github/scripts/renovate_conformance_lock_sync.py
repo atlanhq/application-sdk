@@ -29,7 +29,7 @@ What it does, all of it in the tested functions below:
    regenerate ``relationship_directions.json`` with
    ``bound_lock_branch.regenerate_relationship_directions``.
 
-Two jobs, as in renovate-lock-cooldown.yaml: ``--no-commit`` resolves and
+Two jobs, run by renovate-branch-fixup.yaml as for renovate-lock-cooldown.yaml: ``--no-commit`` resolves and
 regenerates (it installs and imports the new pyatlan) holding only a read-only
 token, ``--stage-to`` copies OUTPUT_PATHS into one folder at their repo paths
 for the artifact upload, and ``--apply-from`` copies exactly OUTPUT_PATHS from
@@ -40,7 +40,6 @@ Idempotent: unchanged outputs commit nothing.
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 import tomllib
@@ -216,38 +215,6 @@ def sync(baseline_ref: str, root: Path) -> int:
     return 0
 
 
-def stage_outputs(
-    root: Path, dest: Path, paths: tuple[str, ...] = OUTPUT_PATHS
-) -> None:
-    """Copy ``paths`` from the checkout into ``dest`` at their repo paths.
-
-    The workflow uploads ``dest`` as the artifact's one folder, so the artifact
-    holds ``packages/conformance/uv.lock`` and not just ``uv.lock``. Given
-    several file paths, upload-artifact roots the artifact at their least
-    common ancestor and drops that prefix, which ``apply_outputs`` (correctly)
-    reads as a missing output (FND-5015). One folder has no such rule to trip.
-
-    Same guards as ``apply_outputs``, in the other direction: every path must
-    exist, a symlink along a path is refused rather than followed, ``dest``
-    must be empty so nothing stale rides along, and everything is checked
-    before anything is copied.
-    """
-    for path in paths:
-        src = root
-        for part in Path(path).parts:
-            src = src / part
-            if src.is_symlink():
-                raise ValueError(f"refusing symlinked output: {path}")
-        if not src.is_file():
-            raise FileNotFoundError(f"missing output to stage: {path}")
-    if dest.exists() and any(dest.iterdir()):
-        raise FileExistsError(f"staging folder is not empty: {dest}")
-    for path in paths:
-        target = dest / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(root / path, target)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -278,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path.cwd()
     if args.stage_to is not None:
-        stage_outputs(root, args.stage_to, OUTPUT_PATHS)
+        lanes.stage_outputs(root, args.stage_to, OUTPUT_PATHS)
         return 0
 
     if args.apply_from is not None:

@@ -3,8 +3,7 @@
 import asyncio
 import base64
 import json
-import threading
-import time
+import ssl
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +11,6 @@ import pytest
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import GCSStore, LocalStore, MemoryStore
 
-from application_sdk._runtime.offload import run_in_thread
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -23,6 +21,7 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
     StoragePermissionError,
 )
+from tests.unit._doubles import SiblingProbe
 
 
 def _async_return(value):
@@ -1100,25 +1099,69 @@ class TestS3RegionLookup:
         assert len(heads) == 1
 
     async def test_lookup_uses_sdk_ssl_context_and_proxy_env(self, monkeypatch):
+        """The SDK TLS context, and the proxy from ``_proxy`` per lookup host:
+        ``NO_PROXY`` applies to each host, and httpx's ``trust_env`` (which
+        also reads OS proxy settings) is off."""
         import httpx
 
         from application_sdk.clients import ssl_utils
 
-        sentinel = object()
+        # Unset every spelling first: Windows env names are case-insensitive,
+        # so deleting NO_PROXY after setting no_proxy would delete both.
+        for scheme in ("HTTPS", "HTTP", "ALL", "NO"):
+            monkeypatch.delenv(f"{scheme}_PROXY", raising=False)
+            monkeypatch.delenv(f"{scheme.lower()}_proxy", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
+        monkeypatch.setenv("no_proxy", "amazonaws.com.cn")
+        sentinel = ssl.create_default_context()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
-        client_kwargs: dict = {}
+        clients: list[dict] = []
         real_init = httpx.AsyncClient.__init__
 
         def _init(self, **kwargs):
-            client_kwargs.update(kwargs)
+            clients.append(kwargs)
             real_init(self, **{**kwargs, "verify": True})
 
         monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
         self._stub_head(monkeypatch, headers={})
         await _REAL_LOOKUP_BUCKET_REGION("b")
-        assert client_kwargs["verify"] is sentinel
-        assert client_kwargs["trust_env"] is True
-        assert client_kwargs["timeout"] == 10.0
+        assert [c["proxy"] for c in clients] == ["http://proxy.internal:3128", None]
+        for client_kwargs in clients:
+            assert client_kwargs["verify"] is sentinel
+            assert client_kwargs["trust_env"] is False
+            assert client_kwargs["timeout"] == 10.0
+
+    async def test_lookup_keeps_ssl_cert_file_trust(self, monkeypatch):
+        """httpx's ``trust_env`` is off for the lookup, but a CA bundle in
+        ``SSL_CERT_FILE`` is still trusted: the context is built with
+        ``trust_env=True`` from the SDK's own verify setting."""
+        import httpx
+
+        from application_sdk.clients import ssl_utils
+
+        monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: True)
+        built: list[dict] = []
+        context = ssl.create_default_context()
+
+        def _create(**kwargs):
+            built.append(kwargs)
+            return context
+
+        monkeypatch.setattr(httpx, "create_ssl_context", _create)
+        clients: list[dict] = []
+        real_init = httpx.AsyncClient.__init__
+
+        def _init(self, **kwargs):
+            clients.append(kwargs)
+            real_init(self, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
+        self._stub_head(monkeypatch, headers={"x-amz-bucket-region": "eu-west-1"})
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == "eu-west-1"
+        assert built == [{"verify": True, "trust_env": True}]
+        assert clients[0]["verify"] is context
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
         from application_sdk import _obstore_config
@@ -1400,49 +1443,13 @@ class TestAuthenticationRejected:
 # First failure: no sibling transfer outlives the raise (FND-4277)
 # ---------------------------------------------------------------------------
 
-_SIBLING_THREAD_SECONDS = 0.3
-
-
-class _SiblingProbe:
-    """Siblings that block in ``run_in_thread``; one transfer fails once every
-    sibling's thread is running. With ``asyncio.gather`` the siblings finished
-    -- wrote into the output dir or the bucket -- after the caller had seen the
-    failure."""
-
-    def __init__(self, siblings: int) -> None:
-        self.started = [threading.Event() for _ in range(siblings)]
-        self.finished = [threading.Event() for _ in range(siblings)]
-        self.completed: list[int] = []
-
-    async def sibling(self, index: int) -> None:
-        def _block() -> None:
-            self.started[index].set()
-            time.sleep(_SIBLING_THREAD_SECONDS)
-            self.finished[index].set()
-
-        await run_in_thread(_block)
-        self.completed.append(index)
-
-    async def fail(self, exc: Exception) -> None:
-        for event in self.started:
-            if not await asyncio.to_thread(event.wait, 5.0):
-                raise AssertionError("sibling thread did not start")
-        raise exc
-
-    async def assert_no_sibling_outlived_the_raise(self) -> None:
-        assert all(e.is_set() for e in self.finished), (
-            "a sibling's thread was still running when the failure propagated"
-        )
-        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
-        assert self.completed == [], "a sibling completed after the raise"
-
 
 class TestFirstFailureStopsSiblings:
     async def test_download_prefix_failure_cancels_and_drains_siblings(self, tmp_path):
         store = CloudStore(MemoryStore(), provider="memory")
         for name in ("a", "bad", "c"):
             await store.upload_bytes(f"p/{name}.txt", b"x")
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"p/a.txt": 0, "p/c.txt": 1}
 
         async def _download(key, local_path, **kwargs):
@@ -1464,7 +1471,7 @@ class TestFirstFailureStopsSiblings:
         src.mkdir()
         for name in ("a", "bad", "c"):
             (src / f"{name}.txt").write_bytes(b"x")
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"a.txt": 0, "c.txt": 1}
 
         async def _upload(self, path, key):

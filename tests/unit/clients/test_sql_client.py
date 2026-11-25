@@ -30,6 +30,7 @@ from application_sdk.testing.hypothesis.strategies.clients.sql import (
     sql_error_strategy,
     sqlalchemy_connect_args_strategy,
 )
+from tests.unit._doubles import FakeClock, StopConnect, record_connect_params
 
 
 def _make_sql_client() -> BaseSQLClient:
@@ -1352,32 +1353,9 @@ def test_sql_pandas_result_error_class_default_is_non_retryable():
 # --- RDS IAM token refresh on new connections ---------------------------------
 
 
-class _StopConnect(Exception):
-    """Raised by the recorder so no connect ever reaches a socket."""
-
-
-def _record_connect_params(engine: Any) -> list[dict[str, Any]]:
-    """Record each connect's driver keyword arguments, then stop it before any socket opens.
-
-    Registered after the refresh listener, so it sees what the driver would get.
-    """
-    from sqlalchemy import event
-
-    seen: list[dict[str, Any]] = []
-
-    def _record(
-        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
-    ) -> None:
-        seen.append(dict(cparams))
-        raise _StopConnect
-
-    event.listen(engine, "do_connect", _record)
-    return seen
-
-
 def _connect_params(engine: Any) -> dict[str, Any]:
-    seen = _record_connect_params(engine)
-    with pytest.raises(_StopConnect):
+    seen = record_connect_params(engine)
+    with pytest.raises(StopConnect):
         engine.raw_connection()
     from sqlalchemy import event
 
@@ -1389,14 +1367,6 @@ def _connect_params(engine: Any) -> dict[str, Any]:
 
 def _url(token: str) -> str:
     return f"postgresql+psycopg2://iam_user:{token}@127.0.0.1:1/db"
-
-
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 class _Tokens:
@@ -1420,7 +1390,7 @@ class TestFreshIamToken:
 
         return create_engine(_url("token-0"), connect_args=connect_args or {})
 
-    def _listen(self, engine: Any, tokens: _Tokens, clock: _Clock) -> None:
+    def _listen(self, engine: Any, tokens: _Tokens, clock: FakeClock) -> None:
         from sqlalchemy import event
 
         from application_sdk.clients.sql import _FreshIamToken
@@ -1432,7 +1402,7 @@ class TestFreshIamToken:
         )
 
     def test_keeps_the_engine_token_while_it_is_fresh(self) -> None:
-        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        engine, tokens, clock = self._engine(), _Tokens(), FakeClock()
         self._listen(engine, tokens, clock)
         clock.now += 9 * 60
 
@@ -1440,7 +1410,7 @@ class TestFreshIamToken:
         assert tokens.calls == 0
 
     def test_a_connect_after_the_token_ages_gets_a_new_one(self) -> None:
-        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        engine, tokens, clock = self._engine(), _Tokens(), FakeClock()
         self._listen(engine, tokens, clock)
         clock.now += 10 * 60
 
@@ -1453,7 +1423,7 @@ class TestFreshIamToken:
         assert params["dbname"] == "db"
 
     def test_the_new_token_is_reused_until_it_ages_too(self) -> None:
-        engine, tokens, clock = self._engine(), _Tokens(), _Clock()
+        engine, tokens, clock = self._engine(), _Tokens(), FakeClock()
         self._listen(engine, tokens, clock)
         clock.now += 11 * 60
         assert _connect_params(engine)["password"] == "token-1"
@@ -1469,7 +1439,7 @@ class TestFreshIamToken:
         engine, tokens, clock = (
             self._engine({"password": "from-connect-args"}),
             _Tokens(),
-            _Clock(),
+            FakeClock(),
         )
         self._listen(engine, tokens, clock)
         clock.now += 11 * 60
@@ -1477,7 +1447,7 @@ class TestFreshIamToken:
         assert _connect_params(engine)["password"] == "from-connect-args"
 
     def test_a_failed_build_fails_the_connect(self) -> None:
-        engine, clock = self._engine(), _Clock()
+        engine, clock = self._engine(), FakeClock()
 
         def _fail() -> str:
             raise SqlAwsCredentialsError(message="no role")
@@ -1505,7 +1475,7 @@ def test_concurrent_connects_share_one_refresh() -> None:
 
     from application_sdk.clients.sql import _FreshIamToken
 
-    clock = _Clock()
+    clock = FakeClock()
     started, release = threading.Event(), threading.Event()
     calls: list[int] = []
 
@@ -1521,11 +1491,11 @@ def test_concurrent_connects_share_one_refresh() -> None:
         "do_connect",
         _FreshIamToken(_build, _url("token-0"), clock.now, clock=clock),
     )
-    seen = _record_connect_params(engine)
+    seen = record_connect_params(engine)
     clock.now += 11 * 60
 
     def _connect() -> None:
-        with pytest.raises(_StopConnect):
+        with pytest.raises(StopConnect):
             engine.raw_connection()
 
     first = threading.Thread(target=_connect)
@@ -1547,7 +1517,7 @@ def test_a_connect_waiting_on_a_failed_refresh_tries_itself() -> None:
 
     from application_sdk.clients.sql import _FreshIamToken
 
-    clock = _Clock()
+    clock = FakeClock()
     outcomes = iter([SqlAwsCredentialsError(message="sts down"), _url("token-1")])
 
     def _build() -> str:

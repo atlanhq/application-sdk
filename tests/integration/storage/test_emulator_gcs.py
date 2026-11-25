@@ -41,13 +41,16 @@ import pytest
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import (
-    emulator_unavailable,
+    GCS_EMULATOR_ENDPOINT,
     write_dapr_component,
 )
 
-pytestmark = pytest.mark.storage_emulator
+pytestmark = [
+    pytest.mark.storage_emulator,
+    pytest.mark.usefixtures("require_testbench"),
+]
 
-_ENDPOINT = os.environ.get("GCS_EMULATOR_ENDPOINT", "http://localhost:9095").rstrip("/")
+
 _BUCKET = os.environ.get("GCS_EMULATOR_BUCKET", "sdk-emulator-test")
 
 
@@ -64,24 +67,6 @@ def _anonymous_credential():
     return _provider
 
 
-@pytest.fixture(scope="module", autouse=True)
-def require_testbench() -> None:
-    """Fail (CI) or skip (local) the module when the GCS emulator (proxy) isn't reachable or unhealthy."""
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0) as client:
-            resp = client.get(f"{_ENDPOINT}/storage/v1/b?project=test")
-    except Exception as exc:  # pragma: no cover — env guard
-        emulator_unavailable(f"GCS emulator not reachable at {_ENDPOINT}: {exc}")
-    # Reachable but 5xx means the emulator/proxy is up yet unhealthy — skip with a
-    # clear signal rather than letting the round-trip fail with an opaque error.
-    if resp.status_code >= 500:  # pragma: no cover — env guard
-        emulator_unavailable(
-            f"GCS emulator unhealthy at {_ENDPOINT}: HTTP {resp.status_code}"
-        )
-
-
 @pytest.fixture
 def _redirect_gcs_to_emulator(monkeypatch):
     """Redirect obstore's GCSStore at the emulator — test layer only, no prod change.
@@ -96,7 +81,7 @@ def _redirect_gcs_to_emulator(monkeypatch):
 
     def _patched(**kwargs):
         config = dict(kwargs.pop("config", None) or {})
-        config["base_url"] = _ENDPOINT
+        config["base_url"] = GCS_EMULATOR_ENDPOINT
         client_options = dict(kwargs.pop("client_options", None) or {})
         client_options["allow_http"] = True
         return real_gcs_store(
@@ -141,5 +126,5 @@ async def test_gcs_binding_write_read(tmp_path, _redirect_gcs_to_emulator):
 
         with httpx.Client(timeout=3.0) as client:
             client.delete(
-                f"{_ENDPOINT}/storage/v1/b/{_BUCKET}/o/{key.replace('/', '%2F')}"
+                f"{GCS_EMULATOR_ENDPOINT}/storage/v1/b/{_BUCKET}/o/{key.replace('/', '%2F')}"
             )

@@ -73,6 +73,37 @@ class TestLoadExecutionSettingsFromEnv:
         settings = load_execution_settings()
         assert settings.task_queue == "my-custom-queue"
 
+    @pytest.mark.parametrize(
+        ("key", "field", "default"),
+        [
+            ("TEMPORAL_HOST", "host", "localhost:7233"),
+            ("TEMPORAL_NAMESPACE", "namespace", "default"),
+            ("TEMPORAL_TASK_QUEUE", "task_queue", "application-sdk"),
+        ],
+    )
+    def test_empty_value_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, key: str, field: str, default: str
+    ) -> None:
+        """An unset Helm value renders as ``""``; it used to become the value
+        itself, so a worker dialled host ``""`` (FND-5223)."""
+        monkeypatch.delenv("ATLAN_WORKFLOW_HOST", raising=False)
+        monkeypatch.setenv(key, "")
+        assert getattr(load_execution_settings(), field) == default
+
+    def test_empty_v2_port_keeps_the_default_port(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "temporal.internal")
+        monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "")
+        assert load_execution_settings().host == "temporal.internal:7233"
+
+    def test_blank_v2_host_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A whitespace-only legacy host used to build ``" :7233"``."""
+        monkeypatch.delenv("TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "  ")
+        assert load_execution_settings().host == "localhost:7233"
+
     def test_max_concurrent_activities_from_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

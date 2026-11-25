@@ -42,41 +42,11 @@ from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome
 from application_sdk.testing.harness import atlas as atlas_api
 from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine import (
-    DAGNodeResult,
-    DAGNodeStatus,
     DAGRunResult,
-    DAGRunStatus,
 )
 from application_sdk.testing.harness.budgets import Budget
 from application_sdk.testing.harness.outcome import Settled
-
-
-def _node(name: str, status: DAGNodeStatus) -> DAGNodeResult:
-    return DAGNodeResult(
-        name=name,
-        status=status,
-        started_at_ms=None,
-        completed_at_ms=None,
-        error_message=None,
-    )
-
-
-def _succeeded(*names: str) -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[_node(n, DAGNodeStatus.SUCCEEDED) for n in names],
-    )
-
-
-def _failed(*names: str) -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.FAILED,
-        nodes=[_node(n, DAGNodeStatus.FAILED) for n in names],
-    )
+from tests.unit.testing._ae_fakes import FakeAE, failed, succeeded
 
 
 class _Crawler(BaseE2ETest):
@@ -121,7 +91,7 @@ class TestDefaultsAreUnchanged:
     def test_outcome_connection_expected_defaults_true(self) -> None:
         """An outcome built without the new field grades exactly as before."""
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract", "publish"),
+            ae_result=succeeded("extract", "publish"),
             connection_qualified_name="default/bundle/1",
             connection_in_atlas=True,
         )
@@ -139,7 +109,7 @@ class TestOutcomeSucceeded:
 
     def test_missing_connection_fails_when_expected(self) -> None:
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract", "publish"),
+            ae_result=succeeded("extract", "publish"),
             connection_qualified_name="default/bundle/1",
             connection_in_atlas=False,
             connection_expected=True,
@@ -148,7 +118,7 @@ class TestOutcomeSucceeded:
 
     def test_missing_connection_ignored_when_not_expected(self) -> None:
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name="default/bundle/1",
             connection_in_atlas=False,
             connection_expected=False,
@@ -158,7 +128,7 @@ class TestOutcomeSucceeded:
     def test_a_failed_dag_still_fails_without_a_connection_expectation(self) -> None:
         """expect_connection must not weaken the DAG gate — only the Atlas one."""
         outcome = FullDAGOutcome(
-            ae_result=_failed("extract"),
+            ae_result=failed("extract"),
             connection_qualified_name="default/bundle/1",
             connection_in_atlas=False,
             connection_expected=False,
@@ -169,28 +139,6 @@ class TestOutcomeSucceeded:
 # ---------------------------------------------------------------------------
 # run_full_dag skips the Atlas probes
 # ---------------------------------------------------------------------------
-
-
-class _FakeAE:
-    """Async stand-in for the AE client the base holds."""
-
-    def __init__(self, ae_result: DAGRunResult) -> None:
-        self._ae_result = ae_result
-
-    async def submit_workflow(self, payload: dict[str, Any], **_kwargs: Any) -> str:
-        return "run-1"
-
-    async def poll_native_status(self, run_id: str, **_kwargs: Any) -> DAGRunResult:
-        return self._ae_result
-
-    async def get_published_version(self, slug: str) -> None:
-        return None
-
-    async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
-        return None
-
-    async def aclose(self) -> None:
-        return None
 
 
 @dataclass
@@ -283,7 +231,7 @@ def _stub_run(
     """Wire a harness so run_full_dag reaches the Atlas branch without a tenant."""
     calls = _AtlasCalls(**atlas_overrides)
     calls.install(monkeypatch)
-    harness._ae = _FakeAE(ae_result)  # type: ignore[attr-defined]
+    harness._ae = FakeAE(ae_result)  # type: ignore[attr-defined]
     harness.run_id = 1  # type: ignore[attr-defined]
     harness.connection_qualified_name = "default/bundle/1"  # type: ignore[attr-defined]
 
@@ -301,7 +249,7 @@ class TestRunFullDagSkipsAtlasProbes:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness = _Miner()
-        calls = _stub_run(harness, _succeeded("extract"), monkeypatch)
+        calls = _stub_run(harness, succeeded("extract"), monkeypatch)
 
         outcome = harness.run_full_dag()
 
@@ -321,7 +269,7 @@ class TestRunFullDagSkipsAtlasProbes:
         harness = _Crawler()
         calls = _stub_run(
             harness,
-            _succeeded("extract", "publish"),
+            succeeded("extract", "publish"),
             monkeypatch,
             connection_found=True,
             total=7,
@@ -347,7 +295,7 @@ class TestAssertionLadder:
     ) -> None:
         harness = _Miner()
         harness.source_available = True  # type: ignore[attr-defined]
-        _stub_run(harness, _succeeded("extract"), monkeypatch)
+        _stub_run(harness, succeeded("extract"), monkeypatch)
 
         # Would raise on the zero-asset backstop if the inventory assertions ran.
         harness.test_full_dag_runs_end_to_end()
@@ -357,7 +305,7 @@ class TestAssertionLadder:
     ) -> None:
         harness = _Miner()
         harness.source_available = True  # type: ignore[attr-defined]
-        _stub_run(harness, _failed("extract"), monkeypatch)
+        _stub_run(harness, failed("extract"), monkeypatch)
 
         with pytest.raises(AssertionError) as exc:
             harness.test_full_dag_runs_end_to_end()
@@ -376,7 +324,7 @@ class TestAssertionLadder:
 
         harness = _Seeding()
         harness.source_available = True  # type: ignore[attr-defined]
-        _stub_run(harness, _succeeded("extract"), monkeypatch)
+        _stub_run(harness, succeeded("extract"), monkeypatch)
         original = harness.run_full_dag
 
         def _tracked() -> FullDAGOutcome:
@@ -399,7 +347,7 @@ class TestAssertionLadder:
         harness.source_available = True  # type: ignore[attr-defined]
         _stub_run(
             harness,
-            _succeeded("extract", "publish"),
+            succeeded("extract", "publish"),
             monkeypatch,
             connection_found=False,
         )

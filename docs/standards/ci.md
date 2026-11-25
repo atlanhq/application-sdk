@@ -320,12 +320,45 @@ that stopped reporting the rule fails instead of matching an emptied baseline.
 The `ann401-baseline` pre-commit hook runs the check on every change under
 `application_sdk/`.
 
-## An artifact upload retry must use a DIFFERENT artifact name
+## Artifacts move through the retry composites
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
-as non-retryable and fails the step, so every upload on a gating path is paired
-with a retry (first attempt `continue-on-error: true`, companion step guarded on
-`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+as non-retryable and fails the step, and `actions/download-artifact` does the
+same with a `ListArtifacts` 403. So every upload and download goes through one
+of two composites that hold the retry:
+
+```yaml
+- name: Upload test results
+  if: always()
+  continue-on-error: true        # only when a lost artifact must not fail the job
+  uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+  with:
+    name: integration-test-results
+    path: results/
+    retention-days: 14
+
+- name: Download test results
+  uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+  with:
+    pattern: integration-test-results*
+    path: results/
+```
+
+Each composite runs a first attempt with `continue-on-error: true`, a 20-second
+wait and a retry, both guarded on the first attempt's outcome. The step fails
+only when both attempts fail. The caller's `if:` gates the whole thing. A
+workflow that only ever runs in this repo, on a checkout of it, may use the
+relative `./.github/actions/...` ref (`codeql.yaml` does, so a PR exercises its
+own version of the upload composite); reusable workflows and composites must
+use `atlanhq/...@main`, because a relative ref resolves against a consumer's
+workspace.
+
+`conformance-reusable.yaml` still writes its 12 SARIF pairs by hand: this
+repo's own PR CI runs it, and an `@main` ref to a composite that is not yet on
+`main` fails the job at setup. It moves in a follow-up once the composites
+merge.
+
+The upload composite follows these rules:
 
 1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
    leaves an artifact record that holds the name for the rest of the run but
@@ -371,11 +404,11 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    "nothing matched" as **success**, so any step gated on
    `steps.<download>.outcome` has to move onto `hashFiles(...)`.
 
-`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
-every workflow, composite action and script in this repo — including a
-cross-file check that no consumer addresses a retried artifact by its base name
-alone — and `EXEMPT` there carries the reason for each upload that does not need
-the hardening.
+`.github/scripts/tests/test_artifact_upload_retry.py` and
+`test_artifact_download_retry.py` pin these rules on the composites, fail on any
+direct `actions/upload-artifact` or `actions/download-artifact` step elsewhere,
+and check that no consumer addresses a retried artifact by its base name alone.
+`EXEMPT` in each carries the reason for a direct call that needs no retry.
 
 ## Test legs are requested by PR comment, never by label
 
@@ -758,7 +791,9 @@ base-sensitive or not:
 | `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
-runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
+runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. Its body is one
+nested reusable, `queue-diff-reusable.yaml`, which each of the three reusables
+calls with `./` (FND-4928); each keeps its own `if:`. It reads the PR
 number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and
 fetches the PR head from `refs/pull/<N>/head`. The SHA in the branch name is
 the commit the entry was built on, the queue commit's parent, not the PR head.
@@ -1684,6 +1719,18 @@ and "not yet" would otherwise read as "never".
 If you add another workflow that commits to a Renovate branch, it inherits this
 problem. Carry the status or accept that the PR needs a human.
 
+### One implementation for both fix-up lanes
+
+`renovate-lock-cooldown.yaml` and `renovate-conformance-lock-sync.yaml` both
+call `renovate-branch-fixup.yaml` (FND-4928). The caller owns the trigger, the
+concurrency group and the driver's arguments. The reusable owns the actor
+allowlist, the re-entrancy guard, the read-only `generate` job, the App-token
+`publish` job and the `renovate/artifacts` carry-forward. A new lane that rewrites
+files on a Renovate branch should call it too. Its driver must take
+`--no-commit --baseline-ref REF`, `--stage-to DIR` and `--apply-from DIR`, and
+write only its `OUTPUT_PATHS`. `test_renovate_branch_fixup.py` checks that
+contract for every caller.
+
 ### Repo-local `postUpgradeTasks` override
 
 `renovate.json` clears the preset's `lockFileMaintenance.postUpgradeTasks`
@@ -1947,8 +1994,8 @@ step re-installs a list the reusable has already checked, or never reaches it
 because D is skipped after a rejected one.
 
 `.github/scripts/tests/test_install_apt_packages.py` tests the script and
-fails on any `apt-get install` in `.github/workflows`, `.github/actions`,
-`.github/workflow-templates` or the bootstrap templates that bypasses it. It
+fails on any `apt-get install` in `.github/workflows`, `.github/actions`
+or the bootstrap templates that bypasses it. It
 reads whole shell commands, joining backslash-continued lines, so splitting
 `apt-get \` from `install "$LIST"` does not hide an install. The only
 exceptions are fixed packages this repo names itself (`twingate`,

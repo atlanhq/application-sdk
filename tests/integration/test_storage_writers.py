@@ -26,16 +26,9 @@ from application_sdk.infrastructure.context import (
     set_infrastructure,
 )
 from application_sdk.storage.batch import list_keys
-from application_sdk.storage.factory import create_local_store
 from application_sdk.storage.formats.parquet import ParquetFileWriter
 from application_sdk.storage.reference import persist_file_reference
 from application_sdk.storage.rolling import RollingFileWriter
-
-
-@pytest.fixture
-def store(tmp_path):
-    """Real local object store backed by a temp directory."""
-    return create_local_store(tmp_path / "store")
 
 
 @pytest.fixture

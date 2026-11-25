@@ -39,22 +39,6 @@ self-hosted-runner:
     - "ubuntu-2*.04-arm"
 
 paths:
-  # FALSE POSITIVE — `$cron-daily` is a GitHub starter-workflow placeholder,
-  # not a cron expression.
-  #
-  # Files under .github/workflow-templates/ are starter workflows: GitHub
-  # substitutes `$default-branch`, `$protected-branches` and `$cron-daily`
-  # when a repo adopts one. Only the cron placeholder trips actionlint — the
-  # other two sit in string fields it does not parse. Expanding it here would
-  # mean committing a schedule the templates deliberately leave to the
-  # adopting repo.
-  #
-  # Scoped to this directory, and to the placeholder shape specifically, so a
-  # genuinely malformed cron in a template is still an error.
-  .github/workflow-templates/**/*.{yml,yaml}:
-    ignore:
-      - 'invalid CRON format "\$cron-[a-z]+" in schedule event'
-
   # FALSE POSITIVE — actionlint's `job` context type is out of date.
   #
   # `job.workflow_sha` is REAL and documented: "the commit SHA of the workflow
@@ -76,7 +60,10 @@ paths:
   .github/workflows/build-and-scan.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
-  # The queue-diff jobs' script checkout (FND-3321).
+  # The queue-diff job's script checkout (FND-3321), one copy since FND-4928.
+  .github/workflows/queue-diff-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
   .github/workflows/checks-reusable.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'

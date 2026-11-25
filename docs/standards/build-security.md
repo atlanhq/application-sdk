@@ -124,7 +124,7 @@ The other three emulator images (Azurite, storage-testbench, and the nginx proxy
 
 `.github/scripts/wait_for_emulators.py` waits for all three emulators and creates the buckets. The step fails if an emulator never answers or a bucket cannot be created. The test step sets `STORAGE_EMULATOR_REQUIRED=1`, so an unreachable emulator fails its tests instead of skipping them. Without the variable, as in a local run with no sidecar, they still skip.
 
-The real-cloud storage jobs (`storage-integration` in `pull_request.yaml` and `schedule.yaml`) set `STORAGE_CLOUD_REQUIRED=1` the same way: a cloud whose bucket or credential variables are unset fails its tests instead of skipping them.
+The real-cloud storage job (`storage-integration-reusable.yaml`, called as `storage-integration` from `pull_request.yaml` and nightly from `schedule.yaml`) sets `STORAGE_CLOUD_REQUIRED=1` the same way: a cloud whose bucket or credential variables are unset fails its tests instead of skipping them.
 
 ## CI test images (Temporal JWT-auth stack)
 

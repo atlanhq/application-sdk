@@ -503,34 +503,12 @@ jobs:
         run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard "${SHARD}" --total "${TOTAL}" --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shard
 
       - name: Upload shard result
-        id: upload-shard
         if: ${{ !cancelled() }}
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: certify-shard-${{ matrix.shard }}
           path: certify-shard/
           retention-days: 1
-          # Overwrite on the first attempt too: a re-run attempt must not 409
-          # and leave two live artifacts for `certify`'s glob to merge.
-          overwrite: true
-
-      # A finalize 403 comes from an intermediary having a moment; wait it out
-      # so the two attempts fail independently (docs/standards/ci.md).
-      - name: Wait before the upload retry
-        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
-        run: sleep 20
-
-      - name: Upload shard result (retry)
-        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          # A DISTINCT name: a failed finalize holds the first name for the
-          # run. `certify` downloads by `certify-shard-*` glob, so either lands.
-          name: certify-shard-${{ matrix.shard }}-retry
-          path: certify-shard/
-          retention-days: 1
-          overwrite: true
 
   certify:
     name: Certify app
@@ -709,26 +687,11 @@ jobs:
       # `-retry`. With `pattern:` an empty match is a success, so a missing leg
       # surfaces in the verdict script (absent result = failed), not here.
       - name: Download unit-test shard results
-        id: download-shards
         if: always() && inputs.unit_test_shards != 1
         continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
         with:
           pattern: certify-shard-*
-          merge-multiple: true
-          path: certify-shards
-
-      - name: Wait before the download retry
-        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
-        run: sleep 20
-
-      - name: Download unit-test shard results (retry)
-        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: certify-shard-*
-          merge-multiple: true
           path: certify-shards
 
       - name: "Unit tests"

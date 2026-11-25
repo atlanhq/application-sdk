@@ -128,9 +128,9 @@ over a raw `DAGNode` in `extraNodes`.
   Assert the message, not just that eval failed, and keep a control fact showing the
   same contract minus the offending value generates.
 - Commit regenerated example outputs with the source change.
-- Toolkit repo skills live at the SDK repo root. Mirror changes between
-  `.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`, and do
-  not add nested skill directories under `contract-toolkit/`.
+- Toolkit repo skills live at the SDK repo root. Edit
+  `.claude/skills/<name>/SKILL.md`; `.agents/skills/<name>` is a symlink to it.
+  Do not add nested skill directories under `contract-toolkit/`.
 - When adding or changing a public toolkit property, write extended descriptions
   in the source doc comment and public docs. Cover the default, when to use it,
   what generated output changes, what does not change, and any caveats such as

@@ -7,7 +7,8 @@ spec:
   type: bindings.localstorage
   ignoreErrors: true
   metadata:
-    # Must match DEFAULT_EVENTSTORE_ROOT in application_sdk/dev/_dapr.py
+    # Must match DEFAULT_EVENTSTORE_ROOT in application_sdk/dev/_dapr_components.py
+    # (enforced by tests/unit/dev/test_dapr_components.py)
     - name: rootPath
       value: "./local/dapr/eventstore"
 

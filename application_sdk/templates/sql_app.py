@@ -998,10 +998,15 @@ class SqlApp(App):
     # ``transform_*`` so the activity boundary is a durable retry point
     # and so future change-detection can compare raw streams between runs
     # before paying mapper cost.
+    #
+    # The ``extract_*`` / ``transform_*`` tasks declare no timing values on
+    # purpose: their runtime scales with source size, so any number here is a
+    # guess (ADR-0018). They take the process-wide defaults —
+    # ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` (24 h backstop) and
+    # ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` — which operators tune per app.
+    # tests/unit/templates/test_template_task_literals.py pins this.
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_databases(
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
@@ -1012,9 +1017,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_schemas(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream schema rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -1023,9 +1026,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_tables(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream table rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -1034,9 +1035,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_columns(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream column rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -1045,9 +1044,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_views(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream view rows from SQL into raw JSONL."""
         return await self._extract_entity(
@@ -1056,9 +1053,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_procedures(
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
@@ -1085,9 +1080,7 @@ class SqlApp(App):
     # Activity boundary keeps transform retry-able without re-running the
     # SQL extraction.
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_databases(self, input: TransformInput) -> TransformOutput:
         """Map raw database records to Atlan assets via ``map_database``."""
         return await self._transform_entity(
@@ -1096,9 +1089,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_schemas(self, input: TransformInput) -> TransformOutput:
         """Map raw schema records to Atlan assets via ``map_schema``."""
         return await self._transform_entity(
@@ -1107,9 +1098,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_tables(self, input: TransformInput) -> TransformOutput:
         """Map raw table records to Atlan assets via ``map_table``."""
         return await self._transform_entity(
@@ -1118,9 +1107,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_columns(self, input: TransformInput) -> TransformOutput:
         """Map raw column records to Atlan assets via ``map_column``."""
         return await self._transform_entity(
@@ -1129,9 +1116,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_views(self, input: TransformInput) -> TransformOutput:
         """Map raw view records to Atlan assets via ``map_table``.
 
@@ -1145,9 +1130,7 @@ class SqlApp(App):
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_procedures(self, input: TransformInput) -> TransformOutput:
         """Map raw procedure records to Atlan assets via ``map_procedure``."""
         return await self._transform_entity(

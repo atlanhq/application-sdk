@@ -180,13 +180,13 @@ def rewrite_env(
     return env
 
 
-def git_auth_env(token: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
-    """``GIT_CONFIG_*`` entries pointing atlanhq remotes at an authed URL.
+def token_rewrite(token: str) -> dict[str, str]:
+    """The rewrite pointing both atlanhq remote forms at an authed URL.
 
     Only ever given to the ``git clone --mirror`` processes, never to uv.
     """
     authed = f"https://x-access-token:{token}@github.com/atlanhq/"
-    return rewrite_env(dict.fromkeys(ATLANHQ_REMOTES, authed), base)
+    return dict.fromkeys(ATLANHQ_REMOTES, authed)
 
 
 def _repo_name(match: str) -> str:
@@ -421,10 +421,7 @@ def prepare_mirrors(
         print(MISSING_TOKEN_ERROR, flush=True)
         return 1
     dest.mkdir(parents=True)
-    rewrite = clone_rewrite or {
-        remote: f"https://x-access-token:{token}@github.com/atlanhq/"
-        for remote in ATLANHQ_REMOTES
-    }
+    rewrite = clone_rewrite or token_rewrite(token)
     failed = mirror(mirror_set(private, referenced), dest, rewrite)
     if failed is not None:
         shutil.rmtree(dest, ignore_errors=True)

@@ -79,6 +79,8 @@ BOOTSTRAP_MANAGED = (
     ".github/workflows/update-dashboard.yml",
     ".github/workflows/renovate-auto-approve.yml",
     ".github/workflows/porter-bundle-cnab.yaml",
+    ".github/workflows/dep-cooldown.yml",
+    ".github/workflows/dep-cooldown.yml",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
     ".github/actions/run-conformance-detect/**",

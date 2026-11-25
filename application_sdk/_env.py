@@ -1,6 +1,6 @@
 """Tolerant env-var parsing: the one reader for every typed SDK env var.
 
-Every SDK setting read from the environment goes through one of these four
+Every SDK setting read from the environment goes through one of these
 functions, so they all share one set of rules:
 
 * **Unset or empty is the default.** An unset Helm value renders as ``""``, so
@@ -35,9 +35,11 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import threading
 import warnings
 from collections.abc import Callable, Collection
+from typing import overload
 
 #: Receives the message for a rejected value. ``None`` means ``warnings.warn``.
 Reporter = Callable[[str], None]
@@ -109,17 +111,43 @@ def _reject(message: str, report: Reporter | None) -> None:
     _to_log(message)
 
 
+def _fallback(default: object) -> str:
+    """The tail of a rejection message: what the reader returns instead."""
+    if default is None:
+        return "ignoring it"
+    if isinstance(default, float):
+        return f"using the default {default:g}"
+    return f"using the default {default}"
+
+
+@overload
 def env_int(
     key: str,
     default: int = 0,
     *,
     minimum: int | None = None,
     report: Reporter | None = None,
-) -> int:
+) -> int: ...
+@overload
+def env_int(
+    key: str,
+    default: None,
+    *,
+    minimum: int | None = None,
+    report: Reporter | None = None,
+) -> int | None: ...
+def env_int(
+    key: str,
+    default: int | None = 0,
+    *,
+    minimum: int | None = None,
+    report: Reporter | None = None,
+) -> int | None:
     """Read an integer env var.
 
-    Returns *default* when the variable is unset or empty. A value that is not
-    an integer, or is below *minimum*, warns and returns *default*.
+    Returns *default* when the variable is unset or empty; pass ``None`` for a
+    setting where "unset" means "no override". A value that is not an integer,
+    or is below *minimum*, warns and returns *default*.
     """
     raw = _raw(key)
     if raw is None:
@@ -127,29 +155,44 @@ def env_int(
     try:
         value = int(raw)
     except ValueError:
-        _reject(f"{key}={raw!r} is not an integer; using the default {default}", report)
+        _reject(f"{key}={raw!r} is not an integer; {_fallback(default)}", report)
         return default
     if minimum is not None and value < minimum:
-        _reject(
-            f"{key}={value} is below {minimum}; using the default {default}", report
-        )
+        _reject(f"{key}={value} is below {minimum}; {_fallback(default)}", report)
         return default
     return value
 
 
+@overload
 def env_float(
     key: str,
     default: float,
     *,
     minimum: float | None = None,
     report: Reporter | None = None,
-) -> float:
+) -> float: ...
+@overload
+def env_float(
+    key: str,
+    default: None,
+    *,
+    minimum: float | None = None,
+    report: Reporter | None = None,
+) -> float | None: ...
+def env_float(
+    key: str,
+    default: float | None,
+    *,
+    minimum: float | None = None,
+    report: Reporter | None = None,
+) -> float | None:
     """Read a finite float env var.
 
-    Returns *default* when the variable is unset or empty. A value that is not a
-    number, is not finite (``inf`` / ``nan``), or is below *minimum*, warns and
-    returns *default*. Non-finite values are rejected because an ``inf`` bound
-    never trips and every ``nan`` comparison is False, so either one silently
+    Returns *default* when the variable is unset or empty; pass ``None`` for a
+    setting where "unset" means "no override". A value that is not a number, is
+    not finite (``inf`` / ``nan``), or is below *minimum*, warns and returns
+    *default*. Non-finite values are rejected because an ``inf`` bound never
+    trips and every ``nan`` comparison is False, so either one silently
     disables whatever the value bounds.
     """
     raw = _raw(key)
@@ -158,16 +201,13 @@ def env_float(
     try:
         value = float(raw)
     except ValueError:
-        _reject(f"{key}={raw!r} is not a number; using the default {default:g}", report)
+        _reject(f"{key}={raw!r} is not a number; {_fallback(default)}", report)
         return default
     if not math.isfinite(value):
-        _reject(f"{key}={raw!r} is not finite; using the default {default:g}", report)
+        _reject(f"{key}={raw!r} is not finite; {_fallback(default)}", report)
         return default
     if minimum is not None and value < minimum:
-        _reject(
-            f"{key}={value:g} is below {minimum:g}; using the default {default:g}",
-            report,
-        )
+        _reject(f"{key}={value:g} is below {minimum:g}; {_fallback(default)}", report)
         return default
     return value
 
@@ -220,12 +260,69 @@ def env_choice(
     return default
 
 
+def env_str(key: str, default: str) -> str:
+    """Read a string env var.
+
+    Returns the value with surrounding whitespace stripped, or *default* when
+    the variable is unset or empty. ``os.getenv(key, default)`` returns ``""``
+    for an empty value, so an unset Helm value would replace the default with
+    an empty string; this reader keeps the default.
+    """
+    raw = _raw(key)
+    return default if raw is None else raw
+
+
+#: Units the object-store client's duration parser (Rust ``humantime`` 2.3)
+#: accepts. Case-sensitive: ``M`` is months and ``m`` is minutes.
+_DURATION_UNITS = (
+    "nanos|nsec|ns|usec|us|µs|millis|msec|ms|seconds|second|secs|sec|s|"
+    "minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d|"
+    "weeks|week|wks|wk|w|months|month|M|years|year|yrs|yr|y"
+)
+#: ASCII digits only: ``\d`` also matches other scripts' digits (``١``), which
+#: obstore rejects. Whitespace stays Unicode-aware, as obstore's is.
+_DURATION = re.compile(rf"(?:[0-9]+(?:\.[0-9]+)?\s*(?:{_DURATION_UNITS})\s*)+")
+
+
+def is_duration(value: str) -> bool:
+    """True when *value* is a duration the object-store client parses.
+
+    One or more ``<number><unit>`` terms (``30s``, ``1h 30m``, ``1.5h``), or
+    ``0``. A bare number has no unit and is rejected, as the client rejects it.
+    """
+    stripped = value.strip()
+    return stripped == "0" or _DURATION.fullmatch(stripped) is not None
+
+
+def env_duration(key: str, default: str, *, report: Reporter | None = None) -> str:
+    """Read a duration env var such as ``30s`` or ``1h 30m``; see :func:`is_duration`.
+
+    Returns *default* when the variable is unset or empty. A value that is not a
+    duration warns and returns *default*: passed through, it would fail every
+    object-store client construction with a config error.
+    """
+    raw = _raw(key)
+    if raw is None:
+        return default
+    if is_duration(raw):
+        return raw
+    _reject(
+        f"{key}={raw!r} is not a duration such as '30s' or '1h 30m'; "
+        f"using the default {default!r}",
+        report,
+    )
+    return default
+
+
 __all__ = [
     "FALSE_VALUES",
     "Reporter",
     "TRUE_VALUES",
     "env_bool",
     "env_choice",
+    "env_duration",
     "env_float",
     "env_int",
+    "env_str",
+    "is_duration",
 ]

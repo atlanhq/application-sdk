@@ -12,14 +12,13 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import bound_lock_branch as lanes
 import conformance_wheel_gate as gate
@@ -32,6 +31,8 @@ REPO_ROOT = Path(__file__).parent.parent.parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "renovate-conformance-lock-sync.yaml"
 COOLDOWN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "renovate-lock-cooldown.yaml"
 AUTO_APPROVE = REPO_ROOT / ".github" / "workflows" / "renovate-auto-approve.yml"
+#: The generate/publish jobs both lanes call (FND-4928).
+FIXUP = REPO_ROOT / ".github" / "workflows" / "renovate-branch-fixup.yaml"
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t",
@@ -616,17 +617,19 @@ class Step:
 
 
 def _sync_steps() -> list[Step]:
+    """The reusable's `generate` steps, with this lane's script substituted for
+    the `$SCRIPT` the reusable reads from its `script` input."""
     workflow = cast(
         dict[str, dict[str, dict[str, list[dict[str, object]]]]],
-        yaml.safe_load(WORKFLOW.read_text()),
+        yaml.safe_load(FIXUP.read_text()),
     )
     steps: list[Step] = []
-    for raw in workflow["jobs"]["sync"]["steps"]:
+    for raw in workflow["jobs"]["generate"]["steps"]:
         with_ = cast(dict[str, object], raw.get("with", {}))
         steps.append(
             Step(
                 name=str(raw.get("name", "")),
-                run=str(raw.get("run", "")),
+                run=str(raw.get("run", "")).replace('"$SCRIPT"', SCRIPT),
                 uses=str(raw.get("uses", "")),
                 path=str(with_.get("path", "")),
                 conditional="if" in raw,
@@ -650,7 +653,7 @@ def _upload_root(search_paths: list[Path]) -> Path:
 
 
 SCRIPT = ".github/scripts/renovate_conformance_lock_sync.py"
-STAGING_DIR = "conformance-lock-sync-out"
+STAGING_DIR = "fixup-out"
 
 
 def _run_sync_job_handoff(repo: Path, runner_temp: Path) -> Path:
@@ -662,7 +665,7 @@ def _run_sync_job_handoff(repo: Path, runner_temp: Path) -> Path:
     The retry upload (`if:` the first one failed) carries the same path, which
     the wiring test pins, so replaying the first upload is enough.
     """
-    download = runner_temp / "conformance-lock-sync"
+    download = runner_temp / "fixup-in"
     for step in _sync_steps():
         if SCRIPT in step.run and "--stage-to" in step.run:
             argv = shlex.split(step.run.replace("$RUNNER_TEMP", str(runner_temp)))
@@ -779,21 +782,17 @@ class TestWiring:
             dict[str, dict[str, dict[str, str]]], yaml.safe_load(WORKFLOW.read_text())
         )
 
-    def test_the_actor_list_matches_the_approval_gates_renovate_identities(self):
-        declared = re.findall(
-            r'"([a-z0-9-]+\[bot\])"', self.workflow["jobs"]["sync"]["if"]
-        )
-        assert sorted(declared) == sorted(approval.RENOVATE_AUTHORS)
-
-    def test_the_condition_folds_to_a_single_line(self):
-        assert "\n" not in self.workflow["jobs"]["sync"]["if"]
+    def test_it_runs_this_script_through_the_shared_fixup_jobs(self):
+        # The actor list, the folded `if:` and the job split are the
+        # reusable's, guarded in test_renovate_branch_fixup.py.
+        job = cast(dict[str, Any], self.workflow["jobs"]["sync"])
+        assert job["uses"] == "./.github/workflows/renovate-branch-fixup.yaml"
+        assert job["with"]["script"] == SCRIPT
 
     def test_re_entrancy_guard_matches_our_commit_subject(self):
-        guard = re.search(
-            r"startsWith\(github\.event\.head_commit\.message, '([^']+)'\)",
-            self.workflow["jobs"]["sync"]["if"],
-        )
-        assert guard and sync.COMMIT_MESSAGE.startswith(guard.group(1))
+        job = cast(dict[str, Any], self.workflow["jobs"]["sync"])
+        subject = job["with"]["own-commit-subject"]
+        assert sync.COMMIT_MESSAGE.startswith(subject)
 
     def test_our_own_outputs_never_match_the_paths_filter(self):
         # The other half of re-entrancy: our push changes only OUTPUT_PATHS.
@@ -811,7 +810,7 @@ class TestWiring:
         uploads = [
             (i, step) for i, step in enumerate(steps) if "upload-artifact" in step.uses
         ]
-        assert len(uploads) == 2  # the first try and the retry
+        assert len(uploads) == 1  # upload-artifact-retry holds the retry
         for i, step in uploads:
             assert i > staging[0], step.name
             # One folder, never a list of files: several paths make

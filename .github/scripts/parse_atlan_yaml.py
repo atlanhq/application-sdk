@@ -49,13 +49,6 @@ _ALLOWED_TYPES = {"connector", "miner", "orchestrator", "utility", "custom"}
 # "versioned" is a deprecated alias for "semver" — normalised on read.
 _ALLOWED_RELEASE_MODELS = {"cd", "semver", "versioned"}
 
-# Channel keys that GM's catalog read interprets as channel-tier overrides.
-# Any other key is interpreted as a tenant-name-tier override (matched against
-# horizon_tenants.name at runtime). We keep this constant for diagnostics —
-# the validator no longer rejects non-channel keys, since tenant-name entries
-# are a supported atlan.yaml shape.
-_OVERRIDABLE_CHANNELS = {"beta", "staging"}
-
 # Required keys for each entrypoints entry. description and icon_url
 # are optional (default empty string on GM side).
 # generated_dir is auto-derived from name (Option B: name == folder) so it is

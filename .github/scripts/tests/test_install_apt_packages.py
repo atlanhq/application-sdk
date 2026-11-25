@@ -230,7 +230,6 @@ def _ci_files() -> list[Path]:
     roots = [
         REPO_ROOT / ".github" / "workflows",
         REPO_ROOT / ".github" / "actions",
-        REPO_ROOT / ".github" / "workflow-templates",
         REPO_ROOT
         / "packages"
         / "conformance"
