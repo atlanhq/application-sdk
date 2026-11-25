@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 
@@ -34,14 +34,6 @@ class _WfOutput2(Output):
 
 class TestGetAllAppWorkflows:
     """Tests for get_all_app_workflows()."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_empty_when_no_apps_registered(self) -> None:
         workflows = get_all_app_workflows()
@@ -236,16 +228,12 @@ class TestGenerateWorkflowClassBehaviour:
     """Tests for generate_workflow_class() — runtime behaviour and idempotency."""
 
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         # Clear the cache so tests are independent
         from application_sdk.app.base import _workflow_class_cache
 
         _workflow_class_cache.clear()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         from application_sdk.app.base import _workflow_class_cache
 
         _workflow_class_cache.clear()

@@ -43,7 +43,6 @@ from application_sdk.common.incremental.state.store import (
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
-    clear_infrastructure,
     set_infrastructure,
 )
 from application_sdk.storage import batch as batch_module
@@ -97,10 +96,7 @@ def _relative(keys) -> set[str]:
 def local(tmp_path: Path) -> Iterator[LocalStore]:
     store = create_local_store(tmp_path / "store")
     set_infrastructure(InfrastructureContext(storage=store))
-    try:
-        yield store
-    finally:
-        clear_infrastructure()
+    yield store
 
 
 # ---------------------------------------------------------------------------
@@ -698,9 +694,7 @@ class TestTwoRunsEndToEnd:
     """Run 1 full; run 2 incremental with one table dropped and one added."""
 
     @pytest.fixture
-    def env(
-        self, tmp_path, local, monkeypatch, clean_app_registry, clean_task_registry
-    ):
+    def env(self, tmp_path, local, monkeypatch):
         monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path / "staging"))
         monkeypatch.setattr(_SteppingDatetime, "_ticks", 0)
         monkeypatch.setattr(marker_module, "datetime", _SteppingDatetime)

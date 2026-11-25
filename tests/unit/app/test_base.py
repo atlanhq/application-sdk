@@ -378,7 +378,7 @@ class _GateEligibleInput(Input, allow_unbounded_fields=True):
 
 
 @pytest.fixture(autouse=True)
-def _reset_app_base_state(clean_app_registry, clean_task_registry):
+def _reset_app_base_state():
     with _app_state_lock:
         _app_state.clear()
     _workflow_class_cache.clear()
@@ -2325,18 +2325,6 @@ class TestWorkflowInteractionRelay:
 
 class TestUploadStoreRouting:
     """App.upload() routes to upstream_storage when configured, else storage."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     async def test_upload_dual_writes_when_both_stores_configured(self) -> None:
         """When both stores are distinct and mirror is enabled (default), _upload is

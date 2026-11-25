@@ -6,7 +6,6 @@ import asyncio
 import math
 import sys
 import types
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -18,7 +17,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import AuthError, SourceUnavailableError
@@ -173,18 +172,6 @@ class _WarmInput(Input, allow_unbounded_fields=True):
 @dataclass
 class _WarmOutput(Output, allow_unbounded_fields=True):
     result: str = ""
-
-
-@pytest.fixture
-def app_registry() -> Iterator[None]:
-    """A clean registry for tests that declare an ``App`` subclass."""
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    try:
-        yield
-    finally:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
 
 def _warm_app(ceiling: int, probe_timeout: int) -> type[App]:
@@ -511,7 +498,7 @@ class TestCheckWarmupTier:
         assert body["error"]["category"] == "AUTH"
         assert handler.preflight_inputs == []
 
-    def test_probe_overrun_reads_as_warming(self, app_registry: None) -> None:
+    def test_probe_overrun_reads_as_warming(self) -> None:
         handler = _SlowWarmupHandler()
         client = _client(handler, _warm_app(ceiling=60, probe_timeout=1))
         body = client.post(
@@ -578,9 +565,7 @@ class TestWarmupRoute:
             "ceiling_seconds": WARMUP_CEILING_DEFAULT_SECONDS,
         }
 
-    def test_reports_the_observation_and_the_apps_ceiling(
-        self, app_registry: None
-    ) -> None:
+    def test_reports_the_observation_and_the_apps_ceiling(self) -> None:
         handler = _TieredHandler(_WARMING)
         response = _client(handler, _warm_app(ceiling=900, probe_timeout=7)).post(
             "/workflows/v1/warmup", json={"credentials": []}
@@ -598,7 +583,7 @@ class TestWarmupRoute:
         assert handler.warmup_inputs[0].probe_timeout_seconds == 7
         assert handler.preflight_inputs == []
 
-    def test_declared_ceiling_is_clamped(self, app_registry: None) -> None:
+    def test_declared_ceiling_is_clamped(self) -> None:
         body = (
             _client(_TieredHandler(), _warm_app(ceiling=5, probe_timeout=10))
             .post("/workflows/v1/warmup", json={"credentials": []})
@@ -634,7 +619,7 @@ class TestWarmupRoute:
         assert seen.connection_config.get("warehouse") == "w"
         assert seen.probe_timeout_seconds == WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS
 
-    def test_probe_overrun_reads_as_warming(self, app_registry: None) -> None:
+    def test_probe_overrun_reads_as_warming(self) -> None:
         client = _client(_SlowWarmupHandler(), _warm_app(ceiling=60, probe_timeout=1))
         response = client.post("/workflows/v1/warmup", json={"credentials": []})
         # "warming", not the probe's eventual "ready": the route stopped
@@ -1027,9 +1012,7 @@ class TestWarmupFlagDrift:
         assert drifted == []
         log.warning.assert_not_called()
 
-    def test_the_service_checks_at_startup(
-        self, generated_dir: Path, app_registry: None
-    ) -> None:
+    def test_the_service_checks_at_startup(self, generated_dir: Path) -> None:
         """A flat single-entry-point form, an app handler that overrides
         ``warmup``, and no flag: the service warns once, at creation."""
         app_cls = _warm_app(600, 10)
@@ -1045,9 +1028,7 @@ class TestWarmupFlagDrift:
         drift = [c for c in log.warning.call_args_list if "SageV2" in str(c.args[0])]
         assert len(drift) == 1
 
-    def test_a_matching_app_logs_nothing_at_startup(
-        self, generated_dir: Path, app_registry: None
-    ) -> None:
+    def test_a_matching_app_logs_nothing_at_startup(self, generated_dir: Path) -> None:
         app_cls = _warm_app(600, 10)
         app_name = AppRegistry.get_instance().list_all()[0].name
         _write(generated_dir, "form.json", _form(None))
@@ -1058,7 +1039,7 @@ class TestWarmupFlagDrift:
         assert not [c for c in log.warning.call_args_list if "SageV2" in str(c.args[0])]
 
     def test_a_broken_comparison_never_breaks_the_service(
-        self, generated_dir: Path, app_registry: None
+        self, generated_dir: Path
     ) -> None:
         app_cls = _warm_app(600, 10)
         app_name = AppRegistry.get_instance().list_all()[0].name

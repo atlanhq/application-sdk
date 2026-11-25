@@ -109,14 +109,6 @@ class _UnrelatedOut(Output, allow_unbounded_fields=True):
 class TestCreateActivityFromTask:
     """Tests for create_activity_from_task()."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def _make_app_with_task(self) -> type[App]:
         class _GreeterApp(App):
             @task(timeout_seconds=60)
@@ -175,14 +167,6 @@ class TestCreateActivityFromTask:
 
 class TestGetAllTaskActivities:
     """Tests for get_all_task_activities()."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_returns_empty_when_no_apps(self) -> None:
         activities = get_all_task_activities()
@@ -265,14 +249,6 @@ class TestGetAllTaskActivities:
 
 class TestAllAppsActivities:
     """Tests for get_all_task_activities() — includes all registered apps' tasks."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_all_apps_tasks_are_included(self) -> None:
         """Tasks from all registered apps should be included."""
@@ -448,14 +424,6 @@ class TestActivityFnExecution:
     These exercise the full happy path through the activity body, hitting
     11 inline imports — a regression in any of them fails these tests.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _make_app_and_get_activity(self) -> tuple[type[App], object]:
         class _AfnApp(App):
@@ -704,14 +672,6 @@ class TestSqlWrapRetryabilityReachesTheWire:
     the flag on the exception.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     async def _run_task_raising(self, err: Exception):
         from application_sdk.execution.errors import ApplicationError
 
@@ -780,14 +740,6 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
     redaction at the activity boundary the same failure appears there twice:
     once redacted, once not.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     async def _run_task_raising(self, err: Exception):
         from application_sdk.execution.errors import ApplicationError
@@ -990,14 +942,6 @@ class TestRunPrefixUsesTheTaskApp:
     activity, so ref persistence (and every other run-scoped path built in the
     activity) lands under the same prefix.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _activity(self) -> object:
         class _PrefixApp(App):
