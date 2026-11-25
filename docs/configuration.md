@@ -332,6 +332,23 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 
 ---
 
+## Outbound proxy
+
+Every SDK connection that can go through an egress proxy resolves it with one rule (`application_sdk/_proxy.py`): the `BaseClient` HTTP transport, the obstore object-store clients, the Temporal connection and the S3 bucket-region lookup.
+
+1. The proxy for a connection is its scheme's variable, then `ALL_PROXY`: `HTTPS_PROXY` for TLS connections (object stores, a TLS Temporal endpoint, `https://` requests), `HTTP_PROXY` for plaintext ones. `HTTP_PROXY` is never used for a TLS connection.
+2. A host matching `NO_PROXY` connects directly: an exact host, a domain suffix (`.example.com` or `example.com` match subdomains), or `*` for every host. A port on the host is ignored. obstore receives the raw list as `proxy_excludes` and matches it per request itself.
+3. Only the process environment is read. The lowercase spelling (`https_proxy`) wins over the uppercase one. Operating-system proxy settings (macOS System Settings, the Windows registry) are ignored, so a laptop resolves the same way a pod does.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HTTPS_PROXY` | _(empty)_ | Proxy URL (`http://[user[:password]@]host:port`) for TLS connections. |
+| `HTTP_PROXY` | _(empty)_ | Proxy URL for plaintext connections. |
+| `ALL_PROXY` | _(empty)_ | Proxy URL for any connection whose scheme variable is unset. |
+| `NO_PROXY` | _(empty)_ | Comma-separated hosts and domain suffixes that connect directly. |
+
+---
+
 ## Logging
 
 | Variable | Default | Description |
