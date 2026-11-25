@@ -20,7 +20,8 @@ Subcommands (each one is a former inline ``run:`` block):
 
 ``check-migration``
     v3 shape, warn-only. Runs ``tools.migrate_v3.check_migration`` from the SDK
-    checkout (cwd ``sdk``) against ``../app``.
+    checkout (cwd ``sdk``) against ``../app``, on this interpreter. The
+    checker is stdlib only, so the SDK is never installed for it (FND-4675).
 
 ``contract-drift``
     Enforced. In the app checkout, regenerate the contract with the SDK's own
@@ -39,7 +40,7 @@ Subcommands (each one is a former inline ``run:`` block):
     enforced layer (contract drift, unit tests) failed or could not run because
     the app's dependencies did not install. An app with no ``tests/unit``
     (``UT`` = ``skipped``) still passes. Reads ``CM``, ``CD``, ``UT``, ``COV``,
-    ``SDK_INSTALL``, ``APP_INSTALL``.
+    ``APP_INSTALL``.
 
 See docs/standards/app-certification.md.
 """
@@ -85,9 +86,7 @@ def install_deps() -> int:
 def check_migration() -> int:
     proc = _bap.run(
         [
-            "uv",
-            "run",
-            "python",
+            sys.executable,
             "-m",
             "tools.migrate_v3.check_migration",
             "--no-color",
@@ -157,12 +156,9 @@ def _render(label: str, outcome: str) -> str:
 
 def verdict() -> int:
     cm, cd, ut, cov = (_bap.env(k) for k in ("CM", "CD", "UT", "COV"))
-    sdk_install = _bap.env("SDK_INSTALL")
     app_install = _bap.env("APP_INSTALL")
 
     cm_label = "v3 shape (check_migration) — warn-only"
-    if sdk_install != "success":
-        cm_label = f"{cm_label} (sdk install failed)"
     app_label = " (app install failed)" if app_install != "success" else ""
 
     _bap.summary(
@@ -177,11 +173,6 @@ def verdict() -> int:
         "and v3 shape are warn-only during rollout. See "
         f"[docs/standards/app-certification.md]({DOCS_URL}).",
     )
-    if sdk_install != "success":
-        print(
-            "::warning title=Certification incomplete::SDK install failed, so "
-            "check_migration did not run."
-        )
     if cm == "failure":
         print(
             "::warning title=Certification warning (warn-only)::v3 shape failed; "

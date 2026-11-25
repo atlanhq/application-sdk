@@ -178,7 +178,7 @@ tools/migrate_v3/
   contract_mapping.py   method → typed Input/Output model lookup table
   rewrite_imports.py    libcst import rewriter (deterministic)
   run_codemods.py       composable codemod pipeline CLI (runs A1–A7 in order)
-  check_migration.py    grep-based validation script (stdlib only; runs without the SDK)
+  check_migration.py    grep-based validation script (stdlib only; certify runs it with no SDK install)
   fingerprint.py        connector type classifier (sql_metadata / sql_query / etc.)
   extract_context.py    structured context extraction & difficulty scoring
   MIGRATION_PROMPT.md   AI agent instructions for structural refactoring

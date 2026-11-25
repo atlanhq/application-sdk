@@ -247,6 +247,35 @@ def test_contract_drift_does_not_wait_on_the_app_install(workflow: Workflow) -> 
     )
 
 
+# ── v3 shape needs no SDK install (FND-4675) ──────────────────────────────────
+# check_migration is stdlib only (tests/unit/tools/test_check_migration.py
+# proves it with the SDK import-blocked), so the SDK checkout is never synced:
+# every publish used to pay a full `uv sync --all-extras` of the SDK for it.
+
+
+def test_sdk_checkout_is_never_installed(workflow: Workflow) -> None:
+    for s in steps(job(workflow, "certify")):
+        if s.get("working-directory") == "sdk":
+            assert "uv " not in str(s.get("run", "")), s.get("name")
+
+
+def test_check_migration_runs_unconditionally(workflow: Workflow) -> None:
+    """Nothing to wait on: an app whose deps do not install still gets its
+    v3-shape verdict."""
+    step = _step_with_id(steps(job(workflow, "certify")), "check_migration")
+    assert "if" not in step
+    assert step["working-directory"] == "sdk"
+    assert step["run"] == (
+        "python3 .github/scripts/build_and_publish/certify.py check-migration"
+    )
+
+
+def test_verdict_reads_no_sdk_install_outcome(workflow: Workflow) -> None:
+    verdict = step_named(job(workflow, "certify"), "Certification verdict")
+    assert "SDK_INSTALL" not in verdict["env"]
+    assert "sdk_install" not in str(verdict["env"])
+
+
 # ── GitHub credentials stay out of app code (FND-4739) ────────────────────────
 # Both jobs run app code: build backends during the install, then pytest and
 # coverage. Only the install may see a GitHub token, and only through its own
