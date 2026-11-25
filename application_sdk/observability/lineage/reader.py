@@ -70,6 +70,9 @@ class AssetRule:
     type_name: str
     relationship_attributes: tuple[str, ...] = ()
     inbound_from: tuple[tuple[str, str], ...] = ()
+    #: Entity attributes copied onto the asset (and its row) for the app's own
+    #: rules and for readers. Keep these few and small: one copy per asset.
+    keep_attributes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,7 @@ class DerivedAsset:
     fields_total: int = 0
     fields_with_lineage: int = 0
     fields_pending: int = 0
+    attributes: dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_lineage(self) -> bool:
@@ -328,6 +332,9 @@ def read_run_output(
                     type_name=type_name, qualified_name=qualified_name
                 )
             asset.name = asset.name or attributes.get("name")
+            for name in rule.keep_attributes:
+                if name in attributes and name not in asset.attributes:
+                    asset.attributes[name] = attributes[name]
             # An app may write one asset in several files (entity, relationships).
             asset.has_relationship = asset.has_relationship or any(
                 _non_empty(attributes.get(name))

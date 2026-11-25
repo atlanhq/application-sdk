@@ -128,6 +128,8 @@ def _row(
         "fieldsWithLineage": asset.fields_with_lineage,
         "fieldsPending": asset.fields_pending,
     }
+    if asset.attributes:
+        row["entityAttributes"] = asset.attributes
     if recorded is not None:
         # The code string as recorded, so one the registry doesn't know stays visible.
         if assessment.verdict is Verdict.MISSING:

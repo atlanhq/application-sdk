@@ -33,7 +33,7 @@ REGISTRY = ReasonRegistry()
 SPEC = CoverageSpec(
     app_name="bi",
     assets=(
-        AssetRule("BiDataset"),
+        AssetRule("BiDataset", keep_attributes=("kind", "absent")),
         AssetRule("BiReport", relationship_attributes=("dataset",)),
         AssetRule("BiBook", inbound_from=(("BiDataset", "book"),)),
     ),
@@ -96,7 +96,7 @@ def write(path: Path, records: list) -> str:
 @pytest.fixture
 def run_files(tmp_path: Path) -> list[str]:
     assets = [
-        entity("BiDataset", "pending"),
+        entity("BiDataset", "pending", kind="extract"),
         entity("BiDataset", "internal", book=link("book")),
         entity("BiBook", "book"),
         entity("BiBook", "empty-book"),
@@ -189,6 +189,8 @@ def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
         "UPSTREAM_IDENTITY_TOO_SPARSE",
     ]
     assert pending["attributes"] == {"kind": "published"}
+    assert pending["entityAttributes"] == {"kind": "extract"}
+    assert "entityAttributes" not in got["why"]
     assert pending["fieldReasons"] == {"FIELD_X": 2}
     assert got["why"]["reasonDetails"] == {"CUSTOM_SQL_PARSER_FAILURE": {"line": 3}}
     # A field that names its parent in an attribute is counted there.
