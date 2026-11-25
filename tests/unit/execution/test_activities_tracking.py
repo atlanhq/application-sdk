@@ -155,7 +155,7 @@ class TestActivityTrackingWiring:
         """The real activity body tracks both sides' refs under (workflow, run)."""
         import application_sdk.execution._temporal.activities as act_mod
         from application_sdk.app.base import App
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
+        from application_sdk.app.registry import TaskRegistry
         from application_sdk.app.task import task
 
         in_ref = FileReference(storage_path="artifacts/in")
@@ -169,34 +169,30 @@ class TestActivityTrackingWiring:
             async def run(self, input: _TrackIn) -> _TrackOut:
                 return await self.produce(input)
 
-        try:
-            meta = next(
-                t
-                for t in TaskRegistry.get_instance().get_tasks_for_app(
-                    _TrackWiringApp._app_name
-                )
-                if t.name == "produce"
+        meta = next(
+            t
+            for t in TaskRegistry.get_instance().get_tasks_for_app(
+                _TrackWiringApp._app_name
             )
-            activity_fn = act_mod.create_activity_from_task(meta)
-            ctx = act_mod.TaskContext(
-                app_name=_TrackWiringApp._app_name,
-                task_name="produce",
-                run_id="run-wiring",
-                heartbeat_timeout_seconds=None,
-                auto_heartbeat_seconds=None,
-            )
-            info = mock.MagicMock(workflow_id="wf-wiring", workflow_run_id="run-wiring")
-            with (
-                mock.patch.object(act_mod.activity, "info", return_value=info),
-                mock.patch(
-                    "application_sdk.infrastructure.context.get_infrastructure",
-                    return_value=None,
-                ),
-            ):
-                await activity_fn(ctx, _TrackIn(ref=in_ref))
-        finally:
-            AppRegistry.reset()
-            TaskRegistry.reset()
+            if t.name == "produce"
+        )
+        activity_fn = act_mod.create_activity_from_task(meta)
+        ctx = act_mod.TaskContext(
+            app_name=_TrackWiringApp._app_name,
+            task_name="produce",
+            run_id="run-wiring",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        info = mock.MagicMock(workflow_id="wf-wiring", workflow_run_id="run-wiring")
+        with (
+            mock.patch.object(act_mod.activity, "info", return_value=info),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+        ):
+            await activity_fn(ctx, _TrackIn(ref=in_ref))
 
         with _app_state_lock:
             assert set(_app_state) == {("wf-wiring", "run-wiring")}

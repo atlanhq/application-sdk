@@ -17,7 +17,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import AppError
@@ -109,15 +109,6 @@ class _In(Input, allow_unbounded_fields=True):
 
 class _Out(Output, allow_unbounded_fields=True):
     msg: str = ""
-
-
-@pytest.fixture(autouse=True)
-def _clean_registries() -> Any:
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
 
 
 @pytest.fixture

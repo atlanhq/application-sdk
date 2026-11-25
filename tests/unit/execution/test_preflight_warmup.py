@@ -25,7 +25,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App, _run_preflight_gate
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.categories import Audience, FailureCategory
@@ -1485,14 +1485,6 @@ def _app_name() -> str:
 
 
 class TestWorkerRegistration:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_an_app_that_declares_nothing_registers_the_poll(self) -> None:
         class _PlainApp(App):
             async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:

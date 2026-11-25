@@ -12,7 +12,7 @@ import pytest
 from temporalio.exceptions import ActivityError
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.constants import SHUTDOWN_DRAIN_DELAY_SECONDS
 from application_sdk.contracts.base import Input, Output
@@ -117,14 +117,6 @@ def _WorkerWrapperForDrain(*, shutdown_drain_delay_seconds: float = 0.0):
 
 class TestCreateWorker:
     """Tests for create_worker()."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def test_returns_app_worker_instance(self) -> None:
         class _WorkerTestApp(App):
@@ -1191,14 +1183,6 @@ class TestAppWorker:
 class TestLivenessInterceptorWiring:
     """create_worker wires the LivenessInterceptor only when on_activity given."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
     def _interceptor_types(on_activity) -> list[str]:
         class _LivenessApp(App):
@@ -1425,34 +1409,19 @@ class TestOnDrained:
         pusher.stop.assert_awaited_once()
 
     def test_create_worker_forwards_on_drained(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-        try:
+        class _DrainApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
 
-            class _DrainApp(App):
-                async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                    return _WorkerOutput()
-
-            client = _make_mock_client()
-            drained = mock.MagicMock()
-            with mock.patch("application_sdk.execution._temporal.worker.Worker"):
-                worker = create_worker(client, on_drained=drained)
-            assert worker._on_drained is drained
-        finally:
-            AppRegistry.reset()
-            TaskRegistry.reset()
+        client = _make_mock_client()
+        drained = mock.MagicMock()
+        with mock.patch("application_sdk.execution._temporal.worker.Worker"):
+            worker = create_worker(client, on_drained=drained)
+        assert worker._on_drained is drained
 
 
 class TestWorkerPoolQueueResolution:
     """ADR-0016 §3: startup pool→queue diagnostic log emitted by create_worker."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _register_pooled_app(self, pool: str) -> None:
         class _PoolApp(App):
@@ -1548,14 +1517,6 @@ class TestNeedsLockNoEffectWarning:
     hide it in production; this warning is the one operators see.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def _lock_warnings(self, locked: bool) -> list[mock._Call]:
         from application_sdk.execution import needs_lock
 
@@ -1603,14 +1564,6 @@ class TestNeedsLockNoEffectWarning:
 
 class TestWorkflowFailureExceptionTypes:
     """Pre-user-code failures must fail the run, not retry the task forever."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     @staticmethod
     def _declared_types() -> tuple[type[BaseException], ...]:
@@ -1864,14 +1817,6 @@ class TestArtifactValidationPostureAtBoot:
     registered.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
     def _posture_rows(logger: mock.MagicMock) -> list[dict]:
         from application_sdk.observability.events import (
@@ -2002,14 +1947,6 @@ class TestPreflightVerifyStorageWiring:
     every existing test still green.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
     def _captured_verify_storage(monkeypatch) -> list[bool]:
         """Build a worker, returning the ``verify_storage`` of every gate built."""
@@ -2090,14 +2027,6 @@ class TestWorkerAndWorkflowResolveTheSameGatePolicy:
     malformed declarations included, or a hard block could be retried, or a
     soft app blocked, by whichever frame disagrees.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     @staticmethod
     def _worker_side() -> dict:

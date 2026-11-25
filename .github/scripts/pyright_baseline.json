@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 442,
-    "warning": 5433
+    "warning": 5297
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -93,7 +93,7 @@
       "warning:reportUnknownMemberType": 5
     },
     ".github/scripts/e2e_dispatch_guard.py": {
-      "warning:reportUnknownMemberType": 40
+      "warning:reportUnknownMemberType": 33
     },
     ".github/scripts/e2e_tenant_api.py": {
       "warning:reportUnknownMemberType": 3
@@ -192,7 +192,7 @@
     },
     ".github/scripts/poll_check_runs_gate.py": {
       "error:reportAttributeAccessIssue": 1,
-      "warning:reportUnknownMemberType": 18
+      "warning:reportUnknownMemberType": 16
     },
     ".github/scripts/poll_dispatched_run.py": {
       "warning:reportUnknownMemberType": 2
@@ -456,7 +456,7 @@
       "warning:reportUnknownMemberType": 9
     },
     ".github/scripts/tests/test_e2e_dispatch_guard.py": {
-      "warning:reportUnknownMemberType": 132
+      "warning:reportUnknownMemberType": 9
     },
     ".github/scripts/tests/test_e2e_dispatch_recheck.py": {
       "error:reportOptionalSubscript": 1,
@@ -559,7 +559,7 @@
       "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/tests/test_poll_check_runs_gate.py": {
-      "warning:reportUnknownMemberType": 40
+      "warning:reportUnknownMemberType": 36
     },
     ".github/scripts/tests/test_poll_dispatched_run.py": {
       "error:reportFunctionMemberAccess": 4,

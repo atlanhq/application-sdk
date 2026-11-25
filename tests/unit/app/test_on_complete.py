@@ -8,7 +8,6 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -29,14 +28,6 @@ class _OCOutput(Output, allow_unbounded_fields=True):
 
 
 class TestOnComplete:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     async def test_default_calls_cleanup_files(self) -> None:
         class _App(App):
             async def run(self, input: _OCInput) -> _OCOutput:

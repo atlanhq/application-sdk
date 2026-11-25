@@ -104,14 +104,12 @@ def _sse_json(body: str) -> dict[str, Any]:
 def _reset_service_globals() -> Iterator[None]:
     """Keep the handler service's module globals from leaking across tests."""
     from application_sdk.handler import service as svc
-    from application_sdk.infrastructure import clear_infrastructure
 
     def _reset() -> None:
         svc._temporal_client = None
         svc._workflow_config = svc.WorkflowClientConfig()
         svc._secret_store = None
         svc._storage = None
-        clear_infrastructure()
 
     _reset()
     yield

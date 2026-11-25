@@ -16,7 +16,6 @@ from application_sdk.common.atomic import PARTIAL_DIRNAME
 from application_sdk.common.file_ops import SafeFileOps
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
-    clear_infrastructure,
     set_infrastructure,
 )
 from application_sdk.storage.batch import list_keys, upload_prefix
@@ -401,82 +400,79 @@ class TestParquetFileWriterReplacePrefix:
         )
         table_path = raw_path / "table"
 
+        first_writer = ParquetFileWriter(
+            path=str(raw_path),
+            typename="table",
+            buffer_size=5000,
+            retain_local_copy=False,
+        )
+        await first_writer.write(
+            pd.DataFrame(
+                {
+                    "qualifiedName": qualified_names[:3],
+                    "raw_shape_only": ["raw"] * 3,
+                }
+            )
+        )
+        await first_writer.write(
+            pd.DataFrame(
+                {
+                    "qualifiedName": qualified_names[3:4],
+                    "raw_shape_only": ["raw"],
+                }
+            )
+        )
+        await first_writer.write(
+            pd.DataFrame(
+                {
+                    "qualifiedName": qualified_names[4:],
+                    "raw_shape_only": ["raw"] * len(qualified_names[4:]),
+                }
+            )
+        )
+        await first_writer.close()
+        await upload_prefix(str(table_path), str(table_path), store)
+
+        first_keys = await list_keys(str(table_path), store, suffix=".parquet")
+        assert any("/chunk-1-part0.parquet" in key for key in first_keys)
+        assert any("/chunk-2-part0.parquet" in key for key in first_keys)
+
+        shutil.rmtree(table_path, ignore_errors=True)
+
+        second_writer = ParquetFileWriter(
+            path=str(raw_path),
+            typename="table",
+            buffer_size=5000,
+            retain_local_copy=False,
+            replace_prefix=True,
+        )
+        await second_writer.write(
+            pd.DataFrame(
+                {
+                    "qualifiedName": qualified_names,
+                    "is_partitioned": [False] * expected_rows,
+                }
+            )
+        )
+        await second_writer.close()
+        await upload_prefix(str(table_path), str(table_path), store)
+
+        second_keys = await list_keys(str(table_path), store, suffix=".parquet")
+        assert len(second_keys) == 3
+        assert all("/chunk-0-" in key for key in second_keys)
+
+        shutil.rmtree(table_path, ignore_errors=True)
+
+        reader = ParquetFileReader(path=str(table_path))
         try:
-            first_writer = ParquetFileWriter(
-                path=str(raw_path),
-                typename="table",
-                buffer_size=5000,
-                retain_local_copy=False,
-            )
-            await first_writer.write(
-                pd.DataFrame(
-                    {
-                        "qualifiedName": qualified_names[:3],
-                        "raw_shape_only": ["raw"] * 3,
-                    }
-                )
-            )
-            await first_writer.write(
-                pd.DataFrame(
-                    {
-                        "qualifiedName": qualified_names[3:4],
-                        "raw_shape_only": ["raw"],
-                    }
-                )
-            )
-            await first_writer.write(
-                pd.DataFrame(
-                    {
-                        "qualifiedName": qualified_names[4:],
-                        "raw_shape_only": ["raw"] * len(qualified_names[4:]),
-                    }
-                )
-            )
-            await first_writer.close()
-            await upload_prefix(str(table_path), str(table_path), store)
-
-            first_keys = await list_keys(str(table_path), store, suffix=".parquet")
-            assert any("/chunk-1-part0.parquet" in key for key in first_keys)
-            assert any("/chunk-2-part0.parquet" in key for key in first_keys)
-
-            shutil.rmtree(table_path, ignore_errors=True)
-
-            second_writer = ParquetFileWriter(
-                path=str(raw_path),
-                typename="table",
-                buffer_size=5000,
-                retain_local_copy=False,
-                replace_prefix=True,
-            )
-            await second_writer.write(
-                pd.DataFrame(
-                    {
-                        "qualifiedName": qualified_names,
-                        "is_partitioned": [False] * expected_rows,
-                    }
-                )
-            )
-            await second_writer.close()
-            await upload_prefix(str(table_path), str(table_path), store)
-
-            second_keys = await list_keys(str(table_path), store, suffix=".parquet")
-            assert len(second_keys) == 3
-            assert all("/chunk-0-" in key for key in second_keys)
-
-            shutil.rmtree(table_path, ignore_errors=True)
-
-            reader = ParquetFileReader(path=str(table_path))
-            try:
-                result = await reader.read()
-            finally:
-                await reader.close()
-
-            assert len(result) == expected_rows
-            assert result["qualifiedName"].nunique() == expected_rows
-            assert "is_partitioned" in result.columns
-            assert "raw_shape_only" not in result.columns
+            result = await reader.read()
         finally:
-            clear_infrastructure()
+            await reader.close()
+
+        assert len(result) == expected_rows
+        assert result["qualifiedName"].nunique() == expected_rows
+        assert "is_partitioned" in result.columns
+        assert "raw_shape_only" not in result.columns
 
 
 class TestParquetFileWriterCloseContract:

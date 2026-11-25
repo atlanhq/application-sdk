@@ -14,11 +14,18 @@ never reaches argv. Every read/write returns a status the caller interprets;
 nothing here raises on a 4xx except a rate limit, which is a ``RateLimited`` so a
 call site cannot forget to distinguish it from a denial.
 
-Both callers — ``e2e_tenant_lease.py`` and ``dataforge_source_lifecycle.py`` —
-import this module rather than carrying a copy (FND-2674). The lease used to be a
-composite action, which is checked out in isolation and so could not import a
-sibling script; it is now run off the same ``job.workflow_sha`` sparse checkout
-its ``verify`` mode always used, which is what made the single copy possible.
+Its callers — ``e2e_tenant_lease.py``, ``dataforge_source_lifecycle.py`` and
+``e2e_dispatch_guard.py`` — import this module rather than carrying a copy
+(FND-2674, FND-4925). The lease used to be a composite action, which is checked
+out in isolation and so could not import a sibling script; it is now run off the
+same ``job.workflow_sha`` sparse checkout its ``verify`` mode always used, which
+is what made the single copy possible.
+
+The callers disagree about what a transport failure MEANS — the lease fails the
+job, the dispatch guard dispatches anyway — so a failure to operate the transport
+at all raises ``TransportError``. It is a ``SystemExit``, so a caller that does
+nothing about it fails exactly as before; a caller with the opposite posture
+catches it by name.
 
 What belongs here is the primitive — how a ref is created, read, listed and
 deleted, and how liveness is decided. What does NOT belong here is what a caller
@@ -121,6 +128,27 @@ class RateLimited(Exception):
         self.retry_after = retry_after
 
 
+class TransportError(SystemExit):
+    """The request could not be made or its answer could not be read.
+
+    No token, curl failing on every attempt, an unparseable response. Distinct
+    from any HTTP status, which is an answer the caller interprets.
+
+    A ``SystemExit`` so the default — the lease and the refcount — is to fail the
+    job with an ``::error::`` line, unchanged from before this type existed. The
+    dispatch guard fails OPEN, so it catches this by name and dispatches; that is
+    why it is a type and not a bare ``SystemExit`` (FND-4925). ``str()`` is the
+    bare reason, for a caller that quotes it in its own annotation.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"::error::{reason}")
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return self.reason
+
+
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Single subprocess seam so tests can stub the HTTP client."""
     return subprocess.run(cmd, **kwargs)
@@ -130,16 +158,16 @@ def _parse_http(raw: str, label: str) -> Response:
     """Split a ``curl -i`` response into status, headers and parsed body."""
     text = raw.replace("\r\n", "\n")
     if "\n\n" not in text:
-        raise SystemExit(f"::error::unexpected response for {label}: {text[:300]!r}")
+        raise TransportError(f"unexpected response for {label}: {text[:300]!r}")
     header_block, _, body = text.partition("\n\n")
     lines = header_block.splitlines()
     try:
         status_code = int(lines[0].split()[1])
     except (IndexError, ValueError):
-        raise SystemExit(
-            f"::error::could not parse HTTP status line for {label}: "
+        raise TransportError(
+            f"could not parse HTTP status line for {label}: "
             f"{(lines[0] if lines else '')!r}"
-        )
+        ) from None
     headers: dict[str, str] = {}
     for line in lines[1:]:
         name, sep, value = line.partition(":")
@@ -175,6 +203,8 @@ def gh_request(
     header is refused rather than silently put back where the token is not
     allowed to be.
 
+    Raises ``TransportError`` (a ``SystemExit``) when no answer could be had.
+
     ``sleep`` resolves from ``time`` at call time, not as a default argument: a
     default is bound once at import, so a test that stubs ``time.sleep`` would
     still back off for real.
@@ -188,7 +218,7 @@ def gh_request(
         )
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
-        raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
+        raise TransportError("GH_TOKEN (or GITHUB_TOKEN) must be set")
 
     cmd = [
         "curl",
@@ -218,8 +248,8 @@ def gh_request(
         last = transport_attempt == _TRANSPORT_ATTEMPTS
         if result.returncode != 0:
             if last:
-                raise SystemExit(
-                    f"::error::curl failed for {label} after "
+                raise TransportError(
+                    f"curl failed for {label} after "
                     f"{_TRANSPORT_ATTEMPTS} attempts: {result.stderr.strip()}"
                 )
             print(
@@ -236,7 +266,7 @@ def gh_request(
                 f"(attempt {transport_attempt}/{_TRANSPORT_ATTEMPTS}) — retrying."
             )
         sleep(_TRANSPORT_BACKOFF_SECONDS * 2 ** (transport_attempt - 1))
-    raise SystemExit(f"::error::exhausted transport attempts for {label}")
+    raise TransportError(f"exhausted transport attempts for {label}")
 
 
 def _rate_limited(response: Response) -> bool:
