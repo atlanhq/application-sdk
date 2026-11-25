@@ -157,12 +157,19 @@ own. Request them by name only where ordering matters — a fixture that
 registers an app must run after the reset.
 
 Do not add a `setup_method` / `teardown_method`, `try`/`finally`, or fixture
-whose job is `AppRegistry.reset()`, `TaskRegistry.reset()` or
-`clear_infrastructure()`. pytest runs the conftest autouse fixtures before a
-class's `setup_method` and tears them down after `teardown_method`, so each
-test already starts and ends with both registries and the infrastructure
-context empty. Call a reset inside a test only when the reset is the behaviour
-under test (an app that is no longer registered, a cleared context).
+whose job is `AppRegistry.reset()` or `TaskRegistry.reset()`. pytest runs the
+conftest autouse fixtures before a class's `setup_method` and tears them down
+after `teardown_method`, so each test already starts and ends with both
+registries empty.
+
+`clear_infrastructure()` is different: only `tests/unit/conftest.py` clears the
+infrastructure context around every test. In `tests/unit`, do not add that
+cleanup either. In `tests/integration`, a test or fixture that calls
+`set_infrastructure` must still clear it in its own finalizer, or the next test
+on the worker inherits the context.
+
+Call a reset inside a test only when the reset is the behaviour under test (an
+app that is no longer registered, a cleared context).
 
 ## What SDK Review Checks for Tests
 
