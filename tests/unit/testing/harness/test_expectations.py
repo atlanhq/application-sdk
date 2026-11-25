@@ -25,6 +25,7 @@ from application_sdk.testing.harness.expectations import (
     Unreadable,
     evaluate_counts,
     evaluate_locations,
+    sampled_qualified_names,
 )
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
@@ -306,6 +307,22 @@ def test_an_ancestor_equal_to_the_asset_is_not_a_level() -> None:
         f"{_C}/db/sch/a/b", (f"{_C}/db", f"{_C}/db/sch", f"{_C}/db/sch/a/b"), "a/b"
     )
     assert evaluate_locations({"View": [view]}, _sql_locations()) == []
+
+
+def test_sampled_qualified_names_projects_records_and_keeps_bare_names() -> None:
+    """Both entry shapes come back as bare qualified-name strings, in order, so a
+    caller indexing ``asset_qn_samples`` never receives a ``LocatedName``."""
+    sample = [
+        LocatedName(f"{_C}/db/sch/a/b", (f"{_C}/db", f"{_C}/db/sch"), "a/b"),
+        f"{_C}/db/sch/tbl",
+        LocatedName(f"{_C}/db/sch/t2"),
+    ]
+    assert sampled_qualified_names(sample) == [
+        f"{_C}/db/sch/a/b",
+        f"{_C}/db/sch/tbl",
+        f"{_C}/db/sch/t2",
+    ]
+    assert sampled_qualified_names([]) == []
 
 
 def test_wrong_depth_names_the_type_and_the_expected_depth() -> None:
