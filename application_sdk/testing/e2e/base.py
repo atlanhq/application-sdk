@@ -4870,7 +4870,17 @@ class BaseE2ETest:
             logger.info(
                 "Atlas qualifiedName samples under %s: %s",
                 self.connection_qualified_name,
-                dict(sample_reads),
+                {
+                    name: value
+                    if isinstance(value, Unreadable)
+                    else [
+                        entry.qualified_name
+                        if isinstance(entry, LocatedName)
+                        else entry
+                        for entry in value
+                    ]
+                    for name, value in sample_reads.items()
+                },
             )
 
         # Sample attribute VALUES for the contents assertion (opt-in). Its own
