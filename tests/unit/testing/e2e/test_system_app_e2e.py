@@ -32,11 +32,11 @@ from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.e2e.system_app import STORE_ASSERT_NODE_ID
 from application_sdk.testing.e2e.tenant_pool import TENANT_POOL_ENV, check_tenant_pool
 from application_sdk.testing.harness.automation_engine.wire import (
-    DAGNodeResult,
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
 )
+from tests.unit.testing._ae_fakes import FakeAE, node, run_result
 
 
 def _connection_ref() -> ConnectionRef:
@@ -224,43 +224,30 @@ def test_a_subclass_of_a_system_suite_stays_on_the_system_pool(
 # ---------------------------------------------------------------------------
 
 
-class _FakeAE:
-    def __init__(self) -> None:
-        self.direct: list[str] = []
-        self.heracles: list[dict[str, Any]] = []
-
-    async def submit_published_version(self, slug: str, **kwargs: Any) -> str:
-        self.direct.append(slug)
-        self.direct_kwargs = kwargs
-        return "run-direct"
-
-    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
-        self.heracles.append(payload)
-        return "run-heracles"
-
-
 async def test_system_suite_submits_straight_to_ae() -> None:
     harness = _SystemSuite()
-    fake = _FakeAE()
+    fake = FakeAE()
     harness._ae = fake  # type: ignore[assignment]
 
     run_id = await harness._submit({"envelope": "unused"}, slug="slug-1")
 
-    assert run_id == "run-direct"
-    assert fake.direct == ["slug-1"]
-    assert fake.heracles == []
+    assert run_id == "run-1"
+    assert fake.methods == ["submit_published_version"]
+    assert fake.args("submit_published_version", "slug") == ["slug-1"]
 
 
 async def test_system_suite_submit_carries_the_teardown_tracking_sink() -> None:
     """The ambiguous-submit recovery inside submit_published_version can only
     record an adopted run id if the sink reaches it."""
     harness = _SystemSuite()
-    fake = _FakeAE()
+    fake = FakeAE()
     harness._ae = fake  # type: ignore[assignment]
 
     await harness._submit({}, slug="slug-1")
 
-    assert fake.direct_kwargs["on_run_id"] == harness._track_unsettled_run
+    assert fake.args("submit_published_version", "on_run_id") == [
+        harness._track_unsettled_run
+    ]
 
 
 async def test_deployed_manifest_check_never_runs_on_the_system_path() -> None:
@@ -362,24 +349,12 @@ _ALL_OK = (
 
 
 def _ae_result(nodes: tuple[tuple[str, DAGNodeStatus], ...] = _ALL_OK) -> DAGRunResult:
-    return DAGRunResult(
+    return run_result(
+        DAGRunStatus.SUCCEEDED,
+        *(node(n, s) for n, s in nodes),
         run_id="run-1",
         workflow_slug="slug-1",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[DAGNodeResult(n, s, None, None, None) for n, s in nodes],
     )
-
-
-class _OutputsAE:
-    def __init__(self, outputs: dict[str, Any] | Exception) -> None:
-        self.outputs = outputs
-        self.reads: list[tuple[str, str]] = []
-
-    async def get_node_outputs(self, run_id: str, node_id: str) -> dict[str, Any]:
-        self.reads.append((run_id, node_id))
-        if isinstance(self.outputs, Exception):
-            raise self.outputs
-        return self.outputs
 
 
 def test_no_expectations_appends_no_node(tmp_path: Path) -> None:
@@ -465,7 +440,7 @@ def _verdict(passed: bool) -> dict[str, Any]:
 
 async def _read_then_grade(
     tmp_path: Path,
-    ae: _OutputsAE,
+    ae: FakeAE,
     nodes: tuple[tuple[str, DAGNodeStatus], ...] = _ALL_OK,
 ) -> None:
     harness = _suite(_manifest(tmp_path), _absent())
@@ -477,16 +452,18 @@ async def _read_then_grade(
 
 
 async def test_a_passing_verdict_grades_green(tmp_path: Path) -> None:
-    ae = _OutputsAE(_verdict(True))
+    ae = FakeAE(node_outputs=_verdict(True))
     await _read_then_grade(tmp_path, ae)
-    assert ae.reads == [("run-1", STORE_ASSERT_NODE_ID)]
+    assert ae.args("get_node_outputs", "run_id", "node_id") == [
+        ("run-1", STORE_ASSERT_NODE_ID)
+    ]
 
 
 async def test_a_failing_verdict_is_an_assertion_naming_the_prefix(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(AssertionError, match=r"\[FAIL\] persistent-artifacts/") as exc:
-        await _read_then_grade(tmp_path, _OutputsAE(_verdict(False)))
+        await _read_then_grade(tmp_path, FakeAE(node_outputs=_verdict(False)))
     assert "objects (incl. markers)=4" in str(exc.value)
 
 
@@ -503,7 +480,7 @@ async def test_an_unreadable_verdict_is_never_a_pass(
     tmp_path: Path, outputs: dict[str, Any] | Exception
 ) -> None:
     with pytest.raises(StoreAssertUnreadableError):
-        await _read_then_grade(tmp_path, _OutputsAE(outputs))
+        await _read_then_grade(tmp_path, FakeAE(node_outputs=outputs))
 
 
 async def test_a_failing_records_verdict_names_the_counts(tmp_path: Path) -> None:
@@ -523,7 +500,7 @@ async def test_a_failing_records_verdict_names_the_counts(tmp_path: Path) -> Non
         ],
     }
     with pytest.raises(AssertionError) as exc:
-        await _read_then_grade(tmp_path, _OutputsAE(verdict))
+        await _read_then_grade(tmp_path, FakeAE(node_outputs=verdict))
     assert (
         f"[FAIL] {_PURGED}: expected RECORDS == 2; "
         "saw records matched=1 of 3 in 1 file(s)"
@@ -544,13 +521,13 @@ async def test_a_disabled_tenant_is_a_precondition_error_not_a_pass(
     tmp_path: Path, outputs: dict[str, Any]
 ) -> None:
     with pytest.raises(StoreAssertDisabledError, match="ATLAN_STORE_ASSERT_ENABLED"):
-        await _read_then_grade(tmp_path, _OutputsAE(outputs))
+        await _read_then_grade(tmp_path, FakeAE(node_outputs=outputs))
 
 
 async def test_a_skipped_assert_node_is_never_a_pass(tmp_path: Path) -> None:
     """The skip-tolerant DAG gate lets a Skipped node through; the store
     grader must not."""
-    ae = _OutputsAE(_verdict(True))
+    ae = FakeAE(node_outputs=_verdict(True))
     with pytest.raises(StoreAssertUnreadableError, match="carries no"):
         await _read_then_grade(
             tmp_path,
@@ -560,4 +537,4 @@ async def test_a_skipped_assert_node_is_never_a_pass(tmp_path: Path) -> None:
                 (STORE_ASSERT_NODE_ID, DAGNodeStatus.SKIPPED),
             ),
         )
-    assert ae.reads == []
+    assert ae.args("get_node_outputs", "run_id", "node_id") == []

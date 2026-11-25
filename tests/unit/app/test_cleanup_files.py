@@ -15,7 +15,6 @@ import pytest
 
 from application_sdk.app import base as app_base
 from application_sdk.app.base import App, _app_state, _app_state_lock
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata
 from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
@@ -56,14 +55,10 @@ class TestCleanupFiles:
             yield
 
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         with _app_state_lock:
             _app_state.clear()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         with _app_state_lock:
             _app_state.clear()
 
@@ -373,16 +368,12 @@ class TestCleanupCredentialFiles:
     """
 
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         with _app_state_lock:
             _app_state.clear()
         with app_base._credential_dirs_lock:
             app_base._credential_dirs_by_run.clear()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         with _app_state_lock:
             _app_state.clear()
         with app_base._credential_dirs_lock:

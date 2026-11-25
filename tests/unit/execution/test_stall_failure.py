@@ -36,7 +36,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE, TaskStalledError
@@ -200,12 +200,8 @@ def _self_cancelling_activity() -> ActivityFn:
 
 @pytest.fixture(autouse=True)
 def _clean_worker_state() -> Any:
-    AppRegistry.reset()
-    TaskRegistry.reset()
     shutdown_module.reset_worker_shutting_down()
     yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
     shutdown_module.reset_worker_shutting_down()
 
 

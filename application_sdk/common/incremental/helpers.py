@@ -9,7 +9,6 @@ This module contains helper functions for:
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,6 +18,7 @@ from typing_extensions import deprecated
 
 from application_sdk import _deprecation
 from application_sdk._runtime.offload import raise_if_offload_abandoned
+from application_sdk.common._env import env_str
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import (
     atomic_copy,
@@ -192,7 +192,7 @@ def get_persistent_s3_prefix(
 
     connection_id = extract_epoch_id_from_qualified_name(connection_qualified_name)
 
-    resolved_app_name = application_name or os.getenv(
+    resolved_app_name = application_name or env_str(
         "ATLAN_APPLICATION_NAME", APPLICATION_NAME
     )
 

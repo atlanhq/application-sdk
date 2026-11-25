@@ -23,7 +23,6 @@ import pytest
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage._manifest import MANIFEST_SUFFIX, DirectoryManifest
 from application_sdk.storage.errors import StorageError, StorageIntegrityError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 from application_sdk.storage.reference import (
     materialize_file_reference,
@@ -32,11 +31,6 @@ from application_sdk.storage.reference import (
 
 _FILES = {"a.json": b'{"a": 1}\n', "sub/b.json": b'{"b": 2}\n', "c.json": b"{}\n"}
 _PIN = "artifacts/apps/x/workflows/wf/run/transformed/table/"
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 def _sha(data: bytes) -> str:

@@ -2400,6 +2400,12 @@ def test_porter_cnab_workflow_is_retired_but_its_helper_is_not() -> None:
     assert ".github/scripts/registry-login.sh" not in RETIRED_FILES
 
 
+def test_dep_cooldown_workflow_is_retired() -> None:
+    """Cooldown is enforced by the GitHub Security App; the per-repo caller is
+    redundant."""
+    assert "dep-cooldown.yml" in RETIRED_WORKFLOWS
+
+
 # ---------------------------------------------------------------------------
 # Dependabot config: superseded by the Renovate preset, never managed
 # ---------------------------------------------------------------------------

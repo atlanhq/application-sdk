@@ -1,4 +1,4 @@
-"""Tests for .github/scripts/_gh_refs.py — the one ref transport (FND-2674).
+"""Tests for .github/scripts/_gh_refs.py — the one ref transport (FND-2674, FND-4925).
 
 Two things are pinned here that the per-caller suites cannot pin.
 
@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 from _gh_refs import (
     Holder,
+    TransportError,
     _timestamp,
     gh_request,
     holder_is_live,
@@ -41,12 +42,13 @@ _TRANSPORT_FUNCTIONS = frozenset(
 )
 
 #: Modules allowed to carry their own copy, each with the reason it is not simply
-#: an import. Both are the `e2e-dispatch` claim guard, whose failure posture is
-#: the OPPOSITE of the lease's: an unusable guard dispatches anyway
-#: (`GuardUnavailable`), where an unusable lease fails the job (`SystemExit`), so
-#: sharing this module means parameterising what its failures raise. That is its
-#: own change; this test exists so a THIRD posture cannot arrive unnoticed.
-_KNOWN_COPIES = {"e2e_dispatch_guard.py"}
+#: an import. Empty: the last one, the `e2e-dispatch` claim guard, imports the
+#: transport since FND-4925 — its opposite failure posture is served by catching
+#: `TransportError` rather than by a copy that raises something else. (The
+#: connector-side recheck under .github/actions/ is a GET-only copy too, but it
+#: ships to connector repos where nothing here can be imported, and it is not in
+#: the directory this globs.)
+_KNOWN_COPIES: set[str] = set()
 
 
 def _top_level_functions(path: Path) -> set[str]:
@@ -80,6 +82,56 @@ def test_the_lease_imports_the_transport_rather_than_defining_it() -> None:
     lease = _SCRIPTS / "e2e_tenant_lease.py"
     assert not _top_level_functions(lease) & _TRANSPORT_FUNCTIONS
     assert "from _gh_refs import" in lease.read_text(encoding="utf-8")
+
+
+def test_the_dispatch_guard_imports_the_transport_rather_than_defining_it() -> None:
+    """The third copy, removed by FND-4925. Its slug had kept "." after this
+    module dropped it, and its retries were silent where this one warns — the
+    drift a single copy exists to prevent. Asserted by name for the same reason
+    as the lease."""
+    guard = _SCRIPTS / "e2e_dispatch_guard.py"
+    defined = _top_level_functions(guard)
+    assert not defined & (_TRANSPORT_FUNCTIONS | {"slug", "delete_ref", "run"})
+    assert "from _gh_refs import" in guard.read_text(encoding="utf-8")
+
+
+# --- TransportError: one type, two postures ---------------------------------
+
+
+def test_a_transport_error_still_fails_a_caller_that_ignores_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lease and the refcount never catch it, and must fail exactly as they
+    did when this raised a bare ``SystemExit``: same type, same ``::error::``
+    line as the exit message."""
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    with pytest.raises(SystemExit) as raised:
+        gh_request("GET", f"repos/{REPO}/git/ref/x")
+
+    assert isinstance(raised.value, TransportError)
+    assert raised.value.code == "::error::GH_TOKEN (or GITHUB_TOKEN) must be set"
+
+
+def test_a_transport_error_reads_as_its_bare_reason() -> None:
+    """The dispatch guard quotes it inside its own ``::warning::`` line, where a
+    nested ``::error::`` prefix would be noise."""
+    assert str(TransportError("curl failed")) == "curl failed"
+
+
+@pytest.mark.parametrize("stdout", ["no blank line here", "garbage\n\n{}"])
+def test_an_unparseable_answer_is_a_transport_error(
+    monkeypatch: pytest.MonkeyPatch, stdout: str
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(
+        "_gh_refs.run",
+        lambda *_a, **_k: subprocess.CompletedProcess([], 0, stdout, ""),
+    )
+
+    with pytest.raises(TransportError):
+        gh_request("GET", f"repos/{REPO}/git/ref/x")
 
 
 # --- the reconciled points -------------------------------------------------

@@ -7,7 +7,6 @@ import ipaddress
 import logging
 import socket
 import threading
-import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -23,6 +22,7 @@ from temporalio.runtime import (
     TelemetryFilter,
 )
 
+from application_sdk._proxy import environment_proxies, proxy_for
 from application_sdk.app.entrypoint import canonical_workflow_type
 from application_sdk.common.backoff import Backoff, RetryExhausted, retry_async
 from application_sdk.common.dispatch import (
@@ -547,9 +547,10 @@ def _build_temporal_proxy_config(
 ) -> HttpConnectProxyConfig | None:
     """Build an HTTP CONNECT proxy config for the Temporal gRPC connection.
 
-    Temporal doesn't read proxy env vars itself, so we resolve them via the
-    stdlib (``urllib.request.getproxies``) like httpx: HTTPS_PROXY for TLS,
-    HTTP_PROXY for plaintext, honoring NO_PROXY.
+    Temporal doesn't read proxy env vars itself, so we resolve them with
+    :mod:`application_sdk._proxy`, the rule every SDK connection follows:
+    HTTPS_PROXY for TLS, HTTP_PROXY for plaintext, then ALL_PROXY, honoring
+    NO_PROXY.
 
     Args:
         host: Temporal target ``host[:port]`` (used for NO_PROXY matching).
@@ -558,15 +559,16 @@ def _build_temporal_proxy_config(
     Returns:
         An ``HttpConnectProxyConfig``, or ``None`` for a direct connection.
     """
-    proxies = urllib.request.getproxies()
-    proxy = proxies.get("https" if tls_enabled else "http")
+    proxies = environment_proxies()
+    scheme = "https" if tls_enabled else "http"
+    proxy = proxy_for(scheme, proxies=proxies)
     if not proxy:
         return None
 
     # bare host:port needs // so urlsplit reads it as an authority
     normalised = host if "//" in host else f"//{host}"
     hostname = urlsplit(normalised).hostname
-    if urllib.request.proxy_bypass_environment(hostname, proxies):
+    if hostname and proxy_for(scheme, hostname, proxies=proxies) is None:
         logger.info("Temporal host %s matches NO_PROXY; connecting directly", host)
         return None
 

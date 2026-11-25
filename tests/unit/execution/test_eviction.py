@@ -22,7 +22,7 @@ import pytest
 from pydantic import Field
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
@@ -93,13 +93,9 @@ class TestActivityCancelledAttribution:
     """
 
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     def _build_cancel_activity(self) -> object:
@@ -436,13 +432,9 @@ class _CarryOut(Output, allow_unbounded_fields=True):
 
 class TestEvictionCarriesHeartbeatDetails:
     def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         shutdown_module.reset_worker_shutting_down()
 
     @staticmethod

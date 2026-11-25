@@ -6,12 +6,13 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 
 ### How values are read
 
-Every typed variable follows the same rules:
+Every variable follows the same rules:
 
-- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured.
+- **Unset or empty means the default.** An unset Helm value renders as `""`, so an empty value is treated as not configured. This holds for string variables too (names, paths, URLs): `ATLAN_APPLICATION_NAME=` means `default`, not an empty name. Surrounding whitespace is ignored.
 - **A malformed value means the default, with a warning.** `OTEL_BATCH_SIZE=abc` or an `inf` timeout does not stop the process. It logs a warning naming the variable and the value, and uses the default. Values read at import time (most of this page) warn on stderr, because logging is not set up yet. Values read later warn through the SDK logger.
 - **Booleans:** `true`, `1`, `yes` and `on` enable. `false`, `0`, `no` and `off` disable. Matching is case-insensitive and ignores surrounding whitespace. Any other word warns and keeps the default.
 - **Choices** (for example `ATLAN_OOM_RESTART_CHECK`, `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE`): an unrecognised word warns and keeps the default.
+- **Durations** (the `ATLAN_OBSTORE_*_TIMEOUT` variables): one or more number-and-unit terms such as `30s`, `90s`, `1h 30m` or `1.5h`. Units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `M` (months) and `y`, plus their long forms. A bare number has no unit and is rejected (it warns and keeps the default), except `0`, which is accepted as zero, as the object-store client accepts it.
 
 `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` is the one exception: an explicitly empty value disables server-side cursors, as it always has.
 
@@ -309,9 +310,9 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
-| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. |
-| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. |
-| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. An invalid value logs a warning and keeps the default. |
+| `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. A value that is not a duration (see [How values are read](#how-values-are-read)) warns and keeps the default, as do the other `ATLAN_OBSTORE_*_TIMEOUT` variables. |
+| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. A malformed or negative value logs a warning and keeps the default. |
+| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. A malformed or negative value logs a warning and keeps the default. |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its in-flight part file and checkpoint sidecar (`.sdk-partial/{name}.part` and `.sdk-partial/{name}.transfer-state` beside the destination), and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Interval (seconds) between in-progress heartbeat log lines during a long upload/download. `0` disables heartbeats. |
 | `ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS` | `30` | Interval (seconds) between progress marks while an activity waits on a per-destination storage lock (a second download of the same path queues behind the first). Capped at a quarter of `ATLAN_MAX_NO_PROGRESS_SECONDS` so a queued activity is never killed as stalled; floored at `1`. |
@@ -328,6 +329,23 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS` | `600` | Upper bound in seconds for one upload's asset-validation scan. The scan runs in an isolated child process (CNCT-85); past this bound the child is killed and the upload proceeds with a warning, so warn-only validation can neither stall nor crash a handoff. |
 | `ATLAN_FAULT_ISOLATION_IDLE_SECONDS` | `30` | Seconds a fault-isolation process pool (`run_fault_isolated` / `run_best_effort`, which the asset-validation scans use) keeps its spawn children after its last call finishes. Past it the children exit and their memory returns to the pod; the next call spawns afresh. `0` shuts the pool down as soon as it goes idle. Read when a pool goes idle, so a change applies from the next idle period. A value that isn't a non-negative number is ignored, with one warning. See [ADR-0017](adr/0017-native-execution-isolation.md#addendum-idle-children-are-reaped-fnd-4278). |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by the SDK's `httpx` clients when set. |
+
+---
+
+## Outbound proxy
+
+Every SDK connection that can go through an egress proxy resolves it with one rule (`application_sdk/_proxy.py`): the `BaseClient` HTTP transport, the obstore object-store clients, the Temporal connection and the S3 bucket-region lookup.
+
+1. The proxy for a connection is its scheme's variable, then `ALL_PROXY`: `HTTPS_PROXY` for TLS connections (object stores, a TLS Temporal endpoint, `https://` requests), `HTTP_PROXY` for plaintext ones. `HTTP_PROXY` is never used for a TLS connection.
+2. A host matching `NO_PROXY` connects directly: an exact host, a domain suffix (`.example.com` or `example.com` match subdomains), or `*` for every host. A port on the host is ignored. obstore receives the raw list as `proxy_excludes` and matches it per request itself.
+3. Only the process environment is read. The lowercase spelling (`https_proxy`) wins over the uppercase one. Operating-system proxy settings (macOS System Settings, the Windows registry) are ignored, so a laptop resolves the same way a pod does.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HTTPS_PROXY` | _(empty)_ | Proxy URL (`http://[user[:password]@]host:port`) for TLS connections. |
+| `HTTP_PROXY` | _(empty)_ | Proxy URL for plaintext connections. |
+| `ALL_PROXY` | _(empty)_ | Proxy URL for any connection whose scheme variable is unset. |
+| `NO_PROXY` | _(empty)_ | Comma-separated hosts and domain suffixes that connect directly. |
 
 ---
 

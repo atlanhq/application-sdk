@@ -119,6 +119,26 @@ class TestAppConfigFromArgsAndEnv:
         config = AppConfig.from_args_and_env(args)
         assert config.mode == "handler"
 
+    def test_empty_env_values_keep_their_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-5223: an empty value used to replace the default."""
+        monkeypatch.setenv("ATLAN_APP_MODE", "handler")
+        monkeypatch.setenv("ATLAN_APP_MODULE", "pkg:App")
+        for key in (
+            "ATLAN_TEMPORAL_NAMESPACE",
+            "ATLAN_HANDLER_HOST",
+            "ATLAN_LOG_LEVEL",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_NAMESPACE", "")
+        monkeypatch.setenv("ATLAN_APP_HTTP_HOST", " ")
+        monkeypatch.setenv("LOG_LEVEL", "")
+        config = AppConfig.from_args_and_env(self._make_args())
+        assert config.temporal_namespace == "default"
+        assert config.handler_host == "0.0.0.0"
+        assert config.log_level == "INFO"
+
     def test_app_module_from_args(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ATLAN_APP_MODULE", raising=False)
         monkeypatch.setenv("ATLAN_APP_MODE", "worker")
@@ -2426,7 +2446,6 @@ class TestRunHandlerMode:
         from application_sdk.infrastructure._dapr.client import DaprSecretStore
         from application_sdk.infrastructure.context import (
             InfrastructureContext,
-            clear_infrastructure,
             get_infrastructure,
         )
 
@@ -2452,45 +2471,42 @@ class TestRunHandlerMode:
             "/v1.0/metadata": b"{}",
             "/v1.0/secrets/secretstore/cred": b'{"cred": "value"}',
         }
-        try:
-            with (
-                _FakeDaprSidecar(responses) as sidecar,
-                # Undo the unit-tier sidecar interceptor for this test only:
-                # the real pooled transport is what this test is about.
-                patch.object(
-                    dapr_http.httpx, "AsyncHTTPTransport", httpx.AsyncHTTPTransport
-                ),
-                patch(
-                    "application_sdk.main._create_infrastructure",
-                    _fake_create_infrastructure,
-                ),
-                patch(
-                    "application_sdk.storage.preflight.verify_object_store_access",
-                    new_callable=AsyncMock,
-                ),
-                patch(
-                    "application_sdk.main.load_app_class",
-                    return_value=_fake_app_class(),
-                ),
-                patch("application_sdk.main.validate_app_class"),
-                patch("application_sdk.main.load_handler_class", return_value=None),
-                patch("application_sdk.handler.DefaultHandler"),
-                patch(
-                    "application_sdk.execution._temporal.converter.create_data_converter_for_app"
-                ),
-                patch("application_sdk.handler.create_app_handler_service"),
-                patch("application_sdk.handler.service.create_app_handler_service"),
-                # Patch the method, not the class: the request path runs on
-                # whatever loop serves, however the server is started.
-                patch.object(uvicorn.Server, "serve", _serve_fetches_secret),
-                patch(
-                    "application_sdk.main._flush_observability",
-                    new_callable=AsyncMock,
-                ) as mock_flush,
-            ):
-                run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
-        finally:
-            clear_infrastructure()
+        with (
+            _FakeDaprSidecar(responses) as sidecar,
+            # Undo the unit-tier sidecar interceptor for this test only:
+            # the real pooled transport is what this test is about.
+            patch.object(
+                dapr_http.httpx, "AsyncHTTPTransport", httpx.AsyncHTTPTransport
+            ),
+            patch(
+                "application_sdk.main._create_infrastructure",
+                _fake_create_infrastructure,
+            ),
+            patch(
+                "application_sdk.storage.preflight.verify_object_store_access",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "application_sdk.main.load_app_class",
+                return_value=_fake_app_class(),
+            ),
+            patch("application_sdk.main.validate_app_class"),
+            patch("application_sdk.main.load_handler_class", return_value=None),
+            patch("application_sdk.handler.DefaultHandler"),
+            patch(
+                "application_sdk.execution._temporal.converter.create_data_converter_for_app"
+            ),
+            patch("application_sdk.handler.create_app_handler_service"),
+            patch("application_sdk.handler.service.create_app_handler_service"),
+            # Patch the method, not the class: the request path runs on
+            # whatever loop serves, however the server is started.
+            patch.object(uvicorn.Server, "serve", _serve_fetches_secret),
+            patch(
+                "application_sdk.main._flush_observability",
+                new_callable=AsyncMock,
+            ) as mock_flush,
+        ):
+            run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
 
         assert fetched == ["value"]
         assert loops["create"] is loops["serve"]

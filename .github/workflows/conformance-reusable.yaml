@@ -331,40 +331,11 @@ jobs:
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
       (github.event_name == 'merge_group' && inputs.event_name == 'merge_group' && !inputs.force-all)
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
+    # The job body is queue-diff-reusable.yaml (FND-4928); its outputs keep the
+    # names this file's gates read.
     permissions:
       contents: read
-    outputs:
-      identical: ${{ steps.diff.outputs.identical }}
-    steps:
-      # The queue commit, depth 1. Credentials stay persisted: the script
-      # fetches the PR head from this same remote, and the repo may be private.
-      - name: "Checkout queue commit"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 1
-
-      # Pinned to `job.workflow_sha` so the script always matches the workflow
-      # running it (same as tests-reusable.yaml's Detect merge queue).
-      - name: "Fetch queue_tree_diff.py from SDK"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/queue_tree_diff.py
-          sparse-checkout-cone-mode: false
-          path: _sdk
-          persist-credentials: false
-
-      - name: "Compare the queue commit with the PR head"
-        id: diff
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
-          QUEUE_SHA: ${{ github.sha }}
-          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+    uses: ./.github/workflows/queue-diff-reusable.yaml
 
   # ── The suite, the ledger guard and the gate, in one job ────────────────────
   # `series`, `slug` and the filter globs are workflow-controlled constants;
@@ -523,7 +494,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       # Private atlanhq git deps: a read-only fleet App token scoped to the
       # private repos the app names (none named: no mint). It only reaches

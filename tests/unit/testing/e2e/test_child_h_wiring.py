@@ -34,12 +34,6 @@ from application_sdk.testing.e2e._errors import (
 )
 from application_sdk.testing.e2e.base import BaseE2ETest, FullDAGOutcome, NodeDispatch
 from application_sdk.testing.harness import atlas as atlas_api
-from application_sdk.testing.harness.automation_engine import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-)
 from application_sdk.testing.harness.expectations import Unreadable
 from application_sdk.testing.harness.outcome import (
     Expired,
@@ -48,6 +42,7 @@ from application_sdk.testing.harness.outcome import (
     Settled,
 )
 from application_sdk.testing.harness.temporal import PollerInfo, TaskQueueType
+from tests.unit.testing._ae_fakes import FakeAE, stalled, succeeded
 
 _QN = "default/openapi/1700000000123456"
 
@@ -59,24 +54,6 @@ class _Suite(BaseE2ETest):
     expected_min_asset_counts = {"APISpec": 1}
     expect_lineage = False
     required_dag_nodes = ("extract",)
-
-
-def _succeeded(*names: str) -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[
-            DAGNodeResult(
-                name=name,
-                status=DAGNodeStatus.SUCCEEDED,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-            for name in names
-        ],
-    )
 
 
 def _suite() -> _Suite:
@@ -93,7 +70,7 @@ def _suite() -> _Suite:
 def _unreadable_outcome() -> FullDAGOutcome:
     """An outcome whose count read failed, as the readers now report it."""
     return FullDAGOutcome(
-        ae_result=_succeeded("extract"),
+        ae_result=succeeded("extract"),
         connection_qualified_name=_QN,
         connection_in_atlas=True,
         asset_counts={},
@@ -122,7 +99,7 @@ class TestUnreadableAtlasIsNotAFailure:
     def test_a_settled_zero_still_fails_the_floor(self) -> None:
         """The control: "read it, and it was zero" is still the connector's."""
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=True,
             asset_counts={"APISpec": 0},
@@ -145,7 +122,7 @@ class TestUnreadableAtlasIsNotAFailure:
         suite = _Depths()
         suite.connection_qualified_name = _QN
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=True,
             asset_counts={"APISpec": 3},
@@ -165,7 +142,7 @@ class TestUnreadableAtlasIsNotAFailure:
         suite = _Depths()
         suite.connection_qualified_name = _QN
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=True,
             asset_counts={"APISpec": 3},
@@ -186,7 +163,7 @@ class TestTheConnectionPollKeepsItsVerdict:
 
     def _outcome(self, connection_read: Any) -> FullDAGOutcome:
         return FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=False,
             connection_read=connection_read,
@@ -248,7 +225,7 @@ class TestTheConnectionPollKeepsItsVerdict:
         complaint about a probe that never ran.
         """
         outcome = FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=False,
         )
@@ -266,7 +243,7 @@ class TestTheLineageCountKeepsItsVerdict:
 
     def _outcome(self, lineage_read: Any) -> FullDAGOutcome:
         return FullDAGOutcome(
-            ae_result=_succeeded("extract"),
+            ae_result=succeeded("extract"),
             connection_qualified_name=_QN,
             connection_in_atlas=True,
             asset_counts={"APISpec": 3},
@@ -381,7 +358,7 @@ class TestUnreadableCountsReachTheOutcome:
         monkeypatch.setattr(BaseE2ETest, "_atlas_client", lambda _s: _null_client())
         suite._ae = SimpleNamespace()  # type: ignore[attr-defined]
 
-        outcome = _run_sync(suite._read_atlas(_succeeded("extract")))
+        outcome = _run_sync(suite._read_atlas(succeeded("extract")))
 
         assert isinstance(outcome.asset_count_reads["APISpec"], Unreadable)
         # The settled projection simply has no entry — never a zero, which is
@@ -572,25 +549,6 @@ class TestCaptureStopPointPollers:
     is the read that turns it into a measurement — and the reads are scoped to
     the queues that line will actually ask about."""
 
-    def _stalled(self, *nodes: str) -> DAGRunResult:
-        return DAGRunResult(
-            run_id="r",
-            workflow_slug="s",
-            status=DAGRunStatus.RUNNING,
-            nodes=[
-                DAGNodeResult(
-                    name=name,
-                    status=DAGNodeStatus.RUNNING,
-                    started_at_ms=None,
-                    completed_at_ms=None,
-                    error_message=None,
-                )
-                for name in nodes
-            ],
-            progress_stalled_after_seconds=600.0,
-            seconds_since_last_progress=612.0,
-        )
-
     def _wired(self, **queues: str) -> _Suite:
         suite = _suite()
         suite._node_dispatch = {
@@ -608,7 +566,7 @@ class TestCaptureStopPointPollers:
         reader = _Reader([])
         _install_reader(monkeypatch, reader)
 
-        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+        _run_sync(suite._capture_stop_point_pollers(stalled("extract")))
 
         assert reader.queries == []
         assert suite._queue_pollers == {}
@@ -628,7 +586,7 @@ class TestCaptureStopPointPollers:
         _install_reader(monkeypatch, reader)
 
         _run_sync(
-            suite._capture_stop_point_pollers(self._stalled("extract", "publish", "qi"))
+            suite._capture_stop_point_pollers(stalled("extract", "publish", "qi"))
         )
 
         assert reader.queries == [
@@ -649,7 +607,7 @@ class TestCaptureStopPointPollers:
         suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
         _install_reader(monkeypatch, _Reader([]))
 
-        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+        _run_sync(suite._capture_stop_point_pollers(stalled("extract")))
 
         reading = suite._queue_pollers["atlan-openapi-default"]
         assert reading.unclaimed
@@ -665,7 +623,7 @@ class TestCaptureStopPointPollers:
         reader = _Reader([])
         _install_reader(monkeypatch, reader)
 
-        _run_sync(suite._capture_stop_point_pollers(_succeeded("extract")))
+        _run_sync(suite._capture_stop_point_pollers(succeeded("extract")))
 
         assert reader.queries == []
         assert suite._queue_pollers == {}
@@ -680,10 +638,10 @@ class TestCaptureStopPointPollers:
         suite = self._wired(extract="atlan-openapi-default")
         suite.temporal_address = "127.0.0.1:7233"  # type: ignore[misc]
         _install_reader(monkeypatch, _Reader([]))
-        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+        _run_sync(suite._capture_stop_point_pollers(stalled("extract")))
         assert suite._queue_pollers
 
-        _run_sync(suite._capture_stop_point_pollers(_succeeded("extract")))
+        _run_sync(suite._capture_stop_point_pollers(succeeded("extract")))
 
         assert suite._queue_pollers == {}
         # Never written through to the shared class-level default.
@@ -700,7 +658,7 @@ class TestCaptureStopPointPollers:
             monkeypatch, _Reader([], error=RuntimeError("frontend unreachable"))
         )
 
-        _run_sync(suite._capture_stop_point_pollers(self._stalled("extract")))
+        _run_sync(suite._capture_stop_point_pollers(stalled("extract")))
 
         assert suite._queue_pollers == {}
 
@@ -719,11 +677,7 @@ class TestTheStallErrorCarriesTheObservation:
         _install_reader(monkeypatch, _Reader([]))
         original = NoWorkerOnTaskQueueError(message="nothing started in 180s")
 
-        class _AE:
-            async def poll_native_status(self, run_id: str, **_kwargs: Any) -> Any:
-                raise original
-
-        suite._ae = _AE()  # type: ignore[attr-defined]
+        suite._ae = FakeAE(original)  # type: ignore[attr-defined]
 
         with pytest.raises(NoWorkerOnTaskQueueError) as exc:
             _run_sync(suite._poll_dag("run-1"))
@@ -739,11 +693,7 @@ class TestTheStallErrorCarriesTheObservation:
         suite = _suite()
         original = NoWorkerOnTaskQueueError(message="nothing started in 180s")
 
-        class _AE:
-            async def poll_native_status(self, run_id: str, **_kwargs: Any) -> Any:
-                raise original
-
-        suite._ae = _AE()  # type: ignore[attr-defined]
+        suite._ae = FakeAE(original)  # type: ignore[attr-defined]
 
         with pytest.raises(NoWorkerOnTaskQueueError) as exc:
             _run_sync(suite._poll_dag("run-1"))

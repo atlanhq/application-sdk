@@ -163,7 +163,7 @@ def gh_api_conditional(path: str, *, etag: str | None = None):
     return response.status, new_etag, body_json
 
 
-def check_run_age_key(check_run: dict) -> tuple[str, int]:
+def check_run_age_key(check_run: dict[str, object]) -> tuple[str, int]:
     """Sort key that orders same-named check runs oldest-first.
 
     ``started_at`` is the semantic answer and GitHub renders it as a Zulu

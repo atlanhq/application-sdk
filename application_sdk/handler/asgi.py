@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Literal
 
 from fastapi import FastAPI
 
+from application_sdk._env import env_str
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import blocking_executor, offload_owner
 from application_sdk.common.task_queue import derive_task_queue
@@ -73,7 +74,7 @@ APPENV_PREFIX = "ATLAN_APPENV__"
 
 def app_env(app_name: str, key: str, default: str = "") -> str:
     """``key`` for one hosted app: its ``ATLAN_APPENV__<APP>__<key>``, else
-    ``default``. An empty string counts as set.
+    ``default``. An empty value counts as unset, as for every SDK env read.
 
     Never the bare ``key``: on the host that is the host's own value, shared by
     every hosted app, so reading it would hand one app another app's (or the
@@ -82,7 +83,7 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
     scoped = APPENV_PREFIX + app_name.strip().upper().replace("-", "_").replace(
         ".", "_"
     )
-    return os.environ.get(f"{scoped}__{key}", default)
+    return env_str(f"{scoped}__{key}", default)
 
 
 @functools.cache

@@ -36,11 +36,6 @@ from application_sdk.storage.ops import (
 from tests.unit.private_stdlib import private_stdlib
 
 
-@pytest.fixture
-def store():
-    return create_memory_store()
-
-
 class TestPutAndGet:
     async def test_put_then_get_returns_data(self, store) -> None:
         await _put("hello.txt", b"world", store)
@@ -1995,14 +1990,6 @@ class TestResolvePutAttributes:
     - unrelated store: returns None.
     - no infra context: returns None.
     """
-
-    @pytest.fixture(autouse=True)
-    def _clear_infra(self):
-        from application_sdk.infrastructure.context import clear_infrastructure
-
-        clear_infrastructure()
-        yield
-        clear_infrastructure()
 
     def _make_infra(
         self, store, put_attrs, *, upstream_store=None, upstream_put_attrs=None

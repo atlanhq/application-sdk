@@ -13,8 +13,9 @@ gate is evaluated here, through the real expressions, for both directions:
 * the skipping jobs keep a static `name:` so the skipped check run carries the
   context string the rulesets require.
 
-The three `queue-diff` jobs are also pinned to the same steps, so a fix to one
-cannot silently miss the other two.
+The three `queue-diff` jobs call one reusable, queue-diff-reusable.yaml
+(FND-4928), so a fix lands once; the tests below pin each caller to it and pin
+the reusable's outputs to the names the gates read.
 """
 
 from __future__ import annotations
@@ -110,21 +111,34 @@ def test_scan_never_skips_for_a_prebuilt_image_or_explicit_ref(
     assert evaluate(gate, contexts) is runs
 
 
-def test_the_three_queue_diff_jobs_are_the_same_job() -> None:
-    def shape(job: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{k: v for k, v in step.items() if k != "name"} for step in job["steps"]]
+QUEUE_DIFF = "queue-diff-reusable.yaml"
 
-    jobs = {name: load_workflow(name)["jobs"]["queue-diff"] for name in GATED}
-    reference = shape(jobs["checks-reusable.yaml"])
-    for name, queue_diff in jobs.items():
-        assert shape(queue_diff) == reference, f"{name}'s queue-diff steps drifted"
-        assert queue_diff["runs-on"] == "ubuntu-slim"
-        assert queue_diff["permissions"] == {"contents": "read"}
+
+@pytest.mark.parametrize("name", sorted(GATED))
+def test_every_queue_diff_job_is_the_one_reusable(name: str) -> None:
+    queue_diff = load_workflow(name)["jobs"]["queue-diff"]
+    assert queue_diff["uses"] == f"./.github/workflows/{QUEUE_DIFF}"
+    # A called workflow can only narrow its caller's grant.
+    assert queue_diff["permissions"] == {"contents": "read"}
+    assert "steps" not in queue_diff
+
+
+@pytest.mark.parametrize("name", sorted(GATED))
+def test_the_reusable_exports_the_answer_each_gate_reads(name: str) -> None:
+    output, _, _ = GATED[name]
+    # YAML 1.1 reads a bare `on` as True, so the keys are not all strings.
+    reusable: dict[Any, Any] = load_workflow(QUEUE_DIFF)
+    exported = reusable[True]["workflow_call"]["outputs"][output]["value"]
+    assert exported == f"${{{{ jobs.diff.outputs.{output} }}}}"
+    diff = reusable["jobs"]["diff"]
+    assert diff["outputs"][output] == f"${{{{ steps.diff.outputs.{output} }}}}"
 
 
 def test_queue_diff_runs_the_script_it_fetches() -> None:
     assert SCRIPT.is_file()
-    job = load_workflow("checks-reusable.yaml")["jobs"]["queue-diff"]
+    job = load_workflow(QUEUE_DIFF)["jobs"]["diff"]
+    assert job["runs-on"] == "ubuntu-slim"
+    assert job["permissions"] == {"contents": "read"}
     fetch = job["steps"][1]
     assert fetch["with"]["sparse-checkout"] == ".github/scripts/queue_tree_diff.py"
     assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"

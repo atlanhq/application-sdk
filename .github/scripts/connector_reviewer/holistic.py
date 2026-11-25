@@ -191,8 +191,12 @@ def check(
     files: list[FileDiff],
     pr_meta: dict[str, Any],
     *,
-    max_input_tokens: int = 8000,
-    max_lookups: int = 4,
+    # Raised for review depth (FND-5316): an 8,000-token excerpt showed about 400
+    # changed lines of a 4,000-line pull request, and all 4 lookups were spent on
+    # a 42-file one. At 32,000 input tokens and 8 lookups a check costs about
+    # $0.02, well inside its 15% share of the round.
+    max_input_tokens: int = 32000,
+    max_lookups: int = 8,
     max_tokens: int = 16000,  # reasoning tokens count against this
     max_concerns: int = 2,
     exclude: tuple[str, ...] | list[str] = DEFAULT_EXCLUDE,

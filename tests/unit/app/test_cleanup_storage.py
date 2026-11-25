@@ -10,7 +10,6 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import App, TaskStateAccessor, _app_state, _app_state_lock
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import StorageCleanupInput, StorageCleanupOutput
 from application_sdk.contracts.storage import DownloadInput
@@ -63,13 +62,7 @@ def _clear_app_state(run: tuple[str, str] = _RUN) -> None:
 
 
 class TestCleanupStorage:
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     # ------------------------------------------------------------------
@@ -487,13 +480,7 @@ class TestCleanupStorageNeverDeletesDurableAlias:
 
     _KEY = "artifacts/apps/test/workflows/wf-test/r1/transformed/table/entities.json"
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     @pytest.mark.parametrize("tier", [StorageTier.RETAINED, StorageTier.PERSISTENT])
@@ -570,13 +557,7 @@ class TestCleanupStorageDirectoryManifest:
     _DIR = "artifacts/apps/test/workflows/wf-test/r1/file_refs/d1/"
     _MANIFEST = "artifacts/apps/test/workflows/wf-test/r1/file_refs/m1.sdk-manifest"
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     async def test_transient_directory_ref_deletes_its_manifest(self) -> None:
@@ -625,13 +606,7 @@ class TestCleanupStorageSparesDownloadedKeys:
     _KEY = "artifacts/apps/producer/workflows/wf-0/run-0/output/part-0.json"
     _DATA = b'{"a": 1}\n'
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
         _clear_app_state()
 
     def _app(self, deployment: Any, upstream: Any | None) -> App:
