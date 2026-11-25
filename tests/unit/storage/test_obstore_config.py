@@ -196,6 +196,11 @@ class TestDurationEnvValues:
             "1micros",
             "1h2",
             "forever",
+            "\u0661s",
+            "1.\u0665s",
+            "\uff11s",
+            "1h\u20032m",
+            "\u00a030s",
         ],
     )
     def test_validator_agrees_with_obstore(self, value: str) -> None:

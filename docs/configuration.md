@@ -12,7 +12,7 @@ Every variable follows the same rules:
 - **A malformed value means the default, with a warning.** `OTEL_BATCH_SIZE=abc` or an `inf` timeout does not stop the process. It logs a warning naming the variable and the value, and uses the default. Values read at import time (most of this page) warn on stderr, because logging is not set up yet. Values read later warn through the SDK logger.
 - **Booleans:** `true`, `1`, `yes` and `on` enable. `false`, `0`, `no` and `off` disable. Matching is case-insensitive and ignores surrounding whitespace. Any other word warns and keeps the default.
 - **Choices** (for example `ATLAN_OOM_RESTART_CHECK`, `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE`): an unrecognised word warns and keeps the default.
-- **Durations** (the `ATLAN_OBSTORE_*_TIMEOUT` variables): one or more number-and-unit terms such as `30s`, `90s`, `1h 30m` or `1.5h`. Units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `M` (months) and `y`, plus their long forms. A bare number has no unit and is rejected: it warns and keeps the default.
+- **Durations** (the `ATLAN_OBSTORE_*_TIMEOUT` variables): one or more number-and-unit terms such as `30s`, `90s`, `1h 30m` or `1.5h`. Units are `ns`, `us`, `ms`, `s`, `m`, `h`, `d`, `w`, `M` (months) and `y`, plus their long forms. A bare number has no unit and is rejected (it warns and keeps the default), except `0`, which is accepted as zero, as the object-store client accepts it.
 
 `ATLAN_SQL_USE_SERVER_SIDE_CURSOR` is the one exception: an explicitly empty value disables server-side cursors, as it always has.
 

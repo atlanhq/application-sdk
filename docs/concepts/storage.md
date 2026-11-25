@@ -287,7 +287,7 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
 
-The `ATLAN_OBSTORE_*_TIMEOUT` values are durations such as `30s` or `1h 30m`. An empty value, or one that is not a duration (a bare `30` has no unit), keeps the default; the second also logs a warning. Before, either one failed every object-store client construction with `failed to parse ... as Duration`.
+The `ATLAN_OBSTORE_*_TIMEOUT` values are durations such as `30s` or `1h 30m`. An empty value, or one that is not a duration (a bare `30` has no unit; `0` alone is accepted as zero), keeps the default; the second also logs a warning. Before, either one failed every object-store client construction with `failed to parse ... as Duration`.
 
 ---
 

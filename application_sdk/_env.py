@@ -279,7 +279,9 @@ _DURATION_UNITS = (
     "minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d|"
     "weeks|week|wks|wk|w|months|month|M|years|year|yrs|yr|y"
 )
-_DURATION = re.compile(rf"(?:\d+(?:\.\d+)?\s*(?:{_DURATION_UNITS})\s*)+")
+#: ASCII digits only: ``\d`` also matches other scripts' digits (``١``), which
+#: obstore rejects. Whitespace stays Unicode-aware, as obstore's is.
+_DURATION = re.compile(rf"(?:[0-9]+(?:\.[0-9]+)?\s*(?:{_DURATION_UNITS})\s*)+")
 
 
 def is_duration(value: str) -> bool:

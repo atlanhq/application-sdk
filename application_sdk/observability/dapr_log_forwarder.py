@@ -100,7 +100,7 @@ _ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK = "info"
 def _app_log_level_name() -> str:
     """The app level name the SDK will resolve, mirroring ``constants.LOG_LEVEL``
     without importing it (that import is what fixes the sinks)."""
-    return (os.environ.get("ATLAN_LOG_LEVEL") or env_str("LOG_LEVEL", "INFO")).upper()
+    return env_str("ATLAN_LOG_LEVEL", env_str("LOG_LEVEL", "INFO")).upper()
 
 
 def _forwarder_log_level() -> str | None:

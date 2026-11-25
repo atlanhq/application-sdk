@@ -480,9 +480,15 @@ def _string_reads_with_a_default(tree: ast.Module) -> list[ast.Call]:
     """
     found = []
     for node in ast.walk(tree):
-        if not (_is_env_read(node) and len(node.args) >= 2):
+        if not _is_env_read(node):
             continue
-        default = node.args[1]
+        if len(node.args) >= 2:
+            default = node.args[1]
+        else:
+            keyword = next((k for k in node.keywords if k.arg == "default"), None)
+            if keyword is None:
+                continue
+            default = keyword.value
         if isinstance(default, ast.Constant) and default.value in ("", None):
             continue
         found.append(node)
@@ -534,6 +540,8 @@ class TestEveryEnvReadIsTolerant:
             "d = os.environ.get('D', name)\n"
             "e = os.getenv('E', '')\n"
             "g = os.getenv('G')\n"
+            "k = os.getenv('K', default='fallback')\n"
+            "n = os.environ.get('N', default=None)\n"
             "def h(raw):\n"
             "    return int(raw)\n"
         )
@@ -544,6 +552,7 @@ class TestEveryEnvReadIsTolerant:
         assert [ast.unparse(n) for n in _string_reads_with_a_default(tree)] == [
             "os.getenv('C', 'default')",
             "os.environ.get('D', name)",
+            "os.getenv('K', default='fallback')",
         ]
 
     def test_no_numeric_conversion_of_an_env_read(self) -> None:

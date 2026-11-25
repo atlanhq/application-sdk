@@ -209,7 +209,7 @@ def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
     # Prefer TEMPORAL_HOST (v3). Fall back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2).
-    _v2_host = os.environ.get("ATLAN_WORKFLOW_HOST", "")
+    _v2_host = env_str("ATLAN_WORKFLOW_HOST", "")
     _v2_port = env_str("ATLAN_WORKFLOW_PORT", "7233")
     _v2_default = f"{_v2_host}:{_v2_port}" if _v2_host else "localhost:7233"
     return ExecutionSettings(

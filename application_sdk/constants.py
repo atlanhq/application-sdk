@@ -1069,7 +1069,7 @@ DEPLOYMENT_SECRET_STORE_NAME = env_str(
 #: Used by logger_adaptor.py at module level (logging.basicConfig runs at
 #: import time, before AppConfig exists). AppConfig.log_level is the runtime
 #: equivalent for code that has access to the config instance.
-LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or env_str("LOG_LEVEL", "INFO")).upper()
+LOG_LEVEL = env_str("ATLAN_LOG_LEVEL", env_str("LOG_LEVEL", "INFO")).upper()
 #: Service name for OpenTelemetry.
 #: Used by traces_adaptor.py and metrics_adaptor.py at module level for
 #: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.

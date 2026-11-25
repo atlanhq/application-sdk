@@ -98,6 +98,12 @@ class TestLoadExecutionSettingsFromEnv:
         monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "")
         assert load_execution_settings().host == "temporal.internal:7233"
 
+    def test_blank_v2_host_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A whitespace-only legacy host used to build ``" :7233"``."""
+        monkeypatch.delenv("TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "  ")
+        assert load_execution_settings().host == "localhost:7233"
+
     def test_max_concurrent_activities_from_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
