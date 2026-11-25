@@ -166,8 +166,6 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     _preflight_failure_response,
     _preflight_response,
     _preflight_runtime_summary,
-    _request_normalizer,
-    _RequestNormalizer,
     _summarize_check,
     _validated_entrypoint,
     _wrap_response,
@@ -176,25 +174,27 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     register_handler_routes,
 )
 
-#: The serving handler's ``extra_credential_keys`` while a legacy
-#: ``_normalize_credentials`` wrapper runs. The wrapper takes only the body, so
-#: this is how the original it calls learns them.
-_handler_credential_keys: ContextVar[frozenset[str]] = ContextVar(
-    "_handler_credential_keys", default=frozenset()
+_RequestNormalizer = Callable[[dict[str, Any]], dict[str, Any]]
+"""Turns a raw request body into the shape the handler inputs validate."""
+
+#: The app's credential-form keys while a legacy ``_normalize_credentials``
+#: wrapper runs. The wrapper takes only the body, so this is how the original
+#: it calls learns them.
+_form_credential_keys: ContextVar[frozenset[str]] = ContextVar(
+    "_form_credential_keys", default=frozenset()
 )
 
 
 def _sdk_normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     """The SDK's credential normalization, as ``service._normalize_credentials`` served it.
 
-    Honours a rebound ``service._CREDENTIAL_KEYS`` and the serving handler's
-    ``extra_credential_keys``, so an app that wraps this function keeps both
-    until v4.0.0.
+    Honours a rebound ``service._CREDENTIAL_KEYS`` and the app's credential-form
+    keys, so an app that wraps this function keeps both until v4.0.0.
     """
     rebound_keys = globals().get("_CREDENTIAL_KEYS")
     keys = _SDK_CREDENTIAL_KEYS if rebound_keys is None else frozenset(rebound_keys)
     return _contracts_normalize_credentials(
-        body, keys=keys | _handler_credential_keys.get()
+        body, keys=keys, extra_keys=_form_credential_keys.get()
     )
 
 
@@ -204,21 +204,20 @@ _LEGACY_NORMALIZATION_GLOBALS: dict[str, object] = {
 }
 
 #: Connector apps used to extend the worker's credential normalization by
-#: rebinding these module globals at import time. ``Handler.extra_credential_keys``
-#: and ``Handler.prepare_request_body`` replace them, and reach the consolidated
-#: API host too, which a rebind here never did. Literal per entry: the surface
-#: gate and gen-deprecations read this table statically.
+#: rebinding these module globals at import time. The SDK now reads the extra
+#: credential keys from the app's generated credential forms, on the worker and
+#: the API host alike; a rebind here only ever reached the worker. Literal per
+#: entry: the surface gate and gen-deprecations read this table statically.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "_CREDENTIAL_KEYS": (
-        "application_sdk.handler.base.Handler.extra_credential_keys",
-        "declare the extra keys on the app's Handler subclass, which every "
-        "surface reads; rebinding this module global reaches only the worker",
+        "the app's generated credential form (contract/app.pkl)",
+        "every top-level field the form declares is now a credential key on "
+        "every surface, so drop the rebind",
     ),
     "_normalize_credentials": (
-        "application_sdk.handler.base.Handler.prepare_request_body",
-        "override it on the app's Handler subclass to rewrite the request body "
-        "before credential normalization; rebinding this module global reaches "
-        "only the worker",
+        "a field the entry point's input contract declares",
+        "send the field the input reads; a legacy request shape the contract "
+        "cannot express is a gap to raise with the SDK, not a request to rewrite",
     ),
 }
 
@@ -244,17 +243,18 @@ def _legacy_rebinds() -> dict[str, object]:
     }
 
 
-def _worker_request_normalizer(handler: Handler) -> _RequestNormalizer:
-    """The worker's request normalization: the handler's, or a legacy rebind's.
+def _worker_request_normalizer(
+    generated_dir: Callable[[], Path | None],
+) -> _RequestNormalizer:
+    """The worker's request normalization: the API host's, or a legacy rebind's.
 
     Built once per service. Without a rebind it is exactly the API host's
-    (:func:`~application_sdk.handler.routes._request_normalizer`). An app that
-    still rebinds ``service._CREDENTIAL_KEYS`` or ``service._normalize_credentials``
-    keeps that behaviour on the worker until v4.0.0, with a warning naming the
-    ``Handler`` attribute that replaces it.
+    (:func:`~application_sdk.handler.metadata_routes._credential_normalizer`).
+    An app that still rebinds ``service._CREDENTIAL_KEYS`` or
+    ``service._normalize_credentials`` keeps that behaviour on the worker until
+    v4.0.0, with a logged warning, and keeps its credential-form keys too.
     """
-    normalize = _request_normalizer(handler)
-    handler_keys = frozenset(type(handler).extra_credential_keys)
+    normalize = _credential_normalizer(generated_dir)
 
     def worker_normalize(body: dict[str, Any]) -> dict[str, Any]:
         rebound = _legacy_rebinds()
@@ -269,22 +269,20 @@ def _worker_request_normalizer(handler: Handler) -> _RequestNormalizer:
                 name,
                 _DEPRECATED_CONSTANTS[name][0],
             )
-        prepared = handler.prepare_request_body(body)
+        form_keys = _credential_form_keys_of(generated_dir())
         # Whatever the app bound: a body -> body callable, a set of key names.
         rebound_fn = cast(
             "_RequestNormalizer | None", rebound.get("_normalize_credentials")
         )
         if rebound_fn is not None:
-            token = _handler_credential_keys.set(handler_keys)
+            token = _form_credential_keys.set(form_keys)
             try:
-                return rebound_fn(prepared)
+                return rebound_fn(body)
             finally:
-                _handler_credential_keys.reset(token)
+                _form_credential_keys.reset(token)
         rebound_keys = cast("frozenset[str] | None", rebound.get("_CREDENTIAL_KEYS"))
         keys = _SDK_CREDENTIAL_KEYS if rebound_keys is None else rebound_keys
-        return _contracts_normalize_credentials(
-            prepared, keys=frozenset(keys) | handler_keys
-        )
+        return _contracts_normalize_credentials(body, keys=keys, extra_keys=form_keys)
 
     return worker_normalize
 
@@ -671,6 +669,8 @@ def warn_on_warmup_flag_drift(
 from application_sdk.handler.metadata_routes import (  # noqa: E402,F401
     MAX_FE_INPUTS_BYTES,
     MetadataSource,
+    _credential_form_keys_of,
+    _credential_normalizer,
     decode_fe_inputs,
     entrypoint_form,
     handler_compute_manifest,
@@ -2262,7 +2262,7 @@ def create_app_handler_service(
 
     # One request normalization for every route that reads a body (/start,
     # /validate and the shared routes), built from the handler once.
-    normalize = _worker_request_normalizer(handler)
+    normalize = _worker_request_normalizer(lambda: CONTRACT_GENERATED_DIR)
 
     # The auth / check / metadata routes, the request contract's 422 and the
     # error boundary are ONE implementation shared with the consolidated API host

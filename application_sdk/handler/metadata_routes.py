@@ -25,10 +25,11 @@ be computed per request is served the same from either place.
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -247,8 +248,8 @@ class MetadataSource:
         log: The logger the routes report through.
         normalize_body: Converts a v2 credential shape in a ``/validate`` body
             to the v3 list before the credentials are stripped. Both surfaces
-            pass the handler's request normalization, which honours its
-            ``extra_credential_keys`` and ``prepare_request_body``.
+            pass :func:`_credential_normalizer`, which also treats the app's
+            credential-form fields as credential keys.
         max_fe_inputs_bytes: The GET ``fe_inputs`` cap.
         from_process_env: Whether this process's own ``ATLAN_APPLICATION_NAME``
             / ``ATLAN_DEPLOYMENT_NAME`` describe this app. ``False`` on the
@@ -331,6 +332,72 @@ def _redacted(exc: HTTPException) -> HTTPException:
 #: The workflow-form credential slot routed by ``ExtractionInput``'s top-level
 #: ``extraction_method`` / ``credential_guid`` / ``agent_json`` fields.
 _PRIMARY_CREDENTIAL_SLOT = "credential-guid"
+
+
+def _credential_form_keys(generated_dir: Path) -> frozenset[str]:
+    """Top-level fields of every credential form the app's workflow forms use.
+
+    A v2 flat request (credential test, local dev) sends a credential form's
+    values as top-level body keys. The SDK's own key set names the fields every
+    connector shares; a connector's form can add more (``kerberos``, an
+    auth-type object such as ``basic``), and those are credential material too.
+    Read from the generated forms, so the contract stays the one place a
+    connector declares its credential. Empty when no form is shipped.
+    """
+    workflow_forms = list(eligible_form_configmaps(generated_dir))
+    for entrypoint in tree_entrypoints(generated_dir):
+        workflow_forms.extend(eligible_form_configmaps(generated_dir / entrypoint))
+    credential_types = sorted(
+        {
+            slot.credential_type
+            for path in workflow_forms
+            if (form := load_form(path)) is not None
+            for slot in credential_slots(form)
+        }
+    )
+    keys: set[str] = set()
+    for credential_type in credential_types:
+        form = credential_form(generated_dir, credential_type)
+        properties = form.get("properties") if form is not None else None
+        if isinstance(properties, Mapping):
+            keys.update(k for k in properties if isinstance(k, str))
+    return frozenset(keys)
+
+
+@functools.lru_cache(maxsize=16)
+def _cached_credential_form_keys(generated_dir: str) -> frozenset[str]:
+    # The generated tree ships with the image and does not change while the
+    # process runs, so each directory's forms are read once.
+    return _credential_form_keys(Path(generated_dir))
+
+
+def _credential_form_keys_of(generated_dir: Path | None) -> frozenset[str]:
+    """:func:`_credential_form_keys` for *generated_dir*, read once per directory."""
+    if generated_dir is None:
+        return frozenset()
+    return _cached_credential_form_keys(str(generated_dir))
+
+
+def _credential_normalizer(
+    generated_dir: Callable[[], Path | None],
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """The request normalization for an app whose generated tree is *generated_dir*.
+
+    :func:`~application_sdk.handler.contracts.normalize_credentials` with the
+    top-level fields of the app's credential forms as ``extra_keys``: a v2
+    flat credential (detected by the SDK's own keys, as before) also carries
+    those fields into ``credentials``. Every route that reads a request body (``/auth``, ``/check``,
+    ``/metadata``, ``/validate``, ``/start``) runs it, on the worker and the API
+    host alike. *generated_dir* is read per request, so a process repointed
+    after startup is seen.
+    """
+
+    def normalize(body: dict[str, Any]) -> dict[str, Any]:
+        return normalize_credentials(
+            body, extra_keys=_credential_form_keys_of(generated_dir())
+        )
+
+    return normalize
 
 
 def missing_fields_error(paths: list[tuple[str, ...]]) -> ValidationError:

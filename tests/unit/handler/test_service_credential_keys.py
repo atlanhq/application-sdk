@@ -1,14 +1,13 @@
-"""How an app extends request normalization, on the worker and the API host.
+"""Which request-body keys count as credential material, on the worker and the API host.
 
-The public seams are two ``Handler`` attributes, read on every surface that
-serves the handler:
+A v2 flat request sends a credential form's values as top-level keys. The SDK
+detects one by its own shared keys (``host``, ``authType``, ...) and lifts them
+into ``credentials``. It also lifts every top-level field of the app's generated
+credential form (``kerberos``, an auth-type object such as ``gcp-wif``), read
+from the generated tree on both surfaces. Those form fields never make a body a
+credential on their own: some are as generic as ``name``.
 
-* ``extra_credential_keys`` — v2 flat top-level keys, beyond the SDK's own,
-  that count as credential material (e.g. ``kerberos``);
-* ``prepare_request_body`` — rewrites the raw body before its credentials are
-  normalized (e.g. lifting a legacy key into the field the input reads).
-
-Before them, connector apps patched ``application_sdk.handler.service`` at
+Before this, connector apps patched ``application_sdk.handler.service`` at
 import time, either extending the worker's key set::
 
     _svc._CREDENTIAL_KEYS = _svc._CREDENTIAL_KEYS | frozenset({"kerberos"})
@@ -27,11 +26,10 @@ not.
 from __future__ import annotations
 
 import shutil
-import sys
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -42,7 +40,7 @@ import application_sdk.handler.service as service
 from application_sdk.app.base import App
 from application_sdk.contracts.base import Input, Output
 from application_sdk.handler.asgi import build_asgi_app
-from application_sdk.handler.base import DefaultHandler, Handler
+from application_sdk.handler.base import Handler
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
@@ -54,13 +52,18 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataOutput,
 )
+from application_sdk.handler.metadata_routes import _credential_form_keys
 
-_KERBEROS = {"principal": "svc@EXAMPLE.COM", "keytab": "a2V5dGFi"}
+#: BigQuery's generated tree, regenerated from tests/unit/handler/fixtures/
+#: bigquery_contract by tests/regen_fixtures.py and used unchanged. Its
+#: credential form declares the auth-type object ``gcp-wif`` at the top level.
+_BIGQUERY_GENERATED = (
+    Path(__file__).parent / "fixtures" / "generated_bigquery_credentials"
+)
 _FLAT_BODY: dict[str, Any] = {
-    "host": "db.example.com",
-    "port": 10000,
-    "username": "svc",
-    "kerberos": _KERBEROS,
+    "authType": "gcp-wif",
+    "connectorType": "rest",
+    "gcp-wif": {"extra": {"project_id": "example-project"}},
 }
 _ROUTES = ("auth", "check", "metadata")
 _LIFTED = "lifted-by-app"
@@ -88,44 +91,48 @@ class _CapturingHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
-class _KerberosHandler(_CapturingHandler):
-    extra_credential_keys: ClassVar[frozenset[str]] = frozenset({"kerberos"})
-
-
-class _LiftingHandler(_CapturingHandler):
-    """Lifts a legacy top-level key into ``connection_config``, as databricks does."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.prepared: list[dict[str, Any]] = []
-
-    def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        self.prepared.append(dict(body))
-        cfg = dict(body.get("connection_config") or {})
-        cfg["legacy-key"] = _LIFTED
-        return {**body, "connection_config": cfg}
-
-
 # Module-level so get_type_hints() resolves it under postponed annotations.
-class _KerberosStartInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+class _FlatStartInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
     name: str = ""
-    kerberos: dict[str, str] | None = None
 
 
-class _KerberosStartOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+class _FlatStartOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
     pass
 
 
-def _worker(handler: Handler, **kwargs: Any) -> TestClient:
+@pytest.fixture
+def generated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A copy of the bigquery tree, and the worker pointed at it."""
+    target = tmp_path / "generated"
+    shutil.copytree(_BIGQUERY_GENERATED, target)
+    monkeypatch.setattr(service, "CONTRACT_GENERATED_DIR", target)
+    return target
+
+
+@pytest.fixture
+def no_generated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An app that ships no generated tree."""
+    target = tmp_path / "missing"
+    monkeypatch.setattr(service, "CONTRACT_GENERATED_DIR", target)
+    return target
+
+
+def _worker(handler: Handler, _generated: Path, **kwargs: Any) -> TestClient:
+    """The worker reads ``service.CONTRACT_GENERATED_DIR``, which the fixture set."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         app = service.create_app_handler_service(handler, app_name="kv-test", **kwargs)
     return TestClient(app, raise_server_exceptions=False)
 
 
-def _host(handler: Handler) -> TestClient:
+def _host(handler: Handler, generated: Path) -> TestClient:
     return TestClient(
-        build_asgi_app(handler, app_name="kv-test", object_store=None),
+        build_asgi_app(
+            handler,
+            app_name="kv-test",
+            generated_dir=generated,
+            object_store=None,
+        ),
         raise_server_exceptions=False,
     )
 
@@ -133,20 +140,18 @@ def _host(handler: Handler) -> TestClient:
 _SURFACES = {"worker": _worker, "host": _host}
 
 
-def _post_routes(client: TestClient) -> None:
+def _post_routes(client: TestClient, body: dict[str, Any] = _FLAT_BODY) -> None:
     for route in _ROUTES:
-        response = client.post(f"/workflows/v1/{route}", json=_FLAT_BODY)
+        response = client.post(f"/workflows/v1/{route}", json=body)
         assert response.status_code == 200, (route, response.text)
 
 
-def _start_input(
-    handler: Handler, body: dict[str, Any]
-) -> tuple[_KerberosStartInput, dict[str, Any]]:
-    """POST /start; return the input handed to Temporal and the response body."""
+def _start_input(body: dict[str, Any], generated: Path) -> _FlatStartInput:
+    """POST /start; return the input handed to Temporal."""
 
-    class _KerberosApp(App):
-        async def run(self, input: _KerberosStartInput) -> _KerberosStartOutput:
-            return _KerberosStartOutput()
+    class _FlatApp(App):
+        async def run(self, input: _FlatStartInput) -> _FlatStartOutput:
+            return _FlatStartOutput()
 
     mock_client = MagicMock()
     mock_client.start_workflow = AsyncMock(
@@ -156,11 +161,16 @@ def _start_input(
         "application_sdk.handler.service._get_temporal_client",
         new=AsyncMock(return_value=mock_client),
     ):
-        client = _worker(handler, app_class=_KerberosApp, temporal_host="temporal:7233")
+        client = _worker(
+            _CapturingHandler(),
+            generated,
+            app_class=_FlatApp,
+            temporal_host="temporal:7233",
+        )
         response = client.post("/workflows/v1/start", json=body)
     assert response.status_code == 200, response.text
     (input_data,) = mock_client.start_workflow.await_args.kwargs["args"]
-    return input_data, response.json()
+    return input_data
 
 
 @pytest.fixture
@@ -180,10 +190,10 @@ def _read_legacy(name: str) -> Any:
 
 
 @pytest.fixture
-def kerberos_rebound(unbound_legacy_globals: None) -> None:
+def realm_rebound(unbound_legacy_globals: None) -> None:
     """Rebind the key set exactly as a connector app does."""
     service._CREDENTIAL_KEYS = _read_legacy("_CREDENTIAL_KEYS") | frozenset(  # type: ignore[attr-defined]
-        {"kerberos"}
+        {"realm"}
     )
 
 
@@ -205,159 +215,66 @@ def normalize_wrapped(unbound_legacy_globals: None) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Handler.extra_credential_keys
+# Credential keys from the generated credential form
 # ---------------------------------------------------------------------------
 
 
-class TestExtraCredentialKeys:
-    @pytest.mark.parametrize("surface", sorted(_SURFACES))
-    def test_routes_see_the_extra_key_as_a_credential(self, surface: str) -> None:
-        handler = _KerberosHandler()
-        _post_routes(_SURFACES[surface](handler))
-        for route in _ROUTES:
-            assert "kerberos" in handler.seen[route], route
-            assert "host" in handler.seen[route], route
+class TestCredentialFormKeys:
+    def test_reads_the_top_level_fields_of_the_credential_form(
+        self, generated: Path
+    ) -> None:
+        assert _credential_form_keys(generated) == {
+            "auth-type",
+            "basic",
+            "connector",
+            "connectorType",
+            "gcp-wif",
+            "name",
+        }
+
+    def test_no_generated_tree_has_no_form_keys(self, no_generated: Path) -> None:
+        assert _credential_form_keys(no_generated) == frozenset()
 
     @pytest.mark.parametrize("surface", sorted(_SURFACES))
-    def test_default_handler_keeps_the_sdk_set(self, surface: str) -> None:
+    def test_routes_lift_the_form_field_into_credentials(
+        self, surface: str, generated: Path
+    ) -> None:
         handler = _CapturingHandler()
-        _post_routes(_SURFACES[surface](handler))
+        _post_routes(_SURFACES[surface](handler, generated))
         for route in _ROUTES:
-            assert "kerberos" not in handler.seen[route], route
-            assert "host" in handler.seen[route], route
+            assert "gcp-wif" in handler.seen[route], route
+            assert "authType" in handler.seen[route], route
 
-    def test_sdk_set_is_not_mutated(self) -> None:
-        _post_routes(_worker(_KerberosHandler()))
-        assert "kerberos" not in contracts._CREDENTIAL_KEYS
+    @pytest.mark.parametrize("surface", sorted(_SURFACES))
+    def test_without_a_form_only_the_sdk_keys_are_lifted(
+        self, surface: str, no_generated: Path
+    ) -> None:
+        handler = _CapturingHandler()
+        _post_routes(_SURFACES[surface](handler, no_generated))
+        for route in _ROUTES:
+            assert "gcp-wif" not in handler.seen[route], route
+            assert "authType" in handler.seen[route], route
 
-    def test_a_plain_set_is_accepted(self) -> None:
-        class _SetHandler(_CapturingHandler):
-            extra_credential_keys = {"kerberos"}  # type: ignore[assignment]
+    @pytest.mark.parametrize("surface", sorted(_SURFACES))
+    def test_a_form_field_alone_does_not_make_a_body_a_credential(
+        self, surface: str, generated: Path
+    ) -> None:
+        """``name`` is a form field, but a workflow body can carry it too."""
+        handler = _CapturingHandler()
+        _post_routes(_SURFACES[surface](handler, generated), {"name": "x"})
+        for route in _ROUTES:
+            assert handler.seen[route] == [], route
 
-        handler = _SetHandler()
-        _post_routes(_host(handler))
-        assert "kerberos" in handler.seen["auth"]
+    def test_sdk_set_is_not_mutated(self, generated: Path) -> None:
+        _post_routes(_worker(_CapturingHandler(), generated))
+        assert "gcp-wif" not in contracts._CREDENTIAL_KEYS
 
-    def test_start_strips_only_the_credentials_key(self) -> None:
-        input_data, _ = _start_input(_KerberosHandler(), {**_FLAT_BODY, "name": "x"})
+    def test_start_strips_only_the_credentials_key(self, generated: Path) -> None:
+        input_data = _start_input({**_FLAT_BODY, "name": "x"}, generated)
         # /start deletes ``credentials`` and nothing else, so a flat key the
         # input declares still validates into it.
-        assert input_data.kerberos == _KERBEROS
+        assert input_data.name == "x"
         assert "credentials" not in input_data.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# Handler.prepare_request_body
-# ---------------------------------------------------------------------------
-
-
-class TestPrepareRequestBody:
-    @pytest.mark.parametrize("surface", sorted(_SURFACES))
-    def test_metadata_route_sees_the_prepared_body(self, surface: str) -> None:
-        handler = _LiftingHandler()
-        response = _SURFACES[surface](handler).post(
-            "/workflows/v1/metadata", json=_FLAT_BODY
-        )
-        assert response.status_code == 200, response.text
-        assert handler.metadata_input is not None
-        assert handler.metadata_input.connection_config["legacy-key"] == _LIFTED
-
-    @pytest.mark.parametrize("surface", sorted(_SURFACES))
-    def test_runs_once_per_request(self, surface: str) -> None:
-        handler = _LiftingHandler()
-        _post_routes(_SURFACES[surface](handler))
-        assert len(handler.prepared) == len(_ROUTES)
-
-    def test_sees_a_v2_credentials_object_before_normalization(self) -> None:
-        handler = _LiftingHandler()
-        body = {"credentials": {"host": "h", "extra": {"warehouse": "w"}}}
-        response = _host(handler).post("/workflows/v1/auth", json=body)
-        assert response.status_code == 200, response.text
-        assert handler.prepared == [body]
-        # ...and the handler still gets the normalized pairs.
-        assert set(handler.seen["auth"]) == {"host", "extra.warehouse"}
-
-    def test_start_runs_it(self) -> None:
-        handler = _LiftingHandler()
-        _start_input(handler, {**_FLAT_BODY, "name": "x"})
-        assert len(handler.prepared) == 1
-
-    def test_default_is_identity(self) -> None:
-        body = {"a": 1}
-        assert DefaultHandler().prepare_request_body(body) is body
-
-
-_VALIDATE_PACKAGE = "fnd4688_validate_app"
-#: BigQuery's generated tree, regenerated from tests/unit/handler/fixtures/
-#: bigquery_contract by tests/regen_fixtures.py and used as generated: its
-#: credential form requires extra.project_id for gcp-wif.
-_BIGQUERY_GENERATED = (
-    Path(__file__).parent / "fixtures" / "generated_bigquery_credentials"
-)
-_WIF_EXTRA = {
-    "project_id": "example-project",
-    "service_account_email": "sa@example.invalid",
-    "wif_pool_provider_id": "example-pool",
-    "atlan_oauth_id": "example-client-id",
-    "atlan_oauth_secret": "example-client-secret",
-}
-
-
-@pytest.fixture
-def validate_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    package = tmp_path / _VALIDATE_PACKAGE
-    generated = package / "generated"
-    shutil.copytree(_BIGQUERY_GENERATED, generated)
-    for init in (package, generated, generated / "crawler"):
-        (init / "__init__.py").write_text("")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    try:
-        yield generated
-    finally:
-        for name in [m for m in sys.modules if m.startswith(_VALIDATE_PACKAGE)]:
-            del sys.modules[name]
-
-
-class _LegacyProjectIdHandler(DefaultHandler):
-    """Accepts a legacy top-level ``projectId`` beside a v2 flat credential."""
-
-    def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        if "projectId" not in body:
-            return body
-        rest = {k: v for k, v in body.items() if k != "projectId"}
-        extra = {**(body.get("extra") or {}), "project_id": body["projectId"]}
-        return {**rest, "extra": extra}
-
-
-def _validate(handler: Handler, generated: Path) -> int:
-    client = TestClient(
-        build_asgi_app(
-            handler,
-            app_name="validate-host",
-            app_package=_VALIDATE_PACKAGE,
-            generated_dir=generated,
-            object_store=None,
-        ),
-        raise_server_exceptions=False,
-    )
-    extra = {k: v for k, v in _WIF_EXTRA.items() if k != "project_id"}
-    response = client.post(
-        "/workflows/v1/validate?entrypoint=crawler",
-        json={
-            "credential_guid": "guid-1",
-            "authType": "gcp-wif",
-            "extra": extra,
-            "projectId": _WIF_EXTRA["project_id"],
-        },
-    )
-    return response.status_code
-
-
-def test_validate_on_the_host_runs_prepare_request_body(validate_host: Path) -> None:
-    # The legacy shape misses a field the generated credential form requires...
-    assert _validate(DefaultHandler(), validate_host) == 422
-    # ...and is complete once the handler's hook has moved it into place.
-    assert _validate(_LegacyProjectIdHandler(), validate_host) == 200
 
 
 # ---------------------------------------------------------------------------
@@ -369,8 +286,8 @@ class TestDeprecatedServiceGlobals:
     @pytest.mark.parametrize(
         ("name", "replacement"),
         [
-            ("_CREDENTIAL_KEYS", "Handler.extra_credential_keys"),
-            ("_normalize_credentials", "Handler.prepare_request_body"),
+            ("_CREDENTIAL_KEYS", "generated credential form"),
+            ("_normalize_credentials", "input contract"),
         ],
     )
     def test_reading_warns_and_names_the_replacement(
@@ -387,39 +304,39 @@ class TestDeprecatedServiceGlobals:
         )
 
     def test_key_rebind_still_reaches_every_worker_route(
-        self, kerberos_rebound: None
+        self, realm_rebound: None, generated: Path
     ) -> None:
         handler = _CapturingHandler()
-        _post_routes(_worker(handler))
+        _post_routes(_worker(handler, generated), {**_FLAT_BODY, "realm": "R"})
         for route in _ROUTES:
-            assert "kerberos" in handler.seen[route], route
+            assert "realm" in handler.seen[route], route
+            # ...and the form's keys still apply alongside it.
+            assert "gcp-wif" in handler.seen[route], route
 
     def test_key_rebind_after_the_service_is_built_still_applies(
-        self, unbound_legacy_globals: None
+        self, unbound_legacy_globals: None, generated: Path
     ) -> None:
         handler = _CapturingHandler()
-        client = _worker(handler)
+        client = _worker(handler, generated)
         service._CREDENTIAL_KEYS = _read_legacy("_CREDENTIAL_KEYS") | frozenset(  # type: ignore[attr-defined]
-            {"kerberos"}
+            {"realm"}
         )
-        _post_routes(client)
-        assert "kerberos" in handler.seen["auth"]
+        _post_routes(client, {**_FLAT_BODY, "realm": "R"})
+        assert "realm" in handler.seen["auth"]
 
-    def test_key_rebind_still_reaches_start(self, kerberos_rebound: None) -> None:
-        input_data, _ = _start_input(_CapturingHandler(), {**_FLAT_BODY, "name": "x"})
-        assert input_data.kerberos == _KERBEROS
-
-    def test_key_rebind_logs_the_replacement_once(self, kerberos_rebound: None) -> None:
+    def test_key_rebind_logs_the_replacement_once(
+        self, realm_rebound: None, generated: Path
+    ) -> None:
         service._warned_legacy_rebinds.discard("_CREDENTIAL_KEYS")
         with patch.object(service, "logger") as log:
-            _post_routes(_worker(_CapturingHandler()))
+            _post_routes(_worker(_CapturingHandler(), generated))
         warned = [
             call.args
             for call in log.warning.call_args_list
             if "_CREDENTIAL_KEYS" in call.args
         ]
         assert len(warned) == 1
-        assert "Handler.extra_credential_keys" in warned[0][-1]
+        assert "generated credential form" in warned[0][-1]
 
     def test_binding_back_the_value_read_is_not_a_rebind(
         self, unbound_legacy_globals: None
@@ -428,55 +345,47 @@ class TestDeprecatedServiceGlobals:
         assert service._legacy_rebinds() == {}
 
     def test_wrapper_still_reaches_every_worker_route_and_start(
-        self, normalize_wrapped: list[dict[str, Any]]
+        self, normalize_wrapped: list[dict[str, Any]], generated: Path
     ) -> None:
         handler = _CapturingHandler()
-        _post_routes(_worker(handler))
+        _post_routes(_worker(handler, generated))
         assert len(normalize_wrapped) == len(_ROUTES)
         assert handler.metadata_input is not None
         assert handler.metadata_input.connection_config["legacy-key"] == _LIFTED
-        _start_input(_CapturingHandler(), {**_FLAT_BODY, "name": "x"})
+        _start_input({**_FLAT_BODY, "name": "x"}, generated)
         assert len(normalize_wrapped) == len(_ROUTES) + 1
 
+    def test_wrapper_keeps_the_form_keys(
+        self, normalize_wrapped: list[dict[str, Any]], generated: Path
+    ) -> None:
+        """A wrapper around the original still gets the app's form keys."""
+        handler = _CapturingHandler()
+        _post_routes(_worker(handler, generated))
+        assert normalize_wrapped, "wrapper was not called"
+        for route in _ROUTES:
+            assert "gcp-wif" in handler.seen[route], route
+        assert service._form_credential_keys.get() == frozenset()
+
     def test_wrapper_composes_with_key_rebinding(
-        self, kerberos_rebound: None, normalize_wrapped: list[dict[str, Any]]
+        self,
+        realm_rebound: None,
+        normalize_wrapped: list[dict[str, Any]],
+        generated: Path,
     ) -> None:
         handler = _CapturingHandler()
-        _post_routes(_worker(handler))
-        assert "kerberos" in handler.seen["metadata"]
+        _post_routes(_worker(handler, generated), {**_FLAT_BODY, "realm": "R"})
+        assert "realm" in handler.seen["metadata"]
         assert handler.metadata_input is not None
         assert handler.metadata_input.connection_config["legacy-key"] == _LIFTED
 
-    def test_wrapper_keeps_the_handler_keys(
-        self, normalize_wrapped: list[dict[str, Any]]
-    ) -> None:
-        """A wrapper around the original still gets the handler's extra keys."""
-        handler = _KerberosHandler()
-        _post_routes(_worker(handler))
-        assert normalize_wrapped, "wrapper was not called"
-        for route in _ROUTES:
-            assert "kerberos" in handler.seen[route], route
-        assert service._handler_credential_keys.get() == frozenset()
-
-    def test_handler_keys_compose_with_key_rebinding(
-        self, unbound_legacy_globals: None
-    ) -> None:
-        service._CREDENTIAL_KEYS = _read_legacy("_CREDENTIAL_KEYS") | frozenset(  # type: ignore[attr-defined]
-            {"realm"}
-        )
-        handler = _KerberosHandler()
-        client = _worker(handler)
-        response = client.post(
-            "/workflows/v1/auth", json={**_FLAT_BODY, "realm": "EXAMPLE.COM"}
-        )
-        assert response.status_code == 200, response.text
-        assert {"kerberos", "realm"} <= set(handler.seen["auth"])
-
     def test_host_ignores_rebinds(
-        self, kerberos_rebound: None, normalize_wrapped: list[dict[str, Any]]
+        self,
+        realm_rebound: None,
+        normalize_wrapped: list[dict[str, Any]],
+        generated: Path,
     ) -> None:
         handler = _CapturingHandler()
-        _post_routes(_host(handler))
+        _post_routes(_host(handler, generated), {**_FLAT_BODY, "realm": "R"})
         assert normalize_wrapped == []
         for route in _ROUTES:
-            assert "kerberos" not in handler.seen[route], route
+            assert "realm" not in handler.seen[route], route

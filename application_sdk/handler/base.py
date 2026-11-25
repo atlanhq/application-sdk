@@ -108,44 +108,6 @@ class Handler(ABC):
                 return SqlMetadataOutput(objects=[])
     """
 
-    extra_credential_keys: ClassVar[frozenset[str]] = frozenset()
-    """Top-level request-body keys, beyond the SDK's own, that carry credential material.
-
-    A v2 flat request (``{"host": ..., "password": ..., "kerberos": {...}}``)
-    has no ``credentials`` object; the SDK lifts the keys it knows
-    (``host``, ``port``, ``authType``, ``username``, ``password``,
-    ``connectorType``, ``connectorConfigName``, ``extra``) into
-    ``input.credentials``. Name any other key your connector's credential
-    form sends at the top level here, so it reaches ``input.credentials`` too::
-
-        class HiveHandler(Handler):
-            extra_credential_keys = frozenset({"kerberos"})
-
-    Read on every surface that serves the handler: the worker and the
-    consolidated API host.
-    """
-
-    def prepare_request_body(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Rewrite a raw request body before the SDK normalises its credentials.
-
-        Called once per request on ``/workflows/v1/auth``, ``/check``,
-        ``/metadata``, ``/validate`` and ``/start``, before the body's
-        credentials are converted to ``[{key, value}]`` pairs and the body is
-        validated, so a v2 ``credentials`` object is still a dict. Override it to
-        accept a legacy request shape, for example lifting a key the platform
-        still sends at the top level into the field your input reads::
-
-            class MyHandler(Handler):
-                def prepare_request_body(self, body):
-                    if "metadataTemplateKey" in body and not body.get("object_filter"):
-                        return {**body, "object_filter": body["metadataTemplateKey"]}
-                    return body
-
-        Return a new dict rather than mutating *body*. The default returns
-        *body* unchanged. ``self.context`` is not set here.
-        """
-        return body
-
     @property
     def context(self) -> HandlerContext:
         """Current request context.

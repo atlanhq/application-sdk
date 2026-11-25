@@ -26,9 +26,8 @@ The other differences are the seams a thin package needs:
   (``app`` on the worker, e.g. ``atlan_mysql_api`` on the host);
 * preflight outcome rows go through a :class:`PreflightObserver` — the worker
   passes the preflight gate's emitters, the host logs;
-* the request normalization defaults to :func:`_request_normalizer` over the
-  handler, so an app's ``Handler.extra_credential_keys`` and
-  ``Handler.prepare_request_body`` apply on both surfaces alike.
+* the request normalization is injected (``normalize``): both surfaces pass one
+  built from the app's generated credential forms.
 """
 
 from __future__ import annotations
@@ -75,7 +74,6 @@ from application_sdk.handler.context import (
     SecretStore,
     bind_handler_context,
 )
-from application_sdk.handler.contracts import _CREDENTIAL_KEYS as _SDK_CREDENTIAL_KEYS
 from application_sdk.handler.contracts import (
     AuthInput,
     CheckTier,
@@ -220,37 +218,15 @@ def _http_error_boundary(
         raise HTTPException(status_code=status, detail=detail) from None
 
 
-_RequestNormalizer = Callable[[dict[str, Any]], dict[str, Any]]
-"""Turns a raw request body into the shape the handler inputs validate."""
-
-
-def _request_normalizer(handler: Handler) -> _RequestNormalizer:
-    """The one request normalization for *handler*, built once per surface.
-
-    Applies the handler's :meth:`~application_sdk.handler.base.Handler.prepare_request_body`,
-    then :func:`~application_sdk.handler.contracts.normalize_credentials` with
-    the SDK's credential keys plus the handler's
-    :attr:`~application_sdk.handler.base.Handler.extra_credential_keys`. Every
-    route that reads a request body (``/auth``, ``/check``, ``/metadata``,
-    ``/validate``, ``/start``) runs this, on the worker and the API host alike.
-    """
-    keys = _SDK_CREDENTIAL_KEYS | frozenset(type(handler).extra_credential_keys)
-
-    def normalize(body: dict[str, Any]) -> dict[str, Any]:
-        return normalize_credentials(handler.prepare_request_body(body), keys=keys)
-
-    return normalize
-
-
 def _normalize_preflight_request(
     body: dict[str, Any],
     *,
-    normalize: _RequestNormalizer | None = None,
+    normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Normalize preflight-specific compatibility fields before validation.
 
-    ``normalize`` is the request normalization to apply (``None`` =
-    :func:`normalize_credentials` with the SDK's credential keys).
+    ``normalize`` is the credential normalization to apply (``None`` =
+    :func:`normalize_credentials` with the contracts default key set).
     """
     normalized = (normalize or normalize_credentials)(lift_agent_json(body))
     has_metadata = "metadata" in normalized and normalized["metadata"] is not None
@@ -560,7 +536,7 @@ def register_handler_routes(
     include_app_routers: bool = True,
     warmup_ceiling: float | None = None,
     warmup_probe_timeout: float | None = None,
-    normalize: _RequestNormalizer | None = None,
+    normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> None:
     """Register the auth / check / metadata routes and the 422 contract handler on ``app``.
 
@@ -577,14 +553,16 @@ def register_handler_routes(
         warmup_ceiling: The app's ``preflight_warmup_ceiling_seconds`` (``None``
             for the default). Clamped by the same function the gate uses.
         warmup_probe_timeout: The app's ``preflight_warmup_probe_timeout_seconds``.
-        normalize: The request normalization every route applies to the
-            request body. ``None`` uses :func:`_request_normalizer` over
-            *handler*. The worker passes its own, built the same way, which
-            also honours the deprecated ``service._CREDENTIAL_KEYS`` /
+        normalize: The credential normalization every route applies to the
+            request body. ``None`` (the API host) uses
+            :func:`normalize_credentials` with the contracts default key set.
+            Both surfaces pass one that adds the top-level fields of the
+            app's generated credential forms to that set; the worker's also
+            honours the deprecated ``service._CREDENTIAL_KEYS`` /
             ``service._normalize_credentials`` rebinds until v4.0.0.
     """
     _secret_store = secret_store
-    _normalize = normalize or _request_normalizer(handler)
+    _normalize = normalize or normalize_credentials
     # The warmup tier's two numbers, clamped by the same functions the gate
     # uses so the route and the gate cannot disagree about them.
     _warmup_ceiling, _ = warmup_ceiling_seconds(warmup_ceiling)

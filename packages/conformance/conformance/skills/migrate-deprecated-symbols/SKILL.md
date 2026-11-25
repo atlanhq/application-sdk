@@ -68,8 +68,8 @@ on names that exist in the repo, or on dunders.
 
 A B001 or B008 finding on `application_sdk.handler.service._CREDENTIAL_KEYS`
 or `_normalize_credentials` is a runtime patch, not an import to swap: B010
-reports the same line, and `programs/areas/deprecation.prose.md` (B010) gives
-the `Handler` attribute that replaces it.
+reports the same line, and `programs/areas/deprecation.prose.md` (B010) says
+what replaces it.
 
 `detect` does not scan `tests/`, but test code breaks on the same SDK
 changes. Find those sites yourself and add them to the inventory:

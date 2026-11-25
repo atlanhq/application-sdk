@@ -45,7 +45,7 @@ def test_b010_fires_on_the_credential_keys_rebind() -> None:
     assert [f.rule_id for f in findings] == ["B010"]
     message = findings[0].message
     assert "application_sdk.handler.service._CREDENTIAL_KEYS" in message
-    assert "extra_credential_keys" in message
+    assert "generated credential form" in message
 
 
 def test_b010_fires_on_the_normalize_wrapper_rebind() -> None:
@@ -68,7 +68,7 @@ def test_b010_fires_on_the_normalize_wrapper_rebind() -> None:
     assert [f.rule_id for f in findings] == ["B010"]
     message = findings[0].message
     assert "application_sdk.handler.service._normalize_credentials" in message
-    assert "prepare_request_body" in message
+    assert "input contract" in message
 
 
 # ── the other rebind forms ──────────────────────────────────────────────────

@@ -650,7 +650,7 @@ curl -s 'http://localhost:8000/workflows/v1/manifest?entrypoint=mine-queries'
 
 If any endpoint returns 500, check the app terminal for the traceback. Common issues:
 - Handler not discovered → import the handler class in the App module
-- Credential key missing from `input.credentials` → declare it in the handler's `extra_credential_keys`; never rebind `application_sdk.handler.service` globals (B010)
+- Credential key missing from `input.credentials` → declare it as a top-level field of the credential form in `contract/app.pkl` and regenerate; never rebind `application_sdk.handler.service` globals (B010)
 - Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
 
 ### 6e — Start a workflow run

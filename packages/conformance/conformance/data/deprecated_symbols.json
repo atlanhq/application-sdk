@@ -1623,7 +1623,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "_CREDENTIAL_KEYS is deprecated; use application_sdk.handler.base.Handler.extra_credential_keys \u2014 declare the extra keys on the app's Handler subclass, which every surface reads; rebinding this module global reaches only the worker. Will be removed in v4.0.0.",
+      "message": "_CREDENTIAL_KEYS is deprecated; use the app's generated credential form (contract/app.pkl) \u2014 every top-level field the form declares is now a credential key on every surface, so drop the rebind. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.handler.service",
       "removal_version": "4.0.0",
@@ -1632,7 +1632,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "_normalize_credentials is deprecated; use application_sdk.handler.base.Handler.prepare_request_body \u2014 override it on the app's Handler subclass to rewrite the request body before credential normalization; rebinding this module global reaches only the worker. Will be removed in v4.0.0.",
+      "message": "_normalize_credentials is deprecated; use a field the entry point's input contract declares \u2014 send the field the input reads; a legacy request shape the contract cannot express is a gap to raise with the SDK, not a request to rewrite. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.handler.service",
       "removal_version": "4.0.0",

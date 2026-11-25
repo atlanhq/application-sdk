@@ -399,18 +399,18 @@ human audit):
   something it imported from `application_sdk` (a module global or a class
   attribute), so its behaviour depends on the SDK reading that exact name in
   every process that serves the app.  The finding names the rebound path and,
-  where one exists, its public replacement.  The two known cases: a rebind of
-  `application_sdk.handler.service._CREDENTIAL_KEYS` becomes
-  `extra_credential_keys = frozenset({...})` on the app's `Handler` subclass
-  (only the app's extra keys, not the SDK's), and a wrapper bound to
-  `service._normalize_credentials` becomes an override of
-  `Handler.prepare_request_body(self, body)`.  That hook runs *before*
-  credential normalization, so a wrapper that read the original body keeps its
-  logic and drops the call to the original; a wrapper that read the
-  normalized `credentials` pairs must read the v2 `credentials` dict or flat
-  keys instead.  Delete the patch, its `try/except` guard and the module
-  import together.  Target shape: `atlan-openapi-app` `app/handler.py`
-  customises behaviour only on its handler subclass.
+  where one exists, what replaces it.  The two known cases: a rebind of
+  `application_sdk.handler.service._CREDENTIAL_KEYS` is deleted outright,
+  because the SDK lifts every top-level field of the app's generated credential
+  form into the credentials (check the extra key is a top-level property of the
+  credential form `contract/app.pkl` generates; if it is not, it belongs there,
+  not in code).  A wrapper bound to `service._normalize_credentials` is a
+  legacy request shape: the brief says which fields it rewrites, and the fix is
+  for the caller to send the fields the input contract declares, or a gap
+  raised with the SDK.  Do not move the rewrite elsewhere in the app.  Delete
+  the patch, its `try/except` guard and the module import together.  Target
+  shape: `atlan-openapi-app` `app/handler.py` customises behaviour only on its
+  handler subclass.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when

@@ -765,8 +765,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "cover this: it reports private names only in some import shapes "
             "(not from application_sdk.handler import service), and a rebind of "
             "a public name is the same hazard. WARN rather than BLOCK because the "
-            "fix is app-side and each known patch has a public replacement "
-            "(Handler.extra_credential_keys, Handler.prepare_request_body)."
+            "fix is app-side: the SDK now reads an app's extra credential keys "
+            "from its generated credential form, so the key-set patch can simply "
+            "go, and the wrapper patch is a request shape to fix at its source."
         ),
         short_description=(
             "Rebinds or deletes an attribute of something imported from "
@@ -794,14 +795,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "undo the change when the test ends; relative imports and imports of\n"
             "the app's own packages.\n"
             "\n"
-            "**Remediation.**  Use the SDK's public extension point.  For the two\n"
-            "known patches: declare extra v2 credential keys as\n"
-            "``extra_credential_keys`` on the app's ``Handler`` subclass instead of\n"
-            "rebinding ``service._CREDENTIAL_KEYS``, and override\n"
-            "``Handler.prepare_request_body`` instead of wrapping\n"
-            "``service._normalize_credentials``.  Both reach the worker and the\n"
-            "consolidated API host.  Where no extension point exists, raise the\n"
-            "gap with the SDK and say so in the suppression:\n"
+            "**Remediation.**  For the two known patches: delete a rebind of\n"
+            "``service._CREDENTIAL_KEYS`` (the SDK lifts every top-level field of\n"
+            "the app's generated credential form into the credentials, on the\n"
+            "worker and the API host alike), and replace a wrapper bound to\n"
+            "``service._normalize_credentials`` by sending the fields the input\n"
+            "contract declares.  Where the SDK offers no supported way to get the\n"
+            "behaviour, raise the gap with the SDK and say so in the suppression:\n"
             "``# conformance: ignore[B010] no public hook — tracked in <id>``.\n"
         ),
         remediation_reference=RemediationReference(

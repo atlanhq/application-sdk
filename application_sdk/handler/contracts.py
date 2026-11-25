@@ -269,7 +269,10 @@ _CREDENTIAL_KEYS = frozenset(
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def normalize_credentials(
-    body: dict[str, Any], *, keys: Collection[str] | None = None
+    body: dict[str, Any],
+    *,
+    keys: Collection[str] | None = None,
+    extra_keys: Collection[str] = (),
 ) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
 
@@ -290,12 +293,16 @@ def normalize_credentials(
     body (including format 3's flat keys) is kept as sent.
 
     ``keys`` is the set of v2 flat top-level keys treated as credential
-    material; ``None`` means :data:`_CREDENTIAL_KEYS`. The handler routes pass
-    those plus the app's ``Handler.extra_credential_keys`` (e.g. ``kerberos``).
+    material; ``None`` means :data:`_CREDENTIAL_KEYS`. A body carrying any of
+    them is a format-3 credential. ``extra_keys`` are lifted with them once a
+    body is one, but never make it one: the handler routes pass the top-level
+    fields of the app's generated credential form (``kerberos``, ``jdbcUrl``),
+    which include names as generic as ``name`` that a workflow body can carry.
 
     Returns the body with credentials normalized to v3 array format.
     """
     credential_keys = _CREDENTIAL_KEYS if keys is None else frozenset(keys)
+    lifted_keys = credential_keys | frozenset(extra_keys)
     creds = body.get("credentials")
 
     # Already v3 array format — no conversion needed
@@ -312,7 +319,7 @@ def normalize_credentials(
 
     # Format 3: flat top-level keys (detect by presence of known credential keys)
     if creds is None and credential_keys & body.keys():
-        flat_creds = {k: body[k] for k in list(body.keys()) if k in credential_keys}
+        flat_creds = {k: body[k] for k in list(body.keys()) if k in lifted_keys}
         logger.info(
             "Converting v2 flat top-level credentials to v3 list, keys=%s",
             list(flat_creds.keys()),

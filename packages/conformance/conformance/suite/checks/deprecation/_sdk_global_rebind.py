@@ -53,9 +53,9 @@ What is not flagged
 Tier
 ----
 
-WARN, not BLOCK: the two known patches have a public replacement
-(``Handler.extra_credential_keys``, ``Handler.prepare_request_body``) and the
-fix is app-side.
+WARN, not BLOCK: the fix is app-side. The key-set patch needs no replacement
+(the SDK now reads an app's extra credential keys from its generated credential
+form); the wrapper patch is a request shape to fix at its source.
 """
 
 from __future__ import annotations
@@ -74,12 +74,14 @@ _SDK_ROOT = "application_sdk"
 #: Rebinds with a known public replacement, keyed by the dotted path rebound.
 _REPLACEMENTS: dict[str, str] = {
     "application_sdk.handler.service._CREDENTIAL_KEYS": (
-        "declare the extra keys as `extra_credential_keys` on the app's "
-        "Handler subclass"
+        "delete the rebind: the SDK lifts every top-level field of the app's "
+        "generated credential form (contract/app.pkl) into the credentials, on "
+        "the worker and the API host alike"
     ),
     "application_sdk.handler.service._normalize_credentials": (
-        "override `prepare_request_body` on the app's Handler subclass to "
-        "rewrite the request body before credential normalization"
+        "send the fields the entry point's input contract declares; a legacy "
+        "request shape the contract cannot express is a gap to raise with the "
+        "SDK, not a request body to rewrite in the app"
     ),
 }
 
