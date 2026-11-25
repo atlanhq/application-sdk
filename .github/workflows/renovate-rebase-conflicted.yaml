@@ -8,6 +8,10 @@ name: Rebase conflicted Renovate PRs
 # (two releases racing, a replay that could not run) within one tick instead of
 # up to four hours.
 #
+# Hourly (FND-4674). It was every 15 minutes. A week of run history
+# (2026-11-18..25, about 300 sampled runs) found a conflicted PR in about 6% of
+# ticks. An hour is still well inside the four-hour sweep it backstops.
+#
 # Cost per tick: one GraphQL search on the fleet App's budget, plus two run
 # listings on this repo's GITHUB_TOKEN. A dispatch is skipped while any
 # renovate.yaml run is queued or running, so scoped runs never pile up on the
@@ -17,8 +21,9 @@ name: Rebase conflicted Renovate PRs
 
 on:
   schedule:
-    # :07/:22/:37/:52 — off the :00 sweep and the :20 dashboard scan.
-    - cron: "7,22,37,52 * * * *"
+    # :37 — off the :00 sweep and the :20 dashboard scan, and late enough that
+    # the ~15-minute :00 sweep has finished (a tick skips while it runs).
+    - cron: "37 * * * *"
   workflow_dispatch:
 
 permissions:

@@ -890,6 +890,19 @@ def test_skipped_source_runs_do_not_start_a_sweep():
     assert "github.event_name != 'workflow_run'" in gate
 
 
+def test_the_stale_threshold_covers_a_quota_window_plus_two_cron_ticks():
+    """A deferred approval is posted by the first cron tick after `atlan-ci`'s
+    hourly quota resets. If the threshold is shorter than one window plus two
+    ticks, a reset that lands just after a tick reds a verdict the next tick
+    was about to post. Slowing the cron without raising the threshold breaks
+    this."""
+    (schedule,) = triggers(load_workflow("review-approval-reconcile.yml"))["schedule"]
+    minute = schedule["cron"].split()[0]
+    assert minute.startswith("*/"), f"expected a */N minute field, got {minute!r}"
+    interval = int(minute.removeprefix("*/"))
+    assert reconcile.DEFAULT_STALE_AFTER_MINUTES >= 60 + 2 * interval
+
+
 def test_the_workflow_no_longer_passes_the_grace_flags():
     text = (WORKFLOWS / "review-approval-reconcile.yml").read_text()
     assert "--event-name" not in text and "--min-age" not in text

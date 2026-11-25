@@ -71,12 +71,12 @@ Deferral vs failure
 -------------------
 "Quota spent" is a DEFERRAL, not a failure: the window resets hourly and the
 next tick after that posts the approval. It is annotated loudly and lands in the
-job summary, but the run stays green — reddening once every ten minutes for an
+job summary, but the run stays green — reddening once every tick for an
 hour trains everyone to ignore precisely the annotation that matters when the
 problem does not clear.
 
 A verdict that has been unapproved for longer than `--stale-after-minutes`
-(default 90, above one full quota window plus a couple of intervals) has watched
+(default 120, one full quota window plus two 30-minute cron intervals) has watched
 a reset come and go without recovering. That is not self-healing, so it reds the
 run.
 
@@ -122,10 +122,12 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 # Past this, an unapproved verdict is no longer explainable as "waiting for the
 # next quota window". `atlan-ci`'s primary quota resets hourly, so a verdict that
-# has outlived a full window plus a couple of cron intervals has seen at least
-# one reset come and go without recovering — that is a human's problem, not a
-# self-healing one, and the run goes red.
-DEFAULT_STALE_AFTER_MINUTES = 90
+# has outlived a full window plus two cron intervals has seen at least one
+# reset come and go without recovering — that is a human's problem, not a
+# self-healing one, and the run goes red. The cron is every 30 minutes, so 60 +
+# 2 * 30; at 90 a reset just after a tick could red a verdict the next tick was
+# about to post.
+DEFAULT_STALE_AFTER_MINUTES = 120
 
 # Ceiling on each `gh` call this script makes itself. A stalled CLI would
 # otherwise hold the run until the job's own timeout, skipping the report

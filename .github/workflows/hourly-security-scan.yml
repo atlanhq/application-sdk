@@ -1,8 +1,8 @@
-# NOTE: the schedule is HOURLY (cron below). The filename "daily-security-scan.yml"
-# is retained deliberately — it is referenced by exact name in
-# reconcile_allowlist.py and vuln_triage/effects.py (`gh run list --workflow
-# daily-security-scan.yml`); renaming would break those lookups and the prior-run
-# history they page through. The display name reflects the real cadence.
+# Hourly. Named daily-security-scan.yml until FND-4674; renamed to match its
+# cadence. reconcile_allowlist.py, vuln_triage/effects.py and
+# vuln-reconcile-on-release.yml look it up by this exact filename
+# (`gh run list --workflow hourly-security-scan.yml`), so rename them together.
+# Runs from before the rename stay under the old workflow and are not read.
 name: Hourly Security Scan — app-runtime-base + SDK Python Deps
 
 on:

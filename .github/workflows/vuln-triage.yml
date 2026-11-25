@@ -9,7 +9,7 @@ run-name: "vuln triage ${{ inputs.selftest && 'SELFTEST' || inputs.ticket }}${{ 
 # VPN, no sandbox. A run costs one short runner job and $0 in model spend; the rover cost
 # ~$3.40 in model spend per ticket and needed Twingate/GlobalProtect to reach mothership.
 #
-# Triggered by daily-security-scan.yml (dispatch_vuln_triage.py) once per newly filed
+# Triggered by hourly-security-scan.yml (dispatch_vuln_triage.py) once per newly filed
 # ticket, passing that scan's run id so the triage reads exactly the artifacts that
 # produced the ticket. Manual dispatch re-runs one ticket (scan_run_id empty = the newest
 # successful scan).
