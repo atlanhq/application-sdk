@@ -14,7 +14,7 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
-from application_sdk.common._env import env_bool, env_float, env_int
+from application_sdk.common._env import env_bool, env_float, env_int, env_str
 from application_sdk.constants import load_shutdown_budget
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -209,13 +209,13 @@ def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
     # Prefer TEMPORAL_HOST (v3). Fall back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2).
-    _v2_host = os.environ.get("ATLAN_WORKFLOW_HOST", "")
-    _v2_port = os.environ.get("ATLAN_WORKFLOW_PORT", "7233")
+    _v2_host = env_str("ATLAN_WORKFLOW_HOST", "")
+    _v2_port = env_str("ATLAN_WORKFLOW_PORT", "7233")
     _v2_default = f"{_v2_host}:{_v2_port}" if _v2_host else "localhost:7233"
     return ExecutionSettings(
-        host=os.environ.get("TEMPORAL_HOST", _v2_default),
-        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
-        task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "application-sdk"),
+        host=env_str("TEMPORAL_HOST", _v2_default),
+        namespace=env_str("TEMPORAL_NAMESPACE", "default"),
+        task_queue=env_str("TEMPORAL_TASK_QUEUE", "application-sdk"),
         max_concurrent_activities=_load_max_concurrent_activities(),
         graceful_shutdown_timeout_seconds=_load_graceful_shutdown_timeout(),
         default_versioning_behavior=_load_versioning_behavior(

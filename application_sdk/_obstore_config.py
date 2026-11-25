@@ -76,9 +76,25 @@ if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
     from obstore.store import ClientConfig, ObjectStore, RetryConfig
 
+from application_sdk._env import env_duration, env_int, env_str
 from application_sdk._logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _report(message: str) -> None:
+    """Log a rejected env value the way :mod:`application_sdk.common._env` does.
+
+    This module is in the API host's core install, which does not carry
+    ``application_sdk.common``, so it reads through :mod:`application_sdk._env`
+    and reports to its own logger.
+    """
+    logger.warning("Ignoring env var: %s", message)
+
+
+def _duration(key: str, default: str) -> str:
+    return env_duration(key, default, report=_report)
+
 
 # Overall-request cap: from connect to last byte, so it scales with file size,
 # not throughput. Kept generous — ``read_timeout`` below is the real liveness
@@ -140,20 +156,23 @@ def obstore_client_options() -> ClientConfig:
         ``client_options=`` to S3Store / GCSStore / AzureStore constructors.
         Always contains at least the SDK defaults — the dict is never empty.
     """
+    # Unset or empty keeps the default, and a value obstore cannot parse as a
+    # duration warns and keeps it too: passed through, either one fails every
+    # store construction with "failed to parse ... as Duration".
     opts: ClientConfig = {
-        "timeout": os.getenv("ATLAN_OBSTORE_TIMEOUT", _DEFAULT_TIMEOUT),
-        "read_timeout": os.getenv("ATLAN_OBSTORE_READ_TIMEOUT", _DEFAULT_READ_TIMEOUT),
-        "connect_timeout": os.getenv(
+        "timeout": _duration("ATLAN_OBSTORE_TIMEOUT", _DEFAULT_TIMEOUT),
+        "read_timeout": _duration("ATLAN_OBSTORE_READ_TIMEOUT", _DEFAULT_READ_TIMEOUT),
+        "connect_timeout": _duration(
             "ATLAN_OBSTORE_CONNECT_TIMEOUT", _DEFAULT_CONNECT_TIMEOUT
         ),
-        "pool_idle_timeout": os.getenv(
+        "pool_idle_timeout": _duration(
             "ATLAN_OBSTORE_POOL_IDLE_TIMEOUT", _DEFAULT_POOL_IDLE_TIMEOUT
         ),
-        "http2_keep_alive_timeout": os.getenv(
+        "http2_keep_alive_timeout": _duration(
             "ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT",
             _DEFAULT_HTTP2_KEEP_ALIVE_TIMEOUT,
         ),
-        "user_agent": os.getenv("ATLAN_OBSTORE_USER_AGENT", _default_user_agent()),
+        "user_agent": env_str("ATLAN_OBSTORE_USER_AGENT", _default_user_agent()),
     }
     pool_max = os.getenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST")
     if pool_max:
@@ -187,27 +206,19 @@ def obstore_retry_config() -> RetryConfig | None:
     from datetime import timedelta  # noqa: PLC0415
 
     cfg: RetryConfig = {}
-    raw_max = os.getenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES")
-    if raw_max:
-        try:
-            cfg["max_retries"] = int(raw_max)
-        except ValueError:
-            logger.warning(
-                "Invalid ATLAN_OBSTORE_RETRY_MAX_RETRIES=%r — using obstore default",
-                raw_max,
-                exc_info=True,
-            )
+    # Unset means obstore's own default. A malformed or negative value warns
+    # and also keeps obstore's default.
+    max_retries = env_int(
+        "ATLAN_OBSTORE_RETRY_MAX_RETRIES", None, minimum=0, report=_report
+    )
+    if max_retries is not None:
+        cfg["max_retries"] = max_retries
 
-    raw_timeout = os.getenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS")
-    if raw_timeout:
-        try:
-            cfg["retry_timeout"] = timedelta(seconds=int(raw_timeout))
-        except ValueError:
-            logger.warning(
-                "Invalid ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS=%r — using obstore default",
-                raw_timeout,
-                exc_info=True,
-            )
+    retry_timeout = env_int(
+        "ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", None, minimum=0, report=_report
+    )
+    if retry_timeout is not None:
+        cfg["retry_timeout"] = timedelta(seconds=retry_timeout)
 
     return cfg or None
 

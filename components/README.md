@@ -7,6 +7,20 @@ This folder contains Dapr PaaS components for various services.
   (`application_sdk.dev._dapr`) and invoked directly — `uv run poe start-dapr`
   resolves and launches it for you.
 
+## Where these files are used
+This folder ships inside the `atlan-application-sdk` wheel as
+`application_sdk/components/`. Consumer apps copy it into their own
+`components/` (their `download-components` poe task), and `uv run poe start-dapr`
+in this repo points `daprd` at it.
+
+It is **not** the set the SDK generates for itself. The embedded runtime
+(`application_sdk.dev._dapr`), the external-runtime path of the
+`connector-integration-tests` action, and the `sdr-e2e` action all render
+their components from `application_sdk/dev/_dapr_components.py`. Those use an
+in-memory state store; this folder uses SQLite so local state survives a
+restart. The objectstore and eventstore roots are shared with the generated
+set, and `tests/unit/dev/test_dapr_components.py` enforces that.
+
 ## Local Development
 1. State store - Uses SQLite as the state store at `./local/dapr/statestore.db`
 2. Object store - Uses local file system at `./local/dapr/objectstore`

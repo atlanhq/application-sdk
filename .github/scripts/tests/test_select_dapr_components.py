@@ -3,7 +3,7 @@
 The module under test lives alongside the sdr-e2e composite action (not
 under .github/scripts/) because it's invoked via the action's
 `${{ steps.action_root.outputs.path }}` — the same co-location the
-composite already uses for test-config.yaml.tmpl and components/*.yaml, so
+composite already uses for test-config.yaml.tmpl, so
 it resolves correctly whether the action is referenced remotely
 (`uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main`) or locally.
 The test itself stays under .github/scripts/tests/ so `scripts-tests.yaml`

@@ -66,6 +66,8 @@ from typing import Any
 
 import orjson
 
+from application_sdk._env import env_str
+
 # daprd (logrus) log levels → AtlanLoggerAdapter method names.
 _LEVEL_TO_METHOD = {
     "debug": "debug",
@@ -98,9 +100,7 @@ _ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK = "info"
 def _app_log_level_name() -> str:
     """The app level name the SDK will resolve, mirroring ``constants.LOG_LEVEL``
     without importing it (that import is what fixes the sinks)."""
-    return (
-        os.environ.get("ATLAN_LOG_LEVEL") or os.environ.get("LOG_LEVEL", "INFO")
-    ).upper()
+    return env_str("ATLAN_LOG_LEVEL", env_str("LOG_LEVEL", "INFO")).upper()
 
 
 def _forwarder_log_level() -> str | None:
@@ -118,9 +118,7 @@ def _forwarder_log_level() -> str | None:
     — this code supervises daprd.
     """
     dapr_method = _LEVEL_TO_METHOD.get(
-        os.environ.get("DAPR_LOG_LEVEL", _ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK)
-        .strip()
-        .lower()
+        env_str("DAPR_LOG_LEVEL", _ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK).strip().lower()
     )
     app_levelno = logging.getLevelNamesMapping().get(_app_log_level_name())
     if dapr_method is None or app_levelno is None:
