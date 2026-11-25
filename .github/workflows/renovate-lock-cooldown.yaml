@@ -143,9 +143,7 @@ jobs:
       # Every one of them exists on every run, so a missing file is an error,
       # not something to upload around.
       - name: Upload the bounded locks
-        id: upload-locks
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: bounded-locks
           path: |
@@ -154,29 +152,6 @@ jobs:
             packages/conformance/conformance/data/relationship_directions.json
           if-no-files-found: error
           retention-days: 1
-          overwrite: true
-
-      # Same retry shape as conformance-reusable.yaml's SARIF uploads: a wait,
-      # then a DISTINCT name (a failed finalize holds the first name for the
-      # run), which `publish` picks up by `bounded-locks*` glob. No
-      # continue-on-error: a second failure fails here, not as a confusing
-      # missing-artifact error in `publish`.
-      - name: Wait before the upload retry
-        if: steps.upload-locks.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload the bounded locks (retry)
-        if: steps.upload-locks.outcome == 'failure'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: bounded-locks-retry
-          path: |
-            uv.lock
-            packages/conformance/uv.lock
-            packages/conformance/conformance/data/relationship_directions.json
-          if-no-files-found: error
-          retention-days: 1
-          overwrite: true
 
   publish:
     name: Commit and push the bounded locks
@@ -223,28 +198,11 @@ jobs:
       # Outside the checkout, so the artifact's paths cannot overwrite anything
       # in it except through the driver's allowlisted copy.
       - name: Download the bounded locks
-        id: download-locks
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        continue-on-error: true
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
         with:
           # Glob, not the bare name: the upload's retry lands under
           # `bounded-locks-retry`. Both uploads overwrite, so exactly one is live.
           pattern: bounded-locks*
-          merge-multiple: true
-          path: ${{ runner.temp }}/bounded-locks
-
-      - name: Wait before the download retry
-        if: steps.download-locks.outcome == 'failure'
-        run: sleep 20
-
-      # No continue-on-error: a second failure fails the job rather than
-      # committing nothing.
-      - name: Download the bounded locks (retry)
-        if: steps.download-locks.outcome == 'failure'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: bounded-locks*
-          merge-multiple: true
           path: ${{ runner.temp }}/bounded-locks
 
       # Stdlib only, on the runner's python3: no resolver, no install, nothing

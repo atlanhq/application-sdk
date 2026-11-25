@@ -94,6 +94,10 @@ def _steps(job: dict[str, Any]) -> list[dict[str, Any]]:
     return job["steps"]
 
 
+UPLOAD_RETRY = "atlanhq/application-sdk/.github/actions/upload-artifact-retry"
+DOWNLOAD_RETRY = "atlanhq/application-sdk/.github/actions/download-artifact-retry"
+
+
 def _uses(job: dict[str, Any], action: str) -> list[dict[str, Any]]:
     return [s for s in _steps(job) if str(s.get("uses", "")).startswith(action + "@")]
 
@@ -373,22 +377,14 @@ def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     out = "$RUNNER_TEMP/gate-fact/connector-reviewer-gate.json"
     assert f'--out "{out}"' in fact["run"]
     assert '--base-checkout "$GITHUB_WORKSPACE/gate-base"' in fact["run"]
-    uploads = _uses(gate_job, "actions/upload-artifact")
-    assert len(uploads) == 2
-    assert all(u.get("continue-on-error") is True for u in uploads)
-    assert [u["with"]["name"] for u in uploads] == [
-        "connector-reviewer-gate",
-        "connector-reviewer-gate-retry",
-    ]
+    [upload] = _uses(gate_job, UPLOAD_RETRY)
+    assert upload.get("continue-on-error") is True
+    assert upload["with"]["name"] == "connector-reviewer-gate"
     assert job["needs"] == "gate"
     assert job["if"] == "${{ !cancelled() }}"
-    download, retry = _uses(job, "actions/download-artifact")
-    for step in (download, retry):
-        assert step.get("continue-on-error") is True
-        assert step["with"] == download["with"]
+    [download] = _uses(job, DOWNLOAD_RETRY)
+    assert download.get("continue-on-error") is True
     assert download["with"]["pattern"] == "connector-reviewer-gate*"
-    assert download["with"]["merge-multiple"] is True
-    assert retry["if"] == "steps.download-gate.outcome == 'failure'"
     review_steps = _steps(job)
     [review] = [s for s in review_steps if s.get("name") == "Review"]
     assert review_steps.index(download) < review_steps.index(review)
@@ -559,9 +555,7 @@ def test_the_review_step_times_out_before_the_job(job: dict[str, Any]) -> None:
 def test_the_run_report_is_uploaded_even_when_the_review_fails(
     job: dict[str, Any],
 ) -> None:
-    uploads = _uses(job, "actions/upload-artifact")
-    assert len(uploads) == 2
+    uploads = _uses(job, UPLOAD_RETRY)
+    assert len(uploads) == 1
     assert all(str(u["if"]).startswith("always()") for u in uploads)
     assert all(u.get("continue-on-error") is True for u in uploads)
-    names = [u["with"]["name"] for u in uploads]
-    assert names[0] != names[1], "a retry must use a different artifact name"

@@ -521,55 +521,20 @@ jobs:
             --output /tmp/trivy_results.json \
             "$IMAGE"
 
-      # `upload-artifact` classifies the artifact service's finalize 403 as
-      # non-retryable and fails on the first occurrence, even though the bytes
-      # already landed and the next attempt normally succeeds. That failed the
-      # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once.
-      #
-      # The retry is NOT continue-on-error. It was, on the reasoning that the
-      # gate downloads with continue-on-error so nothing needed to fail here.
-      # But the gate fails anyway when the results are absent, and a green job
-      # here then told it the artifact HAD been published — so it blamed the
-      # download and advised re-running itself, which could never find an
-      # artifact this run never created. This job's result has to be a truthful
-      # proxy for "the results exist", because `check_allowlist.py` reads it as
-      # exactly that.
+      # NOT continue-on-error. It was once, on the reasoning that the gate
+      # downloads with continue-on-error so nothing needed to fail here. But the
+      # gate fails anyway when the results are absent, and a green job here then
+      # told it the artifact HAD been published, so it blamed the download and
+      # advised re-running itself, which could never find an artifact this run
+      # never created. This job's result has to be a truthful proxy for "the
+      # results exist", because `check_allowlist.py` reads it as exactly that.
       - name: Upload Trivy results
         id: upload-trivy
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: trivy-results
           path: /tmp/trivy_results.json
           retention-days: 7
-          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
-          # a run, so re-running a failed job would otherwise 409 here and burn the
-          # retry on a conflict that has nothing to do with a finalize failure. It is
-          # also what holds the invariant every consumer of this upload globs on:
-          # at most ONE live artifact ever matches `<name>*`.
-          overwrite: true
-
-      # A finalize 403 comes from an intermediary having a moment, and the
-      # retry runs about a second later — well inside the same window. Wait
-      # it out, so the two attempts fail independently or not at all.
-      - name: Wait before the upload retry
-        if: steps.upload-trivy.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload Trivy results (retry)
-        if: steps.upload-trivy.outcome == 'failure'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
-          # failure leaves an unfinalized record holding that name for the whole
-          # run. The list API cannot see it, so `overwrite` cannot clear it and
-          # CreateArtifact 409s — a same-named retry could never have worked.
-          # Consumers resolve this artifact by `<name>*` glob, not exact name.
-          name: trivy-results-retry
-          path: /tmp/trivy_results.json
-          retention-days: 7
-          overwrite: true
 
       # ── Endor Labs container scan (report-only) ──────────────────────────────
       #
@@ -742,14 +707,13 @@ jobs:
           path: _sdk
           token: ${{ steps.app-token.outputs.token }}
 
-      # Both attempts stay continue-on-error: this job is the required check, so
+      # continue-on-error: this job is the required check, so
       # a raw `Unable to download artifact(s)` here would be the whole story a
       # reader gets. Let the allowlist check below fail instead — it is handed
       # the upstream outcomes and can say which job actually broke.
       - name: Download Trivy results
-        id: download-trivy
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
         with:
           # Glob, not the bare name: the upload's retry attempt lands under
           # `trivy-results-retry`. It resolves to ONE artifact because both
@@ -757,24 +721,6 @@ jobs:
           # failed job could leave both names live, and merge-multiple would
           # flatten two trivy_results.json files in undefined order.
           pattern: trivy-results*
-          merge-multiple: true
-          path: /tmp
-
-      # Also gated on the scan having succeeded. Absent results are the NORMAL
-      # outcome when it did not, and there the first attempt has already told
-      # the truth — retrying would only add 20s of sleep to every genuinely
-      # broken run before the gate gets to say what broke.
-      - name: Wait before the download retry
-        if: steps.download-trivy.outcome == 'failure' && needs.build.result == 'success'
-        run: sleep 20
-
-      - name: Download Trivy results (retry)
-        if: steps.download-trivy.outcome == 'failure' && needs.build.result == 'success'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        continue-on-error: true
-        with:
-          pattern: trivy-results*
-          merge-multiple: true
           path: /tmp
 
       - name: Check against allowlist

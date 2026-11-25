@@ -1,59 +1,26 @@
-"""Cross-file guard: artifact uploads on gating paths must retry.
+"""Cross-file guard: artifact uploads go through `upload-artifact-retry`.
 
 `actions/upload-artifact` treats the artifact service's finalize 403 as
 non-retryable and fails the step on the first occurrence, even though the bytes
 already landed. On a gating path that fails the job, fails the aggregate gate,
-and ejects the merge-queue entry — a full CI run wasted on a flake that a second
-attempt would have absorbed.
+and ejects the merge-queue entry. The retry that absorbs it lives in one place,
+`.github/actions/upload-artifact-retry`, and docs/standards/ci.md ("Artifacts
+move through the retry composites") explains each of its rules.
 
-This guard reads the workflow and composite-action YAML directly rather than
-trusting a checked-in list, so a newly added upload step fails here instead of
-silently reintroducing the flake. It is the same shape as the other cross-file
-guards in this suite that assert a property of the YAML outside .github/scripts/.
+This guard pins the composite's rules once, then checks that nothing in
+.github/ calls `actions/upload-artifact` directly except:
 
-(Deliberately avoids naming those sibling guards' scripts: this suite discovers
-call sites by grepping .github/ for a script's name, and a prose mention here
-would register this file as one of its callers.)
+* the composite itself;
+* `EXEMPT` uploads, each with the reason it needs no retry;
+* `AWAITING_COMPOSITE` files, whose hand-written first-attempt/retry pairs are
+  checked against the same rules until they move to the composite.
 
-What counts as a retry
-----------------------
-Structure, never the step's name. An earlier version of this guard classified any
-upload step whose name contained "(retry)" as a retry and exempted it from every
-assertion — so a *first* attempt that happened to carry that substring vanished
-from validation, and the pairing check only asked whether *some* step in the file
-had an outcome guard. Both let a genuinely unretried upload keep the guard green.
+It reads the workflow and composite-action YAML directly rather than trusting a
+checked-in list, so a newly added direct upload fails here.
 
-Here a retry is an `actions/upload-artifact` step whose `if:` is guarded on
-`steps.<id>.outcome == 'failure'` where `<id>` is another upload step **in the
-same job or composite**, and which uploads the same path under the first
-attempt's name plus `-retry`. That is checked, not assumed: a companion step
-that guards on the right outcome but uploads something else, or is not an upload
-at all, does not satisfy the pairing.
-
-Why the retry must NOT reuse the first attempt's name
------------------------------------------------------
-It was written that way originally, with `overwrite: true` believed to clear
-whatever the failed attempt left behind. It cannot, and the retry could
-therefore never succeed against the very failure it exists for:
-
-    Upload test results          FinalizeArtifact -> (403) Forbidden   [warning]
-    Upload test results (retry)  CreateArtifact   -> (409) Conflict:
-                                 an artifact with this name already exists
-
-A failed *finalize* leaves an artifact record that holds the name for the rest
-of the run but never becomes visible: it is absent from the run's artifact
-listing (verified against the run above — the leg's artifact was simply not
-there), and `overwrite` deletes by looking the name up in that same listing, so
-it finds nothing to delete and `CreateArtifact` then 409s on the record it could
-not see. The name is burnt for the whole run; only a different one can land.
-
-`overwrite: true` stays on the retry for the case it does handle — re-running a
-failed job inside a run that already holds that artifact — which is why it is
-still asserted below.
-
-And the retry waits before it runs: the 403 comes from an intermediary having a
-moment, and firing the second attempt a second later puts it inside the same
-window. That backoff is asserted too.
+(Deliberately avoids naming sibling guards' scripts: this suite discovers call
+sites by grepping .github/ for a script's name, and a prose mention here would
+register this file as one of its callers.)
 """
 
 from __future__ import annotations
@@ -65,14 +32,17 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-UPLOAD_ACTION = "actions/upload-artifact"
-
-# `steps.<id>.outcome == 'failure'` — the only shape that makes a step a retry.
-OUTCOME_GUARD_RE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outcome\s*==\s*'failure'")
+UPLOAD_ACTION = "actions/upload-artifact@"
+COMPOSITE = "actions/upload-artifact-retry/action.yaml"
+COMPOSITE_REF = ".github/actions/upload-artifact-retry"
+LOCAL_COMPOSITE_REF = f"./{COMPOSITE_REF}"
 
 # What a retry appends to the first attempt's artifact name. Consumers resolve
 # these artifacts by `<name>*` glob because of it.
 RETRY_SUFFIX = "-retry"
+
+# `steps.<id>.outcome == 'failure'`: the only shape that makes a step a retry.
+OUTCOME_GUARD_RE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outcome\s*==\s*'failure'")
 
 # Uploads that do NOT need retry hardening, each with the reason it is exempt.
 # Keyed by (path suffix, artifact name) so an exemption cannot silently widen to
@@ -101,19 +71,18 @@ EXEMPT = {
     "(FND-4678)",
 }
 
-# Files that are not valid YAML, so their steps cannot be inspected. Empty, and
-# meant to stay that way: an unparseable workflow is invisible to every guard in
-# this suite, and GitHub cannot run it either. Kept as a mechanism rather than
-# deleted because `test_no_new_unparseable_workflow_yaml` asserts in both
-# directions — nothing new may land here, and anything listed that starts parsing
-# (or is removed from the repo) must be taken off the list.
-#
-# Its one occupant, scheduled-trivy-scan.yml, was deleted rather than repaired:
-# it had never parsed since being added, so its scan had never run once, and
-# `daily-security-scan.yml` already covers the same image + deps scan hourly with
-# CVE dedup. Repairing the YAML would have activated a duplicate ticket-filing
-# scan that has no dedup of its own.
-UNPARSEABLE: set[str] = set()
+# Files that still write the pair out by hand. This repo's own PR CI runs
+# conformance-reusable.yaml, and it reaches consumers too, so it must name the
+# composite as `atlanhq/...@main`: until the composite is on main, that ref
+# fails the job at setup. It moves once the composite merges.
+AWAITING_COMPOSITE = {"workflows/conformance-reusable.yaml"}
+
+# Longest retention any upload here may ask for. Codeql's 30 days is the current
+# high-water mark; nothing in this repo reads an artifact a month later.
+MAX_RETENTION_DAYS = 30
+
+Step = dict
+Scope = tuple[str, str, list[Step]]
 
 
 def _yaml_files() -> list[Path]:
@@ -126,23 +95,13 @@ def _rel(path: Path) -> str:
     return str(path.relative_to(ROOT))
 
 
-def _unparseable() -> set[str]:
-    broken = set()
-    for path in _yaml_files():
-        try:
-            yaml.safe_load(path.read_text())
-        except yaml.YAMLError:
-            broken.add(_rel(path))
-    return broken
-
-
-def _scopes_from_doc(rel: str, doc: dict) -> list[tuple[str, str, list[dict]]]:
+def _scopes_from_doc(rel: str, doc: dict) -> list[Scope]:
     """(file, scope, steps) per job and per composite `runs` block.
 
-    Scoping matters: `steps.<id>` only resolves within one job, so a retry in a
-    *different* job of the same file must not satisfy another job's pairing.
+    `steps.<id>` only resolves within one job, so a retry in a different job of
+    the same file must not satisfy another job's pairing.
     """
-    scopes: list[tuple[str, str, list[dict]]] = []
+    scopes: list[Scope] = []
     for job_id, job in (doc.get("jobs") or {}).items():
         if isinstance(job, dict):
             steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
@@ -156,253 +115,157 @@ def _scopes_from_doc(rel: str, doc: dict) -> list[tuple[str, str, list[dict]]]:
     return scopes
 
 
-def _scopes() -> list[tuple[str, str, list[dict]]]:
-    scopes: list[tuple[str, str, list[dict]]] = []
+def _docs() -> dict[str, dict]:
+    docs = {}
     for path in _yaml_files():
-        rel = _rel(path)
-        if rel in UNPARSEABLE:
-            continue
-        try:
-            doc = yaml.safe_load(path.read_text())
-        except yaml.YAMLError as exc:
-            pytest.fail(
-                f"{rel} is not valid YAML ({exc.__class__.__name__}) and is not "
-                f"in UNPARSEABLE: {exc}"
-            )
-        if not isinstance(doc, dict):
-            continue
-        scopes.extend(_scopes_from_doc(rel, doc))
-    return scopes
+        doc = yaml.safe_load(path.read_text())
+        if isinstance(doc, dict):
+            docs[_rel(path)] = doc
+    return docs
 
 
-def _is_upload(step: dict) -> bool:
+def _scopes() -> list[Scope]:
+    return [s for rel, doc in _docs().items() for s in _scopes_from_doc(rel, doc)]
+
+
+def _is_direct_upload(step: Step) -> bool:
     return UPLOAD_ACTION in str(step.get("uses", ""))
 
 
-def _with(step: dict) -> dict:
+def _is_composite_call(step: Step) -> bool:
+    return str(step.get("uses", "")).split("@")[0].endswith(COMPOSITE_REF)
+
+
+def _with(step: Step) -> dict:
     value = step.get("with")
     return value if isinstance(value, dict) else {}
 
 
-def _artifact_name(step: dict) -> str:
+def _artifact_name(step: Step) -> str:
     return str(_with(step).get("name", ""))
 
 
-def _artifact_path(step: dict) -> str:
+def _artifact_path(step: Step) -> str:
     """Normalised so a multi-line `path:` block compares equal across steps."""
     raw = str(_with(step).get("path", ""))
     return "\n".join(line.strip() for line in raw.splitlines() if line.strip())
 
 
-def _retry_target(step: dict) -> str | None:
-    """The step id this upload claims to retry, or None if it guards on nothing."""
-    match = OUTCOME_GUARD_RE.search(str(step.get("if", "")))
-    return match.group(1) if match else None
-
-
-def _classify(steps: list[dict]) -> tuple[list[dict], dict[str, list[dict]]]:
-    """Split a scope's uploads into (first_attempts, retries_by_target_id).
-
-    A retry must guard on the outcome of another *upload* step in this same
-    scope. An upload guarded on some non-upload step's outcome is treated as a
-    first attempt, so it still has to prove it has a retry of its own.
-    """
-    uploads = [s for s in steps if _is_upload(s)]
-    upload_ids = {s.get("id") for s in uploads if s.get("id")}
-
-    retries: dict[str, list[dict]] = {}
-    first_attempts: list[dict] = []
-    for step in uploads:
-        target = _retry_target(step)
-        if target and target in upload_ids:
-            retries.setdefault(target, []).append(step)
-        else:
-            first_attempts.append(step)
-    return first_attempts, retries
-
-
-def _live_first_attempts() -> list[tuple[str, str, dict, dict[str, list[dict]]]]:
-    """Every non-exempt first-attempt upload, with its scope's retry index."""
-    live = []
-    for rel, scope, steps in _scopes():
-        first_attempts, retries = _classify(steps)
-        for step in first_attempts:
-            if (rel, _artifact_name(step)) in EXEMPT:
-                continue
-            live.append((rel, scope, step, retries))
-    return live
-
-
-def _label(rel: str, scope: str, step: dict) -> str:
+def _label(rel: str, scope: str, step: Step) -> str:
     return f"{rel} [{scope}] '{step.get('name') or step.get('uses')}'"
 
 
-def test_no_new_unparseable_workflow_yaml():
-    """Quarantine must shrink, never grow. An unparseable workflow is invisible
-    to every guard in this suite — and GitHub cannot run it either."""
-    broken = _unparseable()
-    assert broken <= UNPARSEABLE, (
-        "New unparseable workflow/action YAML (GitHub will fail these runs and no "
-        f"guard can inspect them): {sorted(broken - UNPARSEABLE)}"
+def _guards_on(step: Step, step_id: str) -> bool:
+    return step_id in OUTCOME_GUARD_RE.findall(str(step.get("if", "")))
+
+
+def _composite_steps() -> list[Step]:
+    doc = yaml.safe_load((ROOT / COMPOSITE).read_text())
+    return doc["runs"]["steps"]
+
+
+def _composite_calls() -> list[tuple[str, str, Step]]:
+    return [
+        (rel, scope, step)
+        for rel, scope, steps in _scopes()
+        for step in steps
+        if _is_composite_call(step)
+    ]
+
+
+# ── The composite ───────────────────────────────────────────────────────────
+
+
+def test_the_composite_uploads_retries_under_a_distinct_name_after_a_wait():
+    """The four rules, pinned on the one implementation."""
+    first, wait, retry = _composite_steps()
+
+    assert _is_direct_upload(first) and first.get("id"), "first step is the upload"
+    assert first.get("continue-on-error") is True, (
+        "the first attempt must not fail the step before the retry runs"
     )
-    fixed = sorted(UNPARSEABLE - broken)
-    assert not fixed, (
-        f"{fixed} now parses — remove it from UNPARSEABLE so its steps start "
-        f"being guarded."
+    assert str(first.get("if")) == "always()", (
+        "the caller's `if:` is the only gate: an `if:` here would skip the upload "
+        "whenever an earlier step of the caller's job failed"
     )
 
+    assert "sleep 20" in str(wait.get("run")), "the retry needs a backoff"
+    assert _guards_on(wait, first["id"]) and "always()" in str(wait.get("if"))
 
-def test_the_guard_actually_finds_uploads_and_retries():
-    """A scan that silently matched nothing would pass every assertion below.
+    assert _is_direct_upload(retry)
+    assert _guards_on(retry, first["id"]) and "always()" in str(retry.get("if"))
+    assert retry.get("continue-on-error") is not True, (
+        "losing both attempts must fail the step; a caller that tolerates it "
+        "sets continue-on-error on its own step"
+    )
 
-    Asserts on both halves: if the retry-classification broke, `retries` would
-    empty out while `first_attempts` doubled, and the pairing test would then be
-    asserting over the wrong set.
-    """
-    scopes = _scopes()
-    assert len(scopes) > 50, "scope discovery collapsed"
-
-    total_first, total_retries = 0, 0
-    for _, _, steps in scopes:
-        first_attempts, retries = _classify(steps)
-        total_first += len(first_attempts)
-        total_retries += sum(len(v) for v in retries.values())
-    # Floor was 10 until FND-2871 removed @sdk-loop, whose phase workflow
-    # carried three first-attempt uploads.
-    assert total_first >= 8, f"only {total_first} first-attempt uploads found"
-    # Floor was 10 until FND-2661 retired the three per-series conformance
-    # reusables (conformance-ci / -error-handling / -logging), which carried a
-    # retry upload each. Any floor above zero proves the classifier is live;
-    # this one keeps headroom so a real regression still trips it.
-    assert total_retries >= 5, f"only {total_retries} retry uploads found"
+    assert _artifact_name(first) == "${{ inputs.name }}"
+    assert _artifact_name(retry) == "${{ inputs.name }}" + RETRY_SUFFIX, (
+        "a failed finalize burns the first attempt's name for the run, so a "
+        "same-named retry 409s"
+    )
+    for step in (first, retry):
+        inputs = _with(step)
+        assert inputs.get("overwrite") is True, (
+            "both attempts overwrite, so a re-run leaves one live artifact per name"
+        )
+        assert inputs.get("path") == "${{ inputs.path }}"
+        assert inputs.get("retention-days") == "${{ inputs.retention-days }}"
+        assert inputs.get("if-no-files-found") == "${{ inputs.if-no-files-found }}"
 
 
-def test_every_gating_upload_has_a_matching_retry_upload():
-    """The retry must be a real upload of the same artifact, in the same scope."""
+def test_the_composite_requires_a_retention():
+    """No default: an upload without one lives for the 90-day repo default."""
+    doc = yaml.safe_load((ROOT / COMPOSITE).read_text())
+    retention = doc["inputs"]["retention-days"]
+    assert retention.get("required") is True and "default" not in retention
+
+
+# ── Who uploads, and how ────────────────────────────────────────────────────
+
+
+def test_the_scan_finds_composite_calls_and_exempt_uploads():
+    """A scan that silently matched nothing would pass every assertion below."""
+    assert len(_scopes()) > 50, "scope discovery collapsed"
+    assert len(_composite_calls()) >= 15, "composite call discovery collapsed"
+
+
+def test_no_direct_upload_outside_the_composite():
+    """New uploads use the composite; the retry rules live there, not here."""
     problems = []
-    for rel, scope, step, retries in _live_first_attempts():
-        where = _label(rel, scope, step)
-        step_id = step.get("id")
-        if not step_id:
-            problems.append(f"{where}: no `id`, so nothing can guard a retry on it")
+    for rel, scope, steps in _scopes():
+        if rel == COMPOSITE or rel in AWAITING_COMPOSITE:
             continue
-
-        companions = retries.get(step_id, [])
-        if not companions:
-            problems.append(
-                f"{where}: no `{UPLOAD_ACTION}` step in this scope is guarded on "
-                f"steps.{step_id}.outcome == 'failure'"
-            )
-            continue
-
-        # A companion that uploads a different artifact is not a retry of this
-        # one — but it must not reuse the name either: same-named retries 409.
-        for companion in companions:
-            expected = _artifact_name(step) + RETRY_SUFFIX
-            if _artifact_name(companion) != expected:
-                problems.append(
-                    f"{where}: its retry uploads artifact "
-                    f"'{_artifact_name(companion)}', not '{expected}'"
-                )
-            if _artifact_path(companion) != _artifact_path(step):
-                problems.append(
-                    f"{where}: its retry uploads a different path "
-                    f"({_artifact_path(companion)!r} != {_artifact_path(step)!r})"
-                )
-            if companion is step:
-                problems.append(f"{where}: a step cannot be its own retry")
-
+        for step in steps:
+            if _is_direct_upload(step) and (rel, _artifact_name(step)) not in EXEMPT:
+                problems.append(_label(rel, scope, step))
     assert not problems, (
-        "Every artifact upload on a gating path needs a companion "
-        f"`{UPLOAD_ACTION}` step, in the same job/composite, guarded on the first "
-        f"attempt's outcome and uploading the same path under `<name>{RETRY_SUFFIX}` "
-        "(see any conformance-*.yaml for the pattern) — or an EXEMPT entry with a "
-        "reason:\n  " + "\n  ".join(problems)
+        f"Use `atlanhq/application-sdk/{COMPOSITE_REF}@main` instead of "
+        f"`actions/upload-artifact`, or add an EXEMPT entry with the reason the "
+        "upload needs no retry:\n  " + "\n  ".join(problems)
     )
 
 
-def test_first_attempt_never_fails_the_job_before_the_retry_runs():
-    """Without continue-on-error the job dies and the retry never executes."""
-    bad = [
-        _label(rel, scope, step)
-        for rel, scope, step, _ in _live_first_attempts()
-        if step.get("continue-on-error") is not True
-    ]
-    assert not bad, (
-        "The first upload attempt must set `continue-on-error: true`, otherwise "
-        "the job fails before its retry can run:\n  " + "\n  ".join(bad)
+def test_a_relative_ref_is_only_used_where_this_repo_is_the_workspace():
+    """`./.github/actions/...` resolves against the caller's workspace. In a
+    reusable workflow or a composite that is a consumer repo, which has no copy
+    of the composite."""
+    problems = []
+    for rel, doc in _docs().items():
+        on = doc.get("on", doc.get(True))
+        reusable = rel.startswith("actions/") or (
+            isinstance(on, dict) and "workflow_call" in on
+        )
+        if not reusable:
+            continue
+        for _, scope, steps in _scopes_from_doc(rel, doc):
+            for step in steps:
+                if str(step.get("uses", "")).startswith(LOCAL_COMPOSITE_REF):
+                    problems.append(_label(rel, scope, step))
+    assert not problems, (
+        f"Reusable workflows and composites must call `atlanhq/application-sdk/"
+        f"{COMPOSITE_REF}@main`:\n  " + "\n  ".join(problems)
     )
-
-
-def test_first_attempts_overwrite_so_only_one_artifact_is_ever_live():
-    """Both attempts overwrite, and the first attempt is the load-bearing one.
-
-    Artifacts survive across attempts of a run. Without overwrite on the first
-    attempt, re-running a failed job in a run that already carries the artifact
-    409s there, hands the upload to the retry, and leaves BOTH `<name>` (from
-    the earlier attempt) and `<name>-retry` live. Consumers glob `<name>*`, so
-    a `merge-multiple` download then flattens two files of the same inner name
-    in undefined order — for `trivy-results` that means the Security Gate
-    judging the previous attempt's scan. Overwrite here is what keeps at most one live
-    artifact per name, which is the invariant those globs rest on.
-    """
-    bad = [
-        _label(rel, scope, step)
-        for rel, scope, step, _ in _live_first_attempts()
-        if _with(step).get("overwrite") is not True
-    ]
-    assert not bad, (
-        "The first upload attempt must set `overwrite: true` as well:\n  "
-        + "\n  ".join(bad)
-    )
-
-
-def test_retries_overwrite_so_a_job_rerun_cannot_block_them():
-    """Re-running a failed job keeps the run's existing artifacts, so a retry
-    landing on a name the run already carries needs overwrite. (It does NOT
-    rescue a same-named retry after a finalize 403 — see the module docstring;
-    that is what the distinct name below is for.)"""
-    bad = []
-    for rel, scope, steps in _scopes():
-        _, retries = _classify(steps)
-        for companions in retries.values():
-            for companion in companions:
-                if _with(companion).get("overwrite") is not True:
-                    bad.append(_label(rel, scope, companion))
-    assert not bad, "Retry attempts must set `overwrite: true`:\n  " + "\n  ".join(bad)
-
-
-def test_no_retry_reuses_its_first_attempts_artifact_name():
-    """The whole point, stated over the repo rather than over one pairing.
-
-    A retry on the first attempt's name is guaranteed to fail with 409 against
-    the finalize 403 it exists to absorb, so it is worse than no retry: it
-    turns a warning into a red job on a gating path.
-    """
-    bad = []
-    for rel, scope, steps in _scopes():
-        first_attempts, retries = _classify(steps)
-        by_id = {s.get("id"): s for s in first_attempts if s.get("id")}
-        for target_id, companions in retries.items():
-            first = by_id.get(target_id)
-            if first is None:
-                continue
-            for companion in companions:
-                if _artifact_name(companion) == _artifact_name(first):
-                    bad.append(
-                        f"{_label(rel, scope, companion)}: uploads "
-                        f"'{_artifact_name(first)}', the name the failed attempt "
-                        f"already burnt for the run"
-                    )
-    assert not bad, (
-        "A retry must upload under its own name "
-        f"(`<first name>{RETRY_SUFFIX}`):\n  " + "\n  ".join(bad)
-    )
-
-
-# Longest retention any upload here may ask for. Codeql's 30 days is the current
-# high-water mark; nothing in this repo reads an artifact a month later.
-MAX_RETENTION_DAYS = 30
 
 
 def test_every_upload_sets_an_explicit_bounded_retention():
@@ -410,12 +273,15 @@ def test_every_upload_sets_an_explicit_bounded_retention():
 
     Without `retention-days` an artifact lives for the repo/org default, which
     is 90 days. The conformance SARIF uploads shipped that way: 12 per run, every
-    one of them held for three months in each connector repo. Exempt uploads are
-    checked too; the retry exemption is about gating, not storage.
+    one of them held for three months in each connector repo.
     """
     problems = []
     for rel, scope, steps in _scopes():
-        for step in (s for s in steps if _is_upload(s)):
+        if rel == COMPOSITE:
+            continue
+        for step in steps:
+            if not (_is_direct_upload(step) or _is_composite_call(step)):
+                continue
             days = _with(step).get("retention-days")
             # bool is an int subclass, so `retention-days: true` would pass as 1.
             if (
@@ -425,26 +291,9 @@ def test_every_upload_sets_an_explicit_bounded_retention():
             ):
                 problems.append(f"{_label(rel, scope, step)}: retention-days={days!r}")
     assert not problems, (
-        f"Every `{UPLOAD_ACTION}` step must set an integer `retention-days` "
-        f"between 1 and {MAX_RETENTION_DAYS}:\n  " + "\n  ".join(problems)
+        "Every upload must set an integer `retention-days` between 1 and "
+        f"{MAX_RETENTION_DAYS}:\n  " + "\n  ".join(problems)
     )
-
-
-def test_a_retry_keeps_its_first_attempts_retention():
-    """A retry is the same artifact under another name; it must not outlive it."""
-    problems = []
-    for rel, scope, steps in _scopes():
-        first_attempts, retries = _classify(steps)
-        for first in first_attempts:
-            for companion in retries.get(first.get("id"), []):
-                want = _with(first).get("retention-days")
-                got = _with(companion).get("retention-days")
-                if got != want:
-                    problems.append(
-                        f"{_label(rel, scope, companion)}: retention-days={got!r}, "
-                        f"first attempt has {want!r}"
-                    )
-    assert not problems, "\n  ".join(problems)
 
 
 def test_no_workflow_uploads_an_image_tarball():
@@ -460,154 +309,103 @@ def test_no_workflow_uploads_an_image_tarball():
         _label(rel, scope, step)
         for rel, scope, steps in _scopes()
         for step in steps
-        if _is_upload(step)
+        if (_is_direct_upload(step) or _is_composite_call(step))
         and (
             _artifact_path(step).endswith(".tar")
-            or str(_with(step).get("name", "")).startswith("docker-image")
+            or _artifact_name(step).startswith("docker-image")
         )
     ]
     assert not found, "image tarball uploads:\n  " + "\n  ".join(found)
 
 
-def _guards_on(step: dict, step_id: str) -> bool:
-    return step_id in OUTCOME_GUARD_RE.findall(str(step.get("if", "")))
-
-
-def test_every_retry_waits_before_it_runs():
-    """A finalize 403 is an intermediary having a moment. The retry fires about
-    a second after the first attempt, so with no pause it lands in the same
-    window and both attempts fail together — which is the one case that still
-    reddens the job."""
-    problems = []
-    for rel, scope, steps in _scopes():
-        _, retries = _classify(steps)
-        for target_id, companions in retries.items():
-            waits = [
-                s
-                for s in steps
-                if "run" in s
-                and "sleep" in str(s.get("run", ""))
-                and _guards_on(s, target_id)
-            ]
-            if not waits:
-                for companion in companions:
-                    problems.append(
-                        f"{_label(rel, scope, companion)}: no `run: sleep …` step "
-                        f"guarded on steps.{target_id}.outcome == 'failure'"
-                    )
-    assert not problems, (
-        "Each retry needs a backoff step ahead of it, guarded on the same "
-        "outcome as the retry itself:\n  " + "\n  ".join(problems)
-    )
-
-
-def test_a_retry_is_not_identified_by_its_name():
-    """Regression: naming a step '(retry)' must not exempt it from validation.
-
-    Synthesised rather than read off disk, because the point is what the
-    classifier does with a shape the repo should never contain.
-    """
-    steps = [
-        {
-            "name": "Upload something (retry)",
-            "uses": f"{UPLOAD_ACTION}@v7",
-            "with": {"name": "thing", "path": "thing/"},
-        }
-    ]
-    first_attempts, retries = _classify(steps)
-    assert not retries, "a name substring must not make a step a retry"
-    assert len(first_attempts) == 1, (
-        "a step named '(retry)' with no outcome guard is an unretried first "
-        "attempt and must still be validated"
-    )
-
-
-def test_a_companion_guarded_on_a_non_upload_step_is_not_a_retry():
-    """Regression: the guard must require the retry to be an upload of its own."""
-    steps = [
-        {
-            "id": "build",
-            "name": "Build",
-            "run": "make",
-        },
-        {
-            "id": "upload",
-            "name": "Upload",
-            "continue-on-error": True,
-            "uses": f"{UPLOAD_ACTION}@v7",
-            "with": {"name": "thing", "path": "thing/"},
-        },
-        {
-            # Guards on the right outcome but is not an upload at all.
-            "name": "Tell someone it failed",
-            "if": "steps.upload.outcome == 'failure'",
-            "run": "echo oh no",
-        },
-    ]
-    first_attempts, retries = _classify(steps)
-    assert [s["id"] for s in first_attempts] == ["upload"]
-    assert not retries, "a non-upload step must not count as the retry"
-
-
-def test_a_retry_in_another_job_does_not_satisfy_the_pairing():
-    """`steps.<id>` only resolves within one job, so a retry in a sibling job is
-    not a retry at all — it would reference an id that does not exist there."""
-    doc = {
-        "jobs": {
-            "builder": {
-                "steps": [
-                    {
-                        "id": "upload",
-                        "name": "Upload",
-                        "continue-on-error": True,
-                        "uses": f"{UPLOAD_ACTION}@v7",
-                        "with": {"name": "thing", "path": "thing/"},
-                    }
-                ]
-            },
-            "elsewhere": {
-                "steps": [
-                    {
-                        "name": "Upload (retry)",
-                        "if": "steps.upload.outcome == 'failure'",
-                        "uses": f"{UPLOAD_ACTION}@v7",
-                        "with": {"name": "thing", "path": "thing/", "overwrite": True},
-                    }
-                ]
-            },
-        }
+def test_exemptions_still_point_at_real_uploads():
+    """A stale exemption would silently excuse a file that no longer uploads."""
+    live = {
+        (rel, _artifact_name(step))
+        for rel, _, steps in _scopes()
+        for step in steps
+        if _is_direct_upload(step)
     }
-    scopes = _scopes_from_doc("synthetic.yaml", doc)
-    assert len(scopes) == 2, "jobs must be separate scopes"
+    stale = sorted(set(EXEMPT) - live)
+    assert not stale, f"EXEMPT entries no longer match any upload step: {stale}"
 
-    by_scope = {scope: _classify(steps) for _, scope, steps in scopes}
-    # The uploading job has a first attempt and no retry of its own...
-    builder_first, builder_retries = by_scope["job builder"]
-    assert [s["id"] for s in builder_first] == ["upload"]
-    assert not builder_retries
-    # ...and the sibling job's step is itself an unpaired first attempt, because
-    # the id it guards on does not exist in its scope.
-    other_first, other_retries = by_scope["job elsewhere"]
-    assert len(other_first) == 1
-    assert not other_retries
+
+# ── Hand-written pairs awaiting the composite ───────────────────────────────
+
+
+def _awaiting_pairs() -> list[tuple[str, str, Step, list[Step], list[Step]]]:
+    """(file, scope, first attempt, its retries, the scope's steps)."""
+    pairs = []
+    for rel, scope, steps in _scopes():
+        if rel not in AWAITING_COMPOSITE:
+            continue
+        uploads = [s for s in steps if _is_direct_upload(s)]
+        ids = {s.get("id") for s in uploads if s.get("id")}
+        firsts = [
+            s
+            for s in uploads
+            if not set(OUTCOME_GUARD_RE.findall(str(s.get("if", "")))) & ids
+        ]
+        for first in firsts:
+            retries = [
+                s for s in uploads if first.get("id") and _guards_on(s, first["id"])
+            ]
+            pairs.append((rel, scope, first, retries, steps))
+    return pairs
+
+
+def test_awaiting_files_still_have_pairs():
+    """Once a file has moved to the composite, take it off AWAITING_COMPOSITE."""
+    found = {rel for rel, *_ in _awaiting_pairs()}
+    assert found == AWAITING_COMPOSITE, (
+        f"no hand-written uploads left in {sorted(AWAITING_COMPOSITE - found)}"
+    )
+
+
+def test_awaiting_pairs_follow_the_composites_rules():
+    """The same four rules the composite pins, on each hand-written pair."""
+    problems = []
+    for rel, scope, first, retries, steps in _awaiting_pairs():
+        where = _label(rel, scope, first)
+        if first.get("continue-on-error") is not True:
+            problems.append(f"{where}: first attempt is not continue-on-error")
+        if len(retries) != 1:
+            problems.append(f"{where}: {len(retries)} retries guarded on its outcome")
+            continue
+        (retry,) = retries
+        if _artifact_name(retry) != _artifact_name(first) + RETRY_SUFFIX:
+            problems.append(f"{where}: retry uploads '{_artifact_name(retry)}'")
+        if _artifact_path(retry) != _artifact_path(first):
+            problems.append(f"{where}: retry uploads a different path")
+        for step in (first, retry):
+            if _with(step).get("overwrite") is not True:
+                problems.append(f"{_label(rel, scope, step)}: no `overwrite: true`")
+        if _with(retry).get("retention-days") != _with(first).get("retention-days"):
+            problems.append(f"{where}: retry keeps the artifact for a different time")
+        if not any(
+            "sleep" in str(s.get("run", "")) and _guards_on(s, first["id"])
+            for s in steps
+        ):
+            problems.append(f"{where}: no `sleep` step guarded on its outcome")
+    assert not problems, "\n  ".join(problems)
+
+
+# ── Readers of retried artifacts ────────────────────────────────────────────
 
 
 def _retried_literal_names() -> set[str]:
     """Artifact names that have a retry, expression-free so they can be grepped."""
-    names = set()
-    for _, _, steps in _scopes():
-        first_attempts, retries = _classify(steps)
-        for step in first_attempts:
-            if not step.get("id") or step["id"] not in retries:
-                continue
-            name = _artifact_name(step)
-            if name and "${{" not in name:
-                names.add(name)
-    return names
+    names = {_artifact_name(step) for _, _, step in _composite_calls()}
+    names |= {
+        _artifact_name(first)
+        for _, _, first, retries, _ in _awaiting_pairs()
+        if retries
+    }
+    return {n for n in names if n and "${{" not in n}
 
 
-def _addresses_by_bare_name(text: str, name: str) -> bool:
-    """Does `text` use `name` as a whole token, i.e. as an artifact address?
+def _bare_name_addresses(text: str, name: str) -> int:
+    """How many times `text` uses `name` as a whole token, i.e. as an address.
 
     Artifact names collide with filenames and flags built from the same words
     (`trivy-results.json`, `--trivy-results`, `docker-image://…`), none of
@@ -620,7 +418,11 @@ def _addresses_by_bare_name(text: str, name: str) -> bool:
     which is an artifact address like any other.
     """
     pattern = rf"(?:(?<![\w.-])|(?<=:-)){re.escape(name)}(?![\w.:/-])"
-    return re.search(pattern, text) is not None
+    return len(re.findall(pattern, text))
+
+
+def _addresses_by_bare_name(text: str, name: str) -> bool:
+    return _bare_name_addresses(text, name) > 0
 
 
 def _consumer_files() -> list[Path]:
@@ -628,41 +430,44 @@ def _consumer_files() -> list[Path]:
 
     Workflows and composites cover `download-artifact` steps and `run:` blocks;
     the scripts cover the `gh run download` / artifact-listing callers. This
-    suite's own files are excluded — they name artifacts as fixtures.
+    suite's own files are excluded: they name artifacts as fixtures.
     """
-    files = _yaml_files()
-    files += sorted(p for p in (ROOT / "scripts").glob("*.py"))
-    return files
+    return _yaml_files() + sorted((ROOT / "scripts").glob("*.py"))
 
 
 def test_no_consumer_addresses_a_retried_artifact_by_base_name_alone():
-    """The class the `-retry` name creates, checked across every consumer.
+    """A reader of a retried artifact has to accept the retry name too.
 
-    Anything that reads a retried artifact has to cope with the second name:
-    a `download-artifact` glob (`<name>*`), a `--name` resolved from the run's
+    A `download-artifact` glob (`<name>*`), a `--name` resolved from the run's
     artifact listing, or a jq/regex that accepts either. A file that mentions
-    the base name and nowhere mentions the retry name or a glob of it is
-    reading only the first attempt's artifact — which is exactly the artifact
-    that is missing whenever the retry was needed.
-
-    Both cross-run `gh run download --name trivy-results` callers (the
-    dashboard publish and the vulnerability auto-fix) shipped in that state and
-    are what this guard exists to catch.
+    the base name and nowhere mentions the retry name or a glob of it is reading
+    only the first attempt's artifact, which is exactly the artifact that is
+    missing whenever the retry was needed. Both cross-run
+    `gh run download --name trivy-results` callers shipped in that state.
     """
     names = _retried_literal_names()
     assert len(names) >= 5, f"retried-name discovery collapsed: {sorted(names)}"
+
+    # The composite call that uploads a name mentions it in `with.name`, and
+    # maybe in its step name; that is the writer, not a reader.
+    writers: dict[tuple[str, str], int] = {}
+    for rel, _, step in _composite_calls():
+        name = _artifact_name(step)
+        own = 1 + _bare_name_addresses(str(step.get("name", "")), name)
+        writers[(rel, name)] = writers.get((rel, name), 0) + own
 
     problems = []
     for path in _consumer_files():
         text = path.read_text()
         for name in sorted(names):
-            if not _addresses_by_bare_name(text, name):
+            own = writers.get((_rel(path), name), 0)
+            if _bare_name_addresses(text, name) <= own:
                 continue
             if f"{name}{RETRY_SUFFIX}" in text or f"{name}*" in text:
                 continue
             problems.append(f"{_rel(path)}: names '{name}' with no retry-aware read")
     assert not problems, (
-        "A consumer of a retried artifact must accept the retry name too — glob "
+        "A consumer of a retried artifact must accept the retry name too: glob "
         f"`<name>*`, resolve `--name` from the run's artifact listing, or match "
         f"`<name>{RETRY_SUFFIX}` explicitly:\n  " + "\n  ".join(problems)
     )
@@ -692,13 +497,3 @@ def test_the_bare_name_matcher_catches_an_artifact_address(text: str):
 )
 def test_the_bare_name_matcher_ignores_lookalikes(text: str):
     assert not _addresses_by_bare_name(text, "trivy-results")
-
-
-def test_exemptions_still_point_at_real_uploads():
-    """A stale exemption would silently excuse a file that no longer uploads."""
-    live = set()
-    for rel, _, steps in _scopes():
-        first_attempts, _ = _classify(steps)
-        live.update((rel, _artifact_name(s)) for s in first_attempts)
-    stale = sorted(set(EXEMPT) - live)
-    assert not stale, f"EXEMPT entries no longer match any upload step: {stale}"
