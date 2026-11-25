@@ -527,6 +527,41 @@ on every pull request and review event (`connector-review-gate.yaml`, retired
 in FND-5317; `bootstrap` removes it and its script, and C002 reports a copy
 still on disk).
 
+**Release Gate requires that status** (FND-5321). A pull request merges only
+when the reviewer App's newest `connector-reviewer` status on its head is
+`success`: every finding fixed or dismissed, `/review waive` for that head, or
+`/review` answering `exempt`.
+`pending` reads "still running", `error` "re-run `/review`", `failure` names
+the open findings (the gate's job summary lists each one's id, severity, title,
+principle and suggestion, read from the reviewer's own summary comment), and no
+status reads "comment `/review`". A pull request the reviewer would not review
+passes without one, decided by the reviewer's own classifier
+(`connector_reviewer.review.exemption` with `config.toml`'s `[exempt]` lists),
+and only while the reviewer has never reviewed it. A push moves the head to a
+commit with no status, so the gate blocks again. The reviewer posts its status
+with its App token, which fires a `status` event; `release-gate.yaml`'s
+`rerun-on-review` job (default branch, `actions: write`, skipped for every other
+context) re-runs the newest Release Gate run on that commit through
+`gate_check_verdict.rerun_release_gate`, the same re-run a `gate-check` verdict
+uses. The decision is `.github/scripts/release_gate.py` in this repository,
+checked out at `main` by the shim; bootstrap no longer vendors it. The gate job
+runs on `pull_request`, as it always has, so no org or repository Actions
+policy is needed. Nothing of the pull request is checked out or run: the pin
+check reads `uv.lock` and `pyproject.toml` at the head through the API, and a
+pull request that edits the old vendored script changes nothing. The exposure
+that every `pull_request` gate already had remains: a pull request can edit
+`release-gate.yaml` itself, or add its own job named `Release Gate`. Such an
+edit is in the diff, and the connector reviewer's gate-file check raises a high
+finding on any hand edit to a bootstrap-managed workflow (FND-5325).
+
+The gate posts no PR comment. Why it failed and what to do ("comment
+`/review`", the open findings, "still running", "re-run `/review`", the
+`/gate-check` reason on a release PR) is in the Release Gate check: its error
+annotation and its job summary.
+`python release_gate.py explain --repo <owner/name> --pr <n> --config-dir
+.github/connector-reviewer` prints, read-only, what the gate and the reviewer's
+classifier decide for any real pull request.
+
 ## Bot-opened PRs are never labelled
 
 **Rule:** a lane that opens PRs from a bot (the conformance resync lane,
@@ -745,7 +780,7 @@ base-sensitive or not:
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
-| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
+| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839) and `connector-reviewer` status (FND-5321). A pull request without the verdicts it needs fails on the PR and never enters the queue. |
 | `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |

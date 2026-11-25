@@ -16000,6 +16000,70 @@ def test_an_sdk_search_past_the_file_cap_says_it_is_partial(
     assert "the SDK source is partial: it lists only the first 1 files" in out
 
 
+# ---- the vulnerability agent's dependency fixes are exempt (FND-5321) ---------------
+
+VULN = "connectivity-ai[bot]"
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ["uv.lock"],
+        ["uv.lock", "pyproject.toml"],
+        [
+            "uv.lock",
+            "contract/PklProject",
+            "contract/PklProject.deps.json",
+            "contract_schema.lock.json",
+        ],
+    ],
+)
+def test_a_vulnerability_agent_dependency_fix_is_exempt(paths):
+    found = _classify(
+        author=VULN,
+        head_ref="vuln-agent/fix-deps",
+        commit_authors=[VULN, VULN],
+        paths=paths,
+    )
+    assert found is not None and found.kind == exempt_mod.DEPENDENCY
+    assert VULN in found.why and "vuln-agent/fix-deps" in found.why
+
+
+@pytest.mark.parametrize(
+    "near_miss",
+    [
+        # The same App's code pull requests stay reviewed.
+        {"head_ref": "conformance/fix-l010"},
+        {"head_ref": "fix/null-port"},
+        {"head_ref": "ca/refactor"},
+        # A vuln branch that carries code is reviewed.
+        {"paths": ["uv.lock", "app/client.py"]},
+        {"paths": ["uv.lock", "app/pyproject.toml.bak"]},
+        # A person pushed onto the branch, or the commit list could not be read.
+        {"commit_authors": [VULN, "dev"]},
+        {"commit_authors": []},
+        {"paths": []},
+        # Someone else on the vuln branch prefix.
+        {"author": "dev", "commit_authors": ["dev"]},
+    ],
+)
+def test_a_vulnerability_agent_pr_that_is_not_only_dependencies_is_reviewed(near_miss):
+    given = {
+        "author": VULN,
+        "head_ref": "vuln-agent/fix-deps",
+        "commit_authors": [VULN],
+        "paths": ["uv.lock"],
+    }
+    assert _kind(**(given | near_miss)) is None
+
+
+def test_the_vuln_lists_come_from_the_config():
+    shipped = load_config(Path(__file__).resolve().parents[2] / "connector-reviewer")
+    assert shipped.exempt.vuln_bots == [VULN]
+    assert shipped.exempt.vuln_branches == ["vuln-agent/"]
+    assert "uv.lock" in shipped.exempt.dependency_files
+
+
 # ---- the gate-file fact (FND-5325) ---------------------------------------------------
 
 from connector_reviewer import gate as gate_mod  # noqa: E402
