@@ -350,9 +350,15 @@ class _Built:
             monkeypatch.setattr(_obstore_config, f"make_{kind}_store", self._make(kind))
 
     def _make(self, kind: str) -> Any:
-        def make(
-            name: str, config: dict[str, str] | None = None, *, label: str, **_: object
-        ) -> MemoryStore:
+        # Record the obstore config the shared translation derives from the
+        # settings, so assertions read what obstore would be handed.
+        def make(settings: Any, *, label: str, **_: object) -> MemoryStore:
+            if kind == "s3":
+                name = settings.bucket
+                config, _opts = _obstore_config.s3_store_args(settings, {})
+            else:
+                name = settings.container
+                config, _opts = _obstore_config.azure_store_args(settings, {})
             self.calls.append(
                 (kind, name, None if config is None else dict(config), label)
             )

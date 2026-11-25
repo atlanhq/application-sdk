@@ -10,13 +10,13 @@ import orjson
 import pytest
 import yaml
 
+from application_sdk._obstore_config import endpoint_is_aws
 from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
     _adc_is_external_account,
     _coerce_bool,
     _create_store_from_binding_optional_with_put_attrs,
-    _endpoint_is_aws,
     _find_broken_metadata_fields,
     _nonempty,
     _resolve_metadata_value,
@@ -1797,12 +1797,12 @@ class TestIsBindingConfigured:
 
 
 # ---------------------------------------------------------------------------
-# _endpoint_is_aws
+# endpoint_is_aws
 # ---------------------------------------------------------------------------
 
 
 class TestEndpointIsAws:
-    """Parametrised tests for the _endpoint_is_aws helper.
+    """Parametrised tests for the endpoint_is_aws helper.
 
     The helper must correctly identify real-AWS endpoints and not raise for any
     input scheme form (https://, http://, scheme-less host:port, SDK URI forms).
@@ -1831,7 +1831,7 @@ class TestEndpointIsAws:
         ],
     )
     def test_aws_endpoints_return_true(self, endpoint: str) -> None:
-        assert _endpoint_is_aws(endpoint) is True
+        assert endpoint_is_aws(endpoint) is True
 
     @pytest.mark.parametrize(
         "endpoint",
@@ -1856,7 +1856,7 @@ class TestEndpointIsAws:
         ],
     )
     def test_non_aws_endpoints_return_false(self, endpoint: str) -> None:
-        assert _endpoint_is_aws(endpoint) is False
+        assert endpoint_is_aws(endpoint) is False
 
     @pytest.mark.parametrize(
         "endpoint",
@@ -1869,8 +1869,8 @@ class TestEndpointIsAws:
         ],
     )
     def test_no_exception_on_pathological_input(self, endpoint: str) -> None:
-        """_endpoint_is_aws must never raise regardless of input form."""
-        result = _endpoint_is_aws(endpoint)
+        """endpoint_is_aws must never raise regardless of input form."""
+        result = endpoint_is_aws(endpoint)
         assert isinstance(result, bool)
 
 

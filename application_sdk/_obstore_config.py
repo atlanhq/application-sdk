@@ -69,8 +69,9 @@ from __future__ import annotations
 import contextlib
 import os
 import threading
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
@@ -226,30 +227,172 @@ def obstore_retry_config() -> RetryConfig | None:
     return cfg or None
 
 
+# ---------------------------------------------------------------------------
+# Store settings: the one shape every front-end translates into
+# ---------------------------------------------------------------------------
+#
+# Three front-ends build stores from credentials: the Dapr binding
+# (``storage/binding.py``), ``CloudStore`` (``storage/cloud.py``) and the API
+# host (``handler/object_routes.py``). Each reads its own input format and
+# fills one of the settings dataclasses below; ``make_*_store`` is the only
+# code that turns settings into obstore ``config`` / ``client_options``. A fix
+# to that translation (an endpoint rule, a header a store rejects, a credential
+# key) therefore reaches every front-end at once.
+#
+# What stays with each front-end is what depends on its input: field names,
+# defaults (e.g. where a blank region comes from), auth-mode precedence and the
+# warnings that name the front-end's own fields.
+
+
+def endpoint_is_aws(endpoint: str) -> bool:
+    """Return True when *endpoint* points to real AWS (or is empty).
+
+    Handles every scheme form an endpoint may carry:
+    * ``https://s3.amazonaws.com`` — standard AWS public endpoint
+    * ``http://...`` — e.g. LocalStack over plain HTTP
+    * scheme-less ``host:port`` — e.g. ``minio.local:9000``
+    * SDK-internal URI forms: ``s3://``, ``objectstore://``, ``adls://``
+
+    Any endpoint whose hostname ends in ``.amazonaws.com`` or
+    ``.amazonaws.com.cn`` is treated as AWS. An absent/empty endpoint means
+    the caller is relying on the default AWS endpoint — also AWS. Everything
+    else (MinIO, Ceph, R2, B2, GCS-S3-interop, custom CNAMEs) is non-AWS.
+    """
+    if not endpoint:
+        return True  # no custom endpoint → real AWS
+    # Ensure urlparse can extract the hostname regardless of scheme.
+    normalised = endpoint if "//" in endpoint else f"//{endpoint}"
+    host = (urlparse(normalised).hostname or "").rstrip(".")
+    return host.endswith((".amazonaws.com", ".amazonaws.com.cn"))
+
+
+@dataclass(frozen=True)
+class S3StoreSettings:
+    """Everything an ``S3Store`` is built from, whichever front-end read it.
+
+    Empty strings mean "not set": obstore's default applies. Credential fields
+    are excluded from ``repr`` so a logged settings object carries no secret.
+    """
+
+    bucket: str
+    region: str = ""
+    endpoint: str = ""
+    """Custom endpoint (MinIO, R2, GCS interop, ...). An ``http://`` endpoint
+    turns on ``allow_http``; a non-AWS endpoint turns off object tagging unless
+    *disable_tagging* says otherwise."""
+    allow_http: bool = False
+    allow_invalid_certificates: bool = False
+    force_path_style: bool = False
+    disable_tagging: bool | None = None
+    """``None`` auto-detects: tagging is disabled on any non-AWS endpoint,
+    because many S3-compatible stores reject the ``x-amz-tagging`` header."""
+    user_agent: str = ""
+    """Overrides the SDK's default ``User-Agent`` when set."""
+    access_key_id: str = field(default="", repr=False)
+    secret_access_key: str = field(default="", repr=False)
+    session_token: str = field(default="", repr=False)
+    """Sent with static keys, so temporary (STS) credentials work. Static keys
+    are ignored when *credential_provider* is set: the provider owns auth."""
+    conditional_put: str = ""
+    copy_if_not_exists: str = ""
+    checksum_algorithm: str = ""
+    server_side_encryption: str = ""
+    sse_kms_key_id: str = ""
+    credential_provider: object = field(default=None, repr=False, compare=False)
+
+
+def s3_store_args(
+    settings: S3StoreSettings, client_options: ClientConfig
+) -> tuple[dict[str, str] | None, ClientConfig]:
+    """Translate *settings* into obstore S3 ``(config, client_options)``.
+
+    *client_options* is the base (SDK defaults, or a caller override) and is
+    not mutated. ``config`` is ``None`` when nothing is set, so obstore falls
+    back to its own credential chain.
+    """
+    config: dict[str, str] = {}
+    opts: dict[str, object] = dict(client_options)
+    if settings.region:
+        config["aws_region"] = settings.region
+    endpoint = settings.endpoint
+    if endpoint:
+        config["aws_endpoint"] = endpoint
+        # obstore's reqwest client is https-only by default and rejects an
+        # http:// endpoint at request-build time ("HTTP error: builder error").
+        if endpoint.lower().startswith("http://"):
+            opts["allow_http"] = True
+    if settings.allow_http:
+        opts["allow_http"] = True
+    if settings.allow_invalid_certificates:
+        opts["allow_invalid_certificates"] = True
+    if settings.user_agent:
+        opts["user_agent"] = settings.user_agent
+    if settings.force_path_style:
+        config["aws_virtual_hosted_style_request"] = "false"
+
+    # obstore sends x-amz-tagging by default; many S3-compatible stores (B2,
+    # R2, GCS-S3-interop) hard-reject the header. Never log the endpoint: on
+    # the secure k8s path it can come from the secret store.
+    if settings.disable_tagging is None:
+        if not endpoint_is_aws(endpoint):
+            config["aws_disable_tagging"] = "true"
+    elif settings.disable_tagging:
+        config["aws_disable_tagging"] = "true"
+    elif not endpoint_is_aws(endpoint):
+        logger.warning(
+            "Object tagging explicitly enabled on a non-AWS endpoint "
+            "(endpoint_configured=%s) — obstore will send x-amz-tagging, which "
+            "many S3-compatible stores (B2, R2, GCS-interop) reject",
+            bool(endpoint),
+        )
+
+    for key, value in (
+        ("aws_conditional_put", settings.conditional_put),
+        ("aws_copy_if_not_exists", settings.copy_if_not_exists),
+        ("aws_checksum_algorithm", settings.checksum_algorithm),
+        ("aws_server_side_encryption", settings.server_side_encryption),
+        ("aws_sse_kms_key_id", settings.sse_kms_key_id),
+    ):
+        if value:
+            config[key] = value
+
+    if (
+        settings.credential_provider is None
+        and settings.access_key_id
+        and settings.secret_access_key
+    ):
+        config["aws_access_key_id"] = settings.access_key_id
+        config["aws_secret_access_key"] = settings.secret_access_key
+        if settings.session_token:
+            config["aws_session_token"] = settings.session_token
+
+    return (config or None), opts  # pyright: ignore[reportReturnType]
+
+
 def make_s3_store(
-    bucket: str,
-    config: dict[str, str] | None = None,
+    settings: S3StoreSettings,
     *,
     label: str = "s3",
     client_options: ClientConfig | None = None,
-    credential_provider: object = None,
 ) -> ObjectStore:
-    """Create an S3Store with SDK-default client/retry config.
+    """Create an S3Store from *settings* with SDK-default client/retry config.
 
-    Both ``binding.py`` and ``cloud.py`` delegate store construction here so
-    timeouts, retry budgets, and log output stay consistent across all S3 paths.
-    Pass *client_options* to override the SDK defaults (e.g., for insecureSSL).
+    Every front-end (Dapr binding, ``CloudStore``, the API host) builds its
+    store here, so timeouts, retry budgets, the endpoint / tagging rules and
+    log output stay consistent across all S3 paths. Pass *client_options* to
+    replace the SDK default client options before *settings* adjust them.
     """
     from obstore.store import S3Store  # noqa: PLC0415
 
-    opts = client_options if client_options is not None else obstore_client_options()
+    base = client_options if client_options is not None else obstore_client_options()
+    config, opts = s3_store_args(settings, base)
     retry = obstore_retry_config()
     log_obstore_config(label, client_options=opts, retry_config=retry)
     kw: dict[str, object] = dict(
-        bucket=bucket, config=config, client_options=opts, retry_config=retry
+        bucket=settings.bucket, config=config, client_options=opts, retry_config=retry
     )
-    if credential_provider is not None:
-        kw["credential_provider"] = credential_provider
+    if settings.credential_provider is not None:
+        kw["credential_provider"] = settings.credential_provider
     return S3Store(**kw)  # pyright: ignore[reportArgumentType]
 
 
@@ -318,67 +461,145 @@ def _suppress_ambient_azure_env(active: bool):
             os.environ.update(saved)
 
 
+@dataclass(frozen=True)
+class AzureStoreSettings:
+    """Everything an ``AzureStore`` is built from, whichever front-end read it.
+
+    The front-end picks one auth mode and sets only its fields; this class
+    maps fields to obstore keys and does not arbitrate between modes.
+    Credential fields are excluded from ``repr``.
+    """
+
+    container: str
+    account_name: str = ""
+    endpoint: str = ""
+    """Custom endpoint (Azurite, private link, ...). ``http://`` turns on
+    ``allow_http``."""
+    use_emulator: bool = False
+    authority_host: str = ""
+    account_key: str = field(default="", repr=False)
+    sas_key: str = field(default="", repr=False)
+    tenant_id: str = ""
+    client_id: str = ""
+    client_secret: str = field(default="", repr=False)
+    federated_token_file: str = ""
+    msi_endpoint: str = ""
+    msi_resource_id: str = ""
+    credential_provider: object = field(default=None, repr=False, compare=False)
+
+
+def azure_store_args(
+    settings: AzureStoreSettings, client_options: ClientConfig
+) -> tuple[dict[str, str] | None, ClientConfig]:
+    """Translate *settings* into obstore Azure ``(config, client_options)``."""
+    config: dict[str, str] = {}
+    opts: dict[str, object] = dict(client_options)
+    if settings.endpoint:
+        config["azure_storage_endpoint"] = settings.endpoint
+        if settings.endpoint.lower().startswith("http://"):
+            opts["allow_http"] = True
+    if settings.use_emulator:
+        config["azure_storage_use_emulator"] = "true"
+        opts["allow_http"] = True
+    for key, value in (
+        ("azure_storage_account_name", settings.account_name),
+        ("azure_storage_authority_host", settings.authority_host),
+        ("azure_storage_account_key", settings.account_key),
+        ("azure_storage_sas_key", settings.sas_key),
+        ("azure_storage_tenant_id", settings.tenant_id),
+        ("azure_storage_client_id", settings.client_id),
+        ("azure_storage_client_secret", settings.client_secret),
+        ("azure_storage_federated_token_file", settings.federated_token_file),
+        ("azure_storage_msi_endpoint", settings.msi_endpoint),
+        ("azure_storage_msi_resource_id", settings.msi_resource_id),
+    ):
+        if value:
+            config[key] = value
+    return (config or None), opts  # pyright: ignore[reportReturnType]
+
+
 def make_azure_store(
-    container: str,
-    config: dict[str, str] | None = None,
+    settings: AzureStoreSettings,
     *,
     label: str = "azure",
     client_options: ClientConfig | None = None,
-    credential_provider: object = None,
 ) -> ObjectStore:
-    """Create an AzureStore with SDK-default client/retry config.
+    """Create an AzureStore from *settings* with SDK-default client/retry config.
 
-    See :func:`make_s3_store` for rationale. When *config* carries an explicit
-    credential *or* a ``credential_provider`` is supplied, the ambient ``AZURE_*``
-    environment is suppressed for the construction so the host's own identity can't
-    override it (see ``_suppress_ambient_azure_env``).  The cert-auth path in
-    ``binding.py`` uses ``credential_provider`` instead of placing a key in ``config``,
-    so both cases must activate env stripping.
+    See :func:`make_s3_store` for rationale. When the settings carry an
+    explicit credential *or* a ``credential_provider``, the ambient
+    ``AZURE_*`` environment is suppressed for the construction so the host's
+    own identity can't override it (see ``_suppress_ambient_azure_env``). The
+    cert-auth path in ``binding.py`` uses ``credential_provider`` instead of
+    a key in ``config``, so both cases activate env stripping.
     """
     from obstore.store import AzureStore  # noqa: PLC0415
 
-    opts = client_options if client_options is not None else obstore_client_options()
+    base = client_options if client_options is not None else obstore_client_options()
+    config, opts = azure_store_args(settings, base)
     retry = obstore_retry_config()
     log_obstore_config(label, client_options=opts, retry_config=retry)
     kw: dict[str, object] = dict(
-        container_name=container, config=config, client_options=opts, retry_config=retry
+        container_name=settings.container,
+        config=config,
+        client_options=opts,
+        retry_config=retry,
     )
-    if credential_provider is not None:
-        kw["credential_provider"] = credential_provider
+    if settings.credential_provider is not None:
+        kw["credential_provider"] = settings.credential_provider
     isolate = (
-        _azure_config_has_explicit_credential(config) or credential_provider is not None
+        _azure_config_has_explicit_credential(config)
+        or settings.credential_provider is not None
     )
     with _suppress_ambient_azure_env(isolate):
         return AzureStore(**kw)  # pyright: ignore[reportArgumentType]
 
 
+@dataclass(frozen=True)
+class GCSStoreSettings:
+    """Everything a ``GCSStore`` is built from, whichever front-end read it.
+
+    With neither a service-account key nor a credential provider, obstore
+    resolves Application Default Credentials itself.
+    """
+
+    bucket: str
+    service_account_key: str = field(default="", repr=False)
+    """Service-account JSON, as text."""
+    credential_provider: object = field(default=None, repr=False, compare=False)
+
+
 def make_gcs_store(
-    bucket: str,
-    config: dict[str, str] | None = None,
+    settings: GCSStoreSettings,
     *,
     label: str = "gcs",
     client_options: ClientConfig | None = None,
-    credential_provider: object = None,
 ) -> ObjectStore:
-    """Create a GCSStore with SDK-default client/retry config.
+    """Create a GCSStore from *settings* with SDK-default client/retry config.
 
     See :func:`make_s3_store` for rationale. On the ADC / Workload-Identity path
     ``binding.py`` passes a ``credential_provider`` (obstore.auth.google, backed
-    by google-auth) instead of a key in ``config``: obstore's built-in GCS
-    credential-file decoder only understands ``service_account`` /
-    ``authorized_user`` files, NOT a Workload Identity Federation
-    ``external_account`` file — google-auth handles all of them.
+    by google-auth) instead of a key: obstore's built-in GCS credential-file
+    decoder only understands ``service_account`` / ``authorized_user`` files,
+    NOT a Workload Identity Federation ``external_account`` file — google-auth
+    handles all of them.
     """
     from obstore.store import GCSStore  # noqa: PLC0415
 
     opts = client_options if client_options is not None else obstore_client_options()
     retry = obstore_retry_config()
     log_obstore_config(label, client_options=opts, retry_config=retry)
-    kw: dict[str, object] = dict(
-        bucket=bucket, config=config, client_options=opts, retry_config=retry
+    # ``None`` (not {}) so obstore uses Application Default Credentials.
+    config = (
+        {"google_service_account_key": settings.service_account_key}
+        if settings.service_account_key
+        else None
     )
-    if credential_provider is not None:
-        kw["credential_provider"] = credential_provider
+    kw: dict[str, object] = dict(
+        bucket=settings.bucket, config=config, client_options=opts, retry_config=retry
+    )
+    if settings.credential_provider is not None:
+        kw["credential_provider"] = settings.credential_provider
     return GCSStore(**kw)  # pyright: ignore[reportArgumentType]
 
 

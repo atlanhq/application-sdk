@@ -19,6 +19,9 @@ import pytest
 
 from application_sdk import _obstore_config
 from application_sdk._obstore_config import (
+    AzureStoreSettings,
+    GCSStoreSettings,
+    S3StoreSettings,
     _azure_config_has_explicit_credential,
     log_obstore_config,
     make_azure_store,
@@ -225,9 +228,11 @@ class TestDurationEnvValues:
         import sys
 
         code = (
-            "from application_sdk._obstore_config import make_s3_store\n"
-            "make_s3_store('probe-bucket', {'aws_region': 'us-east-1', "
-            "'aws_skip_signature': 'true'})\n"
+            "from application_sdk._obstore_config import S3StoreSettings, "
+            "make_s3_store\n"
+            "make_s3_store(S3StoreSettings(bucket='probe-bucket', "
+            "region='us-east-1', access_key_id='probe', "
+            "secret_access_key='probe'))\n"
         )
         env = {**os.environ, "ATLAN_OBSTORE_TIMEOUT": ""}
         result = subprocess.run(
@@ -584,6 +589,12 @@ class TestCloudPlumbsClientOptions:
 # ---------------------------------------------------------------------------
 
 
+def _azure_settings(config: dict[str, str]) -> AzureStoreSettings:
+    """Settings whose obstore config is *config* (``azure_storage_<field>`` keys)."""
+    fields = {k.removeprefix("azure_storage_"): v for k, v in config.items()}
+    return AzureStoreSettings(container="container", **fields)
+
+
 class TestAzureAmbientEnvIsolation:
     """obstore reads ``AZURE_*`` from the environment at construction and lets a
     host-injected value outrank the caller's explicit credential. ``make_azure_store``
@@ -604,7 +615,7 @@ class TestAzureAmbientEnvIsolation:
             return MagicMock(name="AzureStore")
 
         with patch("obstore.store.AzureStore", new=fake_azure_store):
-            make_azure_store("container", config)
+            make_azure_store(_azure_settings(config))
         return captured
 
     def test_explicit_account_key_strips_ambient_env_during_build(self, monkeypatch):
@@ -657,11 +668,9 @@ class TestAzureAmbientEnvIsolation:
         with patch("obstore.store.AzureStore", new=boom):
             with pytest.raises(RuntimeError, match="construction failed"):
                 make_azure_store(
-                    "container",
-                    {
-                        "azure_storage_account_name": "a",
-                        "azure_storage_account_key": "k",
-                    },
+                    AzureStoreSettings(
+                        container="container", account_name="a", account_key="k"
+                    )
                 )
         assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
 
@@ -708,9 +717,11 @@ class TestAzureAmbientEnvIsolation:
         fake_provider = MagicMock(name="cert-credential-provider")
         with patch("obstore.store.AzureStore", new=fake_azure_store):
             make_azure_store(
-                "container",
-                {"azure_storage_account_name": "acct"},
-                credential_provider=fake_provider,
+                AzureStoreSettings(
+                    container="container",
+                    account_name="acct",
+                    credential_provider=fake_provider,
+                )
             )
 
         assert captured["azure_env"] == {}, (
@@ -752,12 +763,12 @@ class TestS3ConfigPassthrough:
             from application_sdk._obstore_config import make_s3_store
 
             make_s3_store(
-                "test-bucket",
-                {
-                    "aws_access_key_id": "CONFIG-ACCESS-KEY",
-                    "aws_secret_access_key": "CONFIG-SECRET-KEY",
-                    "aws_region": "us-east-1",
-                },
+                S3StoreSettings(
+                    bucket="test-bucket",
+                    access_key_id="CONFIG-ACCESS-KEY",
+                    secret_access_key="CONFIG-SECRET-KEY",
+                    region="us-east-1",
+                )
             )
 
         config = mock_s3.call_args.kwargs["config"]
@@ -772,7 +783,7 @@ class TestS3ConfigPassthrough:
             mock_s3.return_value = MagicMock()
             from application_sdk._obstore_config import make_s3_store
 
-            make_s3_store("test-bucket", None)
+            make_s3_store(S3StoreSettings(bucket="test-bucket"))
 
         assert mock_s3.call_args.kwargs["config"] is None
 
@@ -794,8 +805,10 @@ class TestGCSConfigPassthrough:
             from application_sdk._obstore_config import make_gcs_store
 
             make_gcs_store(
-                "test-bucket",
-                {"google_service_account_key": '{"type":"service_account"}'},
+                GCSStoreSettings(
+                    bucket="test-bucket",
+                    service_account_key='{"type":"service_account"}',
+                )
             )
 
         config = mock_gcs.call_args.kwargs["config"]
@@ -814,6 +827,37 @@ class TestGCSConfigPassthrough:
             mock_gcs.return_value = MagicMock()
             from application_sdk._obstore_config import make_gcs_store
 
-            make_gcs_store("test-bucket", None)
+            make_gcs_store(GCSStoreSettings(bucket="test-bucket"))
 
         assert mock_gcs.call_args.kwargs["config"] is None
+
+
+class TestStoreSettingsRepr:
+    """A logged settings object must not carry a credential."""
+
+    def test_s3_settings_repr_hides_credentials(self) -> None:
+        text = repr(
+            S3StoreSettings(
+                bucket="b",
+                access_key_id="AKID-EXAMPLE",
+                secret_access_key="secret-example",
+                session_token="token-example",
+            )
+        )
+        assert "b" in text
+        for secret in ("AKID-EXAMPLE", "secret-example", "token-example"):
+            assert secret not in text
+
+    def test_azure_and_gcs_settings_repr_hide_credentials(self) -> None:
+        az = repr(
+            AzureStoreSettings(
+                container="c",
+                account_key="key-example",
+                sas_key="sas-example",
+                client_secret="cs-example",
+            )
+        )
+        gcs = repr(GCSStoreSettings(bucket="b", service_account_key="sa-example"))
+        for secret in ("key-example", "sas-example", "cs-example"):
+            assert secret not in az
+        assert "sa-example" not in gcs

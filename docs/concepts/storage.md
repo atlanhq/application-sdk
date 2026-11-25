@@ -473,6 +473,22 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 | Inline service-account key | Any SA JSON field that includes `private_key` or `private_key_id` |
 | ADC / Workload Identity / metadata server | `bucket` + `project_id` only (no `private_key`) |
 
+### `CloudStore` (customer buckets)
+
+`CloudStore.from_credentials` reads the `csa-connectors-objectstore` credential (`authType`, `username`, `password`, `token`, `extra`) and builds its store through the same settings as the Dapr binding, so the same credentials give the same store on both paths. For S3:
+
+| Field | Effect |
+|-------|--------|
+| `username` + `password` | Static access key; `token` adds the STS session token for temporary credentials |
+| `extra.aws_role_arn` | AssumeRole via STS (+ optional `aws_external_id`, `aws_role_session_name`); `username`/`password`/`token` become the base identity |
+| `extra.endpoint` | S3-compatible endpoint (MinIO, R2, ...). `http://` allows plain HTTP; a non-AWS endpoint disables object tagging and skips the bucket-region lookup |
+| `extra.force_path_style`, `extra.disable_tagging` | Path-style requests; explicit tagging override (wins over the non-AWS auto-detect) |
+| `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
+
+ADLS also accepts `extra.endpoint` (e.g. Azurite).
+
+Store construction lives in `application_sdk/_obstore_config.py`: each front-end (the Dapr binding, `CloudStore`, the API host) fills an `S3StoreSettings`, `AzureStoreSettings` or `GCSStoreSettings`, and `make_*_store` is the only code that turns settings into obstore config. A fix to that translation reaches every path.
+
 ---
 
 ## Required Cloud Permissions

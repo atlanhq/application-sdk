@@ -101,15 +101,14 @@ def captured_s3_config():
     """Capture the obstore S3 config the resolver builds, without touching AWS."""
     captured: dict[str, object] = {}
 
-    def _fake_make_s3_store(bucket, config, **kwargs):
-        captured["bucket"] = bucket
-        captured["config"] = config
+    def _fake_s3_store(**kwargs):
+        captured["bucket"] = kwargs["bucket"]
+        captured["config"] = kwargs["config"]
         return mock.Mock(name="S3Store")
 
-    with mock.patch(
-        "application_sdk._obstore_config.make_s3_store",
-        side_effect=_fake_make_s3_store,
-    ):
+    # Patch obstore's class, not make_s3_store, so the capture is the config
+    # the shared settings translation actually produces.
+    with mock.patch("obstore.store.S3Store", side_effect=_fake_s3_store):
         yield captured
 
 

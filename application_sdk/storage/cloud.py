@@ -32,12 +32,24 @@ Usage::
 Credential format (standard ``csa-connectors-objectstore``)::
 
     S3:   authType="s3",   username=access_key, password=secret_key,
-          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?}
-          (a blank region is looked up from the bucket before the first call)
+          token?=session_token (temporary STS credentials),
+          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?,
+                 endpoint?, force_path_style?, disable_tagging?,
+                 server_side_encryption?, sse_kms_key_id?}
+          (a blank region is looked up from the bucket before the first
+          call, unless a custom endpoint is set; an http:// endpoint allows
+          plain HTTP, and a non-AWS endpoint disables object tagging unless
+          disable_tagging says otherwise)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
     ADLS: authType="adls", username=client_id,   password=client_secret,
-          extra={storage_account_name, adls_container, azure_tenant_id}
+          extra={storage_account_name, adls_container, azure_tenant_id,
+                 endpoint?}
+
+Every front-end that builds a store (this module, the Dapr binding, the API
+host) translates its input into the settings dataclasses of
+:mod:`application_sdk._obstore_config`, so the same credentials produce the
+same store whichever path read them.
 """
 
 from __future__ import annotations
@@ -704,9 +716,15 @@ _S3_REGION_LOOKUP_TIMEOUT_SECONDS = 10.0
 
 
 def _needs_region_lookup(extra: dict[str, Any]) -> bool:
-    """True when an S3 store has no region and talks to AWS S3 itself."""
+    """True when an S3 store has no region and talks to AWS S3 itself.
+
+    A custom endpoint (``extra["endpoint"]`` or the ``AWS_ENDPOINT_URL`` /
+    ``AWS_ENDPOINT`` env vars) is not AWS S3's own, so it gets no lookup.
+    """
     return not extra.get("region") and not (
-        os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT")
+        (extra.get("endpoint") or "").strip()
+        or os.environ.get("AWS_ENDPOINT_URL")
+        or os.environ.get("AWS_ENDPOINT")
     )
 
 
@@ -792,6 +810,19 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
     return ""
 
 
+def _extra_bool(extra: dict[str, Any], key: str) -> bool | None:
+    """``extra[key]`` as a bool, or ``None`` when absent or blank.
+
+    The credential form stores booleans as JSON booleans or as strings.
+    """
+    value = extra.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
 def _create_s3_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
@@ -801,19 +832,26 @@ def _create_s3_store(
     ``{"Storage-Class": value}`` when ``extra["storageClass"]`` is set,
     or ``None`` otherwise.
     """
-    from application_sdk._obstore_config import make_s3_store  # noqa: PLC0415
+    from application_sdk._obstore_config import (  # noqa: PLC0415
+        S3StoreSettings,
+        make_s3_store,
+    )
 
     bucket = extra.get("s3_bucket", "")
     if not bucket:
         raise StorageConfigError("S3 bucket is required (extra.s3_bucket)")
 
-    config: dict[str, str] = {}
-    region = extra.get("region", "")
-    if region:
-        config["aws_region"] = region
-
     access_key = creds.get("username") or ""
     secret_key = creds.get("password") or ""
+    # Temporary (STS) credentials carry a session token alongside the keys.
+    session_token = creds.get("token") or ""
+    if bool(access_key) != bool(secret_key):
+        _log().warning(
+            "S3: both username and password are required as credentials; only "
+            "one was set — dropping both and falling back to the ambient "
+            "credential chain."
+        )
+        access_key = secret_key = session_token = ""
 
     credential_provider = None
     role_arn = extra.get("aws_role_arn", "")
@@ -823,22 +861,11 @@ def _create_s3_store(
         # the ambient identity), so wire an STS credential provider — the same
         # path binding.py uses. Base creds are optional: when omitted, the STS
         # call uses the pod's ambient chain (IRSA / instance profile) as the
-        # caller identity. Partial base creds (only one of access/secret) are
-        # dropped so we don't hand obstore a half-configured session.
+        # caller identity.
         from application_sdk.storage._credential_providers import (  # noqa: PLC0415
             make_s3_assume_role_provider,
         )
 
-        base_access_key = access_key or None
-        base_secret_key = secret_key or None
-        if bool(base_access_key) != bool(base_secret_key):
-            _log().warning(
-                "S3 assume-role: both username and password are required as base "
-                "credentials; only one was set — dropping both and falling back to "
-                "the ambient credential chain as the STS caller identity."
-            )
-            base_access_key = None
-            base_secret_key = None
         credential_provider = make_s3_assume_role_provider(
             role_arn=role_arn,
             # Distinct from binding.py's "atlan-application-sdk" default so the
@@ -847,60 +874,60 @@ def _create_s3_store(
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
             # No region: scoping the STS session to the bucket's region breaks
             # AssumeRole for opt-in regions (e.g. me-central-1); region belongs
-            # on the S3 store's own config below, not the STS call.
-            base_access_key=base_access_key,
-            base_secret_key=base_secret_key,
-            base_session_token=(creds.get("token") or None)
-            if base_access_key
-            else None,
+            # on the S3 store's own config, not the STS call.
+            base_access_key=access_key or None,
+            base_secret_key=secret_key or None,
+            base_session_token=session_token or None,
             # Required when the role's trust policy has an sts:ExternalId
             # condition; the provider drops a blank one.
             external_id=extra.get("aws_external_id"),
         )
         _log().debug("S3 cross-account assume-role auth configured")
-    elif access_key and secret_key:
-        config["aws_access_key_id"] = access_key
-        config["aws_secret_access_key"] = secret_key
+
+    settings = S3StoreSettings(
+        bucket=bucket,
+        region=extra.get("region") or "",
+        endpoint=(extra.get("endpoint") or "").strip(),
+        force_path_style=bool(_extra_bool(extra, "force_path_style")),
+        disable_tagging=_extra_bool(extra, "disable_tagging"),
+        access_key_id=access_key,
+        secret_access_key=secret_key,
+        session_token=session_token,
+        server_side_encryption=(extra.get("server_side_encryption") or "").strip(),
+        sse_kms_key_id=(extra.get("sse_kms_key_id") or "").strip(),
+        credential_provider=credential_provider,
+    )
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"Storage-Class": storage_class} if storage_class else None
     )
 
-    return (
-        make_s3_store(
-            bucket,
-            config or None,
-            label="cloud-s3",
-            credential_provider=credential_provider,
-        ),
-        put_attrs,
-    )
+    return make_s3_store(settings, label="cloud-s3"), put_attrs
 
 
 def _create_gcs_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create a GCS store from credentials."""
-    from application_sdk._obstore_config import make_gcs_store  # noqa: PLC0415
+    from application_sdk._obstore_config import (  # noqa: PLC0415
+        GCSStoreSettings,
+        make_gcs_store,
+    )
 
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
         raise StorageConfigError("GCS bucket is required (extra.gcs_bucket)")
-
-    gcs_config: dict[str, str] = {}
-    sa_json = creds.get("password") or ""
-    if sa_json:
-        gcs_config["google_service_account_key"] = sa_json
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"X-Goog-Storage-Class": storage_class} if storage_class else None
     )
 
-    return make_gcs_store(
-        bucket, gcs_config if gcs_config else None, label="cloud-gcs"
-    ), put_attrs
+    settings = GCSStoreSettings(
+        bucket=bucket, service_account_key=creds.get("password") or ""
+    )
+    return make_gcs_store(settings, label="cloud-gcs"), put_attrs
 
 
 def _create_azure_store(
@@ -908,6 +935,7 @@ def _create_azure_store(
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an Azure (ADLS) store from credentials."""
     from application_sdk._obstore_config import (  # noqa: PLC0415
+        AzureStoreSettings,
         make_azure_store,
     )
 
@@ -918,27 +946,27 @@ def _create_azure_store(
             "Azure storage account is required (extra.storage_account_name)"
         )
 
-    az_config: dict[str, str] = {
-        "azure_storage_account_name": storage_account,
-    }
-
-    access_key = creds.get("password") or ""
+    password = creds.get("password") or ""
     client_id = creds.get("username") or ""
     tenant_id = extra.get("azure_tenant_id") or ""
 
-    if access_key and not tenant_id:
-        # Account key auth
-        az_config["azure_storage_account_key"] = access_key
-    elif tenant_id and client_id:
-        # Service principal auth
-        az_config["azure_storage_client_id"] = client_id
-        az_config["azure_storage_tenant_id"] = tenant_id
-        if access_key:
-            az_config["azure_storage_client_secret"] = access_key
+    # Account key auth without a tenant; service principal with one (no
+    # secret: workload identity). Anything else falls to the ambient identity.
+    account_key = password if password and not tenant_id else ""
+    service_principal = bool(tenant_id and client_id)
+    settings = AzureStoreSettings(
+        container=container,
+        account_name=storage_account,
+        endpoint=(extra.get("endpoint") or "").strip(),
+        account_key=account_key,
+        tenant_id=tenant_id if service_principal else "",
+        client_id=client_id if service_principal else "",
+        client_secret=password if service_principal else "",
+    )
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"x-ms-access-tier": storage_class} if storage_class else None
     )
 
-    return make_azure_store(container, az_config, label="cloud-azure"), put_attrs
+    return make_azure_store(settings, label="cloud-azure"), put_attrs

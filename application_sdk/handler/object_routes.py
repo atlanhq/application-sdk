@@ -891,8 +891,10 @@ def _s3_store(bucket: str) -> ObjectStore:
         or os.environ.get("AWS_REGION", "")
         or os.environ.get("AWS_DEFAULT_REGION", "")
     )
-    config = {"aws_region": region} if region else None
-    return _obstore_config.make_s3_store(bucket, config, label="host-s3")
+    return _obstore_config.make_s3_store(
+        _obstore_config.S3StoreSettings(bucket=bucket, region=region),
+        label="host-s3",
+    )
 
 
 def _gcs_store(bucket: str) -> ObjectStore | None:
@@ -912,18 +914,16 @@ def _gcs_store(bucket: str) -> ObjectStore | None:
             "ATLAN_GCP_HMAC_SECRET, so the config and file routes answer 503."
         )
         return None
-    config = {
-        "aws_endpoint": _GCS_ENDPOINT,
-        "aws_access_key_id": access_key,
-        "aws_secret_access_key": secret,
-        # GCS rejects x-amz-tagging, as the worker's binding notes for every
-        # non-AWS endpoint.
-        "aws_disable_tagging": "true",
-    }
-    region = _resolved_env("ATLAN_GCP_REGION")
-    if region:
-        config["aws_region"] = region
-    return _obstore_config.make_s3_store(bucket, config, label="host-gcs")
+    # GCS rejects x-amz-tagging; the shared translation disables it for this
+    # non-AWS endpoint, as it does for every one.
+    settings = _obstore_config.S3StoreSettings(
+        bucket=bucket,
+        region=_resolved_env("ATLAN_GCP_REGION"),
+        endpoint=_GCS_ENDPOINT,
+        access_key_id=access_key,
+        secret_access_key=secret,
+    )
+    return _obstore_config.make_s3_store(settings, label="host-gcs")
 
 
 def _azure_store(account: str) -> ObjectStore | None:
@@ -943,11 +943,12 @@ def _azure_store(account: str) -> ObjectStore | None:
             "ATLAN_AZURE_STORAGE_CONTAINER, so the config and file routes answer 503."
         )
         return None
-    config = {"azure_storage_account_name": account}
-    access_key = _resolved_env("ATLAN_AZURE_STORAGE_ACCESS_KEY")
-    if access_key:
-        config["azure_storage_account_key"] = access_key
-    return _obstore_config.make_azure_store(container, config, label="host-azure")
+    settings = _obstore_config.AzureStoreSettings(
+        container=container,
+        account_name=account,
+        account_key=_resolved_env("ATLAN_AZURE_STORAGE_ACCESS_KEY"),
+    )
+    return _obstore_config.make_azure_store(settings, label="host-azure")
 
 
 def host_object_source(

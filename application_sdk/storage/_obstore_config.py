@@ -9,6 +9,9 @@ the same code. This module re-exports them for the worker's existing imports
 from __future__ import annotations
 
 from application_sdk._obstore_config import (
+    AzureStoreSettings,
+    GCSStoreSettings,
+    S3StoreSettings,
     log_obstore_config,
     logger,
     make_azure_store,
@@ -22,6 +25,9 @@ from application_sdk._obstore_config import (
 from application_sdk.observability.logger_adaptor import get_logger
 
 __all__ = [
+    "AzureStoreSettings",
+    "GCSStoreSettings",
+    "S3StoreSettings",
     "get_logger",
     "log_obstore_config",
     "logger",
