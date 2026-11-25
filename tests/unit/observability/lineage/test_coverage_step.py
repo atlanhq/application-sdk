@@ -231,12 +231,18 @@ def test_coverage_off_holds_nothing_and_still_reads_the_output(run_files, tmp_pa
     assert isinstance(recorder, NoOpCoverageRecorder)
     recorder.missing("k", CustomSqlParserFailure)
     recorder.note("k", a=1)
-    assert recorder.get("k") is None and len(recorder) == 0
+    assert recorder.get("k") is None and recorder.recorded_keys == 0
     summary = run_coverage_step(
         run_files, str(tmp_path / "cov"), SPEC, recorder, REGISTRY
     )
     assert summary["coverageStatus"] == "OK"
     assert rows(tmp_path / "cov")["why"]["reasonCode"] == "UNINSTRUMENTED_PATH"
+
+
+def test_an_empty_recorder_is_truthy():
+    # App code writes ``tracker or NoOp()``; an empty recorder must survive it.
+    assert CoverageRecorder() and NoOpCoverageRecorder()
+    assert CoverageRecorder().recorded_keys == 0
 
 
 class Boom(RuntimeError):
