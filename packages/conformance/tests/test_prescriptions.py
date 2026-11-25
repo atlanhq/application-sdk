@@ -1812,111 +1812,72 @@ _TYPED_CONTRACTS = (
 _APP_IMPORTS = "from application_sdk.app import App, entrypoint, task, signal, query\n"
 
 
-def test_p013_fires_on_untyped_dict_input(tmp_path: Path) -> None:
-    """@entrypoint with dict input → P013."""
+def _boundary_connector(
+    decorator: str, method: str, imports: str, signature: str
+) -> str:
+    """One-method ``App`` subclass for the P013/P014 boundary tables."""
+    return (
+        _APP_IMPORTS + imports + "class MyApp(App):\n"
+        f"    @{decorator}\n"
+        f"    async def {method}{signature}:\n"
+        "        ...\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("imports", "signature", "message_fragment"),
+    [
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict) -> FetchOutput",
+            "input",
+            id="untyped_dict_input",
+        ),
+        # Even if bounded, a dict is not a typed contract.
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict[str, str]) -> FetchOutput",
+            None,
+            id="subscripted_dict_input",
+        ),
+        pytest.param(
+            "from typing import Any\nfrom contracts import FetchOutput\n",
+            "(self, input: Any) -> FetchOutput",
+            None,
+            id="any_input",
+        ),
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input) -> FetchOutput",
+            "missing",
+            id="missing_input_annotation",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput) -> dict",
+            "output",
+            id="untyped_return",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput)",
+            "missing",
+            id="missing_return_annotation",
+        ),
+    ],
+)
+def test_p013_fires_on_untyped_boundary(
+    tmp_path: Path, imports: str, signature: str, message_fragment: str | None
+) -> None:
     files = {
         "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: dict) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
+        "connector.py": _boundary_connector("entrypoint", "run_it", imports, signature),
     }
     findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
-    assert "input" in p013[0].message
-
-
-def test_p013_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
-    """@entrypoint with dict[str,str] input — 'even if bounded' → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: dict[str, str]) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-
-
-def test_p013_fires_on_any_input(tmp_path: Path) -> None:
-    """@entrypoint with Any input → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from typing import Any\n"
-            "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: Any) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-
-
-def test_p013_fires_on_missing_input_annotation(tmp_path: Path) -> None:
-    """@entrypoint with unannotated input param → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "missing" in p013[0].message.lower()
-
-
-def test_p013_fires_on_untyped_return(tmp_path: Path) -> None:
-    """@entrypoint with dict return type → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: FetchInput) -> dict:\n"
-            "        return {}\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "output" in p013[0].message
-
-
-def test_p013_fires_on_missing_return_annotation(tmp_path: Path) -> None:
-    """@entrypoint with no return annotation → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: FetchInput):\n"
-            "        pass\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "missing" in p013[0].message.lower()
+    if message_fragment is not None:
+        assert message_fragment in p013[0].message
 
 
 def test_p013_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
@@ -2257,57 +2218,42 @@ def test_p013_result_is_failing_disposition(tmp_path: Path) -> None:
 # ── P014 UntypedTaskBoundary ──────────────────────────────────────────────────
 
 
-def test_p014_fires_on_untyped_dict_input(tmp_path: Path) -> None:
-    """@task with dict input → P014."""
+@pytest.mark.parametrize(
+    ("imports", "signature", "message_fragment"),
+    [
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict) -> FetchOutput",
+            "input",
+            id="untyped_dict_input",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput) -> dict",
+            "output",
+            id="untyped_return",
+        ),
+        # Bounded containers are still untyped.
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict[str, str]) -> FetchOutput",
+            None,
+            id="subscripted_dict_input",
+        ),
+    ],
+)
+def test_p014_fires_on_untyped_boundary(
+    tmp_path: Path, imports: str, signature: str, message_fragment: str | None
+) -> None:
     files = {
         "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: dict) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
+        "connector.py": _boundary_connector("task", "fetch", imports, signature),
     }
     findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
-    assert "input" in p014[0].message
-
-
-def test_p014_fires_on_untyped_return(tmp_path: Path) -> None:
-    """@task with dict return → P014."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: FetchInput) -> dict:\n"
-            "        return {}\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p014 = [f for f in findings if f.rule_id == "P014"]
-    assert len(p014) == 1
-    assert "output" in p014[0].message
-
-
-def test_p014_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
-    """@task with dict[str,str] input → P014 (bounded containers still untyped)."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: dict[str, str]) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p014 = [f for f in findings if f.rule_id == "P014"]
-    assert len(p014) == 1
+    if message_fragment is not None:
+        assert message_fragment in p014[0].message
 
 
 def test_p014_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
