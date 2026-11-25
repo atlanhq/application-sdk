@@ -6,6 +6,17 @@
     python -m connector_reviewer sdk-ref --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer sdk-ref --root <app checkout>
     python -m connector_reviewer base-ref --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+    python -m connector_reviewer gate-ref --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
+    python -m connector_reviewer gate-fact --checkout <head checkout> --venv <new venv dir> --out <fact.json>
+
+`gate-ref` and `gate-fact` run in the workflow's `gate` job, which holds no
+secret (FND-5325, connector_reviewer/gate.py). `gate-ref` writes the pull
+request's head ref (`ref=refs/pull/<n>/head`, empty when there is none) for a
+sparse checkout of the head, read as data; `gate-fact` installs the
+conformance version that head's `uv.lock` pins into a fresh venv, compares the
+bootstrap-managed gate files with its render, and writes the fact file the
+review reads (`--gate-fact`, or `CONNECTOR_REVIEWER_GATE_FACT`). Both always
+exit 0: a check that cannot be made is a fact that says why.
 
 `base-ref` reads the pull request through the REST API and writes its base
 commit (`base=`, 40 hex, empty when there is none) to `$GITHUB_OUTPUT`; the
@@ -61,7 +72,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import report, trace
+from . import gate, report, trace
 from .config import load_config, validate
 from .event import FORK_REFUSAL, addressed, decide, is_fork
 from .finalize import (
@@ -151,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
         help="the pull request head `sdk-ref` chose the SDK checkout's ref from, for "
         "the note when the head moved (default: $CONNECTOR_REVIEWER_SDK_HEAD)",
     )
+    r.add_argument(
+        "--gate-fact",
+        default=None,
+        help="the gate job's fact file (connector_reviewer/gate.py) "
+        "(default: $CONNECTOR_REVIEWER_GATE_FACT; unset: no gate-file check)",
+    )
     f = sub.add_parser(
         "finalize",
         help="after the review step, whatever its outcome: turn this run's leftover "
@@ -182,7 +199,42 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--pr", type=int)
     b.add_argument("--event-name")
     b.add_argument("--event-path")
+    g = sub.add_parser(
+        "gate-ref",
+        help="write the pull request's head ref to $GITHUB_OUTPUT, for the gate job's "
+        "checkout",
+    )
+    g.add_argument("--pr", type=int)
+    g.add_argument("--event-name")
+    g.add_argument("--event-path")
+    gb = sub.add_parser(
+        "gate-base",
+        help="write the base commit the pull request merges into (the first parent "
+        "of its test merge) to $GITHUB_OUTPUT, for the gate job's base checkout",
+    )
+    gb.add_argument("--merge-checkout", required=True)
+    gf = sub.add_parser(
+        "gate-fact",
+        help="compare the head's bootstrap-managed gate files with the render of the "
+        "conformance version its uv.lock pins, and write the fact file",
+    )
+    gf.add_argument(
+        "--checkout", required=True, help="the pull request head, read as data"
+    )
+    gf.add_argument("--venv", required=True, help="a directory for a new venv")
+    gf.add_argument(
+        "--base-checkout",
+        required=True,
+        help="the base branch, whose uv.lock pins the conformance version rendered",
+    )
+    gf.add_argument("--out", required=True, help="where the fact file is written")
     args = ap.parse_args(argv)
+    if args.cmd == "gate-ref":
+        return _gate_ref(args)
+    if args.cmd == "gate-fact":
+        return _gate_fact(args)
+    if args.cmd == "gate-base":
+        return _gate_base(args)
     if args.cmd == "finalize":
         return _finalize(args)
     if args.cmd == "sdk-ref":
@@ -377,6 +429,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     if sdk_dir is None:
         trace.line("SDK source not available: not configured")
+    gate_fact = (
+        args.gate_fact if args.gate_fact is not None else os.environ.get(gate.FACT_ENV)
+    )
+    if gate_fact is None:
+        trace.line("gate-file check: not configured")
 
     # A "running" note while the review is in progress, with a link to the live log. It is
     # removed once the verdict is posted (the verdict links the run too), and turned into a
@@ -403,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
             on_pending=record_head,
             sdk_dir=sdk_dir,
             sdk_head=sdk_head,
+            gate_fact=gate_fact,
         )
     except Exception:
         # The pending status this run set must not outlive it. The workflow's
@@ -557,6 +615,76 @@ def _base_ref(args: argparse.Namespace) -> int:
             )
     else:
         print(out, end="")
+    return 0
+
+
+def _read_event(args: argparse.Namespace) -> dict[str, Any]:
+    if not (args.event_name and args.event_path):
+        return {}
+    try:
+        event = json.loads(Path(args.event_path).read_text())
+    except (OSError, ValueError):
+        return {}
+    return event if isinstance(event, dict) else {}
+
+
+def _write_output(out: str) -> None:
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        print(out, end="")
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(out)
+    except OSError as e:
+        print(
+            f"connector-reviewer: could not write the step output: {e}", file=sys.stderr
+        )
+
+
+def _gate_ref(args: argparse.Namespace) -> int:
+    """`gate-ref`: always exit 0. No pull request is an empty ref: the
+    checkout then fails on its own, and the fact says the head was not checked
+    out."""
+    out = gate.head_ref_output(args.event_name or "", _read_event(args), args.pr or 0)
+    print(f"connector-reviewer: gate-file check reads {out.strip() or 'no ref'}")
+    _write_output(out)
+    return 0
+
+
+def _gate_base(args: argparse.Namespace) -> int:
+    """`gate-base`: always exit 0. No base is an empty output: the base
+    checkout is skipped, and the fact says the base was not checked out."""
+    out = gate.base_ref_output(Path(args.merge_checkout))
+    print(f"connector-reviewer: gate-file check base: {out.strip() or 'none'}")
+    _write_output(out)
+    return 0
+
+
+def _gate_fact(args: argparse.Namespace) -> int:
+    """`gate-fact`: always exit 0. A check that cannot be made is a fact with
+    `status: unavailable` and the reason, which the review states."""
+    fact = gate.make_fact(
+        Path(args.checkout), Path(args.venv), Path(args.base_checkout)
+    )
+    out = Path(args.out)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(fact), encoding="utf-8")
+    except OSError as e:
+        print(
+            f"connector-reviewer: could not write the gate fact: {e}", file=sys.stderr
+        )
+    if fact.get("status") == "ok":
+        mism = fact.get("mismatches") or {}
+        print(
+            f"connector-reviewer: gate files at {str(fact.get('head'))[:9]} against "
+            f"conformance {fact.get('conformance')}: {len(fact.get('gate_files') or [])} "
+            f"checked, {len(mism)} differ from the render"
+            + (f" ({', '.join(sorted(mism))})" if mism else "")
+        )
+    else:
+        print(f"connector-reviewer: gate-file check not made: {fact.get('reason')}")
     return 0
 
 

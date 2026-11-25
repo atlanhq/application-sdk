@@ -15,6 +15,7 @@ import http.client
 import json
 import math
 import re
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15451,3 +15452,1094 @@ def test_an_sdk_search_past_the_file_cap_says_it_is_partial(
     out = search_code(ws, "no-such-text-anywhere", path_glob="sdk:application_sdk/**")
     assert "No matches" in out
     assert "the SDK source is partial: it lists only the first 1 files" in out
+
+
+# ---- the gate-file fact (FND-5325) ---------------------------------------------------
+
+from connector_reviewer import gate as gate_mod  # noqa: E402
+
+GATE_H1 = "a" * 40
+GATE_H2 = "b" * 40
+CONFORMANCE_WF = ".github/workflows/conformance.yaml"
+CHECKS_WF = ".github/workflows/checks.yml"
+SHIM_WF = ".github/workflows/connector-reviewer.yaml"
+GATE_FILES = [CONFORMANCE_WF, CHECKS_WF, SHIM_WF, ".github/scripts/release_gate.py"]
+
+
+def _conformance_lock(
+    version: str = "0.60.0", registry: str = "https://pypi.org/simple"
+) -> str:
+    return (
+        "version = 1\n\n[[package]]\n"
+        'name = "atlan-application-sdk-conformance"\n'
+        f'version = "{version}"\n'
+        f'source = {{ registry = "{registry}" }}\n'
+    )
+
+
+def _write_fact(
+    tmp_path: Path,
+    head: str = GATE_H1,
+    mismatches: dict[str, Any] | None = None,
+    *,
+    version: str = "0.60.0",
+    gate_files: list[str] | None = None,
+    name: str = "fact.json",
+) -> str:
+    fact: dict[str, Any] = {
+        "schema": 1,
+        "status": "ok",
+        "head": head,
+        "conformance": version,
+        "gate_files": GATE_FILES if gate_files is None else gate_files,
+        "mismatches": mismatches or {},
+        "unchecked": {},
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(fact))
+    return str(path)
+
+
+DRIFT = {
+    "kind": "drifted",
+    "added": 1,
+    "removed": 1,
+    "diff": "@@ -20,1 +20,1 @@\n-      exit-zero: false\n+      exit-zero: true",
+    "cut": False,
+}
+WF_OLD = "name: Conformance\non: pull_request\njobs: {}\n"
+WF_NEW = "name: Conformance\non: pull_request\njobs: {}\n# local tweak\n"
+
+
+def test_gate_ref_names_the_pull_requests_head_ref_and_nothing_else():
+    """The checkout's ref is built from an int: a dispatch input or a comment
+    event can name a pull request number and nothing more."""
+    comment = {"issue": {"number": 12, "pull_request": {}}}
+    assert gate_mod.head_ref_output("issue_comment", comment) == (
+        "ref=refs/pull/12/head\nmerge=refs/pull/12/merge\n"
+    )
+    dispatch = {"inputs": {"pr": "#34"}}
+    assert gate_mod.head_ref_output("workflow_dispatch", dispatch) == (
+        "ref=refs/pull/34/head\nmerge=refs/pull/34/merge\n"
+    )
+    for bad in ("34; rm -rf /", "main", "", "-3", "refs/heads/x"):
+        out = gate_mod.head_ref_output("workflow_dispatch", {"inputs": {"pr": bad}})
+        assert out == "ref=\nmerge=\n", bad
+    # An issue that is not a pull request has no head.
+    issue = {"issue": {"number": 3}}
+    assert gate_mod.head_ref_output("issue_comment", issue) == "ref=\nmerge=\n"
+    assert gate_mod.head_ref_output("issue_comment", {}, pr=7) == (
+        "ref=refs/pull/7/head\nmerge=refs/pull/7/merge\n"
+    )
+
+
+_ENDOR = "factory.endorlabs.com/v1/namespaces/atlan.atlanhq/firewall/pypi/simple"
+
+
+@pytest.mark.parametrize(
+    ("lock", "expected"),
+    [
+        (_conformance_lock(), gate_mod.Pin("0.60.0", "https://pypi.org/simple")),
+        (
+            _conformance_lock("0.61.0rc1"),
+            gate_mod.Pin("0.61.0rc1", "https://pypi.org/simple"),
+        ),
+        # The org's mirror, by its canonical URL: never the lock's own spelling,
+        # which could carry credentials or a longer path.
+        (
+            _conformance_lock(registry=f"https://user:secret@{_ENDOR}/extra"),
+            gate_mod.Pin("0.60.0", f"https://{_ENDOR}"),
+        ),
+        (
+            _conformance_lock(registry="https://evil.example/simple"),
+            "not come from PyPI",
+        ),
+        (_conformance_lock(registry="http://pypi.org/simple"), "not come from PyPI"),
+        (_conformance_lock("0.60.0.dev1"), "is not a released version"),
+        (
+            _conformance_lock() + _conformance_lock("0.59.0").split("\n\n", 1)[1],
+            "more than one way",
+        ),
+        ("version = 1\n", "is not in uv.lock"),
+        ("not = [toml", "does not parse"),
+        (
+            '[[package]]\nname = "atlan-application-sdk-conformance"\n'
+            'version = "0.60.0"\nsource = { git = '
+            '"https://github.com/atlanhq/application-sdk.git#' + "c" * 40 + '" }\n',
+            "not come from PyPI",
+        ),
+    ],
+)
+def test_the_conformance_pin_is_a_release_from_a_known_index(lock: str, expected: Any):
+    got = gate_mod.conformance_pin(lock)
+    if isinstance(expected, gate_mod.Pin):
+        assert got == expected
+    else:
+        assert isinstance(got, str) and expected in got
+
+
+def _git_checkout(path: Path, files: dict[str, str]) -> str:
+    import subprocess  # noqa: PLC0415
+
+    path.mkdir(parents=True)
+    for rel, text in files.items():
+        (path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (path / rel).write_text(text)
+    vcs = [
+        "git",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@e",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    subprocess.run([*vcs, "init", "-q"], cwd=path, check=True)
+    subprocess.run([*vcs, "add", "-A"], cwd=path, check=True)
+    subprocess.run([*vcs, "commit", "-q", "-m", "x"], cwd=path, check=True)
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out.stdout.strip()
+
+
+class _Runner:
+    """Records each subprocess the gate job starts; the render writes `result`."""
+
+    def __init__(self, result: dict[str, Any] | None = None, fail: str = ""):
+        self.calls: list[dict[str, Any]] = []
+        self.result = result
+        self.fail = fail
+
+    def __call__(self, argv: list[str], **kw: Any) -> Any:
+        import subprocess  # noqa: PLC0415
+
+        self.calls.append({"argv": list(argv), **kw})
+        if self.fail and any(self.fail in a for a in argv):
+            return subprocess.CompletedProcess(argv, 1, "", "boom")
+        if "--out" in argv and self.result is not None:
+            Path(argv[argv.index("--out") + 1]).write_text(json.dumps(self.result))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+def _render_result(**over: Any) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "status": "ok",
+        "conformance": "0.60.0",
+        "gate_files": GATE_FILES,
+        "mismatches": {CONFORMANCE_WF: DRIFT},
+        "unchecked": {},
+        **over,
+    }
+
+
+def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Wheels only (no build step runs), from the index the lock names, into
+    a fresh venv, and the render runs with that venv's interpreter in isolated
+    mode, from outside the checkout, with no token in its environment."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_secret")
+    monkeypatch.setenv("PYTHONPATH", "/somewhere")
+    checkout = tmp_path / "gate-head"
+    # The head pins another version: it is never read.
+    head = _git_checkout(checkout, {"uv.lock": _conformance_lock("0.61.0")})
+    base_dir = tmp_path / "gate-base"
+    base = _git_checkout(base_dir, {"uv.lock": _conformance_lock()})
+    runner = _Runner(_render_result())
+    venv_dir = tmp_path / "work" / "venv"
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        fetched.append(url)
+        return json.dumps({"versions": ["0.59.0", "0.60.0", "0.61.0rc1"]}).encode()
+
+    fact = gate_mod.make_fact(
+        checkout,
+        venv_dir,
+        base_dir,
+        python="py",
+        run=runner,
+        script=Path("/s/r.py"),
+        fetch=fetch,
+    )
+    # The newest final release, from the index's version list: no install.
+    assert fact["latest"] == "0.60.0"
+    assert fetched == ["https://pypi.org/simple/atlan-application-sdk-conformance/"]
+    assert fact["status"] == "ok" and fact["head"] == head
+    assert fact["base"] == base
+    # The base branch's pin, not the head's 0.61.0.
+    assert fact["conformance"] == "0.60.0"
+    assert fact["mismatches"] == {CONFORMANCE_WF: DRIFT}
+    venv, pip, render = (c["argv"] for c in runner.calls)
+    assert venv == ["py", "-m", "venv", str(venv_dir)]
+    vpy = str(venv_dir / "bin" / "python")
+    assert pip[:5] == [vpy, "-I", "-m", "pip", "install"]
+    assert pip[pip.index("--only-binary") + 1] == ":all:"
+    assert pip[pip.index("--index-url") + 1] == "https://pypi.org/simple"
+    assert pip[-1] == "atlan-application-sdk-conformance==0.60.0"
+    assert render[:3] == [vpy, "-I", "/s/r.py"]
+    assert render[render.index("--root") + 1] == str(checkout.resolve())
+    for call in runner.calls:
+        assert "GITHUB_TOKEN" not in call["env"]
+        assert "PYTHONPATH" not in call["env"]
+        assert not Path(call["cwd"]).resolve().is_relative_to(checkout.resolve())
+        assert call["timeout"] > 0
+
+
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [
+        ("no-checkout", "the pull request head was not checked out"),
+        ("no-base", "the base branch was not checked out"),
+        ("no-lock", "the base branch has no uv.lock"),
+        ("bad-pin", "not come from PyPI"),
+        ("pip-fails", "installing atlan-application-sdk-conformance 0.60.0 failed"),
+        ("render-fails", "the render failed"),
+        ("no-result", "the render wrote no result"),
+        ("wrong-version", "not the pinned one"),
+        ("render-unavailable", "cannot be compared"),
+    ],
+)
+def test_a_gate_check_that_cannot_be_made_is_never_a_mismatch(
+    tmp_path: Path, setup: str, reason: str
+):
+    checkout = tmp_path / "gate-head"
+    registry = (
+        "https://evil.example/simple"
+        if setup == "bad-pin"
+        else "https://pypi.org/simple"
+    )
+    files = (
+        {"README.md": "x"}
+        if setup == "no-lock"
+        else {"uv.lock": _conformance_lock(registry=registry)}
+    )
+    if setup != "no-checkout":
+        _git_checkout(checkout, {"README.md": "head"})
+    base_dir = tmp_path / "gate-base"
+    if setup != "no-base":
+        _git_checkout(base_dir, files)
+    result: dict[str, Any] | None = _render_result()
+    fail = ""
+    if setup == "pip-fails":
+        fail = "pip"
+    elif setup == "render-fails":
+        fail = "--root"
+    elif setup == "no-result":
+        result = None
+    elif setup == "wrong-version":
+        result = _render_result(conformance="0.59.0")
+    elif setup == "render-unavailable":
+        result = {
+            "schema": 1,
+            "status": "unavailable",
+            "reason": "this conformance version cannot be compared (ImportError)",
+        }
+    fact = gate_mod.make_fact(
+        checkout,
+        tmp_path / "w" / "venv",
+        base_dir,
+        python="py",
+        run=_Runner(result, fail),
+        fetch=lambda url: None,
+    )
+    assert fact["status"] == "unavailable" and "mismatches" not in fact
+    assert reason in fact["reason"]
+    # The review reads it as a note, never a finding.
+    path = tmp_path / "fact.json"
+    path.write_text(json.dumps(fact))
+    ev = gate_mod.evaluate(
+        str(path),
+        parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
+        head=GATE_H1,
+        base_lock_text=_conformance_lock(),
+    )
+    assert ev.findings is None and len(ev.notes) == 1
+    assert ev.notes[0].startswith("Gate-file check not made: ")
+
+
+def test_the_fact_is_read_as_untrusted_data(tmp_path: Path):
+    """It was written by a job that read pull-request files: a path outside
+    the repository, a mismatch on a file that is not a gate file, an unknown
+    kind and an oversized diff are dropped or cut."""
+    path = _write_fact(
+        tmp_path,
+        mismatches={
+            CONFORMANCE_WF: {**DRIFT, "diff": "x" * 50_000},
+            "../etc/passwd": DRIFT,
+            "/abs/path": DRIFT,
+            "app/main.py": DRIFT,
+            CHECKS_WF: {"kind": "rewrite-everything"},
+        },
+        gate_files=[*GATE_FILES, "../etc/passwd", "/abs/path", ".github/./x"],
+    )
+    fact, why = gate_mod.load_fact(path)
+    assert fact is not None and why == ""
+    assert fact.gate_files == frozenset(GATE_FILES)
+    assert list(fact.mismatches) == [CONFORMANCE_WF]
+    assert len(fact.mismatches[CONFORMANCE_WF].diff) == gate_mod.DIFF_KEEP
+    for bad, reason in (
+        ({"schema": 2}, "another format"),
+        ({"head": "h1"}, "names no head"),
+        ({"conformance": "latest"}, "names no conformance version"),
+        (
+            {"status": "unavailable", "reason": "pip failed <script>"},
+            "pip failed script",
+        ),
+        # A fact that leaves out either list must not read as "all clean".
+        ({"mismatches": None}, "no mismatch or unchecked list"),
+        ({"unchecked": []}, "no mismatch or unchecked list"),
+    ):
+        p = Path(_write_fact(tmp_path, name="bad.json"))
+        data = json.loads(p.read_text())
+        data.update(bad)
+        p.write_text(json.dumps(data))
+        got, why = gate_mod.load_fact(str(p))
+        assert got is None and reason in why, (bad, why)
+    assert gate_mod.load_fact(str(tmp_path / "absent.json")) == (
+        None,
+        "the gate check did not run",
+    )
+
+
+def test_a_changed_gate_file_that_differs_from_the_render_is_one_high_finding(
+    tmp_path: Path,
+):
+    """Only a file the pull request changes counts: a drifted gate file it
+    does not touch (the app's own older drift) raises nothing, and a changed
+    gate file that matches the render raises nothing."""
+    path = _write_fact(
+        tmp_path,
+        mismatches={
+            CONFORMANCE_WF: DRIFT,
+            ".github/scripts/release_gate.py": {**DRIFT, "diff": "-a\n+b"},
+        },
+    )
+    files = parse_unified_diff(
+        _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)
+        + _diff_of(CHECKS_WF, "a: 1\n", "a: 2\n")
+        + DIFF
+    )
+    ev = gate_mod.evaluate(
+        path, files, head=GATE_H1, base_lock_text=_conformance_lock()
+    )
+    assert ev.findings is not None and ev.notes == []
+    assert ev.checked == [CONFORMANCE_WF, CHECKS_WF] and ev.matching == [CHECKS_WF]
+    [f] = ev.findings
+    assert (f.path, f.severity, f.origin, f.line, f.rule_id) == (
+        CONFORMANCE_WF,
+        "high",
+        "gate",
+        0,
+        "",
+    )
+    assert f.title == f"Bootstrap-managed `{CONFORMANCE_WF}` differs from the render"
+    assert "conformance 0.60.0 (the version the base branch's `uv.lock` pins)" in f.body
+    assert "+1 −1 line(s), action pins ignored" in f.body
+    assert "Edit it in application-sdk" in f.body and "run a resync" in f.body
+    assert f.suggestion == DRIFT["diff"]
+    # The id is the path's alone: a further edit to the file is the same finding.
+    absent = gate_mod.Mismatch("absent")
+    assert gate_mod.finding_for(CONFORMANCE_WF, absent, "0.60.0").id == f.id
+    drifted = gate_mod.Mismatch("drifted")
+    assert gate_mod.finding_for(CHECKS_WF, drifted, "0.60.0").id != f.id
+
+
+def test_a_deleted_or_renamed_away_gate_file_is_one_finding(tmp_path: Path):
+    deleted = (
+        f"diff --git a/{CHECKS_WF} b/{CHECKS_WF}\ndeleted file mode 100644\n"
+        f"--- a/{CHECKS_WF}\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-name: checks\n-on: push\n"
+    )
+    renamed = _diff_of(
+        ".github/workflows/mine.yaml", WF_OLD, WF_NEW, old_path=CONFORMANCE_WF
+    )
+    absent = {"kind": "absent", "added": 0, "removed": 2}
+    path = _write_fact(tmp_path, mismatches={CHECKS_WF: absent, CONFORMANCE_WF: absent})
+    ev = gate_mod.evaluate(
+        path,
+        parse_unified_diff(deleted + renamed),
+        head=GATE_H1,
+        base_lock_text=_conformance_lock(),
+    )
+    assert ev.findings is not None
+    assert sorted(f.path for f in ev.findings) == [CHECKS_WF, CONFORMANCE_WF]
+    for f in ev.findings:
+        assert f.title.endswith("is deleted") and f.suggestion == ""
+        assert "Restore it with a resync" in f.body
+
+
+def test_the_gate_fact_is_used_only_for_the_head_and_version_it_read(tmp_path: Path):
+    files = parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW))
+    path = _write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT})
+    moved = gate_mod.evaluate(
+        path, files, head=GATE_H2, base_lock_text=_conformance_lock()
+    )
+    assert moved.findings is None
+    assert moved.notes == [
+        f"Gate-file check not made: it read head {GATE_H1[:9]}, and this review "
+        f"reads {GATE_H2[:9]}; `/review force` checks again."
+    ]
+    bumped = gate_mod.evaluate(
+        path, files, head=GATE_H1, base_lock_text=_conformance_lock("0.61.0")
+    )
+    assert bumped.findings is None
+    assert "not the version the pull request's base pins" in bumped.notes[0]
+    no_lock = gate_mod.evaluate(path, files, head=GATE_H1, base_lock_text=None)
+    assert no_lock.findings is None
+    # Not configured (a local run): nothing, and no note.
+    unset = gate_mod.evaluate(None, files, head=GATE_H1, base_lock_text=None)
+    assert unset == gate_mod.Evaluation(None)
+
+
+def test_reconcile_closes_reopens_and_never_undoes_a_dismissal():
+    st = PRState()
+    m = gate_mod.Mismatch("drifted", 1, 1, "-a\n+b")
+
+    def fresh() -> Finding:
+        return gate_mod.finding_for(CONFORMANCE_WF, m, "0.60.0")
+
+    f1 = fresh()
+    new, closed = gate_mod.reconcile(st, [f1], 1)
+    assert new == [f1] and closed == [] and st.findings == [f1] and f1.round == 1
+    # The same mismatch next round: no new finding, the record kept.
+    assert gate_mod.reconcile(st, [fresh()], 2) == ([], [])
+    # No usable fact: nothing changes.
+    assert gate_mod.reconcile(st, None, 3) == ([], []) and f1.status == "open"
+    # The file matches again, or is no longer changed: closed in code.
+    assert gate_mod.reconcile(st, [], 4) == ([], [f1.id])
+    assert (f1.status, f1.fixed_by, f1.fixed_round) == ("fixed", "gate", 4)
+    # Edited again: reopened, as new this round.
+    new, _ = gate_mod.reconcile(st, [fresh()], 5)
+    assert new == [f1] and f1.status == "open" and f1.round == 5
+    assert len(st.findings) == 1
+    # A person dismissed it: it stays dismissed while the file still differs.
+    f1.status, f1.fixed_by = "wontfix", "dismissed"
+    assert gate_mod.reconcile(st, [fresh()], 6) == ([], [])
+    assert f1.status == "wontfix"
+    # A path the render did not compare (a symlink, an unreadable file) keeps
+    # its open finding: no comparison is not a match.
+    f1.status, f1.fixed_by = "open", ""
+    assert gate_mod.reconcile(st, [], 7, unchecked=[CONFORMANCE_WF]) == ([], [])
+    assert f1.status == "open"
+    # A model finding is never touched.
+    llm = Finding(
+        path="app/x.py",
+        line=1,
+        severity="high",
+        category="bug",
+        title="t",
+        body="b",
+        evidence="e",
+    )
+    st.findings.append(llm)
+    gate_mod.reconcile(st, [], 8)
+    assert llm.status == "open"
+
+
+def test_an_unchecked_gate_file_is_not_read_as_matching(tmp_path: Path):
+    files = parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW))
+    path = Path(_write_fact(tmp_path))
+    data = json.loads(path.read_text())
+    data["unchecked"] = {CONFORMANCE_WF: "a symlink: not read"}
+    path.write_text(json.dumps(data))
+    ev = gate_mod.evaluate(
+        str(path), files, head=GATE_H1, base_lock_text=_conformance_lock()
+    )
+    assert ev.findings == [] and ev.matching == [] and ev.unchecked == [CONFORMANCE_WF]
+    assert ev.notes == [
+        f"Gate-file check: `{CONFORMANCE_WF}` was not compared (a symlink: not read)."
+    ]
+
+
+def _gate_pr(head: str, diff: str, files: dict[tuple[str, str], str]) -> Any:
+    gh = fake_github(head=head, diffs={("b0", head): diff}, files=files)
+    gh.raw[("uv.lock", "b0")] = _conformance_lock()
+    # The head pins another version, which the gate check never reads.
+    gh.raw[("uv.lock", head)] = _conformance_lock("0.61.0")
+    return gh
+
+
+def test_a_review_raises_the_gate_finding_and_closes_it_in_code(
+    repo: Path, tmp_path: Path
+):
+    """Round 1: one blocking gate finding, with the diff from the render, and
+    no model call spent on it. Round 2 puts the file back: the finding is
+    closed by the gate check, not by verify."""
+    gh = _gate_pr(
+        GATE_H1,
+        _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW) + DIFF,
+        {(CONFORMANCE_WF, GATE_H1): WF_NEW, ("app/storage/fetch.py", GATE_H1): SRC_V2},
+    )
+    cfg = cfg_for(repo)
+    script = Script()
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        gate_fact=_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}),
+    )
+    st = state_of(first)
+    [f] = [x for x in st.findings if x.origin == "gate"]
+    assert f in first.new_findings and script.skeptic_requests == []
+    assert gh.statuses[-1]["state"] == "failure"
+    body = gh.comments[0]["body"]
+    assert f"| {f.id} |" in body and "— (bootstrap render, computed in code)" in body
+    assert "**Diff from the render**" in body and "+      exit-zero: true" in body
+    assert "```diff\n" in body
+    assert decode_state(body).findings[-1].origin == "gate"
+    # Round 2: the file is back to what the base has: the PR no longer changes it.
+    gh.head = GATE_H2
+    gh.diffs[("b0", GATE_H2)] = DIFF
+    gh.diffs[(GATE_H1, GATE_H2)] = _diff_of(CONFORMANCE_WF, WF_NEW, WF_OLD)
+    gh.files[(CONFORMANCE_WF, GATE_H2)] = WF_OLD
+    gh.files[("app/storage/fetch.py", GATE_H2)] = SRC_V2
+    gh.raw[("uv.lock", GATE_H2)] = _conformance_lock("0.61.0")
+    second = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=principles_of(repo),
+        client_factory=_factory(script),
+        gate_fact=_write_fact(tmp_path, GATE_H2, name="fact2.json"),
+    )
+    g = next(x for x in state_of(second).findings if x.id == f.id)
+    assert (g.status, g.fixed_by) == ("fixed", "gate")
+    assert second.resolved_gate == [f.id]
+    # Never the model's to judge: no verify call names it (the line review is
+    # told it is already reported, so it is not raised again).
+    verify = [r for r in script.requests if _offers(r, "verdicts")]
+    assert all(f.id not in json.dumps(r) for r in verify)
+    assert gh.statuses[-1]["state"] == "success"
+    assert "the file matches the bootstrap render again" in gh.comments[0]["body"]
+
+
+def test_a_forced_review_of_a_resync_that_matches_the_render_raises_no_gate_finding(
+    repo: Path, tmp_path: Path
+):
+    """A resync pull request is exempt, so `/review force` is how one gets
+    reviewed. Its managed files match the render: no gate finding, no note."""
+    diff = _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW) + _diff_of(
+        SHIM_WF, "a: 1\n", "a: 2\n"
+    )
+    gh = _gate_pr(
+        GATE_H1,
+        diff,
+        {(CONFORMANCE_WF, GATE_H1): WF_NEW, (SHIM_WF, GATE_H1): "a: 2\n"},
+    )
+    gh.author, gh.commit_authors = RESYNC, [RESYNC]
+    fact = _write_fact(tmp_path)
+    cfg = cfg_for(repo)
+    plain = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=fact,
+    )
+    assert plain.action == "exempt"
+    forced = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=fact,
+        force=True,
+    )
+    assert forced.action == "reviewed"
+    assert forced.gate is not None
+    assert forced.gate.matching == [CONFORMANCE_WF, SHIM_WF]
+    assert [f for f in state_of(forced).findings if f.origin == "gate"] == []
+    assert not any("Gate-file" in n for n in forced.notes)
+    assert gh.statuses[-1]["state"] == "success"
+
+
+def test_a_gate_finding_is_not_rechecked_by_the_model(repo: Path, tmp_path: Path):
+    gh = _gate_pr(
+        GATE_H1,
+        _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW),
+        {(CONFORMANCE_WF, GATE_H1): WF_NEW},
+    )
+    cfg = cfg_for(repo)
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg,
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}),
+    )
+    [f] = first.new_findings
+    script = Script()
+    res = review_mod.recheck(
+        gh=gh,
+        number=1,
+        ids=[f.id],
+        reason="it is fine",
+        root=repo,
+        cfg=cfg,
+        client_factory=_factory(script),
+        actor="author",
+    )
+    assert script.requests == [] and res.action != "rechecked"
+    assert "computed in code from the bootstrap render" in res.reason
+
+
+RENDER_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "connector_reviewer" / "gate_render.py"
+)
+
+
+def test_gate_render_is_the_installed_c002_check(tmp_path: Path):
+    """The render script, run as the gate job runs it (isolated mode, from
+    outside the checkout), against an app laid out by this repository's own
+    bootstrap: a hand edit and a deleted managed file differ; an action pin
+    bump, a write-if-absent scaffold and the repository's principles do not
+    count; a symlinked gate file is not read."""
+    import subprocess  # noqa: PLC0415
+
+    render_mod = pytest.importorskip(
+        "conformance.bootstrap.render",
+        reason="the render test runs this repository's conformance package",
+    )
+    root = tmp_path / "app"
+    for name in render_mod.MANAGED_WORKFLOWS:
+        p = root / ".github" / "workflows" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(render_mod.render(name))
+    for dest, template in render_mod.MANAGED_ACTION_FILES:
+        (root / dest).parent.mkdir(parents=True, exist_ok=True)
+        (root / dest).write_text(render_mod.render(template))
+    wf = root / ".github" / "workflows"
+    (wf / "conformance.yaml").write_text(
+        render_mod.render("conformance.yaml") + "# local\n"
+    )
+    (wf / "commits.yaml").unlink()
+    gate = render_mod.render("release-gate.yaml")
+    pins = re.findall(r"@[0-9a-f]{40}", gate)
+    assert pins, "release-gate.yaml pins an action"
+    (wf / "release-gate.yaml").write_text(gate.replace(pins[0], "@" + "e" * 40))
+    (wf / "tests.yaml").write_text("name: mine\n")
+    principles = root / ".github" / "connector-reviewer" / "principles"
+    principles.mkdir(parents=True)
+    (principles / "rp01-x.md").write_text("x")
+    (wf / "stale.yml").unlink()
+    (wf / "stale.yml").symlink_to(tmp_path / "outside.txt")
+    (tmp_path / "outside.txt").write_text("runner file\n")
+    out = tmp_path / "out.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(RENDER_SCRIPT),
+            "--root",
+            str(root),
+            "--out",
+            str(out),
+        ],
+        cwd=tmp_path,
+        check=True,
+        timeout=120,
+    )
+    fact = json.loads(out.read_text())
+    assert fact["status"] == "ok"
+    assert ".github/workflows/tests.yaml" not in fact["gate_files"]
+    assert "renovate.json" not in fact["gate_files"]
+    assert ".github/workflows/connector-reviewer.yaml" in fact["gate_files"]
+    assert ".github/actions/run-conformance-detect/action.yaml" in fact["gate_files"]
+    mism = fact["mismatches"]
+    conformance = mism[".github/workflows/conformance.yaml"]
+    assert conformance["kind"] == "drifted" and conformance["added"] == 1
+    assert "+# local" in conformance["diff"]
+    assert mism[".github/workflows/commits.yaml"]["kind"] == "absent"
+    assert set(mism) == {
+        ".github/workflows/conformance.yaml",
+        ".github/workflows/commits.yaml",
+    }
+    assert fact["unchecked"] == {".github/workflows/stale.yml": "a symlink: not read"}
+    assert "runner file" not in out.read_text()
+
+
+def test_no_engine_module_imports_the_render_script():
+    """The engine is standard library only; `gate_render.py` imports the
+    conformance package and runs only in the gate job's venv."""
+    pkg = RENDER_SCRIPT.parent
+    for src in sorted(pkg.glob("*.py")):
+        if src.name == "gate_render.py":
+            continue
+        text = src.read_text().replace("gate_render.py", "")
+        assert "import gate_render" not in text, src.name
+        assert (
+            "from .gate_render" not in text and "from . import gate_render" not in text
+        )
+
+
+# ---- the fallback for a gate file the pinned version does not manage (FND-5325) ----
+
+SHIM_OLD = "name: Connector Reviewer\non: issue_comment\n"
+SHIM_NEW = "name: Connector Reviewer\non: [issue_comment, push]\n"
+UNMANAGED_FILES = [CONFORMANCE_WF, CHECKS_WF]  # a pinned version without the shim
+
+
+def _readers(base: dict[str, str | None], head: dict[str, str | None]) -> Any:
+    reads: list[tuple[str, str]] = []
+
+    def read_base(p: str) -> str | None:
+        reads.append(("base", p))
+        return base.get(p)
+
+    def read_head(p: str) -> str | None:
+        reads.append(("head", p))
+        return head.get(p)
+
+    return read_base, read_head, reads
+
+
+def _shim_eval(tmp_path: Path, diff: str, base: Any, head: Any, **fact: Any) -> Any:
+    read_base, read_head, reads = _readers(base, head)
+    ev = gate_mod.evaluate(
+        _write_fact(tmp_path, **fact),
+        parse_unified_diff(diff),
+        head=GATE_H1,
+        base_lock_text=_conformance_lock(),
+        read_base=read_base,
+        read_head=read_head,
+    )
+    return ev, reads
+
+
+def test_a_shim_the_pin_does_not_manage_is_compared_with_its_base(tmp_path: Path):
+    ev, _ = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_NEW},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.notes == []
+    [f] = ev.findings
+    assert (f.path, f.severity, f.origin) == (SHIM_WF, "high", "gate")
+    assert f.title == f"`{SHIM_WF}` is managed by application-sdk and changed here"
+    assert "managed by application-sdk: change it there" in f.body
+    assert "run a resync" in f.body and "does not manage it yet" in f.body
+    assert "+on: [issue_comment, push]" in f.suggestion
+    # The same id the render path gives the file, so a later pin that manages
+    # it continues the same finding.
+    render_id = gate_mod.finding_for(SHIM_WF, gate_mod.Mismatch("drifted"), "x").id
+    assert f.id == render_id
+
+
+def test_an_unchanged_shim_raises_nothing(tmp_path: Path):
+    # Not in the diff at all: never read.
+    ev, reads = _shim_eval(
+        tmp_path,
+        DIFF,
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_OLD},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.notes == [] and reads == []
+    # In the diff, but its content is the base copy's (line endings aside).
+    mode_only = (
+        f"diff --git a/{SHIM_WF} b/{SHIM_WF}\nold mode 100644\nnew mode 100755\n"
+    )
+    ev, _ = _shim_eval(
+        tmp_path,
+        mode_only,
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_OLD.replace("\n", "\r\n")},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.notes == [] and ev.matching == [SHIM_WF]
+
+
+def test_a_deleted_shim_the_pin_does_not_manage_is_one_finding(tmp_path: Path):
+    deleted = (
+        f"diff --git a/{SHIM_WF} b/{SHIM_WF}\ndeleted file mode 100644\n"
+        f"--- a/{SHIM_WF}\n+++ /dev/null\n@@ -1,2 +0,0 @@\n"
+        "-name: Connector Reviewer\n-on: issue_comment\n"
+    )
+    ev, _ = _shim_eval(
+        tmp_path, deleted, {SHIM_WF: SHIM_OLD}, {}, gate_files=UNMANAGED_FILES
+    )
+    [f] = ev.findings
+    assert f.path == SHIM_WF and "this pull request deletes it" in f.body
+    assert f.suggestion == ""
+
+
+def test_a_shim_the_pin_manages_is_judged_by_the_render_alone(tmp_path: Path):
+    """No second finding, and the base is never read for it."""
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_NEW},
+        mismatches={SHIM_WF: DRIFT},
+    )
+    [f] = ev.findings
+    assert f.title.endswith("differs from the render") and reads == []
+    # And a managed shim that matches the render raises nothing.
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: SHIM_OLD},
+        {SHIM_WF: SHIM_NEW},
+    )
+    assert ev.findings == [] and ev.matching == [SHIM_WF] and reads == []
+
+
+def test_a_shim_whose_base_copy_cannot_be_read_is_a_note_not_a_finding(
+    tmp_path: Path,
+):
+    ev, _ = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {SHIM_WF: None},
+        {SHIM_WF: SHIM_NEW},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.unchecked == [SHIM_WF]
+    assert ev.notes == [
+        f"Gate-file check: `{SHIM_WF}` was not compared: its base copy could not "
+        "be read."
+    ]
+
+
+def test_a_review_compares_an_unmanaged_shim_with_the_base(repo: Path, tmp_path: Path):
+    """Through `run`: the base and head copies come from the GitHub reads."""
+    gh = _gate_pr(
+        GATE_H1,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW),
+        {(SHIM_WF, GATE_H1): SHIM_NEW},
+    )
+    gh.files[(SHIM_WF, "b0")] = SHIM_OLD
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=_write_fact(tmp_path, gate_files=UNMANAGED_FILES),
+    )
+    [f] = [x for x in state_of(res).findings if x.origin == "gate"]
+    assert f.path == SHIM_WF and gh.statuses[-1]["state"] == "failure"
+
+
+def test_a_file_the_pull_request_adds_is_never_a_gate_finding(tmp_path: Path):
+    """Only a hand edit or deletion of a file on the base counts. A shim the
+    pull request adds is not flagged (not even read), and neither is a new
+    file that takes a name the pinned version manages: the render path skips
+    it too, since nothing bootstrap installed was edited."""
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, None, SHIM_NEW),
+        {},
+        {SHIM_WF: SHIM_NEW},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert ev.findings == [] and ev.notes == [] and reads == []
+    assert ev.added == [SHIM_WF]
+    ev, _ = _shim_eval(
+        tmp_path,
+        _diff_of(CHECKS_WF, None, "name: mine\n")
+        + _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW, old_path=".github/workflows/x.yaml"),
+        {},
+        {},
+        mismatches={CHECKS_WF: DRIFT, CONFORMANCE_WF: DRIFT},
+    )
+    assert ev.findings == [] and ev.checked == []
+    assert sorted(ev.added) == [CHECKS_WF, CONFORMANCE_WF]
+
+
+def test_an_edited_existing_shim_is_flagged_and_an_own_workflow_never_is(
+    tmp_path: Path,
+):
+    """Only bootstrap's files are gate files: the pinned version's list and
+    the fixed shim allowlist. An app's own workflow, edited or deleted, is
+    never compared, though it sits under `.github/`."""
+    own = ".github/workflows/nightly.yaml"
+    deleted_own = (
+        f"diff --git a/{own}2 b/{own}2\ndeleted file mode 100644\n"
+        f"--- a/{own}2\n+++ /dev/null\n@@ -1 +0,0 @@\n-name: n\n"
+    )
+    ev, reads = _shim_eval(
+        tmp_path,
+        _diff_of(SHIM_WF, SHIM_OLD, SHIM_NEW)
+        + _diff_of(own, "name: n\n", "name: m\n")
+        + deleted_own,
+        {SHIM_WF: SHIM_OLD, own: "name: n\n"},
+        {SHIM_WF: SHIM_NEW, own: "name: m\n"},
+        gate_files=UNMANAGED_FILES,
+    )
+    assert [f.path for f in ev.findings] == [SHIM_WF]
+    assert {p for _, p in reads} == {SHIM_WF}
+    assert gate_mod.UNMANAGED_FALLBACK == (SHIM_WF,)
+
+
+@pytest.mark.parametrize(
+    ("latest", "note"),
+    [
+        ("0.61.0", True),
+        ("0.60.0", False),
+        ("", False),  # the lookup failed
+        ("0.59.0", False),
+        ("0.61.0rc1", False),  # not a final release: never suggested
+    ],
+)
+def test_a_pin_behind_the_latest_release_is_a_note_never_a_finding(
+    tmp_path: Path, latest: str, note: bool
+):
+    path = Path(_write_fact(tmp_path, mismatches={CONFORMANCE_WF: DRIFT}))
+    data = json.loads(path.read_text())
+    if latest:
+        data["latest"] = latest
+    path.write_text(json.dumps(data))
+    ev = gate_mod.evaluate(
+        str(path),
+        parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
+        head=GATE_H1,
+        base_lock_text=_conformance_lock(),
+    )
+    bump = [n for n in ev.notes if "is behind" in n]
+    assert bump == (
+        [
+            "Pinned conformance 0.60.0 is behind 0.61.0; bump it with a resync to "
+            "pick up newer managed files."
+        ]
+        if note
+        else []
+    )
+    assert ev.findings is not None and len(ev.findings) == 1  # unchanged by it
+
+
+def test_the_latest_release_lookup_never_raises():
+    def failing(url: str) -> bytes | None:
+        return None
+
+    assert gate_mod.latest_release("https://pypi.org/simple", failing) == ""
+    for raw in (b"not json", b"[]", b'{"versions": "x"}', b'{"versions": []}'):
+        assert (
+            gate_mod.latest_release("https://pypi.org/simple", lambda u, r=raw: r) == ""
+        )
+
+
+def test_a_bump_note_never_changes_the_status(repo: Path, tmp_path: Path):
+    gh = _gate_pr(GATE_H1, DIFF, {("app/storage/fetch.py", GATE_H1): SRC_V2})
+    path = Path(_write_fact(tmp_path))
+    data = json.loads(path.read_text())
+    data["latest"] = "0.61.0"
+    path.write_text(json.dumps(data))
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=str(path),
+    )
+    assert any("is behind 0.61.0" in n for n in res.notes)
+    assert gh.statuses[-1]["state"] == "success"
+    assert "is behind 0.61.0" in gh.comments[0]["body"]
+
+
+def test_the_base_branchs_pin_renders_and_the_heads_is_ignored(
+    repo: Path, tmp_path: Path
+):
+    """The head pins 0.61.0 and the base 0.60.0: a fact rendered at the
+    head's version is not used; without the base's lock there is no check."""
+    gh = _gate_pr(
+        GATE_H1,
+        _diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW),
+        {(CONFORMANCE_WF, GATE_H1): WF_NEW},
+    )
+    head_pinned = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        principles=principles_of(repo),
+        client_factory=_factory(Script()),
+        gate_fact=_write_fact(
+            tmp_path, mismatches={CONFORMANCE_WF: DRIFT}, version="0.61.0"
+        ),
+    )
+    assert [f for f in state_of(head_pinned).findings if f.origin == "gate"] == []
+    assert any(
+        "not the version the pull request's base pins" in n for n in head_pinned.notes
+    )
+    no_base_lock = gate_mod.evaluate(
+        _write_fact(tmp_path, name="f2.json", mismatches={CONFORMANCE_WF: DRIFT}),
+        parse_unified_diff(_diff_of(CONFORMANCE_WF, WF_OLD, WF_NEW)),
+        head=GATE_H1,
+        base_lock_text=None,
+    )
+    assert no_base_lock.findings is None and len(no_base_lock.notes) == 1
+
+
+def test_the_base_is_the_first_parent_of_the_test_merge(tmp_path: Path):
+    """lens F-9faf14: the version rendered is the one the pull request's own
+    base pins, not the default branch's. The gate job reads that base as the
+    first parent of GitHub's test merge; anything that is not a merge commit
+    gives no base."""
+    import subprocess  # noqa: PLC0415
+
+    repo_dir = tmp_path / "merge"
+    base = _git_checkout(repo_dir, {"uv.lock": _conformance_lock()})
+    vcs = [
+        "git",
+        "-C",
+        str(repo_dir),
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@e",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    # Not a merge commit yet: no base.
+    assert gate_mod.base_of_merge(repo_dir) == ""
+    assert gate_mod.base_ref_output(repo_dir) == "base=\n"
+    subprocess.run([*vcs, "checkout", "-q", "-b", "feature"], check=True)
+    (repo_dir / "x.txt").write_text("x")
+    subprocess.run([*vcs, "add", "-A"], check=True)
+    subprocess.run([*vcs, "commit", "-q", "-m", "head"], check=True)
+    subprocess.run([*vcs, "checkout", "-q", "-"], check=True)
+    (repo_dir / "y.txt").write_text("y")
+    subprocess.run([*vcs, "add", "-A"], check=True)
+    subprocess.run([*vcs, "commit", "-q", "-m", "base moves"], check=True)
+    tip = subprocess.run(
+        [*vcs, "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(
+        [*vcs, "merge", "-q", "--no-ff", "-m", "merge", "feature"], check=True
+    )
+    assert gate_mod.base_of_merge(repo_dir) == tip != base
+    assert gate_mod.base_ref_output(repo_dir) == f"base={tip}\n"
+    assert gate_mod.base_of_merge(tmp_path / "absent") == ""
+
+
+def test_a_truncated_index_reply_is_no_note_not_a_failed_job():
+    """lens F-c632d5: `IncompleteRead` is not an OSError; a lookup that raises
+    anything is "" (no note), never an exception out of the gate job."""
+    import http.client  # noqa: PLC0415
+
+    def truncated(url: str) -> bytes | None:
+        raise http.client.IncompleteRead(b"partial")
+
+    assert gate_mod.latest_release("https://pypi.org/simple", truncated) == ""

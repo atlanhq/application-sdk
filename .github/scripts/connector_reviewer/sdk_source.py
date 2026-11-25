@@ -125,6 +125,12 @@ def _lock_entries(lock_text: str) -> list[dict[str, object]] | str:
     ]
 
 
+def lock_entries(lock_text: str) -> list[dict[str, object]] | str:
+    """The `[[package]]` tables of a `uv.lock`, or why it does not parse. The
+    gate-file fact reads the conformance pin from them (FND-5325)."""
+    return _lock_entries(lock_text)
+
+
 def resolve(lock_text: str) -> Resolution:
     """The pinned application-sdk in a `uv.lock`'s text. Never raises."""
     all_entries = _lock_entries(lock_text)
@@ -193,18 +199,35 @@ _KNOWN_REGISTRIES = (
 
 
 def _known_registry(raw: object) -> bool:
+    return _registry_of(raw) is not None
+
+
+def _registry_of(raw: object) -> tuple[str, str] | None:
+    """The `_KNOWN_REGISTRIES` entry a registry source URL is under, or None."""
     if not isinstance(raw, str):
-        return False
+        return None
     try:
         url = urllib.parse.urlsplit(raw)
         host = url.hostname
     except ValueError:
-        return False
+        return None
     path = url.path.rstrip("/")
-    return url.scheme == "https" and any(
-        host == h and (path == p or path.startswith(p + "/"))
-        for h, p in _KNOWN_REGISTRIES
-    )
+    if url.scheme != "https":
+        return None
+    for h, p in _KNOWN_REGISTRIES:
+        if host == h and (path == p or path.startswith(p + "/")):
+            return (h, p)
+    return None
+
+
+def known_index(raw: object) -> str | None:
+    """The index to install from for a `uv.lock` registry source that is PyPI
+    or the org's mirror, rebuilt from `_KNOWN_REGISTRIES` and never the lock's
+    own spelling (which could carry credentials, a query or a longer path);
+    None for any other source. The gate-file fact installs the pinned
+    conformance package from it (FND-5325, `gate.py`)."""
+    found = _registry_of(raw)
+    return f"https://{found[0]}{found[1]}" if found else None
 
 
 def resolve_root(root: Path) -> Resolution:
