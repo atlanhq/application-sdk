@@ -99,10 +99,16 @@ class ConsoleWriter:
                 self._dropped += 1
             self._queue.append((stream, text))
             if self._thread is None:
-                self._thread = threading.Thread(
+                thread = threading.Thread(
                     target=self._run, name="atlan-console-log-writer", daemon=True
                 )
-                self._thread.start()
+                # A finalizer that logs while the Thread is being built re-enters
+                # put(), still sees no thread, and starts one. Keep that one: a
+                # second writer would drain alongside it, and _in_flight tracks
+                # only one write, so flush() could return early.
+                if self._thread is None:
+                    self._thread = thread
+                    thread.start()
             self._cond.notify_all()
 
     def flush(self, timeout: float) -> bool:

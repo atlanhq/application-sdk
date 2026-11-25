@@ -274,3 +274,36 @@ def test_a_put_reentered_on_the_same_thread_does_not_deadlock() -> None:
     assert done.wait(5.0), "a re-entrant put deadlocked on the writer's lock"
     assert writer.flush(5.0)
     assert sorted(stream.lines) == ["first line\n", "logged from a finalizer\n"]
+
+
+def test_a_put_reentered_while_the_writer_thread_is_built_starts_one_thread() -> None:
+    """A finalizer that logs during ``threading.Thread(...)`` must not start a second writer."""
+    writer = ConsoleWriter()
+    stream = _GatedStream()
+    stream.release.set()
+    started: list[threading.Thread] = []
+    real_thread = threading.Thread
+
+    class _ReenteringThread(real_thread):
+        def __init__(self, *args, **kwargs) -> None:
+            if not started and writer._thread is None and not reentered.is_set():
+                reentered.set()
+                writer.put(stream, "logged from a finalizer\n")
+            super().__init__(*args, **kwargs)
+
+        def start(self) -> None:
+            started.append(self)
+            super().start()
+
+    reentered = threading.Event()
+    with mock.patch(
+        "application_sdk.observability.console_sink.threading.Thread",
+        _ReenteringThread,
+    ):
+        writer.put(stream, "first line\n")
+
+    assert reentered.is_set()
+    assert len(started) == 1
+    assert writer._thread is started[0]
+    assert writer.flush(5.0)
+    assert sorted(stream.lines) == ["first line\n", "logged from a finalizer\n"]
