@@ -612,9 +612,10 @@ finding, computed in code (`gate.py`).
 Tests: `test_connector_reviewer.py` (the gate section at its end: the ref, the
 pin, the isolated install, a check that cannot be made, the fact's validation,
 one finding per changed mismatched file, deletion and rename, head and version
-binding, `reconcile`, a two-round review, a forced resync, recheck refused, and
+binding, `reconcile`, a two-round review, a forced resync, recheck refused,
 `gate_render.py` run in isolated mode against this repository's own bootstrap
-output) and `test_connector_reviewer_workflow.py` (the gate job holds no secret
+output, and `gate-ref`, `gate-base` and `gate-fact` through the CLI: their
+arguments, the outputs they write, and exit 1 when one cannot be written) and `test_connector_reviewer_workflow.py` (the gate job holds no secret
 or App token, its checkouts, the fact's path to the review, the review job
 names no pull-request ref and installs nothing).
 `test_no_step_mentions_a_pull_request_head` now excludes the gate job, and the

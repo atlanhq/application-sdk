@@ -16631,3 +16631,148 @@ def test_a_gate_step_whose_output_cannot_be_written_fails(
     got = gate_mod.evaluate(str(fact), [], head="a" * 40, base_lock_text=None)
     assert got.findings is None
     assert got.notes == ["Gate-file check not made: the gate check did not run."]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["gate-ref", "--pr", "7; echo"],  # the number is an int or nothing
+        ["gate-base"],  # --merge-checkout is required
+        ["gate-fact", "--checkout", "h", "--venv", "v", "--base-checkout", "b"],
+        ["gate-fact", "--checkout", "h", "--venv", "v", "--out", "f"],
+        ["gate-fact", "--venv", "v", "--base-checkout", "b", "--out", "f"],
+        ["gate-fact", "--checkout", "h", "--base-checkout", "b", "--out", "f"],
+    ],
+)
+def test_the_gate_commands_refuse_bad_arguments(
+    argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """lens F-85e2fb: argparse stops a gate command with exit 2 before it
+    reads anything or writes an output."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    with pytest.raises(SystemExit) as stop:
+        cli.main(argv)
+    assert stop.value.code == 2
+    assert not out.exists()
+
+
+def test_the_gate_ref_cli_writes_both_refs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-85e2fb: `gate-ref` writes `ref=` and `merge=` from the event or
+    `--pr`, both empty when there is no pull request, and exits 0 either way."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    argv = ["gate-ref", "--event-name", "issue_comment", "--event-path", str(event)]
+    assert cli.main(argv) == 0
+    assert out.read_text() == "ref=refs/pull/7/head\nmerge=refs/pull/7/merge\n"
+    assert "gate-file check reads ref=refs/pull/7/head" in capsys.readouterr().out
+
+    out.write_text("")
+    assert cli.main(["gate-ref", "--pr", "9"]) == 0
+    assert out.read_text() == "ref=refs/pull/9/head\nmerge=refs/pull/9/merge\n"
+
+    # An issue, an unreadable event, or no event at all: empty refs, exit 0.
+    for event_text in (json.dumps({"issue": {"number": 7}}), "not json"):
+        event.write_text(event_text)
+        out.write_text("")
+        assert cli.main(argv) == 0
+        assert out.read_text() == "ref=\nmerge=\n"
+    out.write_text("")
+    assert cli.main(["gate-ref"]) == 0
+    assert out.read_text() == "ref=\nmerge=\n"
+    capsys.readouterr()
+
+    # Outside Actions (no $GITHUB_OUTPUT) the lines go to stdout.
+    monkeypatch.delenv("GITHUB_OUTPUT")
+    assert cli.main(["gate-ref", "--pr", "9"]) == 0
+    assert capsys.readouterr().out.endswith(
+        "ref=refs/pull/9/head\nmerge=refs/pull/9/merge\n"
+    )
+
+
+def test_the_gate_base_cli_writes_the_base_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-85e2fb: `gate-base` writes `base=<40 hex>` for the merge
+    checkout it is given, and `base=` (exit 0) when there is none."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    merge = tmp_path / "gate-merge"
+    seen: list[Path] = []
+
+    def first_parent(path: Path) -> str:
+        seen.append(path)
+        return _SHA_BASE
+
+    monkeypatch.setattr(gate_mod, "base_of_merge", first_parent)
+    assert cli.main(["gate-base", "--merge-checkout", str(merge)]) == 0
+    assert out.read_text() == f"base={_SHA_BASE}\n"
+    assert seen == [merge]
+    assert f"gate-file check base: base={_SHA_BASE}" in capsys.readouterr().out
+
+    # No merge checkout (a pull request that conflicts has no merge ref).
+    monkeypatch.undo()
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    out.write_text("")
+    assert cli.main(["gate-base", "--merge-checkout", str(tmp_path / "absent")]) == 0
+    assert out.read_text() == "base=\n"
+
+
+def test_the_gate_fact_cli_writes_the_fact_and_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-85e2fb: `gate-fact` hands its paths to `make_fact`, writes the
+    fact it returns (making the directory), and exits 0 whether the check was
+    made or not: a check that cannot be made is a fact that says why."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    fact_path = tmp_path / "gate-fact" / "connector-reviewer-gate.json"
+    paths = ("gate-head", "gate-venv", "gate-base")
+    argv = [
+        "gate-fact",
+        "--checkout",
+        str(tmp_path / paths[0]),
+        "--venv",
+        str(tmp_path / paths[1]),
+        "--base-checkout",
+        str(tmp_path / paths[2]),
+        "--out",
+        str(fact_path),
+    ]
+    # Nothing checked out: an unavailable fact, made without a subprocess.
+    assert cli.main(argv) == 0
+    written = json.loads(fact_path.read_text())
+    assert written == {
+        "schema": 1,
+        "status": "unavailable",
+        "reason": "the pull request head was not checked out",
+    }
+    assert "gate-file check not made: the pull request head was not checked out" in (
+        capsys.readouterr().out
+    )
+
+    calls: list[tuple[Path, ...]] = []
+    made = {**_render_result(), "head": "a" * 40, "base": _SHA_BASE}
+
+    def make_fact(checkout: Path, venv: Path, base_checkout: Path) -> dict[str, Any]:
+        calls.append((checkout, venv, base_checkout))
+        return made
+
+    monkeypatch.setattr(gate_mod, "make_fact", make_fact)
+    assert cli.main(argv) == 0
+    assert calls == [tuple(tmp_path / p for p in paths)]
+    assert json.loads(fact_path.read_text()) == made
+    said = capsys.readouterr().out
+    assert f"against conformance 0.60.0: {len(GATE_FILES)} checked" in said
+    assert f"1 differ from the render ({CONFORMANCE_WF})" in said
