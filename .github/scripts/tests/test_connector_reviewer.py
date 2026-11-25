@@ -16591,6 +16591,32 @@ def test_a_truncated_index_reply_is_no_note_not_a_failed_job():
     assert gate_mod.latest_release("https://pypi.org/simple", truncated) == ""
 
 
+def test_the_latest_release_lookup_is_bounded_in_wall_time(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """lens F-c0f74f: the version list's socket timeout bounds each operation,
+    not the lookup: a reply that trickles in, or a name lookup that hangs, could
+    outrun `LATEST_SECONDS`, which the gate job's budget counts as a total. The
+    lookup gives up at `LATEST_SECONDS` of wall time, with no note."""
+    import threading  # noqa: PLC0415
+
+    monkeypatch.setattr(gate_mod, "LATEST_SECONDS", 0.2)
+    release = threading.Event()
+
+    def trickle(url: str) -> bytes:
+        release.wait(5)  # a reply still arriving long after the bound
+        return json.dumps({"versions": ["0.60.0"]}).encode()
+
+    started = time.monotonic()
+    try:
+        assert gate_mod.latest_release("https://pypi.org/simple", trickle) == ""
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()
+    # A reply inside the bound is read as before.
+    assert gate_mod.latest_release("https://pypi.org/simple", trickle) == "0.60.0"
+
+
 def test_a_gate_step_whose_output_cannot_be_written_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):

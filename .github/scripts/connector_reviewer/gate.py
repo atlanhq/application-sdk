@@ -77,6 +77,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -125,7 +126,9 @@ MAX_FACT_BYTES = 1_000_000
 VENV_SECONDS = 60
 PIP_SECONDS = 180
 RENDER_SECONDS = 60
-LATEST_SECONDS = 10.0  # the index's version list, read once per gate job
+# The index's version list, read once per gate job: wall time for the whole
+# lookup (`_within`), and the socket timeout of each operation within it.
+LATEST_SECONDS = 10.0
 LATEST_BYTES = 2_000_000
 
 TEMPLATES_DIR = "packages/conformance/conformance/bootstrap/templates/"
@@ -262,14 +265,32 @@ def _fetch(url: str) -> bytes | None:
         return None
 
 
+def _within(fetch: Fetch, url: str, seconds: float) -> bytes | None:
+    """`fetch(url)`, or None when it raises or has not returned after
+    `seconds` of wall time. The socket timeout bounds each operation, not the
+    lookup: a reply that trickles in, or a name lookup (which no socket
+    timeout covers), could outrun it. A fetch still running is left to a
+    daemon thread, which does not hold the process open."""
+    got: list[bytes | None] = []
+
+    def call() -> None:
+        try:
+            got.append(fetch(url))
+        except Exception:  # noqa: BLE001 - a failed lookup is no note, never a failed job
+            got.append(None)
+
+    worker = threading.Thread(target=call, name="gate-latest-release", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    return got[0] if got else None
+
+
 def latest_release(index: str, fetch: Fetch = _fetch) -> str:
     """The newest final release of the conformance package on `index` (one of
     the known indexes, from `conformance_pin`), from the index's version list
-    alone: no install. "" when it cannot be read. Never raises."""
-    try:
-        raw = fetch(f"{index}/{CONFORMANCE}/")
-    except Exception:  # noqa: BLE001 - a failed lookup is no note, never a failed job
-        return ""
+    alone: no install. "" when it cannot be read within `LATEST_SECONDS` of
+    wall time. Never raises."""
+    raw = _within(fetch, f"{index}/{CONFORMANCE}/", LATEST_SECONDS)
     if raw is None:
         return ""
     try:
