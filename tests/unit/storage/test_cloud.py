@@ -1907,7 +1907,34 @@ class TestCloudStoreDelegatesToBatch:
             patch("obstore.open_writer_async", _Discarding),
             pytest.raises(StorageError, match="absent from the store"),
         ):
-            await store.upload_bytes("out/x.bin", b"data")
+            await store.upload_bytes("out/x.bin", b"data", verify=True)
+
+    async def test_upload_bytes_sends_no_head_by_default(self):
+        """A PUT-only customer bucket policy keeps working: no readback HEAD."""
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with (
+            patch(
+                "obstore.head_async",
+                AsyncMock(side_effect=AssertionError("HEAD sent")),
+            ) as head,
+            patch("obstore.list", side_effect=AssertionError("LIST sent")),
+        ):
+            assert await store.upload_bytes("out/x.bin", b"data") == 4
+        head.assert_not_called()
+        assert await store.get_bytes("out/x.bin") == b"data"
+
+    async def test_upload_bytes_verify_sends_one_head(self):
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with patch(
+            "obstore.head_async",
+            AsyncMock(return_value={"size": 4, "e_tag": None}),
+        ) as head:
+            await store.upload_bytes("out/x.bin", b"data", verify=True)
+        head.assert_awaited_once()
 
     async def test_upload_dir_file_vanishing_after_walk_is_a_keyed_storage_error(
         self, tmp_path

@@ -675,31 +675,31 @@ class CloudStore:
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
-    async def upload_bytes(self, key: str, data: bytes) -> int:
+    async def upload_bytes(self, key: str, data: bytes, *, verify: bool = False) -> int:
         """Upload raw bytes to the cloud store.
 
         Routes through the shared
-        :func:`~application_sdk.storage.ops.upload_bytes` primitive, so the
-        post-write HEAD that :meth:`upload` runs also confirms the bytes landed
-        here. The key is used exactly as supplied and no ``.sha256`` sidecar is
-        written.
+        :func:`~application_sdk.storage.ops.upload_bytes` primitive. The key is
+        used exactly as supplied and no ``.sha256`` sidecar is written.
 
-        The credential therefore needs read-metadata (HEAD) access to the key
-        as well as PUT, as :meth:`upload` already did: a PUT-only bucket policy
-        fails here with :class:`StoragePermissionError` from the readback.
-        ``ATLAN_STORAGE_VERIFY_TRANSFERS=false`` turns the readback off for the
-        whole process.
+        By default this sends only the write (PUT, or a multipart upload for a
+        large payload), as it always has: a customer's bucket policy may grant
+        PUT without read access, so no HEAD is sent unless asked for.
 
         Args:
             key: Destination object key.
             data: Bytes to upload.
+            verify: When ``True``, HEAD the object after the write and raise if
+                it is absent or not ``len(data)`` bytes — the readback
+                :meth:`upload` runs. Needs read-metadata access to *key*.
+                Defaults to ``False``.
 
         Returns:
             Number of bytes uploaded.
 
         Raises:
-            StorageError: If the write fails, or the object is absent or the
-                wrong size afterwards.
+            StorageError: If the write fails, or with *verify* the object is
+                absent or the wrong size afterwards.
         """
         await self._ensure_region()
         await self._mapping_denied(
@@ -711,6 +711,7 @@ class CloudStore:
                 BoundStore(self._store, self._put_attributes),
                 normalize=False,
                 compute_hash=False,
+                verify=verify,
             ),
         )
         return len(data)
