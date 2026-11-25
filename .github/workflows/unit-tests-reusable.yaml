@@ -1,0 +1,302 @@
+name: unit-tests-reusable
+
+# Called only by tests-reusable.yaml, never by a connector: tests-reusable.yaml
+# is the entry point, owns the inputs' defaults and descriptions, gates this
+# whole workflow at its `unit` caller job (the bump-PR skip, the e2e-only and
+# queue-proof skips), and turns the job results below into the Tests Gate.
+# Split out of tests-reusable.yaml (FND-4676) so a change to one tier is
+# reviewed against that tier alone.
+#
+# Called at @main like every self-reference (docs/standards/ci.md), so
+# `job.workflow_sha` in here is the SHA @main resolved to for THIS file. A pilot
+# that points a connector's `uses:` at a tests-reusable.yaml branch still runs
+# main's copy of this file; to pilot a change here, point tests-reusable.yaml's
+# `uses:` line for this file at the same branch on the pilot branch only.
+
+on:
+  workflow_call:
+    # Every input but timeout-minutes is required and has no default: the defaults live once, in
+    # tests-reusable.yaml, and a passthrough it forgets fails at parse time
+    # instead of silently taking a second default here.
+    inputs:
+      application-sdk-ref:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      apt-packages:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      distinct-id:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      git-lfs-skip-smudge:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      java-version:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      private-git-deps:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      test-lfs:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      unit-coverage-fail-under:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+    # Declared so actionlint checks every `secrets.` reference. tests-reusable.yaml
+    # calls this with `secrets: inherit`, so each arrives under its own name;
+    # the descriptions live on tests-reusable.yaml's declarations.
+    secrets:
+      FLEET_APP_ID:
+        required: false
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+    outputs:
+      unit-result:
+        description: "The `unit` job's result, which Tests Gate reads as the unit tier."
+        value: ${{ jobs.unit.result }}
+      summary:
+        description: "The unit tier's one-line pytest summary."
+        value: ${{ jobs.unit.outputs.summary }}
+      detect-api-member-result:
+        description: "The `detect-api-member` job's result."
+        value: ${{ jobs.detect-api-member.result }}
+      api-member-result:
+        description: "The `api-member` job's result (skipped when the app has no hosted api member)."
+        value: ${{ jobs.api-member.result }}
+
+jobs:
+  # ── Unit (lightweight: no app server / daprd / Temporal / services) ──────
+  # Runs on EVERY event as the fast per-commit signal. connector-unit-tests is
+  # setup-deps + pytest tests/unit + coverage — none of the runtime infra the
+  # integration job spins up, so a PR greens in seconds of test time.
+  unit:
+    name: Unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      # See the integration job below for why the group is run-unique off the
+      # PR path. Same hazard, same fix — this job was cancelled alongside it.
+      group: tests-unit-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write  # connector-unit-tests comments the coverage delta
+      contents: read
+    outputs:
+      summary: ${{ steps.unit.outputs.summary }}
+    env:
+      # Empty (the default) leaves the smudge filter enabled, exactly as
+      # before; git-lfs only skips on an explicit "1".
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+    steps:
+      - name: echo distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # Must precede the deps action's `uv sync`: a native sdist build (hive's
+      # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.
+      #
+      # The value is routed through env, never interpolated into the script
+      # (docs/standards/ci.md), and install_apt_packages.py checks every token
+      # is a plain Debian package name before anything is installed, failing
+      # the step otherwise. It is the one path a caller's package list takes
+      # to apt-get (docs/standards/ci.md, "System packages go through one
+      # script"). Fetched at this workflow's own SHA into its own path, and
+      # removed before the app checkout lands.
+      - name: Fetch install_apt_packages.py from SDK
+        if: inputs.apt-packages != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/install_apt_packages.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-apt
+          persist-credentials: false
+
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
+          rm -rf .sdk-apt
+
+      # The app checkout the tests run on. setup-deps skips its own
+      # (`checkout: "false"` below), which would otherwise persist the job
+      # token in .git/config for the PR code the tests run (FND-4900).
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint fails the action, named.
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+
+      # Opt-in (java-version). Sets JAVA_HOME and PATH for the steps after it,
+      # so the composite below runs the tests on this JDK.
+      - name: Set up Java (java-version)
+        if: inputs.java-version != ''
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Run unit tests
+        id: unit
+        uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@main
+        with:
+          # The job checked the app out above.
+          checkout: "false"
+          lfs: ${{ inputs.test-lfs }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # "0" by default (no coverage gate); apps opt up via the input.
+          fail-under: ${{ inputs.unit-coverage-fail-under }}
+          # Repin so a cross-repo SDK-PR dispatch exercises the SDK branch in the
+          # unit tier too (parity with integration); empty = lockfile version.
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
+
+  # ── Hosted api member (consolidated API server) ────────────────────────────
+  # An app served by common-app-server opts in with a [tool.atlan-app-api] block
+  # in its root pyproject.toml (handler stays in app/), or a package declaring an
+  # `atlan.app_api` entry point. detect-api-member finds it (a tested script; the
+  # job-level `if` below does the gating, no inlined conditional shell). It only
+  # reads pyproject files and never fails an app that has not opted in (no root
+  # pyproject, or one that is not valid TOML, reads as not opted in). Repos
+  # without one — worker-only apps, and every app not yet hosted — skip
+  # api-member entirely.
+  detect-api-member:
+    name: Detect hosted api member
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.detect.outputs.present }}
+      name: ${{ steps.detect.outputs.name }}
+      member: ${{ steps.detect.outputs.member }}
+      package: ${{ steps.detect.outputs.package }}
+      object: ${{ steps.detect.outputs.object }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      - name: Find an atlan.app_api entry point
+        id: detect
+        run: python3 application-sdk-scripts/.github/scripts/detect_api_member.py >> "$GITHUB_OUTPUT"
+
+  # Opted-in apps only. Checks the handler's files are safe to host, then installs
+  # the member ALONE (its own declared dependencies, no atlan-application-sdk) and
+  # mounts it with application_sdk.handler.asgi.build_asgi_app, exactly as the host
+  # does, and runs the host matrix (health, the handler and metadata routes, 422
+  # on a malformed body, no bare 500). common-app-server's image build runs the
+  # same probe, so a change that would break the host fails here, in the app's
+  # own PR.
+  api-member:
+    name: Hosted api member
+    needs: detect-api-member
+    if: >-
+      !cancelled() && needs.detect-api-member.result == 'success' &&
+      needs.detect-api-member.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Private atlanhq git deps, as in the unit job: the member's wheel
+      # carries the app's git requirements, so `uv pip install` below clones
+      # them. The token only reaches git_auth.py's mirror clones (FND-4740),
+      # scoped by .github/actions/scoped-private-deps-token.
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      # With [tool.atlan-app-api]: fail on an absolute `from app` import, a
+      # worker-only import, an APPLICATION_NAME read, logging in the handler
+      # module or a compute_manifest hook (none of these work on the host).
+      # Prints "nothing to check" for an entry-point member without the config.
+      - name: Check the handler's files are safe to host
+        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+
+      # The only step that holds the token: it mirror-clones the private deps
+      # into $RUNNER_TEMP/git-mirrors and exits, so no build backend uv runs
+      # below can read it.
+      - name: Mirror private git dependencies
+        if: inputs.private-git-deps
+        env:
+          GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
+          PRIVATE_GIT_DEPS: "true"
+        run: python3 application-sdk-scripts/.github/scripts/git_auth.py mirror
+
+      - name: Install the api member alone and mount it like the host
+        env:
+          MEMBER: ${{ needs.detect-api-member.outputs.member }}
+          APP_NAME: ${{ needs.detect-api-member.outputs.name }}
+          PACKAGE: ${{ needs.detect-api-member.outputs.package }}
+          OBJECT: ${{ needs.detect-api-member.outputs.object }}
+        run: |
+          set -euo pipefail
+          # Builds from [tool.atlan-app-api] (handler in app/), or the member dir.
+          python3 application-sdk-scripts/.github/scripts/gen_app_api.py build \
+            --member "$MEMBER" --out dist-api
+          uv venv .venv-api
+          # httpx2 is starlette's TestClient transport (the probe mounts the app
+          # with it). Pinned exactly so every app's CI runs the same client; bump
+          # to a release public >= 7 days (org dependency cooldown).
+          # Through git_auth.py: private git deps come from the mirrors, with
+          # no token here; without mirrors it installs exactly as before.
+          python3 application-sdk-scripts/.github/scripts/git_auth.py run -- \
+            uv pip install --python .venv-api dist-api/*.whl httpx2==2.13.1
+          .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
+            --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"

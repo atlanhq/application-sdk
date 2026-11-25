@@ -45,7 +45,7 @@ import pytest
 import yaml
 from _gha_expr import evaluate as _evaluate
 from _gha_expr import evaluate_operand
-from _workflows import REPO_ROOT, WORKFLOWS, load_workflow
+from _workflows import REPO_ROOT, WORKFLOWS, load_workflow, tier_jobs
 from conformance.bootstrap import render as bootstrap_render
 
 #: tests-reusable.yaml's inputs as a caller that predates FND-3839 passes them:
@@ -725,18 +725,17 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
     incidental attempt, in the FND-250 lease work, where turning it on had been
     added as a runner-time win rather than as the decision it is.
     """
-    workflow = load_workflow("tests-reusable.yaml")
+    # The e2e jobs live in the tier tests-reusable.yaml calls (FND-4676).
+    jobs = tier_jobs()
     e2e_jobs = [
         name
-        for name, job in workflow["jobs"].items()
+        for name, job in jobs.items()
         if isinstance(job, dict)
         and "e2e" in str(job.get("concurrency", {}).get("group", ""))
     ]
     assert e2e_jobs, "no e2e concurrency group found; the guard has drifted"
     for name in e2e_jobs:
-        assert workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False, (
-            name
-        )
+        assert jobs[name]["concurrency"]["cancel-in-progress"] is False, name
 
 
 # ── The done-when criterion of FND-3839 ──────────────────────────────────────

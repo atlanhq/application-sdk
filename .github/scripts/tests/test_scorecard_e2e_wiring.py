@@ -151,7 +151,11 @@ def test_the_generate_step_passes_the_job_results_the_script_needs(
     scorecard: dict[str, Any],
 ) -> None:
     env = _generate_step(scorecard)["env"]
-    assert env["E2E_RESULT"] == "${{ needs.e2e.result }}"
+    # The legs' own result, surfaced by the e2e tier; the caller job's result
+    # only when the tier never wrote it (FND-4676).
+    assert env["E2E_RESULT"] == (
+        "${{ needs.e2e.outputs.e2e-result || needs.e2e.result }}"
+    )
     # A crashed integration job must reach the script, or its empty junit reads
     # as "no integration tier" (FND-3299).
     assert env["INTEGRATION_RESULT"] == "${{ needs.integration.result }}"

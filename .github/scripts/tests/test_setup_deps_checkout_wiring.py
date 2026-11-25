@@ -152,8 +152,8 @@ def test_the_call_site_scan_finds_the_known_callers() -> None:
     sites = {(w, j) for w, j, _, _ in _governed_calls()}
 
     for expected in (
-        ("tests-reusable.yaml", "unit"),
-        ("tests-reusable.yaml", "integration"),
+        ("unit-tests-reusable.yaml", "unit"),
+        ("integration-tests-reusable.yaml", "integration"),
         ("checks-reusable.yaml", "pre-commit"),
         ("codeql.yaml", "lint"),
         ("sdk-tests-reusable.yaml", "integration"),
@@ -203,7 +203,10 @@ def test_composites_that_need_a_prior_checkout_skip_setup_deps_checkout(
 
 @pytest.mark.parametrize(
     "workflow,job_id",
-    [("tests-reusable.yaml", "unit"), ("tests-reusable.yaml", "integration")],
+    [
+        ("unit-tests-reusable.yaml", "unit"),
+        ("integration-tests-reusable.yaml", "integration"),
+    ],
 )
 def test_tests_reusable_checks_the_app_out_on_every_run(
     workflow: str, job_id: str

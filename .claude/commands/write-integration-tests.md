@@ -555,15 +555,18 @@ jobs:
 
 Add these two steps **before** "Start app server":
 
+CI reaches private sources over Twingate. GlobalProtect is retired for CI: it
+signs CI in as a person against a VPN address pool shared with every engineer,
+and runs fail when that pool is full (FND-4169, FND-4676).
+
 ```yaml
-      # Requires: GLOBALPROTECT_USERNAME, GLOBALPROTECT_PASSWORD (secrets)
-      #           GLOBALPROTECT_PORTAL_URL (variable, e.g. vpn2.atlan.app)
-      - name: Connect to VPN (GlobalProtect)
-        uses: atlanhq/github-actions/globalprotect-connect-action@main
+      # Requires: TWINGATE_SHARED_KEY (org secret, shared with the repo)
+      - name: Connect to VPN (Twingate)
+        uses: atlanhq/application-sdk/.github/actions/twingate-connect@main
         with:
-          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
-          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
-          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          # The host the tunnel must reach; the action probes {URL}/health.
+          mothership-url: https://{YOUR_SOURCE_HOST}
 
       - name: Verify VPN connectivity
         run: |
@@ -608,14 +611,7 @@ For each connector repo, add these secrets in Settings → Secrets → Actions:
 | `{APP}_USERNAME` | `admin` | Yes |
 | `{APP}_PASSWORD` | `secret123` | Yes |
 | `{APP}_DATABASE` | `default` | Only if needed |
-| `GLOBALPROTECT_USERNAME` | `john.doe` | Only for VPN sources |
-| `GLOBALPROTECT_PASSWORD` | (system password) | Only for VPN sources |
-
-And one **variable** (Settings → Variables → Actions):
-
-| Variable | Value | Required |
-|----------|-------|----------|
-| `GLOBALPROTECT_PORTAL_URL` | `vpn2.atlan.app` | Only for VPN sources |
+| `TWINGATE_SHARED_KEY` | (org secret; ask for it to be shared with the repo) | Only for VPN sources |
 
 ### Reference Implementations
 

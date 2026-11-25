@@ -74,3 +74,49 @@ def step_named(job_or_action: Doc, name: str) -> Doc:
         f"{[s.get('name') for s in steps(job_or_action)]}"
     )
     return matches[0]
+
+
+#: tests-reusable.yaml is the entry point connectors call; since FND-4676 the
+#: tiers it runs live in the three workflows it calls, each at @main.
+TESTS_REUSABLE = "tests-reusable.yaml"
+TIER_WORKFLOWS = (
+    "unit-tests-reusable.yaml",
+    "integration-tests-reusable.yaml",
+    "e2e-tests-reusable.yaml",
+)
+
+
+def tier_jobs() -> dict[str, Doc]:
+    """Every job tests-reusable.yaml runs, wherever it is defined.
+
+    A tier job replaces the tests-reusable.yaml caller job of the same id
+    (``unit``, ``integration``, ``e2e``), so a test of "the unit job" reads the
+    job that runs the steps rather than the ``uses:`` job that calls it.
+    """
+    jobs: dict[str, Doc] = dict(load_workflow(TESTS_REUSABLE)["jobs"])
+    for name in TIER_WORKFLOWS:
+        jobs.update(load_workflow(name)["jobs"])
+    return jobs
+
+
+def tier_job(name: str) -> Doc:
+    """The job ``name`` of :func:`tier_jobs`."""
+    jobs = tier_jobs()
+    assert name in jobs, f"no job {name!r}; jobs are {sorted(jobs)}"
+    return jobs[name]
+
+
+def tier_workflow_of(name: str) -> str:
+    """The file (under .github/workflows) whose job ``name`` runs steps."""
+    for workflow in (*TIER_WORKFLOWS, TESTS_REUSABLE):
+        if name in (load_workflow(workflow).get("jobs") or {}):
+            return workflow
+    raise AssertionError(f"no job {name!r} in tests-reusable.yaml or its tiers")
+
+
+def tier_text() -> str:
+    """tests-reusable.yaml and its three tier workflows, concatenated."""
+    return "\n".join(
+        (WORKFLOWS / name).read_text(encoding="utf-8")
+        for name in (TESTS_REUSABLE, *TIER_WORKFLOWS)
+    )

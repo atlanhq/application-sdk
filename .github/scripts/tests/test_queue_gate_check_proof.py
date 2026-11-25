@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 import queue_gate_check_proof as proof
 from _gha_expr import evaluate
-from _workflows import job, load_workflow, steps, triggers
+from _workflows import job, load_workflow, steps, tier_job, triggers
 
 HEAD = "a" * 40
 REPO = "atlanhq/example-app"
@@ -238,11 +238,12 @@ def test_an_unproven_queue_entry_runs_the_tiers_as_before(
     proof_result: str, proven: str
 ) -> None:
     ran = _ran(_simulate("merge_group", proof_result, proven, _OUTPUTS))
+    # `unit` is the call to unit-tests-reusable.yaml, so it carries the hosted
+    # api member leg with it (FND-4676).
     assert {
         "unit",
         "detect-integration",
         "integration",
-        "detect-api-member",
         "scorecard",
         "tests-passed",
     } <= ran
@@ -259,16 +260,25 @@ def test_queue_proof_runs_only_on_a_queue_entry(event: str) -> None:
 
 @pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
 def test_an_opted_in_app_runs_its_api_member(event: str) -> None:
-    # queue-proof's skip sits upstream of api-member through detect-api-member.
-    outputs = {**_OUTPUTS, "detect-api-member": {"present": "true"}}
-    assert _simulate(event, "success", "true", outputs)["api-member"] == "success"
+    # queue-proof's skip sits upstream of api-member through the `unit` call,
+    # which runs the hosted api member leg (FND-4676)…
+    assert _simulate(event, "success", "true", _OUTPUTS)["unit"] == "success"
+    # …and inside that tier api-member runs on detect-api-member's answer alone.
+    member = tier_job("api-member")
+    assert _needs(member) == ["detect-api-member"]
+    needs = {"detect-api-member": {"result": "success", "outputs": {"present": "true"}}}
+    assert evaluate(str(member["if"]), {"needs": needs}) is True
 
 
 def test_the_gate_keeps_its_static_required_name() -> None:
     jobs = load_workflow("tests-reusable.yaml")["jobs"]
     assert jobs["tests-passed"]["name"] == "Tests Gate"
-    assert jobs["unit"]["name"] == "Unit"
-    assert jobs["integration"]["name"] == "Integration"
+    # The tier checks file as `tests / unit / Unit` and `tests / integration /
+    # Integration` since FND-4676; neither is a required context.
+    assert jobs["unit"]["name"] == "unit"
+    assert jobs["integration"]["name"] == "integration"
+    assert tier_job("unit")["name"] == "Unit"
+    assert tier_job("integration")["name"] == "Integration"
 
 
 def test_queue_proof_reads_statuses_only_for_an_identical_tree() -> None:

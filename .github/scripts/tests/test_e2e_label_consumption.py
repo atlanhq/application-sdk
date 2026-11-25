@@ -48,7 +48,14 @@ def gate_job() -> dict[str, Any]:
 
 
 def _needs(discover: str, e2e: str) -> dict[str, Any]:
-    return {"discover-e2e": {"result": discover}, "e2e": {"result": e2e}}
+    # `e2e` is the tests-reusable.yaml job that calls e2e-tests-reusable.yaml
+    # (FND-4676); the legs' own result reaches the gate as its `e2e-result`
+    # output, which is empty when the tier never ran.
+    outputs = {} if e2e == "skipped" else {"e2e-result": e2e}
+    return {
+        "discover-e2e": {"result": discover},
+        "e2e": {"result": e2e, "outputs": outputs},
+    }
 
 
 @pytest.mark.parametrize(

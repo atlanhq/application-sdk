@@ -212,7 +212,10 @@ FIXED_INSTALLS = {
 # file) each one reads. These are the nine sites FND-4908 found, less the
 # vendored detect action's, which conformance-reusable.yaml now covers.
 SCRIPT_CALLS = {
-    ".github/workflows/tests-reusable.yaml": ["--env APT_PACKAGES"] * 3,
+    # One per tier tests-reusable.yaml calls (FND-4676).
+    ".github/workflows/unit-tests-reusable.yaml": ["--env APT_PACKAGES"],
+    ".github/workflows/integration-tests-reusable.yaml": ["--env APT_PACKAGES"],
+    ".github/workflows/e2e-tests-reusable.yaml": ["--env APT_PACKAGES"],
     ".github/workflows/conformance-reusable.yaml": [
         "--env APT_PACKAGES",
         "--file .github/ci-system-deps.txt",

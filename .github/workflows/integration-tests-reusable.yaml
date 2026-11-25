@@ -1,0 +1,426 @@
+name: integration-tests-reusable
+
+# Called only by tests-reusable.yaml, never by a connector: tests-reusable.yaml
+# is the entry point, owns the inputs' defaults and descriptions, gates this
+# whole workflow at its `integration` caller job (the bump-PR skip, the e2e-only and
+# queue-proof skips, the merge-queue placement and the suite detection), and turns the job results below into the Tests Gate.
+# Split out of tests-reusable.yaml (FND-4676) so a change to one tier is
+# reviewed against that tier alone.
+#
+# Called at @main like every self-reference (docs/standards/ci.md), so
+# `job.workflow_sha` in here is the SHA @main resolved to for THIS file. A pilot
+# that points a connector's `uses:` at a tests-reusable.yaml branch still runs
+# main's copy of this file; to pilot a change here, point tests-reusable.yaml's
+# `uses:` line for this file at the same branch on the pilot branch only.
+
+on:
+  workflow_call:
+    # Every input but timeout-minutes is required and has no default: the defaults live once, in
+    # tests-reusable.yaml, and a passthrough it forgets fails at parse time
+    # instead of silently taking a second default here.
+    inputs:
+      app-name:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      application-sdk-ref:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      apt-packages:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      dataforge-datasource:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      dataforge-env-tier:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      dataforge-hermetic-fallback:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      dataforge-mode:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      dataforge-output-prefix:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      distinct-id:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      force-external-runtime:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      git-lfs-skip-smudge:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      health-check-timeout-seconds:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      java-version:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      private-git-deps:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      pytest-args:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      services-script:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      test-lfs:
+        type: boolean
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      test-paths:
+        type: string
+        required: true
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+      # Not required, unlike the rest: test_job_timeouts.py reads this
+      # literal default to prove the job is capped below GitHub's 360. It
+      # matches tests-reusable.yaml's, which always forwards its own value.
+      timeout-minutes:
+        type: number
+        required: false
+        default: 60
+        description: "Forwarded by tests-reusable.yaml; see the input of the same name there."
+    # Declared so actionlint checks every `secrets.` reference. tests-reusable.yaml
+    # calls this with `secrets: inherit`, so each arrives under its own name;
+    # the descriptions live on tests-reusable.yaml's declarations.
+    secrets:
+      DATAFORGE_RESOURCE_ID:
+        required: false
+      E2E_SOURCE_ENV_JSON:
+        required: false
+      FLEET_APP_ID:
+        required: false
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+      TWINGATE_SHARED_KEY:
+        required: false
+    outputs:
+      summary:
+        description: "The integration tier's one-line pytest summary."
+        value: ${{ jobs.integration.outputs.summary }}
+
+jobs:
+  # ── Integration (boots the app + testcontainers / services-script) ───────
+  # Runs on merge_group / push / dispatch, and on pull_request only when the base
+  # branch has no merge queue to run it in (see detect-merge-queue). Skipped when
+  # the connector ships no integration suite (detect-integration count == 0).
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      # On a PR ref the group is deliberately SHARED across the PR's commits —
+      # that is what makes cancel-in-progress supersede the previous run.
+      #
+      # Off the PR path there is nothing to serialise: this job is self-contained
+      # (testcontainers / services-script on its own runner, no tenant, no shared
+      # external resource). A shared group there is not merely useless, it is
+      # actively harmful, because GitHub keeps only ONE pending run per group —
+      # a third arrival evicts the queued one with conclusion `cancelled`.
+      #
+      # That is precisely what a cross-repo dispatch delivers: on the
+      # workflow_dispatch path github.ref is the CONNECTOR's ref (always
+      # refs/heads/main), never the application-sdk commit under test, so N
+      # concurrent SDK runs all landed in one group. application-sdk's merge queue
+      # builds several entries speculatively at once and each dispatches into every
+      # connector, so a batch of queued PRs reliably evicted each other's runs —
+      # Tests Gate then failed, report-to-sdk reported failure on the SDK SHA, and
+      # the merge-queue entry was ejected with no test having actually run.
+      #
+      # Keying on run_id off the PR path gives every run its own group.
+      group: tests-integration-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    permissions:
+      pull-requests: write
+      contents: read
+      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
+      # runner mints a per-run identity token the fetch script exchanges for a
+      # 1h credentials:read token. Harmless when the dataforge inputs are unset.
+      # Mirrors the e2e job — both tiers resolve the SAME pinned instance.
+      id-token: write
+      # Lets a services-script pull private CI images from GHCR, e.g. the MinIO
+      # mirror ghcr.io/atlanhq/ci-mirror/minio. The package must also grant the
+      # connector repo Read under "Manage Actions access".
+      packages: read
+    outputs:
+      summary: ${{ steps.integration.outputs.summary }}
+    env:
+      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
+      # Surfaced as env because a step-level `if:` cannot read the secrets
+      # context, and the export steps below are gated on it being set.
+      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
+      # Pinned dataforge instance UUID (dataforge-mode "resource"). The e2e job
+      # reads the same secret, so pinning it makes both tiers fetch byte-identical
+      # source credentials from one locked instance, never two. Empty when the
+      # caller does not use dataforge; the fetch chain below then self-skips.
+      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
+    steps:
+      - name: echo distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
+
+      # See the unit job: must precede the deps action's `uv sync`.
+      - name: Fetch install_apt_packages.py from SDK
+        if: inputs.apt-packages != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/install_apt_packages.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-apt
+          persist-credentials: false
+
+      - name: Install system packages (apt-packages)
+        if: inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          set -euo pipefail
+          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
+          rm -rf .sdk-apt
+
+      # The app checkout the tests run on. setup-deps skips its own
+      # (`checkout: "false"` below), which would otherwise persist the job
+      # token in .git/config for the PR code the tests run (FND-4900).
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Private atlanhq git deps: a read-only fleet App token scoped to the
+      # private repos the app names (none named: no mint). It only reaches
+      # git_auth.py's mirror clones: uv, and every build backend it runs,
+      # install from local mirrors with no token in their env (FND-4740,
+      # lens round 5). A failed mint fails the action, named.
+      # The scoped mint (.github/actions/scoped-private-deps-token): the
+      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
+      # no mint when it names none.
+      - name: Mint read-only token for private git dependencies
+        id: git-deps-token
+        if: inputs.private-git-deps
+        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+
+      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
+      # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
+      # Exported/run here rather than passed to the composite action below,
+      # because every action this workflow calls is pinned @main: an input added
+      # on a feature branch is silently ignored until it lands. Sparse-checks-out
+      # .github/scripts and the VPN actions (the latter needed only on the
+      # dataforge path — a couple of extra files otherwise). Unconditional: the
+      # Docker Hub mirror step below runs a script from it on every connector.
+      - name: Fetch SDK CI scripts (Docker mirror, source credentials, dataforge fetch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          # `job.workflow_sha` is "the commit SHA of the workflow file that
+          # defines the current job" — i.e. THIS reusable, at whatever ref the
+          # caller pinned — so the script always matches the workflow running
+          # it, and no caller-supplied ref reaches a checkout whose payload is
+          # then executed. `repository:` stays hardcoded rather than paired with
+          # `job.workflow_repository` to keep that payload provenance-pinned.
+          # Caveat: the `job.workflow_*` properties do not exist on GitHub
+          # Enterprise Server (no effect on github.com callers), and actionlint
+          # <=1.7.7 predates them, so it reports a false "property not defined".
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/twingate-connect
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          # No `token:` here: application-sdk is public, so the run's own
+          # github.token reads it regardless of whether the caller supplies
+          # ORG_PAT_GITHUB — preferring the org-wide PAT for a same-repo,
+          # public checkout would only burn its shared rate limit for no
+          # benefit. Matches the e2e job's equivalent checkout.
+          persist-credentials: false
+
+      # Two invocations, and the order is the security property. `E2E_SOURCE_ENV_JSON`
+      # is a registered secret, but the runner's masker matches registered
+      # strings, not substrings of one — so the values extracted out of the blob
+      # are NOT redacted until each is registered in its own right. `--mask-only`
+      # writes `::add-mask::` to stdout (the log), which is where the runner
+      # reads workflow commands from; it must run BEFORE the second invocation
+      # redirects stdout into $GITHUB_ENV, because from that point on every step
+      # that renders its `env:` group would print them in cleartext. `set -e`
+      # makes a failure in the mask pass abort before anything is written — it is
+      # set explicitly rather than inherited from the default shell, so that the
+      # security property survives a `defaults: run: shell:` added to this
+      # workflow later (which would silently drop the runner's implicit `-e`).
+      - name: Export connector source credentials
+        if: env.E2E_SOURCE_ENV_JSON != ''
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$E2E_SOURCE_ENV_JSON" --mask-only
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
+
+      # ── source resolution (FND-205), integration tier ───────────────────
+      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
+      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above), the
+      # whole dataforge chain below self-skips — every fetch step gates on
+      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only when there are
+      # NO repo creds does an opted-in connector (dataforge-datasource set) fetch
+      # from dataforge over the VPN. Mirrors the e2e job step-for-step and reads
+      # the SAME dataforge-datasource + DATAFORGE_RESOURCE_ID, so the two tiers
+      # resolve the identical pinned instance whenever they do reach dataforge.
+      #
+      # The fetch steps are continue-on-error so a transient dataforge/VPN blip
+      # (the VPN connect already retries 3x) doesn't redden the job by itself.
+      # The "Resolve source" step below is the compensating control: it FAILS the
+      # job when a source was expected but NONE resolved — no repo creds, no
+      # dataforge creds, and the connector declared no hermetic container
+      # (dataforge-hermetic-fallback: false). A connector that CAN seed one and
+      # left the input at its "true" default degrades to that seeded source
+      # instead — the fetch was still attempted, so the VPN was dialled, but a
+      # blip there no longer decides the job. Apps that set neither
+      # dataforge-datasource nor E2E_SOURCE_ENV_JSON self-skip the whole chain,
+      # fail-fast included.
+      # READ-ONLY: the job only fetches credentials; it never seeds or mutates
+      # the instance (curation is the instance owner's one-time setup).
+      #
+      # dataforge's api host and the provisioned sources admit only the VPN
+      # egress IPs, reached over Twingate (the only route since FND-4169),
+      # from the job.workflow_sha sparse checkout — same provenance pinning as
+      # the scripts above. `resubnet-docker` moves Docker off Atlan's
+      # 172.17/16 before the tunnel comes up.
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
+      - name: Clean up after a stopped Twingate step
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
+
+      - name: Fetch connector source credentials from dataforge
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        continue-on-error: true
+        env:
+          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
+          DF_MODE: ${{ inputs.dataforge-mode }}
+          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
+          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
+        run: |
+          set -euo pipefail
+          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
+            --datasource "$DF_DATASOURCE" \
+            --mode "$DF_MODE" \
+            --resource-id "$DATAFORGE_RESOURCE_ID" \
+            --env-tier "$DF_ENV_TIER" \
+            --output-prefix "$DF_OUTPUT_PREFIX")"
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" --mask-only
+          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
+            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
+
+      # The compensating control for the continue-on-error fetch above: this step
+      # has no continue-on-error, so it reports the resolved source and — when
+      # nothing resolved (E2E_SOURCE_DATASOURCE breadcrumb absent AND no
+      # E2E_SOURCE_ENV_JSON) — fails the job one minute in, with the fix in the
+      # message, instead of letting the leg limp on empty credentials.
+      #
+      # Whether "nothing resolved" is fatal is the CALLER's declaration, exactly
+      # as in the e2e job: hermetic-fallback is wired to
+      # dataforge-hermetic-fallback (default "true"), so a connector that can run
+      # its suite against a locally seeded source degrades to it, and a connector
+      # that cannot MUST set "false" to get the hard error. That default is
+      # deliberate — the two tiers read one input, so a connector cannot be fatal
+      # in one and forgiving in the other — but it does mean a source-less
+      # connector left on the default greens this merge-gating job on code it
+      # never exercised against a real source. The opt-out is the control; see the
+      # dataforge-hermetic-fallback input description. Reuses the e2e job's
+      # script verbatim.
+      - name: Resolve integration source
+        if: inputs.dataforge-datasource != '' || env.E2E_SOURCE_ENV_JSON != ''
+        env:
+          DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
+        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
+
+      # Unit runs in its own job; integration defaults to tests/integration/.
+      # A caller test-paths override scopes THIS job only. The ternary is a
+      # workflow expression in a `with:` value — not inlined conditional shell —
+      # so it stays within the CI authoring rule.
+      # A services-script has no token of its own, so log in here for it. It
+      # is non-fatal: only a pull of a private image needs it, and that pull
+      # then fails loudly (`denied`/`unauthorized`) on its own.
+      # Docker Hub images (mysql, testcontainers' ryuk, ...) are pulled
+      # anonymously from a shared runner IP, so they hit Docker Hub's rate limit
+      # and its 5xx, fail test setup, and eject the PR from the merge queue.
+      # `registry-mirrors` makes the daemon try mirror.gcr.io (Google's public
+      # Docker Hub cache) first and fall back to Docker Hub on a miss; image
+      # names and testcontainers are unchanged, and only docker.io pulls are
+      # affected. Must run AFTER the Twingate step: its `resubnet-docker`
+      # overwrites daemon.json, which would drop the mirror. Best-effort: fails
+      # only if Docker is down even after restoring the old daemon.json.
+      - name: Use mirror.gcr.io as a Docker Hub mirror
+        run: >-
+          sudo python3 application-sdk-scripts/.github/scripts/docker_registry_mirror.py
+          --mirror https://mirror.gcr.io
+
+      - name: Log in to GHCR (private CI images for services-script)
+        continue-on-error: true
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # See the unit job.
+      - name: Set up Java (java-version)
+        if: inputs.java-version != ''
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Run integration tests
+        id: integration
+        uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
+        with:
+          # The job checked the app out above.
+          checkout: "false"
+          app-name: ${{ inputs.app-name }}
+          lfs: ${{ inputs.test-lfs }}
+          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
+          test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || 'tests/integration/' }}
+          pytest-args: ${{ inputs.pytest-args }}
+          services-script: ${{ inputs.services-script }}
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          force-external-runtime: ${{ inputs.force-external-runtime }}
+          health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}

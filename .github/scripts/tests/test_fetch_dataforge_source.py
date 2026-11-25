@@ -282,10 +282,15 @@ _CAPTURE_SHAPE = re.compile(
 )
 
 
-def test_tests_reusable_call_site_captures_stdout():
-    text = (_REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml").read_text()
+@pytest.mark.parametrize(
+    "workflow",
+    # The two tiers tests-reusable.yaml calls that fetch a source (FND-4676).
+    ["integration-tests-reusable.yaml", "e2e-tests-reusable.yaml"],
+)
+def test_tests_reusable_call_site_captures_stdout(workflow: str):
+    text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text()
     assert _CAPTURE_SHAPE.search(text), (
-        "tests-reusable.yaml must capture the fetch's stdout into DF_ENV_JSON "
+        f"{workflow} must capture the fetch's stdout into DF_ENV_JSON "
         "via command substitution — echoing it to the log would print every "
         "credential value unmasked"
     )

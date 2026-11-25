@@ -32,7 +32,16 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from _workflows import ACTIONS, WORKFLOWS, job, load_workflow, steps, triggers
+from _workflows import (
+    ACTIONS,
+    WORKFLOWS,
+    job,
+    load_workflow,
+    steps,
+    tier_job,
+    tier_text,
+    triggers,
+)
 
 _WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
 _ACTION = ACTIONS / "discover-e2e-suites" / "action.yaml"
@@ -72,10 +81,8 @@ def discover_step(workflow: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def e2e_step(workflow: dict[str, Any]) -> dict[str, Any]:
-    matching = [
-        s for s in steps(job(workflow, "e2e")) if s.get("uses") == _SDR_E2E_ACTION
-    ]
+def e2e_step() -> dict[str, Any]:
+    matching = [s for s in steps(tier_job("e2e")) if s.get("uses") == _SDR_E2E_ACTION]
     assert len(matching) == 1, "the e2e job must invoke the sdr-e2e composite once"
     return matching[0]
 
@@ -83,8 +90,14 @@ def e2e_step(workflow: dict[str, Any]) -> dict[str, Any]:
 def test_the_e2e_matrix_is_the_discovery_job_s(workflow: dict[str, Any]) -> None:
     # Everything below rests on this: the per-suite values are resolved in
     # discovery, so the legs must be expanded from the matrix it emitted.
-    matrix = job(workflow, "e2e")["strategy"]["matrix"]
-    assert "needs.discover-e2e.outputs.matrix" in matrix
+    # The legs are in e2e-tests-reusable.yaml (FND-4676): tests-reusable.yaml
+    # hands it discovery's matrix, and the legs expand that input.
+    assert (
+        job(workflow, "e2e")["with"]["e2e-matrix"]
+        == "${{ needs.discover-e2e.outputs.matrix }}"
+    )
+    matrix = tier_job("e2e")["strategy"]["matrix"]
+    assert "inputs.e2e-matrix" in matrix
 
 
 def test_discovery_is_given_both_per_suite_dimensions(
@@ -121,7 +134,7 @@ def test_the_overlay_path_is_written_once(workflow: dict[str, Any]) -> None:
     # Two spellings of the fallback would drift: discovery would key the
     # convention off one directory while the legs fell back to a file in
     # another. The fallback belongs at the resolution site.
-    text = _WORKFLOW.read_text(encoding="utf-8")
+    text = tier_text()
     occurrences = [line for line in text.splitlines() if _REPO_WIDE_OVERLAY in line]
     assert len(occurrences) == 1, (
         f"{_REPO_WIDE_OVERLAY} appears {len(occurrences)} times; it is the "

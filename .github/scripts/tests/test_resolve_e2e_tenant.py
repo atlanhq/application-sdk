@@ -474,7 +474,9 @@ def test_call_sites_are_the_expected_files() -> None:
         # that tenant the same way a leg does. Audited: it runs the two-pass
         # --mask-only-then-write protocol, which the ordering guard below checks.
         ".github/workflows/e2e-tenant-install.yaml",
-        ".github/workflows/tests-reusable.yaml",
+        # The e2e tier tests-reusable.yaml calls (FND-4676): prepare-tenant and
+        # every leg resolve their cloud's tenant.
+        ".github/workflows/e2e-tests-reusable.yaml",
     }
 
 

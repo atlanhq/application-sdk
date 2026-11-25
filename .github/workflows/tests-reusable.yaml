@@ -26,9 +26,18 @@ name: tests-reusable
 #     (`private-git-deps`), scoped to the app's private repos and seen only by
 #     git_auth.py's mirror clones, plus the same scoped token forwarded to the
 #     e2e image build as `git-token`
-#   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
-#     it was previously delegated to e2e-full-reusable.yaml, now folded in so
-#     the whole suite is one reusable + one Tests Gate)
+#   - Label/dispatch-gated full-DAG e2e (see the `e2e` job)
+#
+# Layout (FND-4676). This file is the entry point and the only one a connector
+# calls. It owns every input and secret declaration, routes the run (queue
+# proof, merge-queue and suite detection, e2e discovery, the dataforge wake and
+# pause), and aggregates the verdict (Tests Gate, the SDK callback, the
+# scorecard). The tiers themselves live in three workflows it calls:
+#   unit-tests-reusable.yaml         unit + the hosted api member leg
+#   integration-tests-reusable.yaml  integration
+#   e2e-tests-reusable.yaml          image build, tenant lease + install, legs
+# Each is called at @main and reports its jobs' results back as outputs, which
+# the gate reads exactly as it read the jobs when they lived here.
 #
 # Test tiering (two separate jobs → two separate checks):
 #   unit         → tests/unit/ via the lightweight connector-unit-tests action
@@ -56,12 +65,16 @@ name: tests-reusable
 #   A caller-supplied `test-paths` scopes the INTEGRATION job only; the unit job
 #   always runs tests/unit/.
 #
-# GitHub check name hierarchy as the UI displays it (caller → tests-reusable):
-#   Tests / tests / Unit         (every event)
-#   Tests / tests / Integration  (merge queue if the base branch has one, else
-#                                 on the PR; skipped when there is no suite)
-#   Tests / tests / End-to-end   (label / dispatch)
-#   Tests / tests / Tests Gate   (aggregator — the required check)
+# GitHub check name hierarchy as the UI displays it (caller → tests-reusable →
+# tier workflow):
+#   Tests / tests / unit / Unit                  (every event)
+#   Tests / tests / integration / Integration    (merge queue if the base branch
+#                                                 has one, else on the PR;
+#                                                 skipped when there is no suite)
+#   Tests / tests / e2e / End-to-end (<leg>)     (label / dispatch)
+#   Tests / tests / Tests Gate                   (aggregator — the required check)
+# Only `tests / Tests Gate` is required anywhere in the fleet, so the tier
+# checks gaining a segment in the split renamed no required context.
 #
 # Branch protection does NOT use those display strings. A ruleset's
 # required_status_checks `context` is the check-run name, which omits the
@@ -69,8 +82,8 @@ name: tests-reusable
 # job's name. (Verified against atlan-mysql-app's live `main` ruleset, which
 # also carries `suite / Conformance Gate`; an inline job is a single segment.)
 #
-# Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
-# secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
+# Nested reusable depth: caller → tests-reusable → tier workflow = 3 (GitHub's
+# max is 10). secrets: inherit chains from the caller through to the tiers.
 #
 # Connectors that need OS-level native build deps (ODBC, SAP JCo, etc.) before
 # uv sync cannot use this reusable — they need a bespoke tests.yaml with the
@@ -608,12 +621,11 @@ on:
           dataforge step (wake, pause, integration, e2e). Empty means no route:
           the dataforge calls cannot connect and the leg falls back to repo creds
           or the hermetic source, per dataforge-hermetic-fallback.
-      # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
-      # lives in a YAML comment rather than in the description below because
-      # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
-      # mention of that script as an invocation it must be able to parse and
-      # check for mask-before-write ordering — deliberately, so a real caller can
-      # never hide behind prose.
+      # Resolved per leg by the tenant resolver the e2e tier runs (see
+      # e2e-tests-reusable.yaml). The script is deliberately not named in this
+      # file: its call-site guard treats every file that names it as a call site
+      # it must be able to parse and check for mask-before-write ordering, and
+      # nothing here calls it since the e2e tier moved out (FND-4676).
       E2E_TENANT_MATRIX_JSON:
         required: false
         description: |
@@ -741,12 +753,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 _sdk/.github/scripts/queue_gate_check_proof.py
 
-  # ── Unit (lightweight: no app server / daprd / Temporal / services) ──────
-  # Runs on EVERY event as the fast per-commit signal. connector-unit-tests is
-  # setup-deps + pytest tests/unit + coverage — none of the runtime infra the
-  # integration job spins up, so a PR greens in seconds of test time.
+  # ── Unit tier (unit-tests-reusable.yaml) ─────────────────────────────────
+  # The unit job plus the hosted api member leg. Runs on EVERY event as the
+  # fast per-commit signal.
   unit:
-    name: Unit
+    name: unit
     needs: [queue-proof]
     # An e2e-only run (a `/e2e` comment) skips the tier its PR run already
     # measured. The run reports under `e2e / …`, so this skip never reaches a
@@ -756,104 +767,22 @@ jobs:
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
       (inputs.run-e2e != 'only' && !cancelled() && needs.queue-proof.outputs.proven != 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      # See the integration job below for why the group is run-unique off the
-      # PR path. Same hazard, same fix — this job was cancelled alongside it.
-      group: tests-unit-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
-      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    # The strongest grant any job in the called workflow declares. A called
+    # workflow can only equal or narrow this.
     permissions:
-      pull-requests: write  # connector-unit-tests comments the coverage delta
       contents: read
-    outputs:
-      summary: ${{ steps.unit.outputs.summary }}
-    env:
-      # Empty (the default) leaves the smudge filter enabled, exactly as
-      # before; git-lfs only skips on an explicit "1".
-      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
-    steps:
-      - name: echo distinct-id ${{ inputs.distinct-id }}
-        if: inputs.distinct-id != ''
-        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
-
-      # Must precede the deps action's `uv sync`: a native sdist build (hive's
-      # pykerberos → gssapi/gssapi.h) fails during sync, not at test time.
-      #
-      # The value is routed through env, never interpolated into the script
-      # (docs/standards/ci.md), and install_apt_packages.py checks every token
-      # is a plain Debian package name before anything is installed, failing
-      # the step otherwise. It is the one path a caller's package list takes
-      # to apt-get (docs/standards/ci.md, "System packages go through one
-      # script"). Fetched at this workflow's own SHA into its own path, and
-      # removed before the app checkout lands.
-      - name: Fetch install_apt_packages.py from SDK
-        if: inputs.apt-packages != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/install_apt_packages.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-apt
-          persist-credentials: false
-
-      - name: Install system packages (apt-packages)
-        if: inputs.apt-packages != ''
-        env:
-          APT_PACKAGES: ${{ inputs.apt-packages }}
-        run: |
-          set -euo pipefail
-          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
-          rm -rf .sdk-apt
-
-      # The app checkout the tests run on. setup-deps skips its own
-      # (`checkout: "false"` below), which would otherwise persist the job
-      # token in .git/config for the PR code the tests run (FND-4900).
-      - name: Checkout app
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Private atlanhq git deps: a read-only fleet App token scoped to the
-      # private repos the app names (none named: no mint). It only reaches
-      # git_auth.py's mirror clones: uv, and every build backend it runs,
-      # install from local mirrors with no token in their env (FND-4740,
-      # lens round 5). A failed mint fails the action, named.
-      # The scoped mint (.github/actions/scoped-private-deps-token): the
-      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
-      # no mint when it names none.
-      - name: Mint read-only token for private git dependencies
-        id: git-deps-token
-        if: inputs.private-git-deps
-        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-
-      # Opt-in (java-version). Sets JAVA_HOME and PATH for the steps after it,
-      # so the composite below runs the tests on this JDK.
-      - name: Set up Java (java-version)
-        if: inputs.java-version != ''
-        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
-        with:
-          distribution: temurin
-          java-version: ${{ inputs.java-version }}
-
-      - name: Run unit tests
-        id: unit
-        uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@main
-        with:
-          # The job checked the app out above.
-          checkout: "false"
-          lfs: ${{ inputs.test-lfs }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          # "0" by default (no coverage gate); apps opt up via the input.
-          fail-under: ${{ inputs.unit-coverage-fail-under }}
-          # Repin so a cross-repo SDK-PR dispatch exercises the SDK branch in the
-          # unit tier too (parity with integration); empty = lockfile version.
-          application-sdk-ref: ${{ inputs.application-sdk-ref }}
-          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
+      pull-requests: write  # connector-unit-tests comments the coverage delta
+    uses: atlanhq/application-sdk/.github/workflows/unit-tests-reusable.yaml@main
+    with:
+      application-sdk-ref: ${{ inputs.application-sdk-ref }}
+      apt-packages: ${{ inputs.apt-packages }}
+      distinct-id: ${{ inputs.distinct-id }}
+      git-lfs-skip-smudge: ${{ inputs.git-lfs-skip-smudge }}
+      java-version: ${{ inputs.java-version }}
+      private-git-deps: ${{ inputs.private-git-deps }}
+      test-lfs: ${{ inputs.test-lfs }}
+      unit-coverage-fail-under: ${{ inputs.unit-coverage-fail-under }}
+    secrets: inherit
 
   # ── Detect whether the PR's base branch is behind a merge queue ──────────
   # Decides WHERE the integration tier gates. The tier must run before a merge
@@ -973,140 +902,13 @@ jobs:
         with:
           test-dir: tests/integration
 
-  # ── Hosted api member (consolidated API server) ────────────────────────────
-  # An app served by common-app-server opts in with a [tool.atlan-app-api] block
-  # in its root pyproject.toml (handler stays in app/), or a package declaring an
-  # `atlan.app_api` entry point. detect-api-member finds it (a tested script; the
-  # job-level `if` below does the gating, no inlined conditional shell). It only
-  # reads pyproject files and never fails an app that has not opted in (no root
-  # pyproject, or one that is not valid TOML, reads as not opted in). Repos
-  # without one — worker-only apps, and every app not yet hosted — skip
-  # api-member entirely.
-  detect-api-member:
-    name: Detect hosted api member
-    needs: [queue-proof]
-    if: >-
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (inputs.run-e2e != 'only' && !cancelled() && needs.queue-proof.outputs.proven != 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      present: ${{ steps.detect.outputs.present }}
-      name: ${{ steps.detect.outputs.name }}
-      member: ${{ steps.detect.outputs.member }}
-      package: ${{ steps.detect.outputs.package }}
-      object: ${{ steps.detect.outputs.object }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          persist-credentials: false
-      - name: Find an atlan.app_api entry point
-        id: detect
-        run: python3 application-sdk-scripts/.github/scripts/detect_api_member.py >> "$GITHUB_OUTPUT"
-
-  # Opted-in apps only. Checks the handler's files are safe to host, then installs
-  # the member ALONE (its own declared dependencies, no atlan-application-sdk) and
-  # mounts it with application_sdk.handler.asgi.build_asgi_app, exactly as the host
-  # does, and runs the host matrix (health, the handler and metadata routes, 422
-  # on a malformed body, no bare 500). common-app-server's image build runs the
-  # same probe, so a change that would break the host fails here, in the app's
-  # own PR.
-  api-member:
-    name: Hosted api member
-    needs: detect-api-member
-    # Implicit success() spans queue-proof, which skips outside a merge queue.
-    if: >-
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      !cancelled() && needs.detect-api-member.result == 'success' &&
-      needs.detect-api-member.outputs.present == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Private atlanhq git deps, as in the unit job: the member's wheel
-      # carries the app's git requirements, so `uv pip install` below clones
-      # them. The token only reaches git_auth.py's mirror clones (FND-4740),
-      # scoped by .github/actions/scoped-private-deps-token.
-      - name: Mint read-only token for private git dependencies
-        id: git-deps-token
-        if: inputs.private-git-deps
-        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          persist-credentials: false
-      # With [tool.atlan-app-api]: fail on an absolute `from app` import, a
-      # worker-only import, an APPLICATION_NAME read, logging in the handler
-      # module or a compute_manifest hook (none of these work on the host).
-      # Prints "nothing to check" for an entry-point member without the config.
-      - name: Check the handler's files are safe to host
-        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
-
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.13.9"
-
-      # The only step that holds the token: it mirror-clones the private deps
-      # into $RUNNER_TEMP/git-mirrors and exits, so no build backend uv runs
-      # below can read it.
-      - name: Mirror private git dependencies
-        if: inputs.private-git-deps
-        env:
-          GIT_TOKEN: ${{ steps.git-deps-token.outputs.token }}
-          PRIVATE_GIT_DEPS: "true"
-        run: python3 application-sdk-scripts/.github/scripts/git_auth.py mirror
-
-      - name: Install the api member alone and mount it like the host
-        env:
-          MEMBER: ${{ needs.detect-api-member.outputs.member }}
-          APP_NAME: ${{ needs.detect-api-member.outputs.name }}
-          PACKAGE: ${{ needs.detect-api-member.outputs.package }}
-          OBJECT: ${{ needs.detect-api-member.outputs.object }}
-        run: |
-          set -euo pipefail
-          # Builds from [tool.atlan-app-api] (handler in app/), or the member dir.
-          python3 application-sdk-scripts/.github/scripts/gen_app_api.py build \
-            --member "$MEMBER" --out dist-api
-          uv venv .venv-api
-          # httpx2 is starlette's TestClient transport (the probe mounts the app
-          # with it). Pinned exactly so every app's CI runs the same client; bump
-          # to a release public >= 7 days (org dependency cooldown).
-          # Through git_auth.py: private git deps come from the mirrors, with
-          # no token here; without mirrors it installs exactly as before.
-          python3 application-sdk-scripts/.github/scripts/git_auth.py run -- \
-            uv pip install --python .venv-api dist-api/*.whl httpx2==2.13.1
-          .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
-            --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"
-
-  # ── Integration (boots the app + testcontainers / services-script) ───────
-  # Runs on merge_group / push / dispatch, and on pull_request only when the base
-  # branch has no merge queue to run it in (see detect-merge-queue). Skipped when
-  # the connector ships no integration suite (detect-integration count == 0).
+  # ── Integration tier (integration-tests-reusable.yaml) ───────────────────
+  # Boots the app + testcontainers / services-script. Runs on merge_group /
+  # push / dispatch, and on pull_request only when the base branch has no merge
+  # queue to run it in (see detect-merge-queue). Skipped when the connector
+  # ships no integration suite (detect-integration count == 0).
   integration:
-    name: Integration
+    name: integration
     # wake-dataforge-source is in `needs` for ORDERING only — the source must be
     # awake before the fetch step runs. No wake-result clause is added to the
     # `if:` below (it already uses always()), so a wake failure does not skip the
@@ -1139,305 +941,35 @@ jobs:
           startsWith(github.head_ref, 'bump-version') &&
           contains(github.event.pull_request.labels.*.name, 'gate-check') &&
           (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) ))
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.timeout-minutes }}
-    concurrency:
-      # On a PR ref the group is deliberately SHARED across the PR's commits —
-      # that is what makes cancel-in-progress supersede the previous run.
-      #
-      # Off the PR path there is nothing to serialise: this job is self-contained
-      # (testcontainers / services-script on its own runner, no tenant, no shared
-      # external resource). A shared group there is not merely useless, it is
-      # actively harmful, because GitHub keeps only ONE pending run per group —
-      # a third arrival evicts the queued one with conclusion `cancelled`.
-      #
-      # That is precisely what a cross-repo dispatch delivers: on the
-      # workflow_dispatch path github.ref is the CONNECTOR's ref (always
-      # refs/heads/main), never the application-sdk commit under test, so N
-      # concurrent SDK runs all landed in one group. application-sdk's merge queue
-      # builds several entries speculatively at once and each dispatches into every
-      # connector, so a batch of queued PRs reliably evicted each other's runs —
-      # Tests Gate then failed, report-to-sdk reported failure on the SDK SHA, and
-      # the merge-queue entry was ejected with no test having actually run.
-      #
-      # Keying on run_id off the PR path gives every run its own group.
-      group: tests-integration-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
-      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     permissions:
-      pull-requests: write
       contents: read
-      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
-      # runner mints a per-run identity token the fetch script exchanges for a
-      # 1h credentials:read token. Harmless when the dataforge inputs are unset.
-      # Mirrors the e2e job — both tiers resolve the SAME pinned instance.
+      pull-requests: write
+      # The dataforge fetch's OIDC path; see the job in the called workflow.
       id-token: write
-      # Lets a services-script pull private CI images from GHCR, e.g. the MinIO
-      # mirror ghcr.io/atlanhq/ci-mirror/minio. The package must also grant the
-      # connector repo Read under "Manage Actions access".
+      # A services-script pulling private CI images from GHCR.
       packages: read
-    outputs:
-      summary: ${{ steps.integration.outputs.summary }}
-    env:
-      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
-      # Surfaced as env because a step-level `if:` cannot read the secrets
-      # context, and the export steps below are gated on it being set.
-      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
-      # Pinned dataforge instance UUID (dataforge-mode "resource"). The e2e job
-      # reads the same secret, so pinning it makes both tiers fetch byte-identical
-      # source credentials from one locked instance, never two. Empty when the
-      # caller does not use dataforge; the fetch chain below then self-skips.
-      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
-    steps:
-      - name: echo distinct-id ${{ inputs.distinct-id }}
-        if: inputs.distinct-id != ''
-        run: echo "Dispatched; SDK ref=${{ inputs.application-sdk-ref }}"
-
-      # See the unit job: must precede the deps action's `uv sync`.
-      - name: Fetch install_apt_packages.py from SDK
-        if: inputs.apt-packages != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/install_apt_packages.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-apt
-          persist-credentials: false
-
-      - name: Install system packages (apt-packages)
-        if: inputs.apt-packages != ''
-        env:
-          APT_PACKAGES: ${{ inputs.apt-packages }}
-        run: |
-          set -euo pipefail
-          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
-          rm -rf .sdk-apt
-
-      # The app checkout the tests run on. setup-deps skips its own
-      # (`checkout: "false"` below), which would otherwise persist the job
-      # token in .git/config for the PR code the tests run (FND-4900).
-      - name: Checkout app
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Private atlanhq git deps: a read-only fleet App token scoped to the
-      # private repos the app names (none named: no mint). It only reaches
-      # git_auth.py's mirror clones: uv, and every build backend it runs,
-      # install from local mirrors with no token in their env (FND-4740,
-      # lens round 5). A failed mint fails the action, named.
-      # The scoped mint (.github/actions/scoped-private-deps-token): the
-      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
-      # no mint when it names none.
-      - name: Mint read-only token for private git dependencies
-        id: git-deps-token
-        if: inputs.private-git-deps
-        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-
-      # Connector SOURCE credentials (E2E_SOURCE_ENV_JSON) and, when the caller
-      # sets dataforge-datasource, the dataforge fetch scripts + the VPN action.
-      # Exported/run here rather than passed to the composite action below,
-      # because every action this workflow calls is pinned @main: an input added
-      # on a feature branch is silently ignored until it lands. Sparse-checks-out
-      # .github/scripts and the VPN actions (the latter needed only on the
-      # dataforge path — a couple of extra files otherwise). Unconditional: the
-      # Docker Hub mirror step below runs a script from it on every connector.
-      - name: Fetch SDK CI scripts (Docker mirror, source credentials, dataforge fetch)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          # `job.workflow_sha` is "the commit SHA of the workflow file that
-          # defines the current job" — i.e. THIS reusable, at whatever ref the
-          # caller pinned — so the script always matches the workflow running
-          # it, and no caller-supplied ref reaches a checkout whose payload is
-          # then executed. `repository:` stays hardcoded rather than paired with
-          # `job.workflow_repository` to keep that payload provenance-pinned.
-          # Caveat: the `job.workflow_*` properties do not exist on GitHub
-          # Enterprise Server (no effect on github.com callers), and actionlint
-          # <=1.7.7 predates them, so it reports a false "property not defined".
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: |
-            .github/scripts
-            .github/actions/twingate-connect
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          # No `token:` here: application-sdk is public, so the run's own
-          # github.token reads it regardless of whether the caller supplies
-          # ORG_PAT_GITHUB — preferring the org-wide PAT for a same-repo,
-          # public checkout would only burn its shared rate limit for no
-          # benefit. Matches the e2e job's equivalent checkout.
-          persist-credentials: false
-
-      # Two invocations, and the order is the security property. `E2E_SOURCE_ENV_JSON`
-      # is a registered secret, but the runner's masker matches registered
-      # strings, not substrings of one — so the values extracted out of the blob
-      # are NOT redacted until each is registered in its own right. `--mask-only`
-      # writes `::add-mask::` to stdout (the log), which is where the runner
-      # reads workflow commands from; it must run BEFORE the second invocation
-      # redirects stdout into $GITHUB_ENV, because from that point on every step
-      # that renders its `env:` group would print them in cleartext. `set -e`
-      # makes a failure in the mask pass abort before anything is written — it is
-      # set explicitly rather than inherited from the default shell, so that the
-      # security property survives a `defaults: run: shell:` added to this
-      # workflow later (which would silently drop the runner's implicit `-e`).
-      - name: Export connector source credentials
-        if: env.E2E_SOURCE_ENV_JSON != ''
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$E2E_SOURCE_ENV_JSON" --mask-only
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
-
-      # ── source resolution (FND-205), integration tier ───────────────────
-      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
-      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above), the
-      # whole dataforge chain below self-skips — every fetch step gates on
-      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only when there are
-      # NO repo creds does an opted-in connector (dataforge-datasource set) fetch
-      # from dataforge over the VPN. Mirrors the e2e job step-for-step and reads
-      # the SAME dataforge-datasource + DATAFORGE_RESOURCE_ID, so the two tiers
-      # resolve the identical pinned instance whenever they do reach dataforge.
-      #
-      # The fetch steps are continue-on-error so a transient dataforge/VPN blip
-      # (the VPN connect already retries 3x) doesn't redden the job by itself.
-      # The "Resolve source" step below is the compensating control: it FAILS the
-      # job when a source was expected but NONE resolved — no repo creds, no
-      # dataforge creds, and the connector declared no hermetic container
-      # (dataforge-hermetic-fallback: false). A connector that CAN seed one and
-      # left the input at its "true" default degrades to that seeded source
-      # instead — the fetch was still attempted, so the VPN was dialled, but a
-      # blip there no longer decides the job. Apps that set neither
-      # dataforge-datasource nor E2E_SOURCE_ENV_JSON self-skip the whole chain,
-      # fail-fast included.
-      # READ-ONLY: the job only fetches credentials; it never seeds or mutates
-      # the instance (curation is the instance owner's one-time setup).
-      #
-      # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs, reached over Twingate (the only route since FND-4169),
-      # from the job.workflow_sha sparse checkout — same provenance pinning as
-      # the scripts above. `resubnet-docker` moves Docker off Atlan's
-      # 172.17/16 before the tunnel comes up.
-      - name: Connect to Twingate (dataforge path)
-        id: twingate
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
-        continue-on-error: true
-        timeout-minutes: 8
-        uses: ./application-sdk-scripts/.github/actions/twingate-connect
-        with:
-          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
-          mothership-url: https://api.dataforge.atlan.dev
-          resubnet-docker: "true"
-      - name: Clean up after a stopped Twingate step
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          sudo timeout -k 5 15 twingate stop || true
-          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
-          sudo rm -f /etc/apt/sources.list.d/twingate.list
-          sudo timeout -k 5 30 dpkg --configure -a || true
-
-      - name: Fetch connector source credentials from dataforge
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        env:
-          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
-          DF_MODE: ${{ inputs.dataforge-mode }}
-          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
-          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
-        run: |
-          set -euo pipefail
-          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
-            --datasource "$DF_DATASOURCE" \
-            --mode "$DF_MODE" \
-            --resource-id "$DATAFORGE_RESOURCE_ID" \
-            --env-tier "$DF_ENV_TIER" \
-            --output-prefix "$DF_OUTPUT_PREFIX")"
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$DF_ENV_JSON" --mask-only
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
-
-      # The compensating control for the continue-on-error fetch above: this step
-      # has no continue-on-error, so it reports the resolved source and — when
-      # nothing resolved (E2E_SOURCE_DATASOURCE breadcrumb absent AND no
-      # E2E_SOURCE_ENV_JSON) — fails the job one minute in, with the fix in the
-      # message, instead of letting the leg limp on empty credentials.
-      #
-      # Whether "nothing resolved" is fatal is the CALLER's declaration, exactly
-      # as in the e2e job: hermetic-fallback is wired to
-      # dataforge-hermetic-fallback (default "true"), so a connector that can run
-      # its suite against a locally seeded source degrades to it, and a connector
-      # that cannot MUST set "false" to get the hard error. That default is
-      # deliberate — the two tiers read one input, so a connector cannot be fatal
-      # in one and forgiving in the other — but it does mean a source-less
-      # connector left on the default greens this merge-gating job on code it
-      # never exercised against a real source. The opt-out is the control; see the
-      # dataforge-hermetic-fallback input description. Reuses the e2e job's
-      # script verbatim.
-      - name: Resolve integration source
-        if: inputs.dataforge-datasource != '' || env.E2E_SOURCE_ENV_JSON != ''
-        env:
-          DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
-        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
-
-      # Unit runs in its own job; integration defaults to tests/integration/.
-      # A caller test-paths override scopes THIS job only. The ternary is a
-      # workflow expression in a `with:` value — not inlined conditional shell —
-      # so it stays within the CI authoring rule.
-      # A services-script has no token of its own, so log in here for it. It
-      # is non-fatal: only a pull of a private image needs it, and that pull
-      # then fails loudly (`denied`/`unauthorized`) on its own.
-      # Docker Hub images (mysql, testcontainers' ryuk, ...) are pulled
-      # anonymously from a shared runner IP, so they hit Docker Hub's rate limit
-      # and its 5xx, fail test setup, and eject the PR from the merge queue.
-      # `registry-mirrors` makes the daemon try mirror.gcr.io (Google's public
-      # Docker Hub cache) first and fall back to Docker Hub on a miss; image
-      # names and testcontainers are unchanged, and only docker.io pulls are
-      # affected. Must run AFTER the Twingate step: its `resubnet-docker`
-      # overwrites daemon.json, which would drop the mirror. Best-effort: fails
-      # only if Docker is down even after restoring the old daemon.json.
-      - name: Use mirror.gcr.io as a Docker Hub mirror
-        run: >-
-          sudo python3 application-sdk-scripts/.github/scripts/docker_registry_mirror.py
-          --mirror https://mirror.gcr.io
-
-      - name: Log in to GHCR (private CI images for services-script)
-        continue-on-error: true
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # See the unit job.
-      - name: Set up Java (java-version)
-        if: inputs.java-version != ''
-        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
-        with:
-          distribution: temurin
-          java-version: ${{ inputs.java-version }}
-
-      - name: Run integration tests
-        id: integration
-        uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
-        with:
-          # The job checked the app out above.
-          checkout: "false"
-          app-name: ${{ inputs.app-name }}
-          lfs: ${{ inputs.test-lfs }}
-          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
-          test-paths: ${{ inputs.test-paths != '' && inputs.test-paths || 'tests/integration/' }}
-          pytest-args: ${{ inputs.pytest-args }}
-          services-script: ${{ inputs.services-script }}
-          application-sdk-ref: ${{ inputs.application-sdk-ref }}
-          force-external-runtime: ${{ inputs.force-external-runtime }}
-          health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
+    uses: atlanhq/application-sdk/.github/workflows/integration-tests-reusable.yaml@main
+    with:
+      app-name: ${{ inputs.app-name }}
+      application-sdk-ref: ${{ inputs.application-sdk-ref }}
+      apt-packages: ${{ inputs.apt-packages }}
+      dataforge-datasource: ${{ inputs.dataforge-datasource }}
+      dataforge-env-tier: ${{ inputs.dataforge-env-tier }}
+      dataforge-hermetic-fallback: ${{ inputs.dataforge-hermetic-fallback }}
+      dataforge-mode: ${{ inputs.dataforge-mode }}
+      dataforge-output-prefix: ${{ inputs.dataforge-output-prefix }}
+      distinct-id: ${{ inputs.distinct-id }}
+      force-external-runtime: ${{ inputs.force-external-runtime }}
+      git-lfs-skip-smudge: ${{ inputs.git-lfs-skip-smudge }}
+      health-check-timeout-seconds: ${{ inputs.health-check-timeout-seconds }}
+      java-version: ${{ inputs.java-version }}
+      private-git-deps: ${{ inputs.private-git-deps }}
+      pytest-args: ${{ inputs.pytest-args }}
+      services-script: ${{ inputs.services-script }}
+      test-lfs: ${{ inputs.test-lfs }}
+      test-paths: ${{ inputs.test-paths }}
+      timeout-minutes: ${{ inputs.timeout-minutes }}
+    secrets: inherit
 
   # ── Discover e2e suites × clouds → matrix ────────────────────────────────
   # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
@@ -1780,21 +1312,6 @@ jobs:
           --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
           e2e-running --legs "$LEGS"
 
-  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
-  # One matrix leg per discovered suite × cloud. fail-fast:false so one leg's
-  # failure doesn't cancel the others, and "Re-run failed jobs" re-runs only the
-  # failed leg. Each leg spins its own worker container on its OWN Temporal
-  # queue: the sdr-e2e action derives a per-leg ATLAN_DEPLOYMENT_NAME (base +
-  # artifact-suffix) so legs don't co-serve one queue — under the two-store
-  # posture a shared queue lets Temporal split a workflow's activities across
-  # leg-workers with per-container localstorage, hiding artifacts cross-worker.
-  # 120-min timeout (> ae_poll + atlas_poll + build/setup overhead).
-  #
-  # The cloud rides in `matrix.name`, which is already the artifact suffix, the
-  # concurrency key and the job name — so adding the CSP dimension needed no new
-  # isolation machinery: deployment names, queues and artifact names all pick it
-  # up. Legs on different clouds hit different tenants (and therefore different
-  # Temporal servers) besides.
   # ── Wake the pinned dataforge source ahead of every leg ──────────────────
   # A DataForge-backed connector pins ONE provisioned instance as its e2e source
   # and leaves it PAUSED between runs to avoid paying for an always-on instance
@@ -1916,1280 +1433,63 @@ jobs:
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/dataforge_source_lifecycle.py --mode wake
 
-  # ── Build the image ONCE, ahead of the matrix ────────────────────────────
-  # The test-image tag is deterministic (`derive_e2e_image_tag.py`), so every cloud
-  # leg used to rebuild the identical image. It has to exist before prepare-tenant
-  # can install it, so the build is hoisted here and every leg reuses the
-  # reference via sdr-e2e's `prebuilt-image` input.
+  # ── E2E tier (e2e-tests-reusable.yaml) ───────────────────────────────────
+  # The image build, the SDK-head recheck, the tenant lease and install, the
+  # suite × cloud legs and the lease release. Called only when discover-e2e
+  # found at least one suite, which is the condition every job in there used
+  # to repeat.
   #
-  # Only runs on the install path, which is now the default: a repo that has set
-  # install-app-to-tenant: false keeps building its own image per leg exactly as
-  # before, so opting out restores the previous behaviour down to the build
-  # ordering.
-  # Two machines pull this image and they are not the same architecture: this
-  # runner, which runs the per-leg worker under docker compose, and the TENANT'S
-  # cluster node, which serves the app Heracles fetches the DAG from at submit.
-  # The e2e tenants where the app is not yet installed are ARM. A single-arch
-  # image satisfies one and fails the other ~2 minutes after a successful
-  # install, as ImagePullBackOff with `no matching manifest` — exactly how
-  # FND-31's first live install ended. It must therefore be genuinely multi-arch,
-  # not retargeted: dropping amd64 would break the local worker instead.
-  #
-  # ONE ARCHITECTURE PER JOB, EACH ON A RUNNER NATIVE TO IT. The alternative —
-  # one job with `--platform linux/amd64,linux/arm64` — emulates the non-native
-  # half under QEMU, which the org has already measured at 5-10x native and
-  # documented against (atlanhq/mothership's infrastructure notes; its build.yml
-  # and lh-compute-duckdb both use `ubuntu-24.04-arm` for precisely this). Two
-  # native jobs in parallel cost about one build; one job emulating costs
-  # several. On a path that runs on every install-path e2e forever, that
-  # difference is the whole design.
-  #
-  # arm64 runners are also ~20% cheaper per minute than x64, so this is not a
-  # speed-for-money trade.
-  build-e2e-image:
-    name: Build e2e image (${{ matrix.arch }})
-    needs: discover-e2e
-    if: |
+  # wake-dataforge-source is in `needs` for ORDERING only, as it was on the
+  # legs: the source must be awake before a leg fetches its credentials, and a
+  # wake failure must not skip the legs (FND-1992) — hence `always()` and no
+  # wake-result clause. The trade: GitHub cannot order a job in a called
+  # workflow after a job outside it, so the whole tier now waits for the wake
+  # where only the legs did, and on a `dataforge-lifecycle` connector the wake
+  # no longer overlaps the image build and the tenant lease. Every other
+  # connector skips the wake in seconds and pays nothing.
+  e2e:
+    name: e2e
+    needs: [discover-e2e, wake-dataforge-source]
+    if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (inputs.install-app-to-tenant &&
+      (always() &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0')
-    strategy:
-      # No fail-fast: knowing whether ONE arch or BOTH failed is the whole
-      # diagnosis when a build breaks on an architecture rather than in general.
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            platform: linux/amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            platform: linux/arm64
-            # NOT ubuntu-latest. On an x64 runner this platform would build under
-            # QEMU and still succeed, just several times slower — a regression
-            # that looks like nothing at all in review. test_build_app_image_action
-            # guards the pairing.
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    # Native, so the arm64 leg needs no more headroom than the amd64 one.
-    timeout-minutes: 45
+    # The strongest grant any job in the called workflow declares; each job
+    # there narrows it (only lease-tenant and release-tenant write refs).
     permissions:
-      contents: read
-      packages: write
-    outputs:
-      # The tag WITHOUT the per-arch suffix — what the merge job below combines
-      # into. Matrix job outputs are last-writer-wins, which is normally a trap;
-      # it is safe here precisely because every leg writes the same string. The
-      # per-arch references are NOT surfaced for that reason: those do differ per
-      # leg, so a reader would get whichever finished last.
-      image-base: ${{ steps.build.outputs.image-base }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          # This checkout IS the Docker build context, so an app that vendors
-          # LFS-tracked assets into its image needs the objects materialised
-          # here or the build copies a ~130-byte pointer. atlan-bw-app vendors
-          # SAP JCo's sapjco3.jar and its Dockerfile refuses to build on a
-          # pointer, so every e2e image build failed the moment the repo gained
-          # its first e2e suite and this job started running at all.
-          #
-          # build-and-publish-app.yaml and build-and-scan.yaml already take this
-          # input for exactly this reason (#2086); this is the third and last
-          # image-building path, and the only one that lacked it.
-          lfs: ${{ inputs.lfs }}
-
-      # The `git_token` build secret for a Dockerfile whose `uv sync` clones a
-      # private atlanhq dependency (FND-4744). A read-only fleet App token, not
-      # ORG_PAT_GITHUB: every build backend that `uv sync` runs can read it.
-      # Minted on every build, not on `private-git-deps`: a Dockerfile without
-      # the secret mount ignores it. `require: "false"` and no PAT fallback: a
-      # missing token only fails a build that needs it, at its clone.
-      # The scoped mint (.github/actions/scoped-private-deps-token): the
-      # private atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS;
-      # no mint when it names none.
-      - name: Mint read-only token for the image build
-        id: image-git-token
-        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          require: "false"
-
-      - id: build
-        uses: atlanhq/application-sdk/.github/actions/build-app-image@main
-        with:
-          app-name: ${{ inputs.app-name }}
-          app-image-name: ${{ inputs.app-image-name }}
-          application-sdk-ref: ${{ inputs.application-sdk-ref }}
-          base-image-ref: ${{ inputs.base-image-ref }}
-          git-token: ${{ steps.image-git-token.outputs.token }}
-          # GHCR stays on the PAT: fleet packages are org-level, and the App
-          # only has repo-level Packages permission.
-          ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
-          platforms: ${{ matrix.platform }}
-          # Suffixes the tag AND the buildx cache scope. The cache half is the
-          # one that fails silently: two concurrent builds sharing one type=gha
-          # scope overwrite each other's cache manifest, so every later run finds
-          # the other architecture's and misses. Nothing breaks; both legs just
-          # go cold forever.
-          tag-suffix: -${{ matrix.arch }}
-
-  # Combine the two per-arch images into the manifest list the tenant pulls.
-  # `imagetools create` is a registry-side operation on digests — no build
-  # context, no pull, a handful of seconds — which is what makes the native-split
-  # shape nearly free compared with emulating one half.
-  merge-e2e-image:
-    name: Merge e2e image manifest
-    needs: build-e2e-image
-    if: >-
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (needs.build-e2e-image.result == 'success')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      packages: write
-    outputs:
-      image: ${{ needs.build-e2e-image.outputs.image-base }}
-      # The GM version string == the image tag. Emitted here rather than from
-      # prepare-tenant, which is a matrix job over clouds whose outputs are
-      # last-writer-wins with genuinely different values.
-      version: ${{ steps.version.outputs.tag }}
-    steps:
-      # This workflow runs in the caller's repo, so the platform-assert script
-      # has to be fetched. Sparse + pinned to job.workflow_sha for the same
-      # reason as prepare-tenant's copy: a PR editing the script must run its own
-      # version, not main's.
-      - name: Fetch SDK CI scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          persist-credentials: false
-
-      - name: Log in to GHCR
-        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ORG_PAT_GITHUB || github.token }}
-
-      # Buildx for `imagetools`, which is a buildx subcommand.
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-
-      - name: Create the multi-arch manifest
-        env:
-          IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
-        run: |
-          set -euo pipefail
-          docker buildx imagetools create --tag "$IMAGE" \
-            "${IMAGE}-amd64" "${IMAGE}-arm64"
-
-      # The assert that matters: this is the reference prepare-tenant publishes
-      # and the tenant pulls. A leg that quietly built the wrong architecture
-      # shows up here as a missing one — nothing downstream would catch it, since
-      # GM accepts the version and LM accepts the install regardless.
-      #
-      # Retried, and this is the one place that genuinely needs it. The build legs
-      # avoid the read-after-write race entirely by loading their image locally
-      # (build-app-image's `--load`), but `imagetools create` is purely
-      # registry-side: the manifest list it writes exists ONLY in the registry, so
-      # there is no local copy to inspect and reading it back one step later is
-      # exactly the pattern that failed a build leg with `manifest unknown` 0.7s
-      # after its own push reported success.
-      #
-      # The retry wraps the inspect, not the assertion over its output, so a
-      # genuinely single-arch manifest still fails once rather than three times.
-      - name: Assert the manifest serves both architectures
-        env:
-          IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
-        run: |
-          set -euo pipefail
-          RAW=$(application-sdk-scripts/.github/scripts/with-retry.sh \
-            docker buildx imagetools inspect --raw "$IMAGE")
-          printf '%s' "$RAW" \
-            | python3 application-sdk-scripts/.github/scripts/assert_image_platforms.py \
-                --expected linux/amd64,linux/arm64
-
-      # Straight-line parameter expansion, no branching — ci.md-compliant.
-      - name: Derive the GM version from the image tag
-        id: version
-        env:
-          IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
-        run: echo "tag=${IMAGE##*:}" >> "$GITHUB_OUTPUT"
-
-  # ── Queue for the (app, cloud) tenant ────────────────────────────────────
-  # A tenant is a shared MUTABLE resource: prepare-tenant installs a version onto
-  # it and every leg below then asserts it is testing that version (FND-31). So
-  # exclusive access has to span from the install to the last leg — and that is
-  # something `concurrency:` structurally cannot do, for two separate reasons:
-  #
-  #   * It is per-JOB. A group on prepare-tenant is released when that job ends,
-  #     which is before any leg has started. The old comment on that job admitted
-  #     as much ("another run can still install between this job and the legs").
-  #   * It holds exactly ONE pending run per group. A third arrival does not
-  #     queue — it cancels the run that was waiting, before that run is ever
-  #     given a runner, with no log output at all. That is FND-218: a merge-queue
-  #     batch whose "connector test failures" were all evictions.
-  #
-  # So the lease is a single fixed-name ref per tenant, taken by an atomic
-  # compare-and-swap (GitHub's 422 on creating a ref that already exists IS the
-  # lock), held for the whole run, with dead holders reaped by whoever notices
-  # (FND-250). It runs AFTER the image is built and merged so the tenant is not
-  # held hostage to a build, and it is released by release-tenant below.
-  #
-  # An earlier version ordered per-run ticket refs by run_id instead, and both
-  # contenders acquired on its first concurrent run: run_id is creation order, not
-  # the order runs reach this job, and a total order gives fairness rather than
-  # exclusion. Exclusion needs an atomic primitive — see the module docstring.
-  #
-  # ONE job for every cloud, not a matrix leg per cloud — and that is the fix for
-  # a deadlock, not a tidy-up (FND-646). The matrix acquired each cloud's lease in
-  # PARALLEL and held it for the whole run while blocking on the rest, which is
-  # hold-and-wait. It deadlocked the first time two runs queued behind one holder:
-  # the holder released all three leases at once, the two waiters raced for the
-  # freed set and SPLIT it (one took aws + azure, the other gcp), and each then
-  # blocked on what the other held for the full 90-minute budget. Any time two or
-  # more runs are queued behind a holder, a parallel matrix makes that split the
-  # EXPECTED outcome.
-  #
-  # So this job takes them one at a time, in an order that is a pure function of
-  # the cloud names, and gives back everything it took if it cannot get the whole
-  # set (see acquire_ordered). Resource ordering makes a cycle impossible, so the
-  # worst case degrades from mutual blocking to plain serialisation. Nothing is
-  # ever cancelled: a queued run waits and then proceeds. That matters because
-  # cancelling is not a safe alternative here — prepare-tenant carries
-  # `if: always()`, so a cancelled run finishes installing onto the tenants it
-  # had already leased on its way out.
-  #
-  # Same gate as prepare-tenant: no install, no contention worth serialising —
-  # the legs of a non-installing run cannot lose a version race because nothing
-  # changes the version under them.
-  # ── Is the SDK commit under test still the one under review? ─────────────
-  # The SDK-side dispatch guard drops a fan-out whose SHA has already been
-  # superseded (e2e_dispatch_guard.py, FND-696), but it can only see the window
-  # UP TO the dispatch. A push landing after it leaves this run already in
-  # flight for a commit nobody will merge, and the tenant lease below then does
-  # exactly what it promises — it QUEUES, so the live commit waits out this
-  # run's entire install-plus-legs cycle. On application-sdk PR #3322 that was
-  # 3m38s, 10m12s and 12m of pure lease wait across three connectors.
-  #
-  # This job is the second half of that fix (FND-701), and it is worth being
-  # precise about which half. A dispatched run that has ALREADY leased cannot be
-  # helped: cancelling it is unsafe, because prepare-tenant carries
-  # `if: always()` and finishes installing onto the tenants it holds on its way
-  # out — so for that run the queue is the right answer. A run that has
-  # dispatched but NOT yet leased is a different thing entirely. It is still
-  # building the image and running unit and integration tests — 2m30s on the
-  # openapi leg of #3322, dispatched 21:07:38 and leased 21:10:10 — and it holds
-  # nothing at all, so it can stand down for free.
-  #
-  # Placed here rather than earlier on purpose: the answer is only worth as much
-  # as its freshness, so it is asked as close to the lease as the DAG allows.
-  #
-  # It cannot fail this run. The script exits 0 on every path and answers
-  # "false" to every doubt, and the gates below read the OUTPUT rather than the
-  # job result, so even an outright job failure leaves the lease happening —
-  # which is the pre-existing behaviour.
-  sdk-head-recheck:
-    name: Recheck the dispatched SDK ref
-    needs: [merge-e2e-image]
-    if: >-
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success')
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    permissions:
-      # Nothing beyond the default. Every read is of public data in
-      # application-sdk — a ref, the blob it points at, and a pull request — and
-      # a connector's own github.token can already do that.
-      contents: read
-    outputs:
-      # Either question answering "yes" stands the run down. Each is "false"
-      # on every doubt, so a missing answer leases exactly as before.
-      superseded: ${{ (steps.recheck.outputs.superseded == 'true' || steps.branch.outputs.superseded == 'true') && 'true' || 'false' }}
-    steps:
-      - name: Recheck the dispatched SDK ref
-        id: recheck
-        uses: atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck@main
-        with:
-          sdk-ref: ${{ inputs.application-sdk-ref }}
-          # The claim ref the SDK wrote is keyed on the connector REPOSITORY
-          # name, which is what its dispatch matrix iterates over — not the
-          # short app-name. Derived from github.repository so the two cannot
-          # disagree, and so a connector whose app-name and repo differ (every
-          # one of them: "openapi" vs "atlan-openapi-app") still finds its claim.
-          app: ${{ github.event.repository.name }}
-
-      # A connector's own dispatch (`/e2e`, `/gate-check`) tests its branch
-      # tip at dispatch time; if the branch has moved since, the PR's head is
-      # a newer commit and this one should not take a tenant (FND-3839).
-      - name: Check out the branch-recheck driver
-        if: github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Recheck the dispatched branch
-        id: branch
-        if: github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''
-        continue-on-error: true
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          BRANCH: ${{ github.ref_name }}
-          TESTED_SHA: ${{ github.sha }}
-        run: >-
-          python3 .github/scripts/e2e_branch_recheck.py
-          --repo "$REPO" --event-name "$EVENT_NAME"
-          --branch "$BRANCH" --tested-sha "$TESTED_SHA" >> "$GITHUB_OUTPUT"
-
-  lease-tenant:
-    name: Tenant lease
-    needs: [discover-e2e, merge-e2e-image, sdk-head-recheck]
-    # `always()` here is load-bearing and is what makes the recheck fail-open. A
-    # job's `needs` gate is evaluated separately from its `if:`, and without a
-    # status-check function GitHub applies an implicit success() over every need
-    # — so a recheck job that died on infrastructure would SKIP the lease, and a
-    # skipped lease skips the install and greens the run vacuously. Lifting the
-    # implicit check and reading the OUTPUT instead means an absent answer (job
-    # failed, job skipped, output never written) leases exactly as before.
-    #
-    # Because always() lifts that implicit check, discover-e2e and
-    # merge-e2e-image have to be named explicitly; they were previously carried
-    # by it. Same shape and same reason as prepare-tenant and the e2e legs below.
-    if: |
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() &&
-      inputs.install-app-to-tenant &&
-      needs.discover-e2e.result == 'success' &&
-      needs.merge-e2e-image.result == 'success' &&
-      needs.sdk-head-recheck.outputs.superseded != 'true')
-    runs-on: ubuntu-latest
-    # Above the action's own 90-minute wait budget, which is now a budget for the
-    # WHOLE ordered set rather than per cloud — so this still bounds the job, and
-    # a run that queues for the full budget still reaches the script's own error
-    # (which names the holding run) instead of a bare "job cancelled after Nm".
-    timeout-minutes: 100
-    permissions:
-      # Ref writes create and delete the lease ticket. Scoped to THIS job on
-      # purpose: the long-running e2e legs below keep read-only contents, so the
-      # write capability lives only in a job that runs no test code.
-      #
-      # A called workflow's permissions can only EQUAL or NARROW the caller's, so
-      # this declaration is a ceiling and not a grant: if the calling repo's
-      # `tests:` job has no `contents: write` — because it declares a narrower
-      # `permissions:` block, or because the repo default is read-only — the
-      # acquire below fails, by design and with an error naming the grant
-      # (FND-702). The canonical scaffolded tests.yaml declares the whole set for
-      # exactly this reason.
       contents: write
-      # Tell a live holder from a dead one, which is what makes a cancelled run's
-      # abandoned ticket self-healing.
       actions: read
-    steps:
-      # This workflow runs in the caller's repo, so the lease driver has to be
-      # fetched. Same sparse + job.workflow_sha shape prepare-tenant's verify
-      # step has always used, and for the same reason: `uses:` cannot take an
-      # expression, so a composite action could only ever be @main — a PR
-      # changing the driver would silently exercise main's copy rather than its
-      # own. Running the checked-out driver in all three modes closes that
-      # window and is what let the lease share `_gh_refs` with the DataForge
-      # refcount instead of carrying a second copy of the transport (FND-2674).
-      #
-      # Every consumer calls this reusable @main, so job.workflow_sha is the
-      # commit @main resolved to; contenders still agree on the ref layout.
-      - name: Fetch SDK CI scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          persist-credentials: false
-
-      - name: Acquire the tenant leases
-        # Inputs routed through env rather than inline ${{ }} so nothing
-        # interpolates into the command line (docs/standards/ci.md).
-        env:
-          APP: ${{ inputs.app-name }}
-          # The clouds prepare-tenant will install onto, from the same discovery
-          # call that built its matrix. Empty is the single-tenant fallback path
-          # and the driver leases "default" for it, which is what prepare-tenant's
-          # own fallback leg (`cloud: ""`) verifies.
-          CLOUDS: ${{ needs.discover-e2e.outputs.cloud-list }}
-          # The lease lives in the repository the run belongs to. Every run that
-          # contends for a given app's tenant runs there too — a connector PR, a
-          # push, and a cross-repo dispatch from application-sdk all execute in
-          # the app repo. (The one exception, application-sdk's manual install
-          # workflow, is outside the lease domain: see FND-254.)
-          GH_TOKEN: ${{ github.token }}
-        # wait/poll/ttl are deliberately not passed: their defaults live in the
-        # driver, which is the single source the sizing tests read.
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
-            --mode acquire \
-            --repo "$GITHUB_REPOSITORY" \
-            --app "$APP" \
-            --clouds "$CLOUDS" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT"
-
-  # ── Install the app under test onto each cloud's tenant ──────────────────
-  # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
-  # (one per app per tenant), so installing once per cloud is both sufficient and
-  # the only thing that makes sense — every suite in a run wants the same image.
-  #
-  # `--clouds-only` gives the cloud dimension without the file dimension, and the
-  # `clouds` expression is the same one discover-e2e uses, so this job and the
-  # legs can never disagree about which clouds are in play.
-  prepare-tenant:
-    name: Prepare tenant (${{ matrix.cloud || 'default' }})
-    needs: [discover-e2e, merge-e2e-image, lease-tenant]
-    # Gated on lease-tenant having RUN, not on it having succeeded, and then each
-    # leg confirms its OWN cloud's lease in its first step.
-    #
-    # Since lease-tenant became a single ordered job (FND-646) its `.result` is
-    # exact rather than a matrix aggregate — but `!= 'skipped'` still has to
-    # stay, and now for a sharper reason than the one it was written for.
-    # Acquisition is all-or-nothing, so a FAILED lease means this run holds
-    # nothing; tightening this to `== 'success'` would SKIP the install, and the
-    # e2e legs deliberately tolerate a skipped prepare-tenant (see
-    # test_e2e_tolerates_skipped_but_not_failed_prepare). They would then run
-    # against whatever version the tenant happens to serve — the exact FND-31
-    # failure. Letting the install run and FAIL on its own lease check is what
-    # stops the legs.
-    #
-    # It was originally widened because `.result` was the matrix aggregate:
-    # `== 'success'` meant "some cloud's lease succeeded", never "this leg's
-    # did". Observed live — one cloud's acquire failed on a transient TLS error
-    # and the aggregate then skipped the install for the two clouds whose leases
-    # HAD been taken, a run holding two tenants that installed onto neither.
-    # Ordered acquisition removes that failure mode at source; the per-cloud
-    # verify step below stays anyway, because it is the only thing that makes the
-    # install's precondition true per TENANT rather than per job.
-    #
-    # `always()` is what makes the widening actually do anything, and it is easy
-    # to omit: without a status-check function GitHub applies an implicit
-    # success() over every `needs` entry and skips the job BEFORE this `if:` is
-    # consulted, so a failed lease would still skip the install and the per-cloud
-    # verify step below would never run. Same shape and same reason as the e2e
-    # legs' gate.
-    #
-    # Because always() lifts that implicit success(), discover-e2e and
-    # merge-e2e-image have to be named explicitly here; they were previously
-    # carried by the implicit check.
-    if: |
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() &&
-      inputs.install-app-to-tenant &&
-      needs.discover-e2e.result == 'success' &&
-      needs.merge-e2e-image.result == 'success' &&
-      needs.lease-tenant.result != 'skipped')
-    strategy:
-      # One cloud's tenant being uninstallable must not cancel the others; the
-      # legs for that cloud fail on their own version check.
-      fail-fast: false
-      # Guarded on the COUNT, not on the matrix string. `--clouds none` — which is
-      # what a repo without the tenant-matrix secret resolves to — emits
-      # `{"include":[]}`, a non-empty string, so `matrix || fallback` keeps the
-      # empty include and this job expands to ZERO legs. A matrix job with no legs
-      # is not a skipped job: it does not exist, `needs.prepare-tenant.result` is
-      # never success-or-skipped, and every job gated on it disappears. That
-      # deleted the whole e2e matrix on the first live install run — Tests Gate
-      # caught it ("discovery succeeded but the matrix was skipped"), nothing else
-      # would have.
-      #
-      # The single fallback leg spells out `cloud: ""` rather than `{}` so
-      # `matrix.cloud` is a defined-but-empty string, which is what makes the
-      # tenant resolver take its single-tenant path.
-      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
-    runs-on: ubuntu-latest
-    # Twice the script's own waits, not a shade over them: the publish retries for
-    # up to ~240s while the marketplace service is not answering, the install
-    # retries for up to ~600s while LM's catalog snapshot catches up, the
-    # deployment is polled for up to ~600s, and a FAILED verdict that names only
-    # benign pod churn then settles for ~90s. Set too tight, the runner's timeout
-    # fires first on a slow sync and a bare "job cancelled after Nm" replaces the
-    # actionable error the script was about to print — the diagnosis-hostile
-    # failure this job exists to avoid. This is a ceiling, not a spend: the job
-    # finishes in a handful of minutes whenever the tenants are healthy.
-    # test_job_timeout_stays_above_the_scripts_own_waits derives the floor from
-    # the script's constants, so this cannot drift below them unnoticed.
-    #
-    # 48 → 50 for the FND-831 settle. The lease TTL still clears the hold this
-    # is half of (1.5 × (50 + 120) min < 16200s), so it needs no change; at 60
-    # it would.
-    #
-    # 50 → 65 for the 15-min "Restore the previous version" step, which runs
-    # only after a failed install and so sits on top of the install budget, not
-    # inside it. The lease TTL rose to 16800s with it (1.5 × (65 + 120) min).
-    timeout-minutes: 65
-    concurrency:
-      # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
-      # is the lease's job now (lease-tenant above), and the lease is strictly
-      # better at it: it spans this job AND the legs, and it queues rather than
-      # evicting all but one waiter.
-      #
-      # Keying this on the tenant as well would actively hurt. Two runs that both
-      # hold no lease yet would still stack up here one-deep, and a third would
-      # be evicted with no log — reintroducing the FND-218 failure inside the fix
-      # for it. Left run-unique so this job never waits on anything except the
-      # lease it already holds.
-      group: e2e-prepare-tenant-${{ github.run_id }}-${{ matrix.cloud || 'default' }}
-      cancel-in-progress: false
-    permissions:
-      contents: read
-    env:
-      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
-      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
-      E2E_CLOUD: ${{ matrix.cloud }}
-      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
-      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
-      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
-      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # This workflow runs in the caller's repo, so the SDK drivers have to be
-      # fetched. Sparse + pinned to job.workflow_sha for the same reason as the
-      # equivalent checkout in the e2e job: a PR editing these scripts must run
-      # its own version, not main's.
-      #
-      # The lease driver is fetched here too, and the lease check below invokes
-      # it from the checkout. `uses:` cannot take an expression, so an action
-      # reference can only ever be @main — which means a PR that adds a mode to
-      # the driver would call a main that does not have it yet and die at
-      # argument parsing, and a PR that changes the driver would silently
-      # exercise main's copy instead of its own. Both directions of that stale
-      # window are closed by running the checked-out driver, which is why the
-      # acquire and release jobs now do the same and the composite action is
-      # gone (FND-2674).
-      - name: Fetch SDK CI scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          persist-credentials: false
-
-      # Before anything touches the tenant: confirm THIS leg holds THIS cloud's
-      # lease. The job's `if:` can only see the lease matrix aggregate, so it
-      # cannot tell "my cloud's lease succeeded" from "some cloud's did" — this is
-      # what makes the install's precondition true per cloud. Fails the leg rather
-      # than installing into a race.
-      #
-      # It follows the two checkouts because neither touches the tenant; nothing
-      # between here and the install may be reordered above it.
-      - name: Confirm this run holds the tenant lease
-        env:
-          APP: ${{ inputs.app-name }}
-          CLOUD: ${{ matrix.cloud }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
-            --mode verify \
-            --repo "$GITHUB_REPOSITORY" \
-            --app "$APP" \
-            --cloud "$CLOUD" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT"
-
-      # Two invocations, mask pass first — see the equivalent step in the e2e job
-      # for why registering the matrix blob as a secret does not redact the values
-      # inside it.
-      - name: Resolve e2e tenant for this cloud
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
-            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
-            --cloud "$E2E_CLOUD" \
-            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
-            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
-            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
-            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
-            --mask-only
-          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
-            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
-            --cloud "$E2E_CLOUD" \
-            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
-            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
-            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
-            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
-            >> "$GITHUB_ENV"
-
-      # Reject a tenant we cannot scope a release to, HERE — before atlan.yaml is
-      # parsed and before anything is published. The resolver only exports
-      # E2E_TENANT_ID from a matrix entry carrying `tenant_id`; the legacy
-      # single-tenant fallback path has no entry to carry one, so without this
-      # step the run got as far as the publish and then failed inside the script
-      # on an empty `--tenant`, several steps deeper than the actual cause.
-      #
-      # Failing rather than skipping the install, deliberately. Skipping would
-      # leave prepare-tenant green having done nothing, the tenant on whatever
-      # version it happened to be running, and every leg reding on its version
-      # check instead — one confusing failure per leg in place of one clear
-      # failure here. A caller without the tenant matrix cannot install at all,
-      # so this is a misconfiguration to surface, not a path to degrade into.
-      #
-      # Reachable only via `--clouds none` now that the install path is the
-      # default and the matrix secret is org-wide: FND-203 (#3142) fails the
-      # install path at discovery when no matrix is shared, so the un-onboarded
-      # case no longer arrives here. What still can is an operator dispatching
-      # with e2e_clouds: none, which resolves the single legacy tenant — and that
-      # tenant has no matrix entry to carry a tenant_id.
-      #
-      # A step-level `if:` on the env context rather than a shell `test`, so the
-      # branch lives in the expression layer and the `run:` stays straight-line
-      # (docs/standards/ci.md). The env context sees values earlier steps wrote to
-      # $GITHUB_ENV.
-      - name: Require a tenant ID before publishing anything
-        if: env.E2E_TENANT_ID == ''
-        env:
-          CLOUD: ${{ matrix.cloud || 'default' }}
-        run: |
-          echo "::error::no tenant ID resolved for cloud '${CLOUD}', so a release cannot be scoped to this tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — so there is nothing to fall back to. Add a 'tenant_id' field to this cloud's entry in E2E_TENANT_MATRIX_JSON, alongside 'tenant', 'client_id', 'client_secret' and 'api_key' (see docs/standards/connector-ci-e2e.md). On the legacy single-tenant fallback path there is no matrix entry to add it to: either share the tenant-matrix secret with this repo, or leave install-app-to-tenant off and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case."
-          exit 1
-
-      # app_id / deploy_config / entrypoints / sdk_version all come from
-      # atlan.yaml, which parse_atlan_yaml.py already reads for the release path.
-      # Reused rather than re-parsed so the e2e registration and the release
-      # registration cannot disagree about what the app declares.
-      - name: Read atlan.yaml
-        id: atlan_yaml
-        run: python3 application-sdk-scripts/.github/scripts/parse_atlan_yaml.py
-
-      # The connector form files, read by the release path's own producer so the
-      # e2e registration carries the app_configs a release ships (FND-4909).
-      # Without them LM has no forms to materialise for the version under test.
-      # Empty output when the app ships no app/generated/; the script then omits
-      # the field, as the release path does.
-      - name: Read app/generated/ for app_configs
-        id: app_configs
-        run: python3 application-sdk-scripts/.github/scripts/build_and_publish/prepare.py app-configs
-
-      # Everything reaches the shell through env:, nothing through `${{ }}` inside
-      # run:. Three reasons, in descending order of severity:
-      #
-      #   * `github.head_ref` is the PR's branch name — attacker-controlled on a
-      #     fork PR. Interpolated into run:, a crafted branch name is spliced into
-      #     the script before bash sees a quote and executes.
-      #   * `deploy_config` is multi-line YAML read out of atlan.yaml.
-      #     Interpolating multi-line content into a backslash-continued command is
-      #     not merely unsafe, it is broken — the newline ends the command.
-      #   * `entrypoints` is JSON, so it carries the quotes that would terminate
-      #     whichever quoting style wrapped it.
-      #
-      # Same finding sdk-review raised against e2e-tenant-install.yaml; applied
-      # here at the point of writing rather than waiting to be told twice.
-      #
-      # --app-id is deliberately omitted: the script reads app_id from atlan.yaml
-      # in the working directory (and validates the result either way), so the id
-      # has one source rather than being threaded through a step output.
-      # Its own timeout, not just the job's: a job timeout cancels the job, and
-      # `failure()` is false on a cancelled job, so a hung install would skip
-      # "Restore the previous version" — the slow path is the one most likely to
-      # strand a broken build. A step timeout fails the step instead, so the
-      # restore still runs. 45 min clears the script's own ~25 min of waits, and
-      # 45 + the restore's 15 leaves 5 of the job's 65 for the steps above.
-      # test_install_step_timeout_leaves_room_for_the_restore holds both.
-      - name: Install the app under test
-        id: install
-        timeout-minutes: 45
-        env:
-          IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
-          VERSION: ${{ needs.merge-e2e-image.outputs.version }}
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          DEPLOY_CONFIG: ${{ steps.atlan_yaml.outputs.deploy_config }}
-          SDK_VERSION: ${{ steps.atlan_yaml.outputs.sdk_version }}
-          ENTRYPOINTS: ${{ steps.atlan_yaml.outputs.entrypoints }}
-          RELEASE_MODEL: ${{ steps.atlan_yaml.outputs.release_model }}
-          ENABLE_SDR: ${{ steps.atlan_yaml.outputs.enable_sdr }}
-          APP_CONFIGS: ${{ steps.app_configs.outputs.app_configs }}
-          CREATED_BY: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py install \
-            --base-url "$ATLAN_BASE_URL" \
-            --image "$IMAGE" \
-            --version "$VERSION" \
-            --branch "$BRANCH" \
-            --tenant "${E2E_TENANT_ID:-}" \
-            --repo-url "$REPO_URL" \
-            --deploy-config "$DEPLOY_CONFIG" \
-            --sdk-version "$SDK_VERSION" \
-            --entrypoints "$ENTRYPOINTS" \
-            --release-model "$RELEASE_MODEL" \
-            --self-deployed-runtime "$ENABLE_SDR" \
-            --app-configs "$APP_CONFIGS" \
-            --created-by "$CREATED_BY"
-        # --install-retry-seconds is left at its default (600). A freshly
-        # published release is not immediately installable: LM resolves the
-        # install against its tenant-catalog snapshot, which excludes a release
-        # while it is scan_pending and picks it up on the next scheduled sync
-        # (~5 min). Worst case here is therefore ~10 min of install retry plus
-        # ~10 min of deployment polling — keep this job's timeout-minutes above
-        # the sum of the two, or a slow sync reads as a job timeout instead of
-        # the actionable error the script would otherwise raise.
-
-      # A failed install must not strand the build under test on a shared pool
-      # tenant. `install` records the version the tenant ran BEFORE it publishes
-      # anything, so this can put it back whatever failed after that point. A
-      # broken build left in place breaks every later run against the tenant
-      # and can misbehave on the tenant itself (an ai-memory build left its
-      # Service in a vcluster-syncer recreate loop on two pool tenants).
-      # Skipped when nothing was installed before: there is nothing to return
-      # to, and uninstall is not reliable (DISTR-921). Its own timeout is added
-      # on top of the install budget in this job's timeout-minutes.
-      - name: Restore the previous version
-        id: restore
-        if: failure() && steps.install.outputs.previous_version_id != ''
-        timeout-minutes: 15
-        env:
-          PREVIOUS_VERSION: ${{ steps.install.outputs.previous_version }}
-          PREVIOUS_VERSION_ID: ${{ steps.install.outputs.previous_version_id }}
-          VERSION: ${{ needs.merge-e2e-image.outputs.version }}
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py restore \
-            --base-url "$ATLAN_BASE_URL" \
-            --version-id "$PREVIOUS_VERSION_ID" \
-            --expected "$PREVIOUS_VERSION" \
-            --rolled-back-from "$VERSION"
-
-      - name: Summarise
-        if: always()
-        env:
-          IMAGE: ${{ needs.merge-e2e-image.outputs.image }}
-          RESTORED: ${{ steps.restore.outputs.restored_version }}
-          SKIPPED: ${{ steps.install.outputs.skipped }}
-          RELEASE_STATUS: ${{ steps.install.outputs.release_status }}
-          INSTALLED: ${{ steps.install.outputs.installed_version }}
-          # FND-1684: which layer actually established the installed version —
-          # `pod` (the running pod reported the build identity stamped into the
-          # image), `deployment` (LM's deployment verdict), or `install-record`
-          # (LM's install record alone, which is the record the install itself
-          # writes and so establishes nothing about any pod).
-          LAYER: ${{ steps.install.outputs.verified_layer }}
-          POD_BUILD_ID: ${{ steps.install.outputs.pod_build_id }}
-          CLOUD: ${{ matrix.cloud || 'default' }}
-        run: |
-          {
-            echo "### Tenant prepared — ${CLOUD}"
-            echo ""
-            echo "| Field | Value |"
-            echo "|---|---|"
-            echo "| Image | \`${IMAGE}\` |"
-            echo "| Already current (no-op) | \`${SKIPPED:-unknown}\` |"
-            echo "| Release status at install | \`${RELEASE_STATUS:-unreadable}\` |"
-            echo "| Tenant reports installed | \`${INSTALLED:-unreported}\` |"
-            echo "| Established at layer | \`${LAYER:-unknown}\` |"
-            echo "| Pod reports build | \`${POD_BUILD_ID:-not reported}\` |"
-            echo "| Restored after failure | \`${RESTORED:-no}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  e2e:
-    name: End-to-end (${{ matrix.name }})
-    # The image jobs and prepare-tenant are in `needs` so the legs cannot start
-    # before them, but all are SKIPPED for a caller that has set
-    # install-app-to-tenant: false. That combination needs `always() &&`, and
-    # still does after FND-128 flipped the default — an opt-out is now the
-    # skipped-needs path this reasoning is about:
-    #
-    # A job's `needs` gate is evaluated SEPARATELY from its `if:`. Without a
-    # status-check function, GitHub applies an implicit success() over every
-    # `needs` entry, a skipped need does not satisfy it, and the job is skipped
-    # before the `if:` is even consulted — so the explicit `== 'skipped'` clauses
-    # below would be dead code and the e2e legs would vanish on the off path.
-    #
-    # `always()` does NOT reintroduce run-on-failure: the explicit gates still
-    # require each need to be success-or-skipped, so a FAILED prepare-tenant stops
-    # the legs, which is essential — continuing would test whatever version the
-    # tenant happens to run, the exact failure FND-31 removes.
-    #
-    # Same shape as `connector-tests` in pull_request.yaml, which pairs
-    # `always() &&` with `success' || 'skipped'` gates over a skippable
-    # build-sdk-base-image need. Found by @sdk-review on #3023.
-    #
-    # build-e2e-image is gated HERE as well as merge-e2e-image, and it has to be.
-    # A failed arch leg leaves merge-e2e-image SKIPPED rather than failed (its own
-    # `if:` is not satisfied), and 'skipped' is the benign value in the clause
-    # below — so gating on merge alone would let the legs run after a failed
-    # build, each building its own single-arch image, against a tenant
-    # prepare-tenant never updated, with `expected-app-version` empty so the
-    # version check self-skips. A silently passing wrong-version run: precisely
-    # what FND-31 exists to make impossible. Adding the intermediate merge job
-    # introduced that; naming both needs closes it.
-    #
-    # lease-tenant is gated here for exactly the reason build-e2e-image is. A
-    # failed lease leaves prepare-tenant SKIPPED (its own `if` is not satisfied),
-    # and 'skipped' is the benign value below — so omitting it would let every leg
-    # run against a tenant nobody installed onto, with expected-app-version empty
-    # so the version check self-skips. A silently passing wrong-version run, from
-    # the job added to make wrong-version runs impossible.
-    needs:
-      [
-        discover-e2e,
-        build-e2e-image,
-        merge-e2e-image,
-        sdk-head-recheck,
-        lease-tenant,
-        prepare-tenant,
-        # Ordering only: the source must be awake before a leg fetches its
-        # credentials. No wake-result clause is added to the `if:` below (it
-        # already uses always()), so a wake failure still lets a hermetic-fallback
-        # connector fall back rather than skipping the leg (FND-1992).
-        wake-dataforge-source,
-      ]
-    # The superseded clause is gated on the OUTPUT, never on the job result, and
-    # it has to be: a skipped lease-tenant is the benign value in the clauses
-    # below (it is the install-app-to-tenant:false path), so without this the
-    # legs would run against a tenant nobody installed onto with
-    # expected-app-version empty — a silently passing wrong-version run, the
-    # exact FND-31 failure. Reading the output also keeps a failed recheck
-    # fail-open: no answer means carry on (FND-701).
-    if: |
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() &&
-      needs.sdk-head-recheck.outputs.superseded != 'true' &&
-      needs.discover-e2e.result == 'success' &&
-      needs.discover-e2e.outputs.count != '0' &&
-      (needs.lease-tenant.result == 'success' || needs.lease-tenant.result == 'skipped') &&
-      (needs.prepare-tenant.result == 'success' || needs.prepare-tenant.result == 'skipped') &&
-      (needs.build-e2e-image.result == 'success' || needs.build-e2e-image.result == 'skipped') &&
-      (needs.merge-e2e-image.result == 'success' || needs.merge-e2e-image.result == 'skipped'))
-    strategy:
-      fail-fast: false
-      # Fallback to an empty matrix when discovery was skipped (no label / not
-      # dispatched) so fromJson('') doesn't error at job-setup; the `if` above
-      # also skips the job in that case.
-      matrix: ${{ fromJson(needs.discover-e2e.outputs.matrix || '{"include":[]}') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    concurrency:
-      # Run-unique, so no e2e leg ever queues behind or cancels another. It used
-      # to be keyed on github.ref, which on the cross-repo dispatch path is this
-      # repo's refs/heads/main for EVERY run — so all concurrent dispatches
-      # collapsed into one group, and a group holds only one pending run: a third
-      # dispatch cancelled the queued one before it was ever given a runner, with
-      # no log to say so (FND-218).
-      #
-      # Serialising tenant access is the lease's job now (lease-tenant), and the
-      # lease does it properly — across the install and the legs, with a queue
-      # instead of a single slot. That leaves this group with nothing to
-      # serialise, so it identifies the run and nothing else.
-      #
-      # cancel-in-progress stays false, and deliberately so: cancelling a leg
-      # mid-flight abandons a live Automation Engine run, and there is no cleanup
-      # path for the tenant state it leaves behind. Turning it on needs that
-      # cleanup path first (FND-252) — test_label_trigger_gates.py pins this so
-      # the decision cannot be taken by accident, and it has already caught one
-      # attempt. The cost of leaving it false is a superseded commit's leg running
-      # to the 120-minute ceiling while holding the tenant lease.
-      group: tests-e2e-${{ github.run_id }}-${{ matrix.name }}
-      cancel-in-progress: false
-    permissions:
+      packages: write
       pull-requests: write
-      contents: read
       statuses: write
-      packages: write
-      # For the dataforge fetch's OIDC path (no stored dataforge secret): the
-      # runner mints a per-run identity token the script exchanges for a 1h
-      # credentials:read token. Harmless when the dataforge inputs are unset.
       id-token: write
-    env:
-      # SDR_TEST_TENANT / SDR_CLIENT_ID / SDR_CLIENT_SECRET / ATLAN_API_KEY /
-      # ATLAN_BASE_URL are deliberately NOT set here any more. They are written
-      # per-leg by the resolver step below, from whichever source applies to this
-      # leg. Setting them here as well would leave the runner's job-env-versus-
-      # $GITHUB_ENV precedence load-bearing for whether a leg hits the right
-      # tenant — a silent wrong-tenant run is indistinguishable from a right one
-      # in the logs, since the host is masked. One writer, no precedence.
-      E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
-      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
-      E2E_CLOUD: ${{ matrix.cloud }}
-      FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
-      FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
-      FALLBACK_SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
-      FALLBACK_ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
-      GIT_LFS_SKIP_SMUDGE: ${{ inputs.git-lfs-skip-smudge && '1' || '' }}
-      # See the integration job: needed as env for the step-level `if:` gates.
-      E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
-      DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
-    steps:
-      - name: distinct-id ${{ inputs.distinct-id }}
-        if: inputs.distinct-id != ''
-        shell: bash
-        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
-
-      # See the unit job: the sdr-e2e action runs `uv sync` on the RUNNER as
-      # well as in the image, so a native sdist build needs its headers here
-      # too. The IMAGE build is not covered — the Dockerfile owns its own
-      # system deps.
-      - name: Fetch install_apt_packages.py from SDK
-        if: inputs.apt-packages != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts/install_apt_packages.py
-          sparse-checkout-cone-mode: false
-          path: .sdk-apt
-          persist-credentials: false
-
-      - name: Install system packages (apt-packages)
-        if: inputs.apt-packages != ''
-        env:
-          APT_PACKAGES: ${{ inputs.apt-packages }}
-        run: |
-          set -euo pipefail
-          python3 .sdk-apt/.github/scripts/install_apt_packages.py --env APT_PACKAGES
-          rm -rf .sdk-apt
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # SDK CI scripts. Used here rather than passing the payloads to the
-      # composite action below, because every action this workflow calls is
-      # pinned @main: an input added on a feature branch is silently ignored
-      # until it lands. Sparse-checks-out only .github/scripts.
-      #
-      # Unconditional since FND-6: resolve_e2e_tenant.py lives in the same sparse
-      # path and every leg needs it, whereas export_extra_env.py is only needed
-      # when the connector declares source credentials.
-      - name: Fetch SDK CI scripts (tenant resolution, source-credential export)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          # See the integration job above for why this is job.workflow_sha.
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: |
-            .github/scripts
-            .github/actions/twingate-connect
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          # Falls back to the run's own token because this step became
-          # unconditional. It used to run only when the caller declared
-          # E2E_SOURCE_ENV_JSON — a repo that already had ORG_PAT_GITHUB — so an
-          # empty PAT was unreachable; now every e2e leg hits it, and passing
-          # `token: ''` explicitly overrides checkout's own default and 403s on
-          # the clone. application-sdk is public, so github.token is sufficient
-          # and this is a strictly wider set of callers that can fetch, not a
-          # privilege escalation.
-          token: ${{ secrets.ORG_PAT_GITHUB || github.token }}
-          persist-credentials: false
-
-      # This leg's tenant. Takes E2E_TENANT_MATRIX_JSON[E2E_CLOUD] when both are
-      # set and the FALLBACK_* values otherwise, then writes SDR_TEST_TENANT,
-      # SDR_CLIENT_ID, SDR_CLIENT_SECRET, ATLAN_API_KEY and the derived
-      # ATLAN_BASE_URL — the env the sdr-e2e action and the pytest harness read.
-      # Must precede every step that touches the tenant, so it sits ahead of the
-      # source-credential export as well as the action itself.
-      #
-      # Two invocations for the same reason as the export below: `--mask-only`
-      # writes ::add-mask:: to the log, and the second call's stdout is the env
-      # file. Masks first, so nothing reaches $GITHUB_ENV before it is redactable.
-      - name: Resolve e2e tenant for this leg
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
-            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
-            --cloud "$E2E_CLOUD" \
-            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
-            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
-            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
-            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
-            --mask-only
-          python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
-            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
-            --cloud "$E2E_CLOUD" \
-            --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
-            --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
-            --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
-            --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
-            >> "$GITHUB_ENV"
-
-      # See the integration job above for why this is two invocations, why the
-      # `--mask-only` pass has to come first, and why `set -e` is explicit.
-      - name: Export connector source credentials
-        if: env.E2E_SOURCE_ENV_JSON != ''
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$E2E_SOURCE_ENV_JSON" --mask-only
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$E2E_SOURCE_ENV_JSON" >> "$GITHUB_ENV"
-
-      # ── source resolution (FND-205) ───────────────────────────────────────
-      # Precedence is REPO-CREDS-FIRST, to keep the VPN off the hot path: when
-      # the caller provides E2E_SOURCE_ENV_JSON (repo creds, exported above),
-      # the whole dataforge chain self-skips — every step gates on
-      # `E2E_SOURCE_ENV_JSON == ''` — so no VPN is dialled. Only with NO repo
-      # creds does an opted-in leg (dataforge-datasource set) fetch from
-      # dataforge over the VPN. Every dataforge step is continue-on-error — when
-      # the fetch cannot complete (VPN, binding, dataforge down), the connector's
-      # hermetic source carries the run instead of failing it.
-      #
-      # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs, reached over Twingate from the job.workflow_sha sparse
-      # checkout — same provenance pinning as the scripts. The health probe
-      # targets the dataforge api host — the thing this tunnel actually has
-      # to reach.
-      - name: Connect to Twingate (dataforge path)
-        id: twingate
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
-        continue-on-error: true
-        timeout-minutes: 8
-        uses: ./application-sdk-scripts/.github/actions/twingate-connect
-        with:
-          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
-          mothership-url: https://api.dataforge.atlan.dev
-          resubnet-docker: "true"
-      - name: Clean up after a stopped Twingate step
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          sudo timeout -k 5 15 twingate stop || true
-          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
-          sudo rm -f /etc/apt/sources.list.d/twingate.list
-          sudo timeout -k 5 30 dpkg --configure -a || true
-
-      - name: Fetch connector source credentials from dataforge
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
-        continue-on-error: true
-        env:
-          DF_DATASOURCE: ${{ inputs.dataforge-datasource }}
-          DF_MODE: ${{ inputs.dataforge-mode }}
-          DF_ENV_TIER: ${{ inputs.dataforge-env-tier }}
-          DF_OUTPUT_PREFIX: ${{ inputs.dataforge-output-prefix }}
-        run: |
-          set -euo pipefail
-          DF_ENV_JSON="$(python3 application-sdk-scripts/.github/scripts/fetch_dataforge_source.py \
-            --datasource "$DF_DATASOURCE" \
-            --mode "$DF_MODE" \
-            --resource-id "$DATAFORGE_RESOURCE_ID" \
-            --env-tier "$DF_ENV_TIER" \
-            --output-prefix "$DF_OUTPUT_PREFIX")"
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$DF_ENV_JSON" --mask-only
-          python3 application-sdk-scripts/.github/scripts/export_extra_env.py \
-            --json "$DF_ENV_JSON" >> "$GITHUB_ENV"
-
-      # E2E_SOURCE_DATASOURCE is a non-secret breadcrumb the fetch exports on
-      # success — its presence is the source-selection signal. When nothing
-      # resolved AND the connector declared no hermetic option, fail HERE —
-      # one minute in, with the actual fix in the message — rather than
-      # letting the leg limp to the extract node and die on a cryptic
-      # empty-credential auth failure.
-      - name: Resolve e2e source (fail fast when none)
-        if: inputs.dataforge-datasource != ''
-        env:
-          DF_HERMETIC_FALLBACK: ${{ inputs.dataforge-hermetic-fallback }}
-        run: python3 application-sdk-scripts/.github/scripts/resolve_e2e_source.py
-
-      # One scoped mint (.github/actions/scoped-private-deps-token: the private
-      # atlanhq repos the app names, capped by ALLOWED_PRIVATE_DEPS; no mint
-      # when it names none) for both consumers below:
-      # * the image build's `git_token` secret (FND-4744), on every run: a
-      #   Dockerfile without the secret mount ignores it;
-      # * the host-side `uv sync` the sdr-e2e action runs on the RUNNER, only
-      #   with private-git-deps. There it reaches git_auth.py's mirror clones
-      #   alone: uv, and every build backend it runs, install from local
-      #   mirrors with no token in their env (FND-4740, lens round 5).
-      # A failed mint fails here, named, only when private-git-deps is set.
-      - name: Mint read-only token for private git dependencies
-        id: git-deps-token
-        uses: atlanhq/application-sdk/.github/actions/scoped-private-deps-token@main
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          require: ${{ inputs.private-git-deps }}
-
-      # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
-      # The action self-installs uv only when application-sdk-ref is set
-      # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
-      # and fails with `uv: command not found`. Install it unconditionally here.
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.13.9"
-          enable-cache: true
-
-      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
-        with:
-          app-name: ${{ inputs.app-name }}
-          app-image-name: ${{ inputs.app-image-name }}
-          git-auth-token: ${{ inputs.private-git-deps && steps.git-deps-token.outputs.token || '' }}
-          # Reuse the merged manifest the build legs pushed and prepare-tenant
-          # installed, instead of rebuilding the identical deterministic tag per
-          # leg. The merged reference, not a per-arch one: compose pulls this on
-          # the runner and resolves it to amd64 itself. Empty on the non-install
-          # path, which keeps each leg building its own image exactly as before.
-          prebuilt-image: ${{ needs.merge-e2e-image.outputs.image }}
-          # Re-assert the tenant version immediately before pytest. prepare-tenant
-          # already verified it, but the installation is tenant-scoped and there is
-          # no cross-job lease — another run can replace it in between. Empty
-          # disables the check, so an unadopted repo is untouched.
-          expected-app-version: ${{ needs.merge-e2e-image.outputs.version }}
-          # One suite per leg (the matrix file), not the whole e2e directory.
-          test-path: ${{ matrix.file }}
-          # Full-DAG defaults (formerly in the deleted e2e-full-reusable.yaml). The
-          # full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
-          # in connector repos, so these must be explicit — otherwise the action
-          # falls back to the SDR component/compose set (wrong stack).
-          secrets-script: .github/e2e/make-secrets-e2e-full.py
-          components-dir: .github/e2e/e2e-full-components
-          # Per-suite (FND-1865), resolved by discovery against the caller's
-          # tree: `.github/e2e/<suite>-docker-compose.yaml` when that file
-          # exists, else the repo-wide path discovery was given. One pinned
-          # overlay for every leg meant a multi-entrypoint connector started
-          # EVERY source container on EVERY leg — and the worker's
-          # `depends_on: service_healthy` made the legs that cannot use one wait
-          # for it before failing.
-          compose-overlay: ${{ matrix.compose-overlay }}
-          # Force the full-DAG config dir even when the repo also has a
-          # .github/sdr-e2e/ (testcontainer) setup, which the action would
-          # otherwise prefer — see the action's `config-dir` input.
-          config-dir: .github/e2e
-          # Bump the container-health wait because the worker has to establish
-          # the Temporal connection with TLS + auth before /server/health greens.
-          container-health-timeout-seconds: ${{ inputs.container-health-timeout-seconds }}
-          # This job IS the full-DAG pipeline, so layer the SDK-owned
-          # queue-alignment overlay (docker-compose.full-dag.yml): it passes the
-          # per-leg ATLAN_DEPLOYMENT_NAME through to the worker so it registers
-          # on the queue the harness dispatches the extract node to. Without it,
-          # alignment depends entirely on the app carrying a byte-identical
-          # per-app overlay — and a connector with no `.github/e2e/
-          # e2e-full-docker-compose.yaml` (the chain builder skips a missing
-          # overlay silently) gets no alignment at all, surfacing 90 minutes
-          # later as "No Workers Running". App overlays layer ABOVE this one, so
-          # connectors that already carry theirs are unaffected.
-          full-dag: "true"
-          # `-s` streams the harness poll-loop output in real time — each leg is
-          # a single sequential pytest process, so this is live per-job again.
-          pytest-extra-args: "-s"
-          # Unique per-leg artifact name so parallel legs don't collide on
-          # upload-artifact (which rejects duplicate names within a run).
-          artifact-suffix: ${{ matrix.name }}
-          # One slim summary is posted by the Tests Gate; suppress the per-leg
-          # connector-PR comment so N legs don't post N comments.
-          post-pr-comment: "false"
-          application-sdk-ref: ${{ inputs.application-sdk-ref }}
-          runtime-sdk-ref: ${{ inputs.runtime-sdk-ref }}
-          harness-sdk-ref: ${{ inputs.harness-sdk-ref }}
-          base-image-ref: ${{ inputs.base-image-ref }}
-          enable-two-store: ${{ inputs.two-store }}
-          # Per-suite (FND-1865): the repo-wide input narrowed by
-          # `source-available-overrides` for this leg's suite, resolved in
-          # discovery. Reaches the harness as E2E_SOURCE_AVAILABLE, which is
-          # per-run and therefore per-leg — which is why this had to move into
-          # the matrix rather than be expressible in the suite itself.
-          source-available: ${{ matrix.source-available }}
-          # Push the test image with the org PAT (same identity build-and-publish
-          # uses) so it can write PAT-published connector packages — a plain
-          # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
-          # because callers invoke this reusable with `secrets: inherit`.
-          ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
-          # Forwarded to the image build as the `git_token` build secret so a
-          # Dockerfile whose `uv sync` clones a private atlanhq dependency can
-          # authenticate. A read-only App token, not the PAT above; a Dockerfile
-          # that declares no such secret mount simply ignores it.
-          git-token: ${{ steps.git-deps-token.outputs.token }}
-
-  # ── Hand the tenant to whoever is next in the queue ──────────────────────
-  # Prompt release, not the mechanism that makes the lease safe. GitHub cancels
-  # queued jobs rather than running them, so on a cancelled run this job never
-  # starts at all and `if: always()` does not help — which is why liveness is
-  # derived from the holder's run status instead, and any later contender reaps a
-  # ticket whose run is over. This job just means the next run waits seconds
-  # rather than one poll interval.
-  #
-  # It never fails the workflow: the driver returns 0 whether or not a ticket was
-  # there to delete, so a release hiccup cannot redden a run whose tests passed.
-  release-tenant:
-    name: Release tenant lease (${{ matrix.cloud || 'default' }})
-    needs: [discover-e2e, lease-tenant, prepare-tenant, e2e]
-    # Still a per-cloud MATRIX while the acquire is one ordered job (FND-646), and
-    # deliberately so: release cannot block, is ownership-checked, and is
-    # idempotent, so there is no hold-and-wait to remove here — and one leg per
-    # cloud keeps a single wedged DELETE from holding the others' tenants.
-    #
-    # Gated on lease-tenant having RUN, not on it having succeeded. When acquire
-    # was a matrix, `== 'success'` meant one cloud's acquire timing out skipped
-    # the release for EVERY cloud, including those that had acquired — their
-    # leases then waited for the next contender's reaper instead of being handed
-    # back. The ordered acquire hands its own leases back on the way out of a
-    # failure, so this is now a backstop rather than the primary path, but it must
-    # stay one: a lease job that dies outright releases nothing.
-    #
-    # Safe to widen because the release driver checks ownership before deleting:
-    # a leg for a cloud this run never held reads a lease that is not its own (or
-    # none at all) and no-ops. Not gated on the legs' outcome either — a failed
-    # leg must still give the tenant back.
-    if: >-
-      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() && needs.lease-tenant.result != 'skipped')
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
-    runs-on: ubuntu-slim
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      # Same fetch-then-run shape as the acquire; see the comment there.
-      - name: Fetch SDK CI scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          path: application-sdk-scripts
-          persist-credentials: false
-
-      - name: Release the tenant lease
-        env:
-          APP: ${{ inputs.app-name }}
-          CLOUD: ${{ matrix.cloud }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
-            --mode release \
-            --repo "$GITHUB_REPOSITORY" \
-            --app "$APP" \
-            --cloud "$CLOUD" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT"
+    uses: atlanhq/application-sdk/.github/workflows/e2e-tests-reusable.yaml@main
+    with:
+      app-image-name: ${{ inputs.app-image-name }}
+      app-name: ${{ inputs.app-name }}
+      application-sdk-ref: ${{ inputs.application-sdk-ref }}
+      apt-packages: ${{ inputs.apt-packages }}
+      base-image-ref: ${{ inputs.base-image-ref }}
+      container-health-timeout-seconds: ${{ inputs.container-health-timeout-seconds }}
+      dataforge-datasource: ${{ inputs.dataforge-datasource }}
+      dataforge-env-tier: ${{ inputs.dataforge-env-tier }}
+      dataforge-hermetic-fallback: ${{ inputs.dataforge-hermetic-fallback }}
+      dataforge-mode: ${{ inputs.dataforge-mode }}
+      dataforge-output-prefix: ${{ inputs.dataforge-output-prefix }}
+      distinct-id: ${{ inputs.distinct-id }}
+      git-lfs-skip-smudge: ${{ inputs.git-lfs-skip-smudge }}
+      harness-sdk-ref: ${{ inputs.harness-sdk-ref }}
+      install-app-to-tenant: ${{ inputs.install-app-to-tenant }}
+      lfs: ${{ inputs.lfs }}
+      private-git-deps: ${{ inputs.private-git-deps }}
+      runtime-sdk-ref: ${{ inputs.runtime-sdk-ref }}
+      two-store: ${{ inputs.two-store }}
+      e2e-matrix: ${{ needs.discover-e2e.outputs.matrix }}
+      e2e-cloud-matrix: ${{ needs.discover-e2e.outputs.cloud-matrix }}
+      e2e-cloud-count: ${{ needs.discover-e2e.outputs.cloud-count }}
+      e2e-cloud-list: ${{ needs.discover-e2e.outputs.cloud-list }}
+    secrets: inherit
 
   # ── Pause the pinned dataforge source on the way out ──────────────────────
   # Mirror of wake-dataforge-source (FND-1992). Runs under `if: always()` so a
@@ -3299,11 +1599,6 @@ jobs:
         detect-integration,
         integration,
         discover-e2e,
-        build-e2e-image,
-        merge-e2e-image,
-        sdk-head-recheck,
-        lease-tenant,
-        prepare-tenant,
         e2e,
       ]
     if: |
@@ -3407,7 +1702,7 @@ jobs:
       # apart. The body is one arbitrary leg's, which is why the authoritative
       # verdict is the gate line appended below rather than anything in it.
       - name: Download connector e2e results
-        if: needs.e2e.result != 'skipped'
+        if: (needs.e2e.outputs.e2e-result || needs.e2e.result) != 'skipped'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
@@ -3429,23 +1724,23 @@ jobs:
         id: gate
         uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
         with:
-          unit-result: ${{ needs.unit.result }}
+          unit-result: ${{ needs.unit.outputs.unit-result || needs.unit.result }}
           integration-result: ${{ needs.integration.result }}
           detect-integration-result: ${{ needs.detect-integration.result }}
           detect-merge-queue-result: ${{ needs.detect-merge-queue.result }}
           discover-e2e-result: ${{ needs.discover-e2e.result }}
-          build-e2e-image-result: ${{ needs.build-e2e-image.result }}
-          merge-e2e-image-result: ${{ needs.merge-e2e-image.result }}
-          lease-tenant-result: ${{ needs.lease-tenant.result }}
-          prepare-tenant-result: ${{ needs.prepare-tenant.result }}
-          e2e-result: ${{ needs.e2e.result }}
+          build-e2e-image-result: ${{ needs.e2e.outputs.build-e2e-image-result || needs.e2e.result }}
+          merge-e2e-image-result: ${{ needs.e2e.outputs.merge-e2e-image-result || needs.e2e.result }}
+          lease-tenant-result: ${{ needs.e2e.outputs.lease-tenant-result || needs.e2e.result }}
+          prepare-tenant-result: ${{ needs.e2e.outputs.prepare-tenant-result || needs.e2e.result }}
+          e2e-result: ${{ needs.e2e.outputs.e2e-result || needs.e2e.result }}
           # Explains a skipped matrix as a deliberate stand-down rather than the
           # misconfiguration the matrix-skipped anomaly exists to catch. Empty
           # (the recheck job skipped, or it failed and wrote no answer) reads as
           # "not explained", which is the correct default: the anomaly is what
           # stops a future re-wiring of the e2e `if` from greening the gate by
           # skipping it (FND-701).
-          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
+          superseded: ${{ needs.e2e.outputs.sdk-head-recheck-superseded }}
           # Identical to the Tests Gate's inputs (one verdict, two callers).
           # Always "false" here — the SDK's dispatch runs the full DAG — but
           # spelled the same so the two calls cannot drift.
@@ -3459,10 +1754,10 @@ jobs:
       - name: Build summary
         id: report
         env:
-          UNIT_RESULT: ${{ needs.unit.result }}
+          UNIT_RESULT: ${{ needs.unit.outputs.unit-result || needs.unit.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
           DETECT_INTEGRATION_RESULT: ${{ needs.detect-integration.result }}
-          E2E_RESULT: ${{ needs.e2e.result }}
+          E2E_RESULT: ${{ needs.e2e.outputs.e2e-result || needs.e2e.result }}
           UNIT_SUMMARY: ${{ needs.unit.outputs.summary }}
           INTEGRATION_SUMMARY: ${{ needs.integration.outputs.summary }}
         run: |
@@ -3636,7 +1931,7 @@ jobs:
       # and the glob below resolves to nothing — which the CLI reads as "e2e not
       # applicable", never as "e2e scored zero".
       - name: Download e2e evidence (one artifact per leg)
-        if: needs.e2e.result != 'skipped'
+        if: (needs.e2e.outputs.e2e-result || needs.e2e.result) != 'skipped'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
@@ -3707,7 +2002,7 @@ jobs:
           # shell would need a loop this file is not allowed to contain
           # (docs/standards/ci.md).
           E2E_JUNIT_GLOB: e2e-evidence/*/results/sdr-test-results.xml
-          E2E_RESULT: ${{ needs.e2e.result }}
+          E2E_RESULT: ${{ needs.e2e.outputs.e2e-result || needs.e2e.result }}
           CONFIGURED_CLOUDS: ${{ steps.configured-clouds.outputs.clouds }}
           CONFIGURED_KNOWN: ${{ steps.configured-clouds.outcome == 'success' }}
           OBSERVED_CLOUDS: ${{ needs.discover-e2e.outputs.clouds }}
@@ -3792,15 +2087,8 @@ jobs:
         detect-integration,
         integration,
         discover-e2e,
-        build-e2e-image,
-        merge-e2e-image,
-        sdk-head-recheck,
-        lease-tenant,
-        prepare-tenant,
         e2e,
         renovate-artifacts,
-        detect-api-member,
-        api-member,
       ]
     # Skipped on a proven queue entry (queue-proof): the skipped check run
     # passes the required `tests / Tests Gate` context, as on a bump PR's own
@@ -3830,11 +2118,11 @@ jobs:
       # entry point; a failure or cancellation of either job fails the gate.
       - name: Fail the gate when the hosted api member leg failed
         if: >-
-          contains(fromJSON('["failure", "cancelled"]'), needs.detect-api-member.result) ||
-          contains(fromJSON('["failure", "cancelled"]'), needs.api-member.result)
+          contains(fromJSON('["failure", "cancelled"]'), needs.unit.outputs.detect-api-member-result || needs.unit.result) ||
+          contains(fromJSON('["failure", "cancelled"]'), needs.unit.outputs.api-member-result || needs.unit.result)
         env:
-          DETECT_RESULT: ${{ needs.detect-api-member.result }}
-          MEMBER_RESULT: ${{ needs.api-member.result }}
+          DETECT_RESULT: ${{ needs.unit.outputs.detect-api-member-result || needs.unit.result }}
+          MEMBER_RESULT: ${{ needs.unit.outputs.api-member-result || needs.unit.result }}
         run: |
           echo "::error::Hosted api member leg did not pass (detect: $DETECT_RESULT, member: $MEMBER_RESULT)"
           exit 1
@@ -3859,23 +2147,23 @@ jobs:
         if: always()
         uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
         with:
-          unit-result: ${{ needs.unit.result }}
+          unit-result: ${{ needs.unit.outputs.unit-result || needs.unit.result }}
           integration-result: ${{ needs.integration.result }}
           detect-integration-result: ${{ needs.detect-integration.result }}
           detect-merge-queue-result: ${{ needs.detect-merge-queue.result }}
           discover-e2e-result: ${{ needs.discover-e2e.result }}
-          build-e2e-image-result: ${{ needs.build-e2e-image.result }}
-          merge-e2e-image-result: ${{ needs.merge-e2e-image.result }}
-          lease-tenant-result: ${{ needs.lease-tenant.result }}
-          prepare-tenant-result: ${{ needs.prepare-tenant.result }}
-          e2e-result: ${{ needs.e2e.result }}
+          build-e2e-image-result: ${{ needs.e2e.outputs.build-e2e-image-result || needs.e2e.result }}
+          merge-e2e-image-result: ${{ needs.e2e.outputs.merge-e2e-image-result || needs.e2e.result }}
+          lease-tenant-result: ${{ needs.e2e.outputs.lease-tenant-result || needs.e2e.result }}
+          prepare-tenant-result: ${{ needs.e2e.outputs.prepare-tenant-result || needs.e2e.result }}
+          e2e-result: ${{ needs.e2e.outputs.e2e-result || needs.e2e.result }}
           # Explains a skipped matrix as a deliberate stand-down rather than the
           # misconfiguration the matrix-skipped anomaly exists to catch. Empty
           # (the recheck job skipped, or it failed and wrote no answer) reads as
           # "not explained", which is the correct default: the anomaly is what
           # stops a future re-wiring of the e2e `if` from greening the gate by
           # skipping it (FND-701).
-          superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
+          superseded: ${{ needs.e2e.outputs.sdk-head-recheck-superseded }}
           # A `/e2e` run skips unit on purpose (FND-3839).
           e2e-only: ${{ inputs.run-e2e == 'only' }}
 
@@ -4056,11 +2344,11 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           STATE: >-
-            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
-            && needs.e2e.result || 'error' }}
+            ${{ (needs.e2e.outputs.e2e-result == 'success' || needs.e2e.outputs.e2e-result == 'failure')
+            && needs.e2e.outputs.e2e-result || 'error' }}
           DESCRIPTION: >-
-            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
-            && format('End-to-end suite {0} on this commit', needs.e2e.result)
+            ${{ (needs.e2e.outputs.e2e-result == 'success' || needs.e2e.outputs.e2e-result == 'failure')
+            && format('End-to-end suite {0} on this commit', needs.e2e.outputs.e2e-result)
             || 'No e2e verdict on this commit (cancelled, tenant busy, or setup failed); comment /e2e again' }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -4119,8 +2407,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CLOUDS: ${{ needs.discover-e2e.outputs.clouds }}
           VERDICT: >-
-            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
-            && needs.e2e.result || 'error' }}
+            ${{ (needs.e2e.outputs.e2e-result == 'success' || needs.e2e.outputs.e2e-result == 'failure')
+            && needs.e2e.outputs.e2e-result || 'error' }}
         run: >-
           python3 .github/scripts/test_command_comment.py
           --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
@@ -4147,8 +2435,8 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
           SELF_RUN_ID: ${{ github.run_id }}
           VERDICT: >-
-            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
-            && needs.e2e.result || 'error' }}
+            ${{ (needs.e2e.outputs.e2e-result == 'success' || needs.e2e.outputs.e2e-result == 'failure')
+            && needs.e2e.outputs.e2e-result || 'error' }}
         run: |
           set -euo pipefail
           python3 .github/scripts/rerun_deferred_gate.py \
