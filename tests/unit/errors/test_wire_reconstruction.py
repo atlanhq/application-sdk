@@ -335,6 +335,21 @@ def test_redact_evidence_value_keeps_shape_and_masks_by_name() -> None:
     }
 
 
+def test_redact_evidence_value_masks_secret_named_namedtuple_fields() -> None:
+    """A NamedTuple is walked by position, so its field names must be checked
+    as keys, or ``Creds(api_key="opaque")`` survives under an innocent key."""
+    from typing import NamedTuple
+
+    class _Creds(NamedTuple):
+        user: str
+        api_key: str
+
+    masked = redact_evidence_value({"connection": _Creds(user="u", api_key="opaque")})
+
+    assert masked == {"connection": _Creds(user="u", api_key="***")}
+    assert isinstance(masked["connection"], _Creds)  # type: ignore[index]
+
+
 def test_redacted_validation_reason_omits_the_rejected_input() -> None:
     with pytest.raises(ValidationError) as caught:
         FailureDetails(

@@ -343,12 +343,20 @@ def _mask_secret_named(value: object) -> object:
     if isinstance(value, list):
         return [_mask_secret_named(v) for v in value]
     if isinstance(value, tuple):
-        items = [_mask_secret_named(v) for v in value]
-        if hasattr(type(value), "_fields"):
-            # A NamedTuple takes its fields positionally, not one iterable.
-            namedtuple_cls = cast("Callable[..., object]", type(value))
-            return namedtuple_cls(*items)
-        return tuple(items)
+        fields = getattr(type(value), "_fields", None)
+        if fields is None:
+            return tuple(_mask_secret_named(v) for v in value)
+        # A NamedTuple's field names are keys too: ``Creds(api_key=...)``
+        # carries a secret-named key positionally. It takes its fields
+        # positionally, not one iterable.
+        bad = secret_named_evidence_keys({name: None for name in fields})
+        namedtuple_cls = cast("Callable[..., object]", type(value))
+        return namedtuple_cls(
+            *(
+                _MASKED if name in bad else _mask_secret_named(v)
+                for name, v in zip(fields, value, strict=True)
+            )
+        )
     return value
 
 
