@@ -27,40 +27,21 @@ from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import (
-    emulator_unavailable,
+    AZURITE_ACCOUNT,
+    AZURITE_ENDPOINT,
     write_dapr_component,
 )
 
-pytestmark = pytest.mark.storage_emulator
+pytestmark = [pytest.mark.storage_emulator, pytest.mark.usefixtures("require_azurite")]
 
-# Well-known Azurite dev account/key — public, emulator-only.
-_ACCOUNT = "devstoreaccount1"
+
+# Well-known Azurite dev account key — public, emulator-only.
 _KEY = (
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/"
     "K1SZFPTOtr/KBHBeksoGMGw=="
 )
-_ENDPOINT = os.environ.get("AZURE_STORAGE_ENDPOINT", "http://localhost:10000").rstrip(
-    "/"
-)
-_BLOB_ENDPOINT = f"{_ENDPOINT}/{_ACCOUNT}"
+_BLOB_ENDPOINT = f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}"
 _CONTAINER = os.environ.get("AZURE_EMULATOR_CONTAINER", "sdk-emulator-test")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def require_azurite() -> None:
-    """Fail (CI) or skip (local) the module when Azurite isn't reachable or unhealthy."""
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0) as client:
-            # Azurite returns 400 (not 5xx) for the bare account URL — reachable.
-            resp = client.get(_BLOB_ENDPOINT)
-    except Exception as exc:  # pragma: no cover — env guard
-        emulator_unavailable(f"Azurite not reachable at {_BLOB_ENDPOINT}: {exc}")
-    if resp.status_code >= 500:  # pragma: no cover — env guard
-        emulator_unavailable(
-            f"Azurite unhealthy at {_BLOB_ENDPOINT}: HTTP {resp.status_code}"
-        )
 
 
 def _azure_cloud_store(components_dir) -> CloudStore:
@@ -70,7 +51,7 @@ def _azure_cloud_store(components_dir) -> CloudStore:
         name="azure-emulator",
         binding_type="bindings.azure.blobstorage",
         metadata={
-            "accountName": _ACCOUNT,
+            "accountName": AZURITE_ACCOUNT,
             "accountKey": _KEY,
             "containerName": _CONTAINER,
             "endpoint": _BLOB_ENDPOINT,

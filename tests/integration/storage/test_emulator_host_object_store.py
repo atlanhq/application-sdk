@@ -43,24 +43,25 @@ from application_sdk.handler import (
 )
 from application_sdk.handler.asgi import build_asgi_app
 from application_sdk.handler.object_routes import HostObjectStore
-from tests.integration.storage.conftest import emulator_unavailable
+from tests.integration.storage.conftest import (
+    AZURITE_ACCOUNT,
+    AZURITE_ENDPOINT,
+    MINIO_ENDPOINT,
+    require_reachable,
+)
 
 pytestmark = pytest.mark.storage_emulator
 
-_S3_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+
 _S3_USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 _S3_PASS = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 _S3_BUCKET = os.environ.get("S3_EMULATOR_BUCKET", "sdk-emulator-test")
 
-# Well-known Azurite dev account/key — public, emulator-only.
-_AZ_ACCOUNT = "devstoreaccount1"
+# Well-known Azurite dev account key — public, emulator-only.
 _AZ_KEY = (
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/"
     "K1SZFPTOtr/KBHBeksoGMGw=="
 )
-_AZ_ENDPOINT = os.environ.get(
-    "AZURE_STORAGE_ENDPOINT", "http://localhost:10000"
-).rstrip("/")
 _AZ_CONTAINER = os.environ.get("AZURE_EMULATOR_CONTAINER", "sdk-emulator-test")
 
 
@@ -75,28 +76,16 @@ class _Handler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
-def _reachable(url: str, name: str) -> None:
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0) as client:
-            resp = client.get(url)
-    except Exception as exc:  # pragma: no cover — env guard
-        emulator_unavailable(f"{name} not reachable at {url}: {exc}")
-    if resp.status_code >= 500:  # pragma: no cover — env guard
-        emulator_unavailable(f"{name} unhealthy at {url}: HTTP {resp.status_code}")
-
-
 def _http_options() -> dict[str, object]:
     return {**obstore_client_options(), "allow_http": True}
 
 
 def _minio(bucket: str) -> HostObjectStore:
-    _reachable(f"{_S3_ENDPOINT}/minio/health/live", "MinIO")
+    require_reachable(f"{MINIO_ENDPOINT}/minio/health/live", "MinIO")
     store = make_s3_store(
         bucket,
         {
-            "aws_endpoint": _S3_ENDPOINT,
+            "aws_endpoint": MINIO_ENDPOINT,
             "aws_region": "us-east-1",
             "aws_access_key_id": _S3_USER,
             "aws_secret_access_key": _S3_PASS,
@@ -110,13 +99,13 @@ def _minio(bucket: str) -> HostObjectStore:
 
 
 def _azurite(container: str) -> HostObjectStore:
-    _reachable(f"{_AZ_ENDPOINT}/{_AZ_ACCOUNT}", "Azurite")
+    require_reachable(f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}", "Azurite")
     store = make_azure_store(
         container,
         {
-            "azure_storage_account_name": _AZ_ACCOUNT,
+            "azure_storage_account_name": AZURITE_ACCOUNT,
             "azure_storage_account_key": _AZ_KEY,
-            "azure_storage_endpoint": f"{_AZ_ENDPOINT}/{_AZ_ACCOUNT}",
+            "azure_storage_endpoint": f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}",
         },
         label="host-azure",
         client_options=_http_options(),  # type: ignore[arg-type]

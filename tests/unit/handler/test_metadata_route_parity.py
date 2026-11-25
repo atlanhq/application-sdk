@@ -17,18 +17,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from application_sdk.handler import (
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
-    Handler,
-    MetadataInput,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataOutput,
-)
 from application_sdk.handler.asgi import app_env, build_asgi_app
+from tests.unit._doubles import StaticHandler
 
 _MANIFEST = {
     "execution_mode": "native",
@@ -39,17 +29,6 @@ _MANIFEST = {
         }
     },
 }
-
-
-class _Handler(Handler):
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS)
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
-        return SqlMetadataOutput(objects=[])
 
 
 @pytest.fixture
@@ -78,8 +57,8 @@ def clients(
     monkeypatch.setattr(svc_module, "CONTRACT_GENERATED_DIR", generated)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        worker = create_app_handler_service(_Handler(), app_name="parity")
-    host = build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+        worker = create_app_handler_service(StaticHandler(), app_name="parity")
+    host = build_asgi_app(StaticHandler(), app_name="parity", generated_dir=generated)
     return (
         TestClient(worker, raise_server_exceptions=False),
         TestClient(host, raise_server_exceptions=False),
@@ -130,7 +109,7 @@ def test_a_per_app_deployment_name_wins_on_the_host(
     monkeypatch.setenv("ATLAN_APPENV__PARITY__ATLAN_DEPLOYMENT_NAME", "prod")
     assert app_env("parity", "ATLAN_DEPLOYMENT_NAME") == "prod"
     host = TestClient(
-        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+        build_asgi_app(StaticHandler(), app_name="parity", generated_dir=generated)
     )
     manifest = host.get("/workflows/v1/manifest").json()
     assert manifest["dag"]["extract"]["task_queue"] == "atlan-parity-prod"
@@ -147,7 +126,9 @@ def test_the_host_resolves_an_app_id_to_the_single_form(
 
 
 def test_without_generated_files_the_host_serves_no_metadata_routes() -> None:
-    host = TestClient(build_asgi_app(_Handler(), app_name="bare", app_package="app"))
+    host = TestClient(
+        build_asgi_app(StaticHandler(), app_name="bare", app_package="app")
+    )
     assert host.get("/workflows/v1/configmaps").status_code == 404
 
 
@@ -157,7 +138,7 @@ def test_the_workers_queue_override_is_stamped_on_the_host(
     monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
     monkeypatch.setenv("ATLAN_APPENV__PARITY__ATLAN_TASK_QUEUE", "custom-queue")
     host = TestClient(
-        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+        build_asgi_app(StaticHandler(), app_name="parity", generated_dir=generated)
     )
     manifest = host.post("/manifest", json={}).json()
     assert manifest["dag"]["extract"]["task_queue"] == "custom-queue"
@@ -171,7 +152,7 @@ def test_the_host_never_reads_its_own_bare_queue_settings(
     monkeypatch.setenv("ATLAN_APPENV__PARITY__ATLAN_DEPLOYMENT_NAME", "prod")
     assert app_env("parity", "ATLAN_TASK_QUEUE") == ""
     host = TestClient(
-        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+        build_asgi_app(StaticHandler(), app_name="parity", generated_dir=generated)
     )
     manifest = host.post("/manifest", json={}).json()
     assert manifest["dag"]["extract"]["task_queue"] == "atlan-parity-prod"
@@ -186,7 +167,7 @@ def test_the_host_uses_its_own_deployment_name_but_never_its_bare_queue(
     monkeypatch.setenv("ATLAN_TASK_QUEUE", "host-wide-queue")
     monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
     host = TestClient(
-        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+        build_asgi_app(StaticHandler(), app_name="parity", generated_dir=generated)
     )
     manifest = host.post("/manifest", json={}).json()
     assert manifest["dag"]["extract"]["task_queue"] == "atlan-parity-prod"
@@ -198,7 +179,7 @@ def test_without_any_deployment_name_the_host_never_falls_back_to_its_bare_queue
     monkeypatch.setenv("ATLAN_TASK_QUEUE", "host-wide-queue")
     monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
     host = TestClient(
-        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+        build_asgi_app(StaticHandler(), app_name="parity", generated_dir=generated)
     )
     manifest = host.post("/manifest", json={}).json()
     assert manifest["dag"]["extract"]["task_queue"] != "host-wide-queue"
