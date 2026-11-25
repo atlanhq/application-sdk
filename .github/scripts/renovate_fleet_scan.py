@@ -238,11 +238,10 @@ def resolve_scope(org: str, repo: Optional[str]) -> str:
 RENOVATE_PR_AUTHORS = ("app/renovate", "app/atlan-app-fleet")
 
 
-def build_search_query(scope: str, extra: str) -> str:
-    """Build a GitHub search-syntax query, e.g.
-    'org:atlanhq is:pr author:app/renovate author:app/atlan-app-fleet is:open'."""
-    authors = " ".join(f"author:{a}" for a in RENOVATE_PR_AUTHORS)
-    return f"{scope} is:pr {authors} {extra}".strip()
+def build_search_query(scope: str, author: str, extra: str) -> str:
+    """Build a GitHub search-syntax query for one author, e.g.
+    'org:atlanhq is:pr author:app/renovate is:open'."""
+    return f"{scope} is:pr author:{author} {extra}".strip()
 
 
 def build_graphql_payload(
@@ -495,7 +494,7 @@ def fetch_prs_by_author(
     seen: set[str] = set()
     out: list[dict] = []
     for author in RENOVATE_PR_AUTHORS:
-        query = f"{scope} is:pr author:{author} {extra}".strip()
+        query = build_search_query(scope, author, extra)
         for node in fetch_all_prs(token, query, fields, post, page_size):
             url = node.get("url")
             if url is not None and url in seen:
