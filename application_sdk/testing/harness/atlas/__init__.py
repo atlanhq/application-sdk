@@ -593,6 +593,11 @@ async def count_total_assets(
     return Settled(label=name, attempts=attempts, elapsed=elapsed, value=total)
 
 
+# How many hits per wanted sample :func:`sample_qualified_names` asks for, so a
+# hit it skips is replaced from the same page.
+_SAMPLE_OVERFETCH = 3
+
+
 async def sample_qualified_names(
     client: AsyncAtlanClient,
     connection_qualified_name: str,
@@ -609,6 +614,10 @@ async def sample_qualified_names(
     asset" field the Atlan UI filters on, and is required to be populated on
     every asset — so the query matches on it directly, not just the QN path
     prefix, to sample the assets exactly as the product surfaces them.
+
+    An asset whose own ``name`` contains ``/`` is never sampled: depth is
+    counted by splitting the qualified name on ``/``, so such a name reads one
+    level too deep however correctly it is nested.
 
     Args:
         client: An open client from :func:`atlas_client`.
@@ -644,8 +653,10 @@ async def sample_qualified_names(
             .where(Asset.TYPE_NAME.eq(type_name))
             .include_on_results(Asset.QUALIFIED_NAME)
             .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+            .include_on_results(Asset.NAME)
         ).to_request()
-        request.dsl.size = per_type
+        # Over-fetch so a skipped hit (below) does not shrink the sample.
+        request.dsl.size = per_type * _SAMPLE_OVERFETCH
         results = await client.asset.search(request)
         page = results.current_page() or []
         # Asset.qualified_name is str | None; the `if qn` narrows it to str so
@@ -654,7 +665,11 @@ async def sample_qualified_names(
         qns: list[str] = []
         for asset in page:
             qn = asset.qualified_name
-            if qn:
+            # The location check counts depth by splitting the qualified name on
+            # "/", so an asset whose own name holds a "/" (a SQL table may be
+            # named `a/b`) reads one level too deep. It cannot be graded, so it
+            # is not sampled.
+            if qn and "/" not in (asset.name or ""):
                 qns.append(qn)
             if len(qns) >= per_type:
                 break

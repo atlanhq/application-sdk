@@ -34,9 +34,12 @@ class FakeAsset:
     hit with no GUID — turning a real regression into a passing test.
     """
 
-    def __init__(self, qualified_name: str, guid: str | None = None) -> None:
+    def __init__(
+        self, qualified_name: str, guid: str | None = None, name: str | None = None
+    ) -> None:
         self.qualified_name = qualified_name
         self.guid = f"guid-{qualified_name}" if guid is None else guid
+        self.name = qualified_name.rsplit("/", 1)[-1] if name is None else name
 
 
 class FakeSearchResult:

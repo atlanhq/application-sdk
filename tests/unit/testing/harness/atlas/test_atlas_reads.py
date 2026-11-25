@@ -182,6 +182,19 @@ class TestReadShapes:
         assert isinstance(outcome, Settled)
         assert len(outcome.value["Table"]) == 3
 
+    async def test_a_name_holding_a_slash_is_not_sampled(self) -> None:
+        """Bug: a correctly nested table named `a/b` splits into one segment too
+        many, so the location check failed whenever the sample happened to pick
+        it. The rest of the page still fills the sample."""
+        slashed = FakeAsset(f"{_QN}/db/sch/a/b", name="a/b")
+        plain = [FakeAsset(f"{_QN}/db/sch/t{i}") for i in range(3)]
+        client = _client(lambda _r: FakeSearchResult([slashed, *plain]))
+        outcome = await atlas.sample_qualified_names(
+            client, _QN, ("Table",), per_type=3
+        )
+        assert isinstance(outcome, Settled)
+        assert outcome.value["Table"] == [asset.qualified_name for asset in plain]
+
     async def test_lineage_counts_add_the_has_lineage_filter(self) -> None:
         """The one thing that separates this from ``count_assets``: it has to
         reach the wire, or the "Lineage coverage" card is just the asset count.

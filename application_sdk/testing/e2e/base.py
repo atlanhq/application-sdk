@@ -1309,9 +1309,11 @@ class BaseE2ETest:
     #     samples are read AFTER ES indexes them, but a genuinely-zero type is
     #     still only surfaced by the floor.)
     #   * Depth is computed by splitting the QN tail on "/", so it assumes
-    #     qualifiedName segments don't themselves contain "/". True for SQL
-    #     (db>schema>table>column); BI / object-store connectors whose QNs embed
-    #     slashes would mis-count — don't enable it there without adjusting.
+    #     qualifiedName segments don't themselves contain "/". The sampler skips
+    #     an asset whose own name holds one (a SQL table may be named `a/b`), but
+    #     a slash in a PARENT's name still mis-counts; BI / object-store
+    #     connectors whose QNs embed slashes would mis-count — don't enable it
+    #     there without adjusting.
     expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
 
     # Opt-in: validate the VALUES published assets carry, not just how many
