@@ -57,8 +57,10 @@ path glob:
 A principle covers a file when one of its areas is the file's area or one of
 its globs matches the file's path; a principle without `applies-to` covers
 every file. A bundle gets the principles that cover at least one of its files,
-fleet first and then repo, each in id order and each rendered once with the
-files it covers.
+each rendered once with the files it covers: first those whose `applies-to`
+names one of its files (fleet, then repo; a glob before an area), then those
+with no `applies-to`. In full while they fit `[agent] principles_max_tokens`;
+the rest by id and title only (`PrincipleSet.render_for`).
 
 A file that does not follow the format never stops a review: it is skipped and
 a note says so in the summary. A fleet directory that is missing, or holds no
@@ -188,18 +190,52 @@ class PrincipleSet:
             if p.everywhere or any(p.covers(f) for f in paths)
         ]
 
-    def render_for(self, paths: list[str]) -> str:
-        """Each applicable principle once, with the files it governs."""
+    def in_order(self, paths: list[str]) -> list[Principle]:
+        """`for_paths` in the order they get room in a prompt: those whose
+        `applies-to` names one of the files (a glob first, then an area),
+        fleet then repo, and last the ones with no `applies-to`, which cover
+        every file and say least about these ones (FND-5316)."""
+        found = self.for_paths(paths)
+
+        def rank(p: Principle) -> tuple[int, int]:
+            by_glob = any(
+                glob_match(f.removeprefix("./"), g) for f in paths for g in p.globs
+            )
+            return (
+                2 if p.everywhere else 0,
+                (0 if p.source == "fleet" else 1) * 2 + (0 if by_glob else 1),
+            )
+
+        return sorted(found, key=rank)  # stable: id order within a rank
+
+    def render_for(self, paths: list[str], max_chars: int | None = None) -> str:
+        """Each applicable principle once, with the files it governs, in
+        `in_order`. With `max_chars`, principles are rendered in full while
+        they fit and the rest are listed by id and title only, so a repository
+        with many principles cannot take the room the code under review
+        needs. Every listed principle still applies (`cite`, grading)."""
         blocks: list[str] = []
+        titles: list[str] = []
+        used = 0
         repo_started = False
-        for p in self.for_paths(paths):
+        for p in self.in_order(paths):
+            files = [f for f in paths if p.covers(f)]
+            text = p.render(files)
+            if titles or (max_chars is not None and used + len(text) > max_chars):
+                titles.append(f'<principle id="{p.id}" title="{_attr(p.title)}"/>')
+                continue
             if p.source == "repo" and not repo_started:
                 repo_started = True
                 blocks.append(
                     "The principles below (RP ids) are this repository's own."
                 )
-            files = [f for f in paths if p.covers(f)]
-            blocks.append(p.render(files))
+            blocks.append(text)
+            used += len(text) + 1
+        if titles:
+            blocks.append(
+                "These principles also apply to these files; there was no room for "
+                "their full text, so judge by the title:\n" + "\n".join(titles)
+            )
         return "\n".join(blocks)
 
 

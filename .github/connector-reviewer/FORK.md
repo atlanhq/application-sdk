@@ -752,6 +752,20 @@ context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
   hunk header. A file whose copy is missing or does not parse falls back to the
   diff lines.
 
+- **Principles (connector-reviewer only).** `PrincipleSet.in_order` gives a bundle's
+  principles room in this order: those whose `applies-to` names one of its files,
+  fleet then repo, a glob before an area; then those with no `applies-to`, which
+  cover every file and say least about these ones. `render_for(paths, max_chars)`
+  renders them in full while they fit `[agent] principles_max_tokens` (24,000
+  estimated tokens) and lists the rest by id and title. A title-only principle still
+  applies: `cite` and `grade_by_principle` read the whole set, so a finding citing
+  one is graded by its Severity text, which the model saw only as a title. On the
+  live pull request every principle matched by area (`[app]`), so this ordering cut
+  nothing there; the context ceiling below is what fixed its depth. lens's rule
+  cards are matched by glob, first match per file, and are not changed.
+  Test adapted: `test_principles_are_rendered_once_each_with_their_files_and_five_fields`
+  now expects the everywhere principle FP02 after the repo's RP01.
+
 ## Not changed, and worth knowing before the next change
 
 Nothing listed at the moment. The three items that were here (the test-file

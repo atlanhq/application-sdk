@@ -1011,14 +1011,68 @@ def test_principles_are_rendered_once_each_with_their_files_and_five_fields(repo
         "Don't flag: A missing return annotation, which `L004` already enforces.",
         "Severity: High when a shortfall can be published as complete; otherwise medium.",
     ]
-    # The repo's own principle comes after the fleet ones and is labelled as its own.
+    # The repo's own principle comes after the fleet ones that name these files
+    # and is labelled as its own. FP02 has no `applies-to`: it covers every file
+    # and says least about these ones, so it comes after the repo's (FND-5316).
     own = (
         '<principle id="RP01" source="this repository" '
         'title="Tests assert on extracted counts" for="tests/unit/test_a.py">'
     )
     label = "The principles below (RP ids) are this repository's own."
-    assert text.index('id="FP02"') < text.index(label) < text.index(own)
+    assert (
+        text.index('id="FP01"')
+        < text.index(label)
+        < text.index(own)
+        < text.index('id="FP02"')
+    )
     assert 'source="this repository"' not in text.split(label)[0]
+
+
+def test_principles_that_name_the_files_get_room_first_and_the_rest_a_title(
+    repo: Path,
+):
+    """FND-5316: every bundle carried every principle in full, about a third of
+    its context. The ones whose `applies-to` names the bundle's files come
+    first, in full; past `principles_max_tokens` the rest are listed by title,
+    and still apply."""
+    fleet = repo / FLEET_DIR
+    (fleet / "fp03-glob.md").write_text(
+        FP01.replace("FP01", "FP03").replace("[app, contract]", '["app/extract/**"]')
+    )
+    _repo_principle(repo, "rp01-count-assertions.md", RP01.replace("[tests]", "[app]"))
+    principles = principles_of(repo)
+    paths = ["app/extract/a.py"]
+    # A glob before an area, fleet before repo, and no `applies-to` (FP02) last.
+    assert [p.id for p in principles.in_order(paths)] == [
+        "FP03",
+        "FP01",
+        "RP01",
+        "FP02",
+    ]
+    full = principles.render_for(paths)
+    first_two = full.index('<principle id="RP01"')
+    tight = principles.render_for(paths, max_chars=first_two)
+    assert tight.count("</principle>") == 2
+    assert '<principle id="RP01" title="Tests assert on extracted counts"/>' in tight
+    assert '<principle id="FP02" title="Never log a credential"/>' in tight
+    assert "judge by the title" in tight
+    # A title-only principle still applies to the file.
+    assert [p.id for p in principles.for_paths(paths)] == [
+        "FP01",
+        "FP02",
+        "FP03",
+        "RP01",
+    ]
+    # The prompt's budget comes from the agent limits.
+    bundle = review_mod.Bundle(
+        label="b", files=parse_unified_diff(_file_diff(paths[0], ["a"], ["b"]))
+    )
+    roomy = agent_mod.build_principles_message(bundle, principles, 24_000)
+    assert roomy.count("</principle>") == 4
+    assert (
+        agent_mod.build_principles_message(bundle, principles, 10).count("</principle>")
+        == 0
+    )
     # Nothing applies: no block at all, and the message says so.
     assert PrincipleSet().render_for(paths) == ""
 

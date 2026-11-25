@@ -111,6 +111,9 @@ class AgentLimits:
     # to accept the value: a 400 is fatal and opens the run-wide breaker, so
     # every later bundle (all test bundles) would fail with it.
     final_retry_max_tokens: int = 24_000
+    # The room a bundle's principles may take (estimated tokens): in full while
+    # they fit, the rest by title (`PrincipleSet.render_for`).
+    principles_max_tokens: int = 24_000
 
     def turn_budget(self, n_files: int, changed_lines: int) -> int:
         extra = self.turns_per_extra_file * max(n_files - 1, 0) + changed_lines // max(
@@ -265,7 +268,9 @@ def suspect_paths(refusal: dict[str, Any]) -> list[str]:
 # ---- context -----------------------------------------------------------------
 
 
-def build_principles_message(bundle: Bundle, principles: PrincipleSet) -> str:
+def build_principles_message(
+    bundle: Bundle, principles: PrincipleSet, max_tokens: int | None = None
+) -> str:
     """The principles for this bundle, alone in their own message.
 
     Message order is the cache layout. Provider prompt caching matches the
@@ -276,7 +281,9 @@ def build_principles_message(bundle: Bundle, principles: PrincipleSet) -> str:
       the change itself      — unique
     and the tool loop only ever APPENDS, so every turn re-reads the previous
     turn's whole conversation from cache."""
-    text = principles.render_for(bundle.paths)
+    text = principles.render_for(
+        bundle.paths, None if max_tokens is None else int(max_tokens * 3.5)
+    )
     return (
         "<principles>\n"
         + (text or "(no principle applies to these files)")
@@ -757,7 +764,12 @@ def review_bundle(
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": prompts.REVIEW_SYSTEM},
-        {"role": "user", "content": build_principles_message(bundle, principles)},
+        {
+            "role": "user",
+            "content": build_principles_message(
+                bundle, principles, limits.principles_max_tokens
+            ),
+        },
         {
             "role": "user",
             "content": build_context(ws, bundle, pr_meta, confirmed),

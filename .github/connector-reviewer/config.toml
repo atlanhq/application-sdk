@@ -187,6 +187,11 @@ verify_max_tokens = 8000
 verify_max_tokens_opt_in = 24000
 max_comments = 12
 max_nits = 5              # low-severity (nit) findings kept per bundle
+# The room a bundle's principles may take, in estimated tokens. Those whose applies-to
+# names the bundle's files go first (fleet, then repo), those with no applies-to last;
+# in full while they fit, the rest by id and title. 17 fleet + 19 repo principles on
+# an 8-file app bundle came to about 20,000 (a third of the old 60,000 ceiling).
+principles_max_tokens = 24000
 # Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
 plan = 1
 plan_min_lines = 60
