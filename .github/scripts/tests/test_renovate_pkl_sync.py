@@ -58,6 +58,22 @@ def _commit_count(repo: Path) -> int:
     return int(_git_out(repo, "rev-list", "--count", "HEAD").strip())
 
 
+def test_a_failed_git_call_reports_gits_stderr(tmp_path: Path) -> None:
+    """A fixture git failure must name its cause: FND-5416's CI failure gave
+    only `exit status 128`. A stale index.lock is a real exit-128 failure."""
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".git" / "index.lock").write_text("")
+    (tmp_path / "f").write_text("x")
+
+    with pytest.raises(AssertionError) as exc:
+        _git(tmp_path, "add", "-A")
+
+    message = str(exc.value)
+    assert "git add -A exited 128" in message
+    assert "index.lock" in message
+    assert "File exists" in message
+
+
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A throwaway repo with a contract, a committed (stale) lock, and stale
