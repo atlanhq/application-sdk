@@ -210,6 +210,10 @@ RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
         "an inline job that ran the vendored connector_review_gate.py; called"
         " no SDK reusable"
     ),
+    "dep-cooldown.yml": (
+        "never bootstrap-managed; called atlanhq/.github's"
+        " reusable-dep-cooldown.yml, not an SDK reusable"
+    ),
 }
 
 
