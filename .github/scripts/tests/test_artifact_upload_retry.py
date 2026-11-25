@@ -49,7 +49,7 @@ OUTCOME_GUARD_RE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outcome\s*==\s*'failure
 # other uploads added to the same file later.
 EXEMPT = {
     (
-        "workflows/daily-security-scan.yml",
+        "workflows/hourly-security-scan.yml",
         "security-scan-raw-results",
     ): "scheduled scan; nothing gates on it and there is no merge queue to eject",
     (

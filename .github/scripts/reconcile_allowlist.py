@@ -52,7 +52,7 @@ Environment:
                          the Authorized Approver Check on `.security/`). Falls
                          back to GH_TOKEN when unset (local runs).
     LINEAR_API_KEY       to close / update tickets (optional; skipped if unset)
-    SCAN_WORKFLOW        default 'daily-security-scan.yml'
+    SCAN_WORKFLOW        default 'hourly-security-scan.yml'
     RUN_DATE             ISO date, for branch/commit naming
 
 Optional:
@@ -81,7 +81,7 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 ALLOWLIST_PATH = ".security/base-allowlist.json"
 TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
-DEFAULT_WORKFLOW = "daily-security-scan.yml"
+DEFAULT_WORKFLOW = "hourly-security-scan.yml"
 # Act on the first clean scan by default; both the allowlist removal PR and the
 # ticket close are gated on this same window. Raise via DEBOUNCE_SCANS to require
 # N consecutive clean scans (debounce against transient scanner drops).
