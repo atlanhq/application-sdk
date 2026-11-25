@@ -11,6 +11,7 @@ Public API:
     SecretMap / BindingSecretRefs                      → public shapes for the above
     normalize_key(key)                                 → str  (path normalisation)
     upload_file(key, local_path)      → str  (streaming upload, returns sha256)
+    upload_bytes(key, data)           → str  (the byte-put primitive, returns sha256)
     download_file(key, local_path)    → str | None  (streaming download)
     download_file_chunked(key, local_path) → str | None  (parallel range GETs for
         large files; resumable + version-pinned — prefer for GB-class objects)
@@ -31,8 +32,33 @@ wrote and, when a sidecar exists, that they hash to what the producer recorded.
 A mismatch raises ``StorageIntegrityError`` (non-retryable) instead of letting a
 truncated artifact reach a parser. See ``application_sdk.storage.integrity``.
 
-For directory upload/download, use App.upload / App.download (framework tasks)
-or call application_sdk.storage.transfer.upload / .download directly.
+Which entry point to use
+------------------------
+Pick by what you hold and where it goes. Every row below the ``App`` ones ends
+in the same two primitives — ``upload_file`` / ``upload_bytes`` for writes,
+``download_file`` / ``download_file_chunked`` for reads — so integrity
+(FND-306) is the same whichever you call.
+
+=====================================  ============================================
+You have / want                        Use
+=====================================  ============================================
+Bytes in memory → one key              ``upload_bytes(key, data)``
+A JSON value → one key                 ``put_json(key, obj)``
+A local file → one key                 ``upload_file(key, local_path)``
+One key → a local file                 ``download_file(key, local_path)``
+One GB-class key → a local file        ``download_file_chunked(key, local_path)``
+A directory, from a ``@task``          ``App.upload`` / ``App.download`` (adds
+                                       validation and ``FileReference`` tagging)
+A ``FileReference``, outside ``App``   ``transfer.upload`` / ``transfer.download``
+A state directory mirrored as-is       ``upload_prefix`` / ``download_prefix``
+(RocksDB, DuckDB, a parquet dataset)   (no local markers, no manifest)
+A customer's own bucket                ``CloudStore`` (its ``upload`` /
+                                       ``upload_bytes`` / ``upload_dir`` /
+                                       ``download`` run on the primitives and
+                                       engines above, with sidecars off)
+=====================================  ============================================
+
+``upload_file_from_bytes`` is a deprecated alias of ``upload_bytes``.
 
 When ``store`` is omitted all I/O functions resolve the store from the current
 infrastructure context (set via ``set_infrastructure()`` in ``main.py``).
@@ -93,6 +119,7 @@ from application_sdk.storage.ops import (
     get_file_meta,
     normalize_key,
     put_json,
+    upload_bytes,
     upload_file,
 )
 from application_sdk.storage.preflight import (
@@ -114,6 +141,7 @@ __all__ = [
     "BoundStore",
     # Core ops
     "upload_file",
+    "upload_bytes",
     "upload_file_from_bytes",
     "upload_prefix",
     "download_file",

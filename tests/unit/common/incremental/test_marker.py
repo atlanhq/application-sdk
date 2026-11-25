@@ -196,7 +196,7 @@ class TestPersistMarkerToStorage:
     async def test_s3_upload_failure_raises(self):
         """S3 upload failure propagates the exception."""
         with patch(
-            "application_sdk.common.incremental.marker.upload_file_from_bytes",
+            "application_sdk.common.incremental.marker.upload_bytes",
             new_callable=AsyncMock,
             side_effect=Exception("S3 unavailable"),
         ):

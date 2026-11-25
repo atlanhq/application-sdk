@@ -615,6 +615,15 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "upload_file_from_bytes is deprecated; use application_sdk.storage.batch.upload_file_from_bytes \u2014 it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file_from_bytes"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "StorageError is deprecated; use application_sdk.storage.errors.StorageError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_reader",
@@ -2260,9 +2269,18 @@
       "symbol": "internal_server_error_handler"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "upload_file_from_bytes is deprecated; use application_sdk.storage.batch.upload_file_from_bytes \u2014 it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.utils",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file_from_bytes"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's POST /workflows/v1/file route instead, or application_sdk.storage.batch.upload_file_from_bytes to write the bytes yourself \u2014 will be removed in v4.0.",
+      "message": "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's POST /workflows/v1/file route instead, or application_sdk.storage.upload_bytes to write the bytes yourself \u2014 will be removed in v4.0.",
       "migration_target": true,
       "module": "application_sdk.server.fastapi.utils",
       "removal_version": "4.0",
@@ -2276,6 +2294,33 @@
       "module": "application_sdk.server.health",
       "removal_version": "4.0.0",
       "symbol": "run_health_server"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.storage.batch.upload_file_from_bytes is deprecated; use application_sdk.storage.upload_bytes, which writes the bytes directly instead of staging them through a temp file \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.batch",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file_from_bytes"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "prune_internal_dirs is deprecated; use application_sdk.common._listing.prune_internal_dirs \u2014 it was only ever re-exported here by an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.cloud",
+      "removal_version": "4.0.0",
+      "symbol": "prune_internal_dirs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "run_in_thread is deprecated; use application_sdk._runtime.offload.run_in_thread \u2014 it was only ever re-exported here by an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.cloud",
+      "removal_version": "4.0.0",
+      "symbol": "run_in_thread"
     },
     {
       "kind": "constant",

@@ -11,6 +11,7 @@ import pytest
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import GCSStore, LocalStore, MemoryStore
 
+from application_sdk.storage import batch as _batch_module
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -1067,6 +1068,12 @@ class TestCloudStorePutAttributes:
         with (
             patch("application_sdk.storage.cloud._create_s3_store") as mock_create,
             patch("obstore.put_async", new_callable=AsyncMock) as mock_put,
+            # The post-write readback HEAD the shared primitive runs.
+            patch(
+                "obstore.head_async",
+                new_callable=AsyncMock,
+                return_value={"size": 5, "e_tag": None},
+            ),
         ):
             mock_store = MagicMock()
             put_attrs = {"Storage-Class": "STANDARD_IA"}
@@ -1775,13 +1782,14 @@ class TestFirstFailureStopsSiblings:
         probe = SiblingProbe(siblings=2)
         order = {"p/a.txt": 0, "p/c.txt": 1}
 
-        async def _download(key, local_path, **kwargs):
+        async def _download(key, local_path, *args, **kwargs):
             if key == "p/bad.txt":
                 await probe.fail(StorageError("bad object"))
             await probe.sibling(order[key])
 
+        # CloudStore's prefix download runs on batch's engine.
         with (
-            patch.object(_cloud_module, "download_file_chunked", _download),
+            patch.object(_batch_module, "download_file_chunked", _download),
             pytest.raises(StorageError, match="bad object"),
         ):
             await store.download(prefix="p", output_dir=tmp_path / "out")
@@ -1797,13 +1805,14 @@ class TestFirstFailureStopsSiblings:
         probe = SiblingProbe(siblings=2)
         order = {"a.txt": 0, "c.txt": 1}
 
-        async def _upload(self, path, key):
+        async def _upload(key, path, *args, **kwargs):
             if key == "bad.txt":
                 await probe.fail(ValueError("not a storage failure"))
             await probe.sibling(order[key])
 
+        # upload_dir runs on batch's tree engine.
         with (
-            patch.object(CloudStore, "upload", _upload),
+            patch.object(_batch_module, "upload_file", _upload),
             pytest.raises(ValueError, match="not a storage failure") as exc_info,
         ):
             await store.upload_dir(src)
@@ -1811,3 +1820,64 @@ class TestFirstFailureStopsSiblings:
         # A lone failure keeps the bare shape asyncio.gather gave callers.
         assert not isinstance(exc_info.value, BaseExceptionGroup)
         await probe.assert_no_sibling_outlived_the_raise()
+
+
+# ---------------------------------------------------------------------------
+# CloudStore runs on the shared primitives and engines (FND-4684)
+# ---------------------------------------------------------------------------
+
+
+class TestCloudStoreDelegatesToBatch:
+    async def test_upload_dir_ships_local_sha256_files_and_writes_no_sidecars(
+        self, tmp_path
+    ):
+        """A customer's ``.sha256`` file is data, and no SDK sidecar is added."""
+        mem = MemoryStore()
+        store = CloudStore(mem, provider="memory")
+        src = tmp_path / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "a.json").write_bytes(b"{}")
+        (src / "sub" / "release.tar.gz.sha256").write_bytes(b"abc")
+
+        keys = await store.upload_dir(src, "out")
+
+        assert sorted(keys) == ["out/a.json", "out/sub/release.tar.gz.sha256"]
+        assert await store.list("out") == sorted(keys)
+
+    async def test_prefix_download_keeps_sha256_keys(self, tmp_path):
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/data.bin", b"d")
+        await store.upload_bytes("p/data.bin.sha256", b"customer digest")
+
+        paths = await store.download(prefix="p", output_dir=tmp_path)
+
+        assert sorted(p.name for p in paths) == ["data.bin", "data.bin.sha256"]
+        assert (tmp_path / "data.bin.sha256").read_bytes() == b"customer digest"
+
+    async def test_prefix_download_403_names_the_failing_key(
+        self, monkeypatch, tmp_path
+    ):
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/a.json", b"{}")
+
+        async def _denied(key, *_a, **_k):
+            raise StorageError(
+                "denied", key=key, cause=PermissionDeniedError(_GCS_VPC_SC_403)
+            )
+
+        monkeypatch.setattr(batch_module, "download_file_chunked", _denied)
+        with pytest.raises(StoragePermissionError) as ei:
+            await store.download(prefix="p", output_dir=tmp_path)
+        assert ei.value.key == "p/a.json"
+
+    async def test_upload_bytes_readback_catches_a_dropped_object(self):
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with (
+            patch("obstore.put_async", AsyncMock(return_value=None)),
+            pytest.raises(StorageError, match="absent from the store"),
+        ):
+            await store.upload_bytes("out/x.bin", b"data")

@@ -17,9 +17,11 @@ reserves the bytes it will hold in memory before it holds them:
 * a multipart upload in ``ops._upload_once``, for its part buffers, while its
   writer is open.
 
-Whole-object byte reads and writes do not reserve — ``CloudStore``, including
-``CloudStore.get_bytes``, and the small-object ``_get_bytes`` / ``_put``
-helpers hold what they move outside the budget.
+Whole-object byte reads and writes do not reserve — ``ops.upload_bytes``,
+``CloudStore.get_bytes`` / ``upload_bytes``, and the small-object
+``_get_bytes`` / ``_put`` helpers hold what they move outside the budget.
+``CloudStore``'s file and prefix transfers run on the primitives above and
+reserve like any other.
 
 No holder ever asks for a second reservation, so the budget cannot deadlock
 against itself. A request larger than the whole budget is clamped to it: it

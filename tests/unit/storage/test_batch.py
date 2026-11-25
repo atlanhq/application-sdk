@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import hashlib
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -21,7 +21,6 @@ from application_sdk.storage.batch import (
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.factory import create_local_store
 from application_sdk.storage.ops import _get_bytes, _put
-from tests.unit.private_stdlib import private_stdlib
 
 
 def _list_with_phantom(phantom: str):
@@ -787,41 +786,34 @@ class TestUploadPrefix:
 
 
 class TestUploadFileFromBytes:
-    async def test_uploads_bytes_via_temp_file(self, store) -> None:
-        """BLDX-1129 anchor: exercises function-local `import tempfile`."""
-        sha = await upload_file_from_bytes(
-            "k/blob.bin", b"hello bytes", store, normalize=False
-        )
-        # SHA-256 hex string
-        assert len(sha) == 64
-        assert all(c in "0123456789abcdef" for c in sha)
-        # Roundtrip readable
-        assert await _get_bytes("k/blob.bin", store, normalize=False) == b"hello bytes"
+    """Deprecated alias: warns, and delegates to ``ops.upload_bytes``."""
 
-    async def test_cleanup_failure_swallowed(self, store) -> None:
-        """If os.unlink raises OSError, the upload still succeeds."""
-        original_unlink = os.unlink
-
-        def _flaky_unlink(path):
-            # Raise once, then call through so test cleanup still happens
-            _flaky_unlink.calls += 1
-            if _flaky_unlink.calls == 1:
-                raise OSError("temp file already gone")
-            return original_unlink(path)
-
-        _flaky_unlink.calls = 0
-        with (
-            private_stdlib("application_sdk.storage.batch", "os") as local_os,
-            patch.object(local_os, "unlink", _flaky_unlink),
-        ):
+    async def test_warns_and_round_trips(self, store) -> None:
+        with pytest.warns(DeprecationWarning, match="upload_bytes"):
             sha = await upload_file_from_bytes(
-                "k/quiet.bin", b"data", store, normalize=False
+                "k/blob.bin", b"hello bytes", store, normalize=False
             )
-        assert len(sha) == 64
-        assert _flaky_unlink.calls == 1
+        assert sha == hashlib.sha256(b"hello bytes").hexdigest()
+        assert await _get_bytes("k/blob.bin", store, normalize=False) == b"hello bytes"
+        # Same sidecar the file upload wrote.
+        assert await _get_bytes("k/blob.bin.sha256", store, normalize=False) == (
+            sha.encode()
+        )
+
+    async def test_no_temp_file(self, store) -> None:
+        """The bytes are written directly; nothing is staged on local disk."""
+        with (
+            patch("tempfile.NamedTemporaryFile") as tmp,
+            pytest.warns(DeprecationWarning),
+        ):
+            await upload_file_from_bytes("k/quiet.bin", b"data", store, normalize=False)
+        tmp.assert_not_called()
 
     async def test_empty_bytes(self, store) -> None:
-        sha = await upload_file_from_bytes("k/zero.bin", b"", store, normalize=False)
+        with pytest.warns(DeprecationWarning):
+            sha = await upload_file_from_bytes(
+                "k/zero.bin", b"", store, normalize=False
+            )
         assert len(sha) == 64
         assert await _get_bytes("k/zero.bin", store, normalize=False) == b""
 

@@ -7,7 +7,7 @@ Batch upload/download
 ---------------------
 * ``upload_prefix(local_dir, prefix)``     — upload a directory tree
 * ``download_prefix(prefix, local_dir)``   — download a prefix tree
-* ``upload_file_from_bytes(key, content)``  — upload bytes via temp file
+* ``upload_file_from_bytes(key, content)``  — deprecated; use ``ops.upload_bytes``
 * ``delete_prefix(prefix)``                — delete all objects under prefix
 * ``list_keys(prefix)``                    — list object keys under prefix
 
@@ -20,6 +20,10 @@ etag sync index, strip/full layouts and suffix filter. The engines' value —
 markers, manifest digests, the per-path materialize lock — is what a mirror
 must not have. Both already share the transfer primitives (``upload_file`` /
 ``download_file_chunked``) and the sidecar verification.
+
+``CloudStore.upload_dir`` and ``CloudStore.download(prefix=...)`` run on the
+same engines (``_upload_tree`` / ``_download_listed``) with the sidecar
+protocol switched off, since a customer bucket does not take part in it.
 
 Param order convention: source first, destination second.
 ``upload_prefix(local_dir, prefix)`` and ``download_prefix(prefix, local_dir)``
@@ -38,6 +42,7 @@ from typing import TYPE_CHECKING
 
 import obstore
 
+from application_sdk._deprecation import deprecated
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import (
     SYNC_INDEX_DIRNAME,
@@ -66,6 +71,7 @@ from application_sdk.storage.ops import (
     _storage_error_for,
     download_file_chunked,
     normalize_key,
+    upload_bytes,
     upload_file,
 )
 from application_sdk.storage.ops import delete as _delete_object
@@ -588,6 +594,7 @@ async def _download_listed(
     strip_prefix: bool,
     max_concurrency: int,
     sync: bool,
+    unwrap_lone_failure: bool = False,
 ) -> list[str]:
     """Download an already-listed set of *objects* under *prefix*.
 
@@ -596,6 +603,11 @@ async def _download_listed(
     current-state manifest names, not every key a failed commit left beside
     them — with the same layout, integrity and *sync* semantics. With *sync*
     the subset is the mirror: local files outside it are pruned.
+
+    ``CloudStore`` is the other caller: it lists a customer bucket itself (its
+    listing keeps ``.sha256`` keys, which are customer data there) and passes
+    every object with ``has_sidecar=False``. *unwrap_lone_failure* is passed
+    to :func:`_run_bounded` for it.
     """
     local = Path(local_dir)
     # Strip against the *normalised* listing prefix rather than the caller's raw
@@ -652,7 +664,11 @@ async def _download_listed(
             sidecar_present=obj.has_sidecar,
         )
 
-    await _run_bounded([_download_one(obj, d) for obj, d in todo], max_concurrency)
+    await _run_bounded(
+        [_download_one(obj, d) for obj, d in todo],
+        max_concurrency,
+        unwrap_lone_failure=unwrap_lone_failure,
+    )
 
     if sync:
         await _run_drained(
@@ -861,7 +877,7 @@ def _prune_unlisted(root: Path, keep: set[str], suffix: str) -> None:
 async def upload_prefix(
     local_dir: str | Path,
     prefix: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
     retain_local_copy: bool = True,
@@ -924,39 +940,13 @@ async def upload_prefix(
             "would delete every key in the store that this call did not upload."
         )
 
-    def _collect_files() -> list[tuple[str, Path]]:
-        collected: list[tuple[str, Path]] = []
-        for root, dirs, filenames in os.walk(local, followlinks=False):
-            prune_internal_dirs(dirs)
-            for fname in filenames:
-                file_path = Path(root) / fname
-                if file_path.is_symlink():
-                    continue
-                # Local integrity markers must not overwrite store-side digests.
-                if is_sidecar_key(fname):
-                    continue
-                rel = file_path.relative_to(local)
-                # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
-                rel_posix = PurePosixPath(*rel.parts)
-                key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
-                collected.append((key, file_path))
-        return collected
-
-    # Offloaded: the walk is one stat per entry over a whole run's output
-    # directory, which on a large extraction is thousands of syscalls with no
-    # await between them. Inline it holds the event loop — and the enclosing
-    # activity's auto-heartbeat — for the entire traversal (ADR-0010).
-    files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
-
-    uploaded: list[str] = []
-
-    async def _upload_one(key: str, path: Path) -> None:
-        await upload_file(
-            key, path, store, normalize=False, retain_local_copy=retain_local_copy
-        )
-        uploaded.append(key)
-
-    await _run_bounded([_upload_one(k, p) for k, p in files], max_concurrency)
+    uploaded = await _upload_tree(
+        local,
+        prefix,
+        store,
+        retain_local_copy=retain_local_copy,
+        max_concurrency=max_concurrency,
+    )
 
     if prune:
         keep = set(uploaded) | {sidecar_key(k) for k in uploaded}
@@ -971,6 +961,78 @@ async def upload_prefix(
     return uploaded
 
 
+async def _upload_tree(
+    local: Path,
+    prefix: str,
+    store: BoundStore | ObjectStore | None,
+    *,
+    retain_local_copy: bool = True,
+    max_concurrency: int = 4,
+    sidecars: bool = True,
+    unwrap_lone_failure: bool = False,
+) -> list[str]:
+    """Upload every regular file under *local* to *prefix*, key used as given.
+
+    The engine under :func:`upload_prefix` and ``CloudStore.upload_dir``.
+    Symlinks are skipped and SDK working directories are not descended into.
+
+    *sidecars* selects the SDK integrity protocol: when ``True`` each upload
+    records a ``{key}.sha256`` sidecar and local ``.sha256`` files are skipped,
+    so a stale local digest cannot replace the one the upload writes. A
+    customer bucket (``CloudStore``) passes ``False``: no sidecars are written,
+    and a local ``.sha256`` file is ordinary data that uploads like any other.
+    *unwrap_lone_failure* is passed to :func:`_run_bounded`.
+    """
+
+    def _collect_files() -> list[tuple[str, Path]]:
+        collected: list[tuple[str, Path]] = []
+        for root, dirs, filenames in os.walk(local, followlinks=False):
+            prune_internal_dirs(dirs)
+            for fname in filenames:
+                file_path = Path(root) / fname
+                if file_path.is_symlink():
+                    continue
+                # Local integrity markers must not overwrite store-side digests.
+                if sidecars and is_sidecar_key(fname):
+                    continue
+                rel = file_path.relative_to(local)
+                # Use PurePosixPath to ensure forward slashes in S3 keys (Windows uses backslash)
+                rel_posix = PurePosixPath(*rel.parts)
+                key = f"{prefix}/{rel_posix}" if prefix else str(rel_posix)
+                collected.append((key, file_path))
+        return collected
+
+    # Offloaded: the walk is one stat per entry over a whole run's output
+    # directory, which on a large extraction is thousands of syscalls with no
+    # await between them. Inline it holds the event loop — and the enclosing
+    # activity's auto-heartbeat — for the entire traversal (ADR-0010).
+    files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
+
+    async def _upload_one(key: str, path: Path) -> str:
+        await upload_file(
+            key,
+            path,
+            store,
+            normalize=False,
+            retain_local_copy=retain_local_copy,
+            compute_hash=sidecars,
+        )
+        return key
+
+    # Generator: the bounded pool pulls lazily, so a large tree does not build
+    # every coroutine up front.
+    return await _run_bounded(
+        (_upload_one(k, p) for k, p in files),
+        max_concurrency,
+        unwrap_lone_failure=unwrap_lone_failure,
+    )
+
+
+@deprecated(
+    "application_sdk.storage.batch.upload_file_from_bytes is deprecated; use "
+    "application_sdk.storage.upload_bytes, which writes the bytes directly "
+    "instead of staging them through a temp file — will be removed in v4.0.0."
+)
 async def upload_file_from_bytes(
     key: str,
     content: bytes,
@@ -980,7 +1042,9 @@ async def upload_file_from_bytes(
 ) -> str:
     """Upload bytes directly to *key* in the store.
 
-    Writes content to a temporary file, uploads it, then cleans up.
+    .. deprecated:: 3.60
+        Use :func:`application_sdk.storage.upload_bytes`. Will be removed in
+        v4.0.0.
 
     Args:
         key: Destination object key.
@@ -991,20 +1055,7 @@ async def upload_file_from_bytes(
     Returns:
         Hex-encoded SHA-256 digest of the uploaded content.
     """
-    import tempfile  # noqa: PLC0415 — stdlib tempfile; lazy use only
-
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        sha256 = await upload_file(key, tmp_path, store, normalize=normalize)
-        # compute_hash defaults to True, so upload_file always returns the digest here.
-        assert sha256 is not None
-        return sha256
-    finally:
-        try:
-            os.unlink(tmp_path)
-        # conformance: ignore[E002] best-effort temp-file cleanup; not fatal
-        except OSError:
-            pass
+    sha256 = await upload_bytes(key, content, store, normalize=normalize)
+    # compute_hash defaults to True, so upload_bytes always returns the digest.
+    assert sha256 is not None
+    return sha256

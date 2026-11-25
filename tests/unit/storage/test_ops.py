@@ -31,6 +31,7 @@ from application_sdk.storage.ops import (
     get_file_size,
     normalize_key,
     put_json,
+    upload_bytes,
     upload_file,
 )
 from tests.unit.private_stdlib import private_stdlib
@@ -368,6 +369,66 @@ class TestDownloadFile:
         dest = tmp_path / "out.bin"
         await download_file("perm.bin", dest, store)
         assert dest.stat().st_mode & 0o077 == 0
+
+
+class TestUploadBytes:
+    """The byte-put primitive: same write-side integrity as upload_file."""
+
+    async def test_writes_bytes_and_sidecar_returns_digest(self, store) -> None:
+        sha = await upload_bytes("out/blob.bin", b"payload", store)
+        assert sha == hashlib.sha256(b"payload").hexdigest()
+        assert await _get_bytes("out/blob.bin", store) == b"payload"
+        assert await _get_bytes("out/blob.bin.sha256", store) == sha.encode()
+
+    async def test_normalises_staging_path_by_default(self, store) -> None:
+        staging = os.path.join(constants.TEMPORARY_PATH, "out/staged.bin")
+        await upload_bytes(staging, b"x", store)
+        assert await _get_bytes("out/staged.bin", store, normalize=False) == b"x"
+
+    async def test_compute_hash_false_writes_no_sidecar(self, store) -> None:
+        assert await upload_bytes("ext/x.bin", b"x", store, compute_hash=False) is None
+        assert await _get_bytes("ext/x.bin", store) == b"x"
+        assert await _get_bytes("ext/x.bin.sha256", store) is None
+
+    async def test_empty_payload(self, store) -> None:
+        sha = await upload_bytes("out/zero.bin", b"", store)
+        assert sha == hashlib.sha256(b"").hexdigest()
+        assert await _get_bytes("out/zero.bin", store) == b""
+
+    async def test_object_absent_after_put_raises(self, store) -> None:
+        """A store that drops the object is caught by the readback HEAD."""
+        with patch.object(obstore, "put_async", AsyncMock(return_value=None)):
+            with pytest.raises(StorageError, match="absent from the store"):
+                await upload_bytes("out/dropped.bin", b"data", store, verify=True)
+        assert await _get_bytes("out/dropped.bin.sha256", store) is None
+
+    async def test_bound_store_put_attributes_reach_the_put(self, store) -> None:
+        from application_sdk.storage.ops import BoundStore
+
+        real_put = obstore.put_async
+        seen: list[object] = []
+
+        async def _put_spy(st, key, data, **kwargs):
+            seen.append(kwargs.get("attributes"))
+            return await real_put(st, key, data)
+
+        attrs = {"Storage-Class": "STANDARD_IA"}
+        with patch.object(obstore, "put_async", _put_spy):
+            await upload_bytes(
+                "k.bin", b"v", BoundStore(store, attrs), compute_hash=False
+            )
+        assert seen == [attrs]
+
+    async def test_large_payload_hash_is_offloaded(self, store) -> None:
+        from application_sdk.storage import ops as ops_module
+
+        data = b"z" * (ops_module._INLINE_HASH_MAX_BYTES + 1)
+        with patch.object(
+            ops_module, "run_in_thread", wraps=ops_module.run_in_thread
+        ) as offload:
+            sha = await upload_bytes("big.bin", data, store)
+        assert sha == hashlib.sha256(data).hexdigest()
+        assert any(c.args[0] is ops_module._sha256_hex for c in offload.call_args_list)
 
 
 class TestPutJson:

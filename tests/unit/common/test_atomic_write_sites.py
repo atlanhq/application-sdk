@@ -173,7 +173,7 @@ class TestMarkerWrite:
 
         monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path))
         upload = AsyncMock()
-        monkeypatch.setattr(marker, "upload_file_from_bytes", upload)
+        monkeypatch.setattr(marker, "upload_bytes", upload)
 
         result = await marker.persist_marker_to_storage(
             connection_qualified_name="default/oracle/1696528289",

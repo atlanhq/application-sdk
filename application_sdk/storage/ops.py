@@ -17,12 +17,15 @@ avoid the constant import overhead, or for tests that need exact key control).
 
 Public helpers (small payloads)
 --------------------------------
+* ``upload_bytes(key, data)`` — the byte-put primitive: write bytes with the
+  same integrity checks and ``.sha256`` sidecar as ``upload_file``
 * ``put_json(key, obj)`` — serialise to JSON and write (configs, metadata)
 * ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
 
 Internal helpers
 ----------------
-* ``_put(key, data)``    — write raw bytes (use ``put_json`` for JSON)
+* ``_put(key, data)``    — the raw PUT under ``upload_bytes``, ``put_json`` and
+  the sidecar writes: no readback, no sidecar
 
 Streaming API (large files)
 ----------------------------
@@ -1010,7 +1013,7 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 
 async def _finalize_upload_integrity(
     key: str,
-    path: Path,
+    path: Path | None,
     store: BoundStore | ObjectStore | None,
     resolved: ObjectStore,
     *,
@@ -1035,7 +1038,8 @@ async def _finalize_upload_integrity(
 
     Args:
         key: Normalised destination key, as written.
-        path: Local source file.
+        path: Local source file, or ``None`` for an in-memory payload
+            (:func:`upload_bytes`), which has no file to shrink under it.
         store: Caller's store argument — passed to the sidecar write so a
             ``BoundStore``'s put attributes still apply.
         resolved: Underlying store, for the readback HEAD.
@@ -1051,9 +1055,10 @@ async def _finalize_upload_integrity(
             that was sent.
     """
     if integrity.verification_enabled(verify):
-        integrity.check_local_file_stable(
-            key, path, declared_size=declared_size, bytes_read=bytes_sent
-        )
+        if path is not None:
+            integrity.check_local_file_stable(
+                key, path, declared_size=declared_size, bytes_read=bytes_sent
+            )
         # Confirmed: a gateway instance without routes answers this HEAD with
         # a bodiless 404, which would fail an upload that landed.
         remote_meta = await _get_file_meta_confirmed(key, resolved, normalize=False)
@@ -1064,10 +1069,11 @@ async def _finalize_upload_integrity(
             # 0 found — so absence is checked separately from length.
             from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
+            source = path if path is not None else "memory"
             raise StorageError(
                 f"Upload of '{key}' reported success but the object is absent "
                 f"from the store afterwards ({bytes_sent} bytes sent from "
-                f"{path}). Some S3-style backends silently drop empty objects; "
+                f"{source}). Some S3-style backends silently drop empty objects; "
                 f"others need read-your-writes consistency that this store "
                 f"does not offer.",
                 key=key,
@@ -1811,6 +1817,91 @@ async def _put(
         raise _storage_error_for(
             exc, key, f"Failed to put key '{key}'", resolved
         ) from exc
+
+
+#: Largest payload :func:`upload_bytes` hashes on the event loop.
+_INLINE_HASH_MAX_BYTES = 1024 * 1024
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+async def upload_bytes(
+    key: str,
+    data: bytes,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+    compute_hash: bool = True,
+    verify: bool | None = None,
+    write_sidecar: bool | None = None,
+) -> str | None:
+    """Write *data* to *key* — the SDK's one byte-put primitive.
+
+    The in-memory counterpart of :func:`upload_file`, with the same write-side
+    integrity (FND-306): after the PUT, a HEAD confirms the store holds exactly
+    ``len(data)`` bytes, and the SHA-256 of *data* is recorded in a
+    ``{key}.sha256`` sidecar. Nothing is staged on local disk.
+
+    ``batch.upload_file_from_bytes`` (deprecated) and ``CloudStore.upload_bytes``
+    both delegate here. *data* is held in memory for the whole call, so use
+    :func:`upload_file` for anything already on disk or too large to buffer.
+
+    Args:
+        key: Destination object key.  Normalised by default.
+        data: Bytes to write.
+        store: Target store, or ``None`` to use the infrastructure store.  A
+            ``BoundStore``'s put attributes apply to the write.
+        normalize: When ``True`` (default), normalise *key* before use.
+        compute_hash: When ``True`` (default), hash *data* and return the
+            digest.  Pass ``False`` for external stores (e.g. ``CloudStore``)
+            that do not take part in the sidecar protocol.  Implies
+            ``write_sidecar=False``.
+        verify: Run the post-write size check.  ``None`` (default) follows
+            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.
+        write_sidecar: Write the ``{key}.sha256`` sidecar.  ``None`` (default)
+            follows ``ATLAN_STORAGE_WRITE_SIDECARS``.
+
+    Returns:
+        Hex-encoded SHA-256 digest of *data* if *compute_hash* is ``True``,
+        else ``None``.
+
+    Raises:
+        StorageError: If the write fails, or the object the store reports
+            afterwards is absent or not ``len(data)`` bytes.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+    if not data:
+        logger.warning(
+            "Uploading zero-byte object to key '%s' — "
+            "some S3-style backends silently drop empty objects.",
+            key,
+        )
+    await _put(key, data, store, normalize=False)
+    digest: str | None = None
+    if compute_hash:
+        # A multi-MB hash inline would hold the event loop, and with it the
+        # activity heartbeat (ADR-0010); a marker-sized one is not worth a hop.
+        if len(data) > _INLINE_HASH_MAX_BYTES:
+            digest = await run_in_thread(_sha256_hex, data)
+        else:
+            digest = _sha256_hex(data)
+    await _finalize_upload_integrity(
+        key,
+        None,
+        store,
+        resolved,
+        declared_size=len(data),
+        bytes_sent=len(data),
+        digest=digest,
+        verify=verify,
+        write_sidecar=write_sidecar,
+    )
+    return digest
 
 
 async def put_json(

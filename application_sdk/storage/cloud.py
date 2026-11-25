@@ -60,9 +60,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import quote
 
 import httpx
@@ -71,9 +71,8 @@ import orjson
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import ObjectStore
 
-from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._listing import prune_internal_dirs
-from application_sdk.storage._concurrency import _run_bounded
+from application_sdk import _deprecation
+from application_sdk.storage.batch import DataObject, _download_listed, _upload_tree
 from application_sdk.storage.errors import (
     StorageAuthError,
     StorageConfigError,
@@ -87,10 +86,30 @@ from application_sdk.storage.ops import (
     BoundStore,
     _list_items,
     _obstore_http_evidence,
-    _safe_join_under,
     _store_target,
     download_file_chunked,
+    upload_bytes,
     upload_file,
+)
+
+_T = TypeVar("_T")
+
+
+#: name -> (replacement, why). Importable from here only as a side effect of
+#: an import that is gone; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "prune_internal_dirs": (
+        "application_sdk.common._listing.prune_internal_dirs",
+        "it was only ever re-exported here by an import",
+    ),
+    "run_in_thread": (
+        "application_sdk._runtime.offload.run_in_thread",
+        "it was only ever re-exported here by an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
 )
 
 # Lazy import: direct get_logger() at module load would create a circular
@@ -389,49 +408,49 @@ class CloudStore:
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
             )
 
-        async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
-            # No `list_prefix and` guard here: when list_prefix == "" (a
-            # whole-bucket download), startswith("") is always True, so the
-            # full key is kept instead of falling through to the basename-only
-            # branch below, which would clobber same-named files from
-            # different subdirectories onto one path.
-            rel = (
-                obj_key[len(list_prefix) :]
-                if obj_key.startswith(list_prefix)
-                else Path(obj_key).name
-            )
-            # Reject keys whose resolved path escapes output (e.g. via ".." segments).
-            local_path = _safe_join_under(output, rel)
-            # Pass the listing's size + etag so large objects chunk (with
-            # version-pinned range GETs) and small ones stream — no per-file
-            # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-            try:
-                await download_file_chunked(
-                    obj_key,
-                    local_path,
-                    store=self._store,
-                    normalize=False,
-                    file_size=size,
-                    etag=etag,
-                    # External bucket: the SDK never wrote sidecars here, so
-                    # skip the per-file probe that could only ever miss.
-                    sidecar_present=False,
-                )
-            except StorageError as exc:
-                self._raise_if_denied(exc, "reading", obj_key)
-                raise
-            return local_path
-
+        # The listing is CloudStore's own (multi-suffix, and ``.sha256`` keys
+        # are customer data here); the download is batch's engine, with every
+        # object marked sidecar-less. Prefix stripped: the tree under the
+        # prefix lands directly in *output*, and a whole-bucket download
+        # (list_prefix "") keeps each full key rather than a basename that
+        # same-named files in different subdirectories would clobber.
+        objects = [
+            DataObject(key=k, size=n, etag=e, has_sidecar=False) for k, n, e in items
+        ]
         # The first failure cancels the remaining downloads and drains them
-        # before it propagates: with asyncio.gather they kept writing into
-        # *output* after the caller had seen the error and moved on.
-        downloaded = await _run_bounded(
-            (_dl(k, s, e) for k, s, e in items),
-            max_concurrency,
-            unwrap_lone_failure=True,
+        # before it propagates, so nothing writes into *output* afterwards.
+        downloaded = await self._mapping_denied(
+            "reading",
+            list_prefix,
+            _download_listed(
+                objects,
+                list_prefix,
+                output,
+                self._store,
+                suffix="",
+                normalize=False,
+                strip_prefix=True,
+                max_concurrency=max_concurrency,
+                sync=False,
+                unwrap_lone_failure=True,
+            ),
         )
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
-        return downloaded
+        return [Path(p) for p in downloaded]
+
+    async def _mapping_denied(
+        self, action: str, key: str, op: Coroutine[Any, Any, _T]
+    ) -> _T:
+        """Await *op*, turning a 401/403 ``StorageError`` into a typed USER error.
+
+        The key named is the failing object's when the error carries one, else
+        *key*.
+        """
+        try:
+            return await op
+        except StorageError as exc:
+            self._raise_if_denied(exc, action, exc.key or key)
+            raise
 
     def _raise_if_denied(self, exc: Exception, action: str, key: str) -> None:
         """Raise a typed USER error from *exc* when it is a 401/403.
@@ -627,20 +646,35 @@ class CloudStore:
     async def upload_bytes(self, key: str, data: bytes) -> int:
         """Upload raw bytes to the cloud store.
 
+        Routes through the shared
+        :func:`~application_sdk.storage.ops.upload_bytes` primitive, so the
+        post-write HEAD that :meth:`upload` runs also confirms the bytes landed
+        here. The key is used exactly as supplied and no ``.sha256`` sidecar is
+        written.
+
         Args:
             key: Destination object key.
             data: Bytes to upload.
 
         Returns:
             Number of bytes uploaded.
+
+        Raises:
+            StorageError: If the write fails, or the object is absent or the
+                wrong size afterwards.
         """
         await self._ensure_region()
-        try:
-            await obs.put_async(self._store, key, data, attributes=self._put_attributes)
-        # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
-        except Exception as exc:
-            self._raise_if_denied(exc, "writing", key)
-            raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
+        await self._mapping_denied(
+            "writing",
+            key,
+            upload_bytes(
+                key,
+                data,
+                BoundStore(self._store, self._put_attributes),
+                normalize=False,
+                compute_hash=False,
+            ),
+        )
         return len(data)
 
     async def upload_dir(
@@ -652,11 +686,11 @@ class CloudStore:
     ) -> list[str]:
         """Upload all files in a local directory to the cloud store.
 
-        Note: Unlike ``batch.upload_prefix``, this uploads to an *external*
-        store without SHA-256 sidecars or key normalization — those features
-        are specific to the tenant's internal storage layer.  The byte-level
-        validations (truncation, post-write readback) still apply, via
-        :meth:`upload`.
+        Note: Runs on the same engine as ``batch.upload_prefix`` but without
+        SHA-256 sidecars or key normalization — those features are specific
+        to the tenant's internal storage layer.  The byte-level validations
+        (truncation, post-write readback) still apply.  Symlinks and SDK
+        working directories are skipped.
 
         Args:
             local_dir: Local directory to upload from.
@@ -674,40 +708,24 @@ class CloudStore:
                 directory.
         """
         await self._ensure_region()
-        local = Path(local_dir)
-
-        def _collect_files() -> list[tuple[str, Path]]:
-            collected: list[tuple[str, Path]] = []
-            for root, dirs, filenames in os.walk(local, followlinks=False):
-                # SDK working directories (.sdk-partial staging, in-flight
-                # download part files) must never ship to a customer bucket.
-                prune_internal_dirs(dirs)
-                for fname in filenames:
-                    file_path = Path(root) / fname
-                    if file_path.is_symlink():
-                        continue
-                    rel = file_path.relative_to(local)
-                    key = f"{prefix}/{rel}" if prefix else str(rel)
-                    collected.append((key, file_path))
-            return collected
-
-        # Offloaded: the walk is one stat per entry over the whole directory,
-        # thousands of syscalls with no await between them on a large upload.
-        # Inline it holds the event loop — and the enclosing activity's
-        # auto-heartbeat — for the entire traversal (ADR-0010).
-        files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
-
-        async def _up(key: str, path: Path) -> str:
-            await self.upload(path, key)
-            return key
-
-        # The first failure cancels and drains the remaining uploads before it
+        # batch's tree engine with the sidecar protocol off: no sidecars and no
+        # key normalisation, and a local ``.sha256`` file uploads as data. The
+        # first failure cancels and drains the remaining uploads before it
         # propagates, so none lands in the bucket after the caller saw it fail.
-        return await _run_bounded(
-            (_up(k, p) for k, p in files),
-            max_concurrency,
-            unwrap_lone_failure=True,
+        uploaded = await self._mapping_denied(
+            "writing",
+            prefix,
+            _upload_tree(
+                Path(local_dir),
+                prefix,
+                BoundStore(self._store, self._put_attributes),
+                max_concurrency=max_concurrency,
+                sidecars=False,
+                unwrap_lone_failure=True,
+            ),
         )
+        _log().info("Uploaded %d files to prefix=%s", len(uploaded), prefix)
+        return uploaded
 
 
 # ---------------------------------------------------------------------------
