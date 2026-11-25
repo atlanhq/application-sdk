@@ -4501,6 +4501,67 @@ def test_a_finding_in_a_file_still_reviewed_stays_open(repo: Path):
     assert [f.id for f in state.open_findings()] == [fid]
 
 
+def _rerun_unchanged_head(
+    repo: Path, exclude: list[str], *, round_cap: int | None = None
+) -> tuple[str, FakeGitHub, Script, RunResult]:
+    """Round one raises a finding in fetch.py at h1; a plain `/lens` then runs
+    again on the SAME head (the skip path) with `exclude` in the config."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    assert first.state is not None
+    fid = first.state.findings[0].id
+    cfg = cfg_for(repo)
+    cfg.exclude = exclude
+    if round_cap is not None:
+        cfg.max_rounds = round_cap
+    script = Script()
+    again = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    return fid, gh, script, again
+
+
+@pytest.mark.parametrize("round_cap", [None, 1], ids=["unchanged-head", "round-cap"])
+def test_a_plain_rerun_with_nothing_new_closes_a_finding_in_a_now_excluded_file(
+    repo: Path, round_cap: int | None
+):
+    """lens F-dd33b2: an already-reviewed PR (#5096) re-asked with `/lens` on the
+    same head, or past the round cap, returns before any review. The closure
+    must happen there too, or the finding still blocks the PR."""
+    fid, gh, script, again = _rerun_unchanged_head(
+        repo, ["application_sdk/storage/*.py"], round_cap=round_cap
+    )
+    assert again.action == "dismissed" and again.mode == "excluded"
+    assert again.state is not None and again.state.open_findings() == []
+    assert script.requests == [] and script.approach_requests == []  # no model call
+    summary = next(c["body"] for c in gh.comments if SUMMARY_MARKER in c["body"])
+    assert "closed: its file is now excluded from review" in summary
+    assert f"closure after round 1 · {fid}" in gh.posted[-1]
+    assert gh.statuses[-1]["state"] == "success"
+    assert approve_mod.decision_for(again)["action"] == "approve"
+
+
+def test_a_plain_rerun_with_nothing_excluded_still_skips(repo: Path):
+    fid, _, script, again = _rerun_unchanged_head(repo, ["application_sdk/common/**"])
+    assert again.action == "skipped"
+    assert again.state is not None
+    assert [f.id for f in again.state.open_findings()] == [fid]
+    assert script.requests == []
+
+
 def test_generated_baselines_are_excluded_from_review():
     """Their consistency is proven by check_pyright_baseline.py and
     check_ann401_baseline.py on every PR; a line review of their counts after a
