@@ -675,31 +675,35 @@ class CloudStore:
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
-    async def upload_bytes(self, key: str, data: bytes, *, verify: bool = False) -> int:
+    async def upload_bytes(
+        self, key: str, data: bytes, *, verify: bool | None = None
+    ) -> int:
         """Upload raw bytes to the cloud store.
 
         Routes through the shared
-        :func:`~application_sdk.storage.ops.upload_bytes` primitive. The key is
-        used exactly as supplied and no ``.sha256`` sidecar is written.
+        :func:`~application_sdk.storage.ops.upload_bytes` primitive, so the
+        post-write HEAD that :meth:`upload` runs also confirms the bytes landed
+        here: a write the store accepted but did not keep, or kept at the wrong
+        size, raises instead of surfacing later at a reader. The key is used
+        exactly as supplied and no ``.sha256`` sidecar is written.
 
-        By default this sends only the write (PUT, or a multipart upload for a
-        large payload), as it always has: a customer's bucket policy may grant
-        PUT without read access, so no HEAD is sent unless asked for.
+        The readback needs read-metadata (HEAD) access to *key* as well as
+        PUT, as :meth:`upload` and :meth:`upload_dir` already do. Pass
+        ``verify=False`` for a bucket whose policy grants PUT only.
 
         Args:
             key: Destination object key.
             data: Bytes to upload.
-            verify: When ``True``, HEAD the object after the write and raise if
-                it is absent or not ``len(data)`` bytes — the readback
-                :meth:`upload` runs. Needs read-metadata access to *key*.
-                Defaults to ``False``.
+            verify: Run the post-write readback. ``None`` (default) follows
+                ``ATLAN_STORAGE_VERIFY_TRANSFERS``, which is on unless the
+                deployment turned it off.
 
         Returns:
             Number of bytes uploaded.
 
         Raises:
-            StorageError: If the write fails, or with *verify* the object is
-                absent or the wrong size afterwards.
+            StorageError: If the write fails, or the readback finds the object
+                absent or the wrong size.
         """
         await self._ensure_region()
         await self._mapping_denied(
