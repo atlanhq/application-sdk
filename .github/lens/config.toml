@@ -29,7 +29,19 @@ cache_write_per_mtok = 0.125
 output_per_mtok = 0.50
 
 [budget]
-cap_usd_per_pr = 1.0      # every round of every run on one PR, combined
+# Review depth (FND-5316). A live review of a 42-file connector PR forced the final turn
+# of 3 of 5 bundles at the context ceiling (the core one at turn 3 of 24) and truncated
+# 2 of 4 plan turns at plan_max_tokens. Every limit below is sized for a PR of 100 files
+# and about 4,000 changed lines (2x a 50-file / 2,000-line "large" PR) to finish without
+# hitting it. Caps all stay; they are roomy, not removed.
+# The cap: about 3x the cost estimated for that PR. Re-costed from a live 42-file run
+# under these limits, its line review comes to about $1.00 and the whole round
+# (approach check, skeptic, fact-checks) about $1.25. Round 1 may use
+# first_round_share of it ($2.25), of which 75% ($1.69) is the line review's; that
+# also covers what four calls in flight hold as reservations (each reserves its
+# prompt's byte count at the cache-write rate, about $0.10 at the context ceiling).
+# Was 1.0. A normal PR spends what it uses, not the cap: the live run cost $0.09.
+cap_usd_per_pr = 3.75     # every round of every run on one PR, combined
 first_round_share = 0.6   # round 1 may use at most this share; later rounds get what is left
 
 [rounds]
@@ -37,9 +49,9 @@ max_rounds = 5                    # invocations per PR; `/lens force` bypasses (
 later_round_min_severity = "high" # after round 1, only critical/high may be newly raised
 
 [scope]
-max_bundles = 8
+max_bundles = 16          # was 8: a 100-file, 4,000-line PR packs into 12-16 bundles of at most 9,000 diff tokens
 concurrency = 4
-max_changed_files = 60
+max_changed_files = 200   # was 60: 2x the 100-file target
 exclude = [
   "conformance/**/fixtures/**",
   "tests/**/fixtures/**",
@@ -63,12 +75,26 @@ approach = true  # understand the problem + judge the approach: once per PR, fir
 # lines, capped. It is a safety net, not a target: the model is never told it and stops
 # itself with task_done (observed 7-9 turns; none forced). What bounds cost is the bundle's
 # $ share, context_limit_tokens and the per-PR $ cap, whatever this says.
-max_tool_turns = 16
+# Was 16 and 30. The deepest bundle of the live run used 12 turns (and was still cut
+# short by the old ceiling): the base is now 2x that, so an 8-file, 229-line bundle
+# gets 24 + 7 + 1 = 32 turns.
+max_tool_turns = 24
 turns_per_extra_file = 1
 lines_per_extra_turn = 150
-max_tool_turns_cap = 30
+max_tool_turns_cap = 48
 max_empty_turns = 2
-context_limit_tokens = 60000
+# Was 60,000, the ceiling 3 of 5 live bundles hit, one at turn 3. gpt-6-luna's window:
+# the LiteLLM proxy reports max_input_tokens 922,000 for it (as quoted in mothership's
+# atlanClaw/src/agent.ts, read 2026-11-25; no repo here or the gateway docs states it).
+# 200,000 is 22% of that, far under a 70-75% safety bound, and also under 272,000, where
+# the provider's long-context meters (abacus: "6-luna LongCo") start billing at another
+# rate that [model.price] does not carry. The check runs before each call on an
+# estimate (chars / 3.5, within ~10% of the billed count in the live run), so the
+# request it lets through stays under 272,000 even with one turn's tool replies added.
+context_limit_tokens = 200000
+# Not raised: 24,000 is the largest max_output_tokens this gateway route is known to
+# accept (every review turn sends it), a 400 opens the run-wide breaker, and no live
+# turn wrote more than 4,776.
 review_max_tokens = 24000     # reasoning tokens count against this; sized for max effort
 reflect_max_tokens = 8000
 # Verify re-checks still-open findings each round; reasoning tokens count against it too.
@@ -82,7 +108,9 @@ max_nits = 5              # low-severity (nit) findings kept per bundle
 # Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
 plan = 1
 plan_min_lines = 60
-plan_max_tokens = 8000
+# Was 8,000: two of four live plan turns spent all 8,000 on reasoning and wrote no plan.
+# 24,000 is the value every review turn already sends on the same route.
+plan_max_tokens = 24000
 # Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
 # finds real defects the first pass misses at an acceptable cost.
 second_pass = 0

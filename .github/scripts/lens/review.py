@@ -1001,6 +1001,13 @@ def run(
         elif b.stop in ("llm_error", "fatal", "budget"):
             res.incomplete.append(f"{b.label}: {b.stop} — {b.error[:200]}")
             failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.shallow:
+            # Stopped by the context ceiling before it could read the code
+            # around its diff (FND-5316): not a review of its files.
+            note = shallow_note(b, bundles, "/lens")
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
     res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
@@ -1926,21 +1933,45 @@ def _risk(b: Bundle) -> tuple[int, int]:
     return (0 if risky else 1, -b.changed_lines)
 
 
+NO_REVIEW_FILES_SHOWN = 5  # files named in a shallow-review note
+
+
+def shallow_note(result: BundleResult, bundles: list[Bundle], command: str) -> str:
+    """The incomplete reason for a bundle the context ceiling stopped early
+    (`BundleResult.shallow`): it read little past its own diff, so what it
+    found is not a full review of its files, and they are retried."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    return (
+        f"Bundle `{result.label}` was reviewed shallowly: it reached the context "
+        f"ceiling at turn {result.ceiling_turn} of {result.turn_budget}, so its "
+        f"{len(result.findings) + len(result.unplaced)} finding(s) do not cover it "
+        f"({shown}); `{command}` retries it"
+    )
+
+
+# The most diff a re-packed bundle may hold (estimated tokens). It was half
+# the context ceiling, 30,000 at a 60,000 ceiling; the ceiling is now 200,000
+# (FND-5316), and a 100,000-token diff would start a bundle near it with no room
+# to read anything. Kept at the old value: past `max_bundles` the fix is more
+# bundles, not deeper ones.
+MAX_REPACK_DIFF_TOKENS = 30_000
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # noqa: ANN001
     """Bundles in review order — riskiest first — within `max_bundles`.
 
-    Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed; only if that is not enough are
+    Past the cap, bundles are first re-packed larger (up to
+    `MAX_REPACK_DIFF_TOKENS` of diff) so every file still gets reviewed; only if that is not enough are
     the lowest-risk bundles set aside, and each skipped file is named in the
     summary. Ordering by risk means that whatever a short budget cuts is the
     least important code, never the credentials path."""
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
-        bigger = min(
-            max(total // cfg.max_bundles + 1, 9000),
-            cfg.limits.context_limit_tokens // 2,
-        )
+        bigger = min(max(total // cfg.max_bundles + 1, 9000), MAX_REPACK_DIFF_TOKENS)
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
     bundles.sort(key=_risk)
     # A file over the token cap is reviewed in parts (`bundle._parts`), and its

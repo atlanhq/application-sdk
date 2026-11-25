@@ -93,6 +93,10 @@ def build(res: RunResult) -> dict[str, Any]:
                 "untraced_dropped": [why for _, why in b.untraced],
                 "tools": b.tool_calls,
                 "stop": b.stop,
+                # The context ceiling forced the final turn at this turn (0: it
+                # did not), and whether that was early enough to be shallow.
+                "ceiling_turn": b.ceiling_turn,
+                "shallow": b.shallow,
                 # An app-code bundle's empty final turn retried, and whether the
                 # bundle still ended with no answer at all (FND-5316).
                 "retried": b.retried,
