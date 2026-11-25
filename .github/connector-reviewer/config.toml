@@ -116,6 +116,9 @@ bootstrap_managed = [
   ".github/workflows/update-dashboard.yml",
   ".github/workflows/renovate-auto-approve.yml",
   ".github/workflows/porter-bundle-cnab.yaml",
+  # Never bootstrap-managed: bootstrap never wrote it and only removes it (a per-repo
+  # caller of atlanhq/.github's reusable-dep-cooldown.yml; see render.py).
+  ".github/workflows/dep-cooldown.yml",
   ".github/dependabot.yml",
   ".github/dependabot.yaml",
   ".github/actions/run-conformance-detect/**",
