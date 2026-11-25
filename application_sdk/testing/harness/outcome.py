@@ -59,6 +59,7 @@ from application_sdk.testing.harness.expectations import (
     Finding,
     LineageEdgeCounts,
     LineageEdgeRead,
+    LocatedName,
     SampleRead,
     Unreadable,
 )
@@ -410,7 +411,9 @@ def as_counts(
 
 
 def as_samples(
-    reading: Outcome[Mapping[str, Sequence[str]]], type_names: Sequence[str]
+    reading: Outcome[Mapping[str, Sequence[str]]]
+    | Outcome[Mapping[str, Sequence[LocatedName]]],
+    type_names: Sequence[str],
 ) -> Mapping[str, SampleRead]:
     """Project a qualified-name sample read the same way :func:`as_counts` does.
 
