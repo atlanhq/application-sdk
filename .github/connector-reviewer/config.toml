@@ -72,6 +72,19 @@ trusted_apps = [
 # dependency_branches, and EVERY commit is by one of dependency_bots.
 dependency_bots = ["atlan-app-fleet[bot]", "renovate[bot]", "dependabot[bot]"]
 dependency_branches = ["renovate/", "dependabot/"]
+# Also a dependency update: opened by one of vuln_bots on a branch that starts with one
+# of vuln_branches, EVERY commit by one of vuln_bots, and EVERY changed file matches
+# dependency_files. The vulnerability agent also opens code pull requests on other
+# branches; those, and a vuln branch that touches anything else, are reviewed.
+vuln_bots = ["connectivity-ai[bot]"]
+vuln_branches = ["vuln-agent/"]
+dependency_files = [
+  "uv.lock",
+  "pyproject.toml",
+  "contract/PklProject",
+  "contract/PklProject.deps.json",
+  "contract_schema.lock.json",
+]
 # Conformance resync: opened by one of resync_bots, every commit by one of them, and every
 # changed file matches bootstrap_managed.
 resync_bots = ["atlan-conformance-sync[bot]"]
