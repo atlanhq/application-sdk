@@ -14459,6 +14459,8 @@ def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
             "v0.1.1rc64",
             "v0.1.1rc64",
         ),
+        # HTTPS's default port, spelled out, is the same server.
+        (_lock('{ registry = "https://pypi.org:443/simple" }'), "v3.40.0", "v3.40.0"),
         # A git pin is the locked commit after `#`, whatever `rev=` names.
         (
             _lock(
@@ -14475,7 +14477,7 @@ def _lock(source: str, version: str = "3.40.0", extra: str = "") -> str:
             f"3.40.0 at commit {_SHA[:12]}",
         ),
     ],
-    ids=["release", "firewall-registry", "rc", "git-rev", "git-branch"],
+    ids=["release", "firewall-registry", "rc", "default-port", "git-rev", "git-branch"],
 )
 def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: str):
     res = sdk_source_mod.resolve(lock)
@@ -14541,6 +14543,16 @@ def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: s
             _lock('{ registry = "https://pypi.org.evil.example/simple" }'),
             "not PyPI or its mirror",
         ),
+        # The known host on another port is another server (F-af93d5), and a
+        # port that does not parse is no registry at all.
+        (
+            _lock('{ registry = "https://pypi.org:8443/simple" }'),
+            "not PyPI or its mirror",
+        ),
+        (
+            _lock('{ registry = "https://pypi.org:abc/simple" }'),
+            "not PyPI or its mirror",
+        ),
         # An unparseable git URL falls back instead of aborting the review.
         (
             _lock(
@@ -14575,6 +14587,8 @@ def test_the_sdk_pin_resolves_to_a_tag_or_a_commit(lock: str, ref: str, label: s
         "unknown-registry",
         "http-registry",
         "lookalike-registry",
+        "registry-other-port",
+        "registry-bad-port",
         "malformed-git-url",
         "two-pins",
     ],
@@ -15555,6 +15569,31 @@ _ENDOR = "factory.endorlabs.com/v1/namespaces/atlan.atlanhq/firewall/pypi/simple
             "not come from PyPI",
         ),
         (_conformance_lock(registry="http://pypi.org/simple"), "not come from PyPI"),
+        # A known host on a port other than HTTPS's default is another server
+        # (F-af93d5); a port that does not parse is no registry. The default
+        # port, spelled out, is the same index.
+        (
+            _conformance_lock(registry="https://pypi.org:8443/simple"),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(
+                registry=f"https://{_ENDOR.replace('.com', '.com:8443', 1)}"
+            ),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(registry="https://pypi.org:99999/simple"),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(registry="https://pypi.org:abc/simple"),
+            "not come from PyPI",
+        ),
+        (
+            _conformance_lock(registry="https://pypi.org:443/simple"),
+            gate_mod.Pin("0.60.0", "https://pypi.org/simple"),
+        ),
         (_conformance_lock("0.60.0.dev1"), "is not a released version"),
         (
             _conformance_lock() + _conformance_lock("0.59.0").split("\n\n", 1)[1],
@@ -15690,6 +15729,13 @@ def test_the_gate_job_installs_exactly_the_pinned_version_in_isolation(
         assert "PYTHONPATH" not in call["env"]
         assert not Path(call["cwd"]).resolve().is_relative_to(checkout.resolve())
         assert call["timeout"] > 0
+    # Exactly the bounds the workflow test sums against the gate job's timeout:
+    # a subprocess added here must be counted there too.
+    assert [c["timeout"] for c in runner.calls] == [
+        gate_mod.VENV_SECONDS,
+        gate_mod.PIP_SECONDS,
+        gate_mod.RENDER_SECONDS,
+    ]
 
 
 @pytest.mark.parametrize(
@@ -16819,3 +16865,243 @@ def test_a_truncated_index_reply_is_no_note_not_a_failed_job():
         raise http.client.IncompleteRead(b"partial")
 
     assert gate_mod.latest_release("https://pypi.org/simple", truncated) == ""
+
+
+def test_the_latest_release_lookup_is_bounded_in_wall_time(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """lens F-c0f74f: the version list's socket timeout bounds each operation,
+    not the lookup: a reply that trickles in, or a name lookup that hangs, could
+    outrun `LATEST_SECONDS`, which the gate job's budget counts as a total. The
+    lookup gives up at `LATEST_SECONDS` of wall time, with no note."""
+    import threading  # noqa: PLC0415
+
+    monkeypatch.setattr(gate_mod, "LATEST_SECONDS", 0.2)
+    release = threading.Event()
+
+    def trickle(url: str) -> bytes:
+        release.wait(5)  # a reply still arriving long after the bound
+        return json.dumps({"versions": ["0.60.0"]}).encode()
+
+    started = time.monotonic()
+    try:
+        assert gate_mod.latest_release("https://pypi.org/simple", trickle) == ""
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()
+    # A reply inside the bound is read as before.
+    assert gate_mod.latest_release("https://pypi.org/simple", trickle) == "0.60.0"
+
+
+def test_a_gate_step_whose_output_cannot_be_written_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-316c84: `gate-ref` and `gate-base` hand the refs of the later
+    checkouts on through `$GITHUB_OUTPUT`, and `gate-fact` hands the review
+    its fact file. A write that fails exits 1 and says so: the steps after it
+    are skipped, no fact reaches the review, and the review says the check
+    did not run. It is never a green step with its outputs missing."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "missing" / "github_output"))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    ref = ["gate-ref", "--event-name", "issue_comment", "--event-path", str(event)]
+    assert cli.main(ref) == 1
+    assert "could not write the step output" in capsys.readouterr().err
+    assert cli.main(["gate-base", "--merge-checkout", str(tmp_path / "absent")]) == 1
+    assert "could not write the step output" in capsys.readouterr().err
+
+    # The fact's directory cannot be made: a file stands where it would go.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    fact = blocked / "connector-reviewer-gate.json"
+    argv = [
+        "gate-fact",
+        "--checkout",
+        str(tmp_path / "absent"),
+        "--venv",
+        str(tmp_path / "venv"),
+        "--base-checkout",
+        str(tmp_path / "absent"),
+        "--out",
+        str(fact),
+    ]
+    assert cli.main(argv) == 1
+    assert "could not write the gate fact" in capsys.readouterr().err
+    # What the review then makes of it: no fact, so no finding, and a note.
+    got = gate_mod.evaluate(str(fact), [], head="a" * 40, base_lock_text=None)
+    assert got.findings is None
+    assert got.notes == ["Gate-file check not made: the gate check did not run."]
+
+
+def test_the_review_jobs_ref_steps_fail_when_their_output_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-a7a6c0: `sdk-ref` and `base-ref` exit 1, saying what the review
+    goes without, when `$GITHUB_OUTPUT` cannot be written, as the gate steps
+    do. Both steps are `continue-on-error` in the review job, so the review
+    still runs: with no `ref` the SDK checkout is skipped and the review says
+    the SDK source is not available; with no `base` the app checkout takes its
+    default ref and the review says it is off the base. Neither is a pass."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "missing" / "github_output"))
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    assert cli.main(["sdk-ref", "--root", str(app)]) == 1
+    err = capsys.readouterr().err
+    assert "could not write the step output" in err
+    assert "without the SDK source" in err
+
+    monkeypatch.setattr(cli, "GitHub", lambda repo: fake_github(base=_SHA_BASE))
+    assert cli.main(["base-ref", "--repo", "o/r", "--pr", "7"]) == 1
+    err = capsys.readouterr().err
+    assert "could not write the step output" in err
+    assert "off the base" in err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["gate-ref", "--pr", "7; echo"],  # the number is an int or nothing
+        ["gate-base"],  # --merge-checkout is required
+        ["gate-fact", "--checkout", "h", "--venv", "v", "--base-checkout", "b"],
+        ["gate-fact", "--checkout", "h", "--venv", "v", "--out", "f"],
+        ["gate-fact", "--venv", "v", "--base-checkout", "b", "--out", "f"],
+        ["gate-fact", "--checkout", "h", "--base-checkout", "b", "--out", "f"],
+    ],
+)
+def test_the_gate_commands_refuse_bad_arguments(
+    argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """lens F-85e2fb: argparse stops a gate command with exit 2 before it
+    reads anything or writes an output."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    with pytest.raises(SystemExit) as stop:
+        cli.main(argv)
+    assert stop.value.code == 2
+    assert not out.exists()
+
+
+def test_the_gate_ref_cli_writes_both_refs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-85e2fb: `gate-ref` writes `ref=` and `merge=` from the event or
+    `--pr`, both empty when there is no pull request, and exits 0 either way."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    argv = ["gate-ref", "--event-name", "issue_comment", "--event-path", str(event)]
+    assert cli.main(argv) == 0
+    assert out.read_text() == "ref=refs/pull/7/head\nmerge=refs/pull/7/merge\n"
+    assert "gate-file check reads ref=refs/pull/7/head" in capsys.readouterr().out
+
+    out.write_text("")
+    assert cli.main(["gate-ref", "--pr", "9"]) == 0
+    assert out.read_text() == "ref=refs/pull/9/head\nmerge=refs/pull/9/merge\n"
+
+    # An issue, an unreadable event, or no event at all: empty refs, exit 0.
+    for event_text in (json.dumps({"issue": {"number": 7}}), "not json"):
+        event.write_text(event_text)
+        out.write_text("")
+        assert cli.main(argv) == 0
+        assert out.read_text() == "ref=\nmerge=\n"
+    out.write_text("")
+    assert cli.main(["gate-ref"]) == 0
+    assert out.read_text() == "ref=\nmerge=\n"
+    capsys.readouterr()
+
+    # Outside Actions (no $GITHUB_OUTPUT) the lines go to stdout.
+    monkeypatch.delenv("GITHUB_OUTPUT")
+    assert cli.main(["gate-ref", "--pr", "9"]) == 0
+    assert capsys.readouterr().out.endswith(
+        "ref=refs/pull/9/head\nmerge=refs/pull/9/merge\n"
+    )
+
+
+def test_the_gate_base_cli_writes_the_base_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-85e2fb: `gate-base` writes `base=<40 hex>` for the merge
+    checkout it is given, and `base=` (exit 0) when there is none."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    merge = tmp_path / "gate-merge"
+    seen: list[Path] = []
+
+    def first_parent(path: Path) -> str:
+        seen.append(path)
+        return _SHA_BASE
+
+    monkeypatch.setattr(gate_mod, "base_of_merge", first_parent)
+    assert cli.main(["gate-base", "--merge-checkout", str(merge)]) == 0
+    assert out.read_text() == f"base={_SHA_BASE}\n"
+    assert seen == [merge]
+    assert f"gate-file check base: base={_SHA_BASE}" in capsys.readouterr().out
+
+    # No merge checkout (a pull request that conflicts has no merge ref).
+    monkeypatch.undo()
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    out.write_text("")
+    assert cli.main(["gate-base", "--merge-checkout", str(tmp_path / "absent")]) == 0
+    assert out.read_text() == "base=\n"
+
+
+def test_the_gate_fact_cli_writes_the_fact_and_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-85e2fb: `gate-fact` hands its paths to `make_fact`, writes the
+    fact it returns (making the directory), and exits 0 whether the check was
+    made or not: a check that cannot be made is a fact that says why."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    fact_path = tmp_path / "gate-fact" / "connector-reviewer-gate.json"
+    paths = ("gate-head", "gate-venv", "gate-base")
+    argv = [
+        "gate-fact",
+        "--checkout",
+        str(tmp_path / paths[0]),
+        "--venv",
+        str(tmp_path / paths[1]),
+        "--base-checkout",
+        str(tmp_path / paths[2]),
+        "--out",
+        str(fact_path),
+    ]
+    # Nothing checked out: an unavailable fact, made without a subprocess.
+    assert cli.main(argv) == 0
+    written = json.loads(fact_path.read_text())
+    assert written == {
+        "schema": 1,
+        "status": "unavailable",
+        "reason": "the pull request head was not checked out",
+    }
+    assert "gate-file check not made: the pull request head was not checked out" in (
+        capsys.readouterr().out
+    )
+
+    calls: list[tuple[Path, ...]] = []
+    made = {**_render_result(), "head": "a" * 40, "base": _SHA_BASE}
+
+    def make_fact(checkout: Path, venv: Path, base_checkout: Path) -> dict[str, Any]:
+        calls.append((checkout, venv, base_checkout))
+        return made
+
+    monkeypatch.setattr(gate_mod, "make_fact", make_fact)
+    assert cli.main(argv) == 0
+    assert calls == [tuple(tmp_path / p for p in paths)]
+    assert json.loads(fact_path.read_text()) == made
+    said = capsys.readouterr().out
+    assert f"against conformance 0.60.0: {len(GATE_FILES)} checked" in said
+    assert f"1 differ from the render ({CONFORMANCE_WF})" in said

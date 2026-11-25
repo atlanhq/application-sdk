@@ -22,8 +22,10 @@ the lock names); the review job, which holds the App token and the model key,
 still runs nothing but this package.
 
 1. `gate-ref` (`head_ref_output`) writes the pull request's head ref for a
-   sparse checkout of the head's CI directories, read as data. The
-   repository's default branch is checked out too, `uv.lock` alone.
+   sparse checkout of the head's CI directories, read as data, and its
+   test-merge ref. `gate-base` (`base_ref_output`) writes the base the pull
+   request merges into, the first parent of that merge, whose `uv.lock` alone
+   is checked out too.
 2. `gate-fact` (`make_fact`) reads the conformance version the BASE branch's
    `uv.lock` pins (`conformance_pin`; PyPI or its mirror only, a released
    version only), installs exactly that version into a fresh venv with
@@ -75,6 +77,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -114,10 +117,18 @@ UNMANAGED = "unmanaged"  # the kind of a fallback mismatch; never read from a fa
 MAX_FILES = 100  # gate paths read from a fact
 DIFF_KEEP = 2000  # characters of one file's diff read from a fact
 MAX_FACT_BYTES = 1_000_000
-VENV_SECONDS = 120
-PIP_SECONDS = 300
-RENDER_SECONDS = 120
-LATEST_SECONDS = 10.0  # the index's version list, read once per gate job
+# The bounds of `make_fact`'s steps. With `gate-base`'s two git reads and room
+# for the gate job's other steps they fit in the job's `timeout-minutes`
+# (connector-reviewer-reusable.yaml; test_connector_reviewer_workflow.py ties
+# them), so a step that runs out writes an `unavailable` fact before the job
+# is killed and writes none. A cold install of the package and its few
+# dependencies, all wheels, takes well under a minute.
+VENV_SECONDS = 60
+PIP_SECONDS = 180
+RENDER_SECONDS = 60
+# The index's version list, read once per gate job: wall time for the whole
+# lookup (`_within`), and the socket timeout of each operation within it.
+LATEST_SECONDS = 10.0
 LATEST_BYTES = 2_000_000
 
 TEMPLATES_DIR = "packages/conformance/conformance/bootstrap/templates/"
@@ -254,14 +265,32 @@ def _fetch(url: str) -> bytes | None:
         return None
 
 
+def _within(fetch: Fetch, url: str, seconds: float) -> bytes | None:
+    """`fetch(url)`, or None when it raises or has not returned after
+    `seconds` of wall time. The socket timeout bounds each operation, not the
+    lookup: a reply that trickles in, or a name lookup (which no socket
+    timeout covers), could outrun it. A fetch still running is left to a
+    daemon thread, which does not hold the process open."""
+    got: list[bytes | None] = []
+
+    def call() -> None:
+        try:
+            got.append(fetch(url))
+        except Exception:  # noqa: BLE001 - a failed lookup is no note, never a failed job
+            got.append(None)
+
+    worker = threading.Thread(target=call, name="gate-latest-release", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    return got[0] if got else None
+
+
 def latest_release(index: str, fetch: Fetch = _fetch) -> str:
     """The newest final release of the conformance package on `index` (one of
     the known indexes, from `conformance_pin`), from the index's version list
-    alone: no install. "" when it cannot be read. Never raises."""
-    try:
-        raw = fetch(f"{index}/{CONFORMANCE}/")
-    except Exception:  # noqa: BLE001 - a failed lookup is no note, never a failed job
-        return ""
+    alone: no install. "" when it cannot be read within `LATEST_SECONDS` of
+    wall time. Never raises."""
+    raw = _within(fetch, f"{index}/{CONFORMANCE}/", LATEST_SECONDS)
     if raw is None:
         return ""
     try:
@@ -339,8 +368,8 @@ def make_fact(
 ) -> dict[str, Any]:
     """The fact for the pull request head checked out at `checkout`,
     rendered at the conformance version the base branch pins (`uv.lock` of
-    `base_checkout`, the repository's default branch). Never raises: whatever
-    goes wrong is `status: unavailable` with a reason.
+    `base_checkout`, the base the pull request merges into). Never raises:
+    whatever goes wrong is `status: unavailable` with a reason.
 
     The base's pin, not the head's: the files are judged against what the
     branch they merge into would install. A pull request that bumps the pin

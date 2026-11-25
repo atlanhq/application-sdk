@@ -362,9 +362,9 @@ def test_the_gate_job_checks_out_the_head_sparse_from_a_tested_ref(
 def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     gate_job: dict[str, Any], job: dict[str, Any]
 ) -> None:
-    """The fact step always exits 0; its file is uploaded (with the repo's
-    retry) and downloaded by the review, which runs after the gate job
-    whatever its outcome, short of a cancel."""
+    """The fact step fails only when it cannot write the fact; its file is
+    uploaded (with the repo's retry) and downloaded by the review, which runs
+    after the gate job whatever its outcome, short of a cancel."""
     steps = _steps(gate_job)
     [fact] = [s for s in steps if "gate-fact" in str(s.get("run", ""))]
     assert fact["working-directory"] == "sdk/.github/scripts"
@@ -398,6 +398,74 @@ def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     # The setup-python step comes before the Python steps.
     [setup] = _uses(gate_job, "actions/setup-python")
     assert steps.index(setup) < steps.index(fact)
+
+
+def test_both_reviewer_checkouts_hold_every_script_the_package_imports(
+    gate_job: dict[str, Any], job: dict[str, Any]
+) -> None:
+    """The reviewer is checked out sparse, so a sibling script it imports
+    from `.github/scripts` (`_gha`, the shared step-output writer, F-f0dbf5)
+    must be in both checkouts, or `python -m connector_reviewer` fails on its
+    first import. `gate_render.py` is left out: it runs only in the gate's
+    venv, where the conformance package it imports is installed."""
+    import ast  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    siblings: set[str] = set()
+    for module in sorted((_SCRIPTS / "connector_reviewer").glob("*.py")):
+        if module.name == "gate_render.py":
+            continue
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            names = (
+                [a.name for a in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom) and node.level == 0
+                else []
+            )
+            for name in names:
+                top = name.split(".")[0]
+                if top and top not in sys.stdlib_module_names:
+                    siblings.add(top)
+    assert siblings, "the package imports _gha; this test must see it"
+    for checkouts in (gate_job, job):
+        [sdk] = [
+            c
+            for c in _uses(checkouts, "actions/checkout")
+            if c["with"].get("path") == "sdk"
+        ]
+        held = sdk["with"]["sparse-checkout"].split()
+        for name in siblings:
+            assert (_SCRIPTS / f"{name}.py").is_file(), name
+            assert f".github/scripts/{name}.py" in held, name
+
+
+#: What the gate job's steps other than `gate-base` and `gate-fact` may take,
+#: in seconds: the two checkouts before them and the two between them (all
+#: sparse), setup-python, and the fact's upload with its 20-second wait and
+#: retry. None of them has a bound of its own; this is room, not a guarantee.
+GATE_OTHER_STEPS_SECONDS = 180
+
+
+def test_the_gate_fact_is_written_before_the_gate_job_times_out(
+    gate_job: dict[str, Any],
+) -> None:
+    """F-7ed325: `gate-base` and `gate-fact` bound every subprocess they
+    start. Their worst case, with room for the other steps, must fit in the
+    job's timeout: a job killed first writes no fact at all, where a bound
+    that runs out writes one that says why the check was not made."""
+    from connector_reviewer import gate, sdk_source  # noqa: PLC0415
+
+    gate_base = 2 * gate.GIT_SECONDS  # `base_of_merge`: HEAD^1 and HEAD^2
+    gate_fact = (
+        2 * sdk_source.GIT_SECONDS  # `checkout_commit` of the head and the base
+        + gate.VENV_SECONDS
+        + gate.PIP_SECONDS
+        + gate.RENDER_SECONDS
+        + gate.LATEST_SECONDS
+    )
+    budget = gate_job["timeout-minutes"] * 60
+    assert gate_base + gate_fact + GATE_OTHER_STEPS_SECONDS <= budget
 
 
 def test_there_is_no_concurrency_block(
