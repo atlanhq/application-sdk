@@ -43,6 +43,7 @@ from application_sdk.common.task_queue import derive_task_queue
 from application_sdk.handler.base import Handler
 from application_sdk.handler.metadata_routes import (
     MetadataSource,
+    _credential_normalizer,
     generated_dir_of,
     handler_compute_manifest,
     register_metadata_routes,
@@ -232,6 +233,14 @@ def build_asgi_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    generated = (
+        generated_dir
+        if generated_dir is not None
+        else _package_generated_dir(app_package)
+    )
+    # One request normalization for every route that reads a body: the SDK's
+    # credential keys plus the fields of the app's generated credential forms.
+    normalize = _credential_normalizer(lambda: generated)
     register_handler_routes(
         app,
         handler,
@@ -239,11 +248,7 @@ def build_asgi_app(
         app_package=app_package,
         observer=LoggingPreflightObserver(app_name),
         include_app_routers=False,
-    )
-    generated = (
-        generated_dir
-        if generated_dir is not None
-        else _package_generated_dir(app_package)
+        normalize=normalize,
     )
     if generated is not None:
 
@@ -259,6 +264,7 @@ def build_asgi_app(
                 task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
                 compute_manifest=handler_compute_manifest(handler, lambda: app_name),
+                normalize_body=normalize,
                 from_process_env=False,
             ),
         )

@@ -12,7 +12,11 @@ name: E2E Callback Watchdog
 # poll timeout regardless — but an abandoned PR showing a permanently
 # pending check is confusing, so this sweeps them out periodically.
 #
-# 15-minute cadence, one call per open PR plus one per stale check found —
+# Hourly (FND-4674). It was every 15 minutes, but a week of run history
+# (2026-11-18..25, about 300 sampled runs) found no stuck check run to time out,
+# and a stuck check is cosmetic (see above), so an hour of delay costs nothing.
+#
+# One call per open PR plus one per stale check found —
 # negligible against the fleet App token's rate-limit bucket regardless of how
 # many connectors or PRs are open.
 #
@@ -25,7 +29,7 @@ name: E2E Callback Watchdog
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "47 * * * *"
   workflow_dispatch:
 
 # github.token only needs contents:read for the checkout; the sweep's list +

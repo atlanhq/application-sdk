@@ -347,12 +347,20 @@ class _Built:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.calls: list[tuple[str, str, dict[str, str] | None, str]] = []
         for kind in ("s3", "azure"):
-            monkeypatch.setattr(_obstore_config, f"make_{kind}_store", self._make(kind))
+            monkeypatch.setattr(
+                _obstore_config, f"build_{kind}_store", self._make(kind)
+            )
 
     def _make(self, kind: str) -> Any:
-        def make(
-            name: str, config: dict[str, str] | None = None, *, label: str, **_: object
-        ) -> MemoryStore:
+        # Record the obstore config the shared translation derives from the
+        # settings, so assertions read what obstore would be handed.
+        def make(settings: Any, *, label: str, **_: object) -> MemoryStore:
+            if kind == "s3":
+                name = settings.bucket
+                config, _opts = _obstore_config.s3_store_args(settings, {})
+            else:
+                name = settings.container
+                config, _opts = _obstore_config.azure_store_args(settings, {})
             self.calls.append(
                 (kind, name, None if config is None else dict(config), label)
             )
@@ -577,7 +585,7 @@ def test_without_obstore_there_is_no_store(
     def _missing(*_: object, **__: object) -> None:
         raise ModuleNotFoundError("No module named 'obstore'", name="obstore")
 
-    monkeypatch.setattr(_obstore_config, "make_s3_store", _missing)
+    monkeypatch.setattr(_obstore_config, "build_s3_store", _missing)
     monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
     assert HostObjectStore.from_env() is None
     assert "atlan-application-sdk-api[obstore]" in log.lines[0]

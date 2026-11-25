@@ -298,11 +298,18 @@ def _read_verdict(run: dict, verdict_at: datetime | None) -> bool:
     return verdict_at is not None and started is not None and started >= verdict_at
 
 
+#: The events a Release Gate run judges a pull request on. The shim runs on
+#: `pull_request_target` since FND-5321; a repo that has not resynced since
+#: still runs it on `pull_request`. Never `status`, `merge_group` or a
+#: dispatch: those runs skip the gate.
+RELEASE_GATE_EVENTS = frozenset({"pull_request", "pull_request_target"})
+
+
 def _newest_release_gate(github: GitHub, sha: str) -> dict | None:
     runs = [
         r
         for r in github.runs(sha, workflow=RELEASE_GATE_WORKFLOW)
-        if r.get("event") == "pull_request"
+        if r.get("event") in RELEASE_GATE_EVENTS
     ]
     return max(runs, key=lambda r: r["id"]) if runs else None
 

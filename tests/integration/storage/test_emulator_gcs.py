@@ -71,7 +71,7 @@ def _anonymous_credential():
 def _redirect_gcs_to_emulator(monkeypatch):
     """Redirect obstore's GCSStore at the emulator — test layer only, no prod change.
 
-    ``make_gcs_store`` imports ``GCSStore`` lazily from ``obstore.store`` on each
+    ``build_gcs_store`` imports ``GCSStore`` lazily from ``obstore.store`` on each
     call, so patching the attribute there is picked up by the real binding path.
     """
     import obstore.store as obstore_store

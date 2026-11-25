@@ -718,7 +718,7 @@ schema.
      `Annotated[list[FileReference], AssetArtifact()]`;
    * the field is inherited from an SDK contract that carries it — most often
      `ExtractionOutput.transformed_files`, which the SDK declares, `SqlApp.run()`
-     populates and `SqlApp._transform_entity` writes, so no connector authors any
+     populates and `SqlApp.transform_entity` writes, so no connector authors any
      part of it.
 
    **A hand-written envelope for one of these fields is the defect, not the

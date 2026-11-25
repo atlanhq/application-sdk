@@ -180,7 +180,9 @@ class TestReadShapes:
             client, _QN, ("Table",), per_type=3
         )
         assert isinstance(outcome, Settled)
-        assert len(outcome.value["Table"]) == 3
+        # Exact output, not just its length: the reader shares its search with
+        # sample_located_names and must project the records to bare strings.
+        assert outcome.value["Table"] == [f"{_QN}/t{i}" for i in range(3)]
 
     async def test_lineage_counts_add_the_has_lineage_filter(self) -> None:
         """The one thing that separates this from ``count_assets``: it has to

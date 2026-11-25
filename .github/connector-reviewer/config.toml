@@ -7,7 +7,11 @@
 [model]
 # Model Gateway serves provider-qualified ids (GET /openai/v1/models); the bare
 # "gpt-6-luna" alias was LiteLLM's. Preflight refuses an id the key cannot see.
-name = "atlan-bedrock-dev/global.openai.gpt-6-luna"
+# "openai/gpt-6-luna" is provider-agnostic: the gateway routes it across every provider
+# deployment it supports. It replaced the Bedrock-pinned
+# "atlan-bedrock-dev/global.openai.gpt-6-luna", which hit Bedrock throttling (rate limit
+# errors), the same switch lens made in #5110.
+name = "openai/gpt-6-luna"
 reasoning_effort = "max"  # luna's highest; verified 2026-09-25 on LiteLLM: max + tools works on /v1/responses
 # "responses" (/v1/responses): the only API on which luna reasons AND calls tools; reasoning
 # is also carried between turns. "chat" (/v1/chat/completions): tools only work with
@@ -84,6 +88,19 @@ trusted_apps = [
 # dependency_branches, and EVERY commit is by one of dependency_bots.
 dependency_bots = ["atlan-app-fleet[bot]", "renovate[bot]", "dependabot[bot]"]
 dependency_branches = ["renovate/", "dependabot/"]
+# Also a dependency update: opened by one of vuln_bots on a branch that starts with one
+# of vuln_branches, EVERY commit by one of vuln_bots, and EVERY changed file matches
+# dependency_files. The vulnerability agent also opens code pull requests on other
+# branches; those, and a vuln branch that touches anything else, are reviewed.
+vuln_bots = ["connectivity-ai[bot]"]
+vuln_branches = ["vuln-agent/"]
+dependency_files = [
+  "uv.lock",
+  "pyproject.toml",
+  "contract/PklProject",
+  "contract/PklProject.deps.json",
+  "contract_schema.lock.json",
+]
 # Conformance resync: opened by one of resync_bots, every commit by one of them, and every
 # changed file matches bootstrap_managed.
 resync_bots = ["atlan-conformance-sync[bot]"]

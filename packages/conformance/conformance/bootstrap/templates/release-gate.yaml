@@ -1,29 +1,54 @@
 name: Release Gate
 
-# Blocks release PRs (bump-version branches, labelled `release` by the SDK
-# release-version-bump workflow) from merging until their full release gate —
-# tests with e2e, pre-commit, conformance and the vulnerability scan — has run
-# AND passed on the head commit. No CI runs on a release PR until a reviewer
-# comments `/gate-check` (FND-3748, FND-3839). The PR's own run skips every job
-# inside the gated reusables (`skip-on-bump-pr`, FND-3947), so their required
-# `<caller> / <job>` checks resolve as `skipped`, which reads as a pass. This
-# check is therefore the only thing holding a release PR, and it must stay
-# fail-closed.
+# Holds a pull request until two things are true on its head commit:
 #
-# The verdict is the head commit's `gate-check` status. `/gate-check` posts it
-# as `pending` and dispatches the gated workflows (test-commands.yaml); when the
-# last of them finishes it becomes `success` or `failure`, and this workflow is
-# re-run to read it. A push moves the head to a commit with no status, which
-# re-blocks until `/gate-check` is asked again. The decision lives in
-# .github/scripts/release_gate.py, vendored alongside this file.
+# 1. A release PR (a bump-version branch, labelled `release` by the SDK
+#    release-version-bump workflow) has passed its full release gate: tests
+#    with e2e, pre-commit, conformance and the vulnerability scan. No CI runs
+#    on a release PR until a reviewer comments `/gate-check` (FND-3748,
+#    FND-3839). The PR's own run skips every job inside the gated reusables
+#    (`skip-on-bump-pr`, FND-3947), so their required `<caller> / <job>`
+#    checks resolve as `skipped`, which reads as a pass. This check is the only
+#    thing holding a release PR, and it must stay fail-closed. The verdict is
+#    the head commit's `gate-check` status: `/gate-check` posts it `pending`,
+#    and when the last gated run finishes test-commands.yaml sets it and
+#    re-runs this workflow to read it.
 #
-# All other PRs pass this check immediately.
+# 2. The connector reviewer's verdict is green (FND-5321): the
+#    `connector-reviewer` status the reviewer's App posts on the head is
+#    `success` (every finding fixed or dismissed, or `/review waive`). A pull
+#    request the reviewer would not review (a dependency bot's update, a
+#    conformance resync, a version bump, docs only) passes without one, decided
+#    by the reviewer's own classifier. When the reviewer posts a status, the
+#    `status` event below re-runs this workflow's run on that commit.
+#
+# A push moves the head to a commit with no status, which re-blocks until the
+# new head is asked about again.
+#
+# The decision lives in application-sdk (.github/scripts/release_gate.py), and
+# this workflow checks it out from there at `main` and runs it. The reason a
+# check failed is in the check itself (its annotation and job summary); the gate
+# posts no PR comment.
+#
+# Security shape (review this before changing it):
+#   * The gate runs on `pull_request`, as it always has, so no org or repo
+#     Actions policy is needed. GitHub runs that event from the pull
+#     request's copy of this file, so a pull request that edits this file can
+#     still change how it is judged, exactly as before FND-5321. Such an edit
+#     is in the diff, and the connector reviewer's gate-file check raises a
+#     high finding on any hand edit to it (FND-5325).
+#   * The decision itself is checked out of application-sdk, so a pull
+#     request that edits the vendored script bootstrap used to write changes
+#     nothing. Nothing of the pull request is checked out or run: the pin check
+#     reads uv.lock and pyproject.toml at the head through the API, as data;
+#     the reviewer's state is read from its comment, as data.
+#   * The job's token can only read; the re-run job can only re-run runs.
 #
 # Branch-protection target: "Release Gate"
 # Add this alongside "tests / Tests Gate" in branch protection so that:
-# (a) this check blocks release PRs whose release gate has not passed on the
-# head commit, and (b) the Tests Gate check enforces that unit, integration,
-# and e2e tests all pass.
+# (a) this check blocks pull requests whose gate has not passed on the head
+# commit, and (b) the Tests Gate check enforces that unit, integration, and e2e
+# tests all pass.
 #
 # Those two strings are shaped differently because a ruleset's
 # required_status_checks `context` is the check-run name, which never includes
@@ -32,14 +57,16 @@ name: Release Gate
 #   * a job that `uses:` a reusable → "<caller job id> / <called job name>"
 #     ("tests / Tests Gate" — `tests:` is the job in tests.yaml that calls
 #     tests-reusable.yaml, whose gate job is named "Tests Gate")
-# The UI's checks list shows the workflow name as an extra leading segment;
-# that display form is not what the API matches on, and a context that matches
-# no check silently protects nothing.
+# That is why the gate is an inline job here and not a call to a reusable
+# workflow: the required context is the bare "Release Gate". The UI's checks
+# list shows the workflow name as an extra leading segment; that display form
+# is not what the API matches on, and a context that matches no check silently
+# protects nothing.
 
 on:
   pull_request:
     # No `labeled`/`unlabeled`: a label is no longer the opt-in, and a same-SHA
-    # label event only ever added a duplicate run (FND-3839). The verdict
+    # label event only ever added a duplicate run (FND-3839). A verdict
     # arriving re-runs this workflow instead.
     types: [opened, synchronize, reopened]
     branches: [main]
@@ -48,76 +75,122 @@ on:
   # request. Without this trigger no "Release Gate" check-run is ever created
   # for the merge group, so the required context sits at "Expected — waiting
   # for status to be reported" forever and the queue never drains (FND-851).
-  # Same shape as release-files-guard.yaml and sdk-gate.yaml in
-  # application-sdk, which are the two in-repo guards of this kind.
   merge_group:
+  # The connector reviewer posts its `connector-reviewer` status with its App
+  # token, which fires this event (a GITHUB_TOKEN status would not). It always
+  # runs this file from the default branch. GitHub has no filter on the
+  # context, so every App-posted status in the repo starts a run; the job-level
+  # `if:` below skips all but the reviewer's, at no runner cost.
+  status:
 
 permissions:
   contents: read
-  pull-requests: read
-  # Reads the head commit's `gate-check` status.
-  statuses: read
 
 # A new commit retires the previous commit's run; see conformance.yaml for why
 # the group is run-unique off the PR path and why only `synchronize` cancels.
+# Keyed on the pull request number, so one pull request's push never cancels
+# another's run.
 concurrency:
-  group: release-gate-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
+  group: release-gate-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
   release-gate:
     name: Release Gate
-    # `github.event.pull_request` does not exist on `merge_group`, so the label
-    # lookup can only run on the pull_request event. The skip is at JOB level:
-    # a job that starts only to skip its one step is billed a runner minute on
-    # every queue entry (FND-3320), while a skipped job bills nothing and still
-    # files its `Release Gate` check run with conclusion `skipped` — which a
-    # required check counts as a pass, so the queue still drains. Keep the
-    # `name:` static: the skipped run must carry the same context string.
-    # Nothing is lost by passing here: a release PR without a passed
-    # `gate-check` fails this gate on the PR itself and so never becomes
-    # eligible to enter the queue.
+    # `github.event.pull_request` does not exist on `merge_group`, so the gate
+    # can only run on the pull_request event. The skip is at JOB level: a job
+    # that starts only to skip its one step is billed a runner minute on every
+    # queue entry (FND-3320), while a skipped job bills nothing and still files
+    # its `Release Gate` check run with conclusion `skipped` — which a required
+    # check counts as a pass, so the queue still drains. Keep the `name:`
+    # static: the skipped run must carry the same context string. Nothing is
+    # lost by passing here: a pull request that fails this gate on the PR
+    # itself never becomes eligible to enter the queue.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-slim
-    timeout-minutes: 2
+    timeout-minutes: 5
+    permissions:
+      contents: read # uv.lock and pyproject.toml at the head, as data
+      pull-requests: read # the pull request, its commits and its diff
+      issues: read # the reviewer's summary comment (PR comments are Issues-scope)
+      statuses: read # the head commit's `gate-check` and `connector-reviewer`
     steps:
-      - name: Checkout
+      # The gate itself, and the connector reviewer's classifier, state reader
+      # and config it imports, from application-sdk. The pull request cannot
+      # change any of it. All of it is stdlib-only, so it runs on the runner's
+      # system python3 (ubuntu-slim has no setup-python, docs/standards/ci.md).
+      - name: Check out the gate (application-sdk)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: |
+            .github/scripts/release_gate.py
+            .github/scripts/pr_test_command.py
+            .github/scripts/connector_reviewer
+            .github/connector-reviewer/config.toml
+          sparse-checkout-cone-mode: false
+          path: sdk
           persist-credentials: false
 
-      # A failed lookup leaves the file empty, which the gate reads as "no
-      # verdict" and fails on - see release_gate.py.
-      #
-      # The per-commit statuses list, not the combined status: only the list
-      # carries each status's `creator`, and the script trusts a verdict only
-      # from github-actions[bot] (FND-3947). The list is newest first and
-      # paged; `--paginate` walks every page, and `--jq` prints one
-      # `<state> <creator>` line per gate-check status. Not `--slurp`: gh
-      # rejects it alongside `--jq`, and that error would leave the file empty
-      # on every run.
-      - name: Fetch the head commit's gate-check status
-        continue-on-error: true
+      - name: Verify the pull request may merge
+        working-directory: sdk/.github/scripts
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          gh api "repos/${REPO}/commits/${HEAD_SHA}/statuses?per_page=100" \
-            --paginate \
-            --jq '.[] | select(.context == "gate-check") | "\(.state) \(.creator.login)"' > gate-check-state.txt
-
-      - name: Verify release readiness
-        env:
-          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
-        run: |
-          set -euo pipefail
-          touch gate-check-state.txt
-          python3 .github/scripts/release_gate.py \
-            --head-ref "$HEAD_REF" \
-            --labels "$LABELS" \
-            --gate-check-state-file gate-check-state.txt \
-            --lock-file uv.lock \
-            --pyproject pyproject.toml
+          CONFIG_DIR: ${{ github.workspace }}/sdk/.github/connector-reviewer
+        run: >-
+          python3 release_gate.py gate
+          --repo "$REPO"
+          --pr "$PR"
+          --head-sha "$HEAD_SHA"
+          --head-ref "$HEAD_REF"
+          --labels "$LABELS"
+          --config-dir "$CONFIG_DIR"
+
+  rerun-on-review:
+    name: Re-run Release Gate on the review verdict
+    # Only the reviewer's context starts a runner. Who posted it is checked in
+    # release_gate.py: only the reviewer's App re-runs anything.
+    if: github.event_name == 'status' && github.event.context == 'connector-reviewer'
+    runs-on: ubuntu-slim
+    # A Release Gate run still in progress is waited for (up to ~2 minutes).
+    timeout-minutes: 5
+    permissions:
+      actions: write # find and re-run the Release Gate run on the commit
+    steps:
+      - name: Check out the re-run (application-sdk)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: |
+            .github/scripts/release_gate.py
+            .github/scripts/gate_check_verdict.py
+            .github/scripts/pr_test_command.py
+            .github/scripts/connector_reviewer
+          sparse-checkout-cone-mode: false
+          path: sdk
+          persist-credentials: false
+
+      - name: Re-run Release Gate on the commit
+        working-directory: sdk/.github/scripts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.sha }}
+          CONTEXT: ${{ github.event.context }}
+          CREATOR: ${{ github.event.sender.login }}
+          UPDATED_AT: ${{ github.event.updated_at }}
+        run: >-
+          python3 release_gate.py rerun
+          --repo "$REPO"
+          --sha "$SHA"
+          --context "$CONTEXT"
+          --creator "$CREATOR"
+          --at "$UPDATED_AT"

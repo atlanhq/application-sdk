@@ -30,7 +30,14 @@
 # the job's `if:`. The cron stays as a backstop for GitHub dropping a
 # `workflow_run` event.
 #
-# 10-minute backstop cadence. Per run that is one paginated PR listing, one GraphQL
+# 30-minute backstop cadence (FND-4674). It was every 10 minutes. A week of run
+# history (2026-11-18..25, about a third of the scheduled runs sampled) found the
+# cron posted no approval the `workflow_run` trigger had missed. Its only hits
+# were deferrals: approvals owed while `atlan-ci`'s quota was spent, which the
+# cron posts once the hourly window resets. 30 minutes still catches each reset
+# within half an hour, at a third of the runs.
+#
+# Per run that is one paginated PR listing, one GraphQL
 # query for lens statuses, plus a few reads per PR that lens says may be owed —
 # negligible against the fleet App token's own quota, which is the point: a reconciler polling every PR on the `atlan-ci` PAT
 # would become a new source of the exhaustion it exists to recover from. The PAT
@@ -44,9 +51,9 @@
 #
 # A quota-blocked approval is a DEFERRAL: annotated and summarised, but the run
 # stays green, because the next tick after the hourly reset posts it. Going red
-# every ten minutes for an hour would bury the annotation that matters when the
+# every tick for an hour would bury the annotation that matters when the
 # problem does not clear on its own. A verdict still unapproved past
-# --stale-after-minutes (90) has outlived a full reset without recovering, and
+# --stale-after-minutes (120) has outlived a full reset without recovering, and
 # that does red the run.
 #
 # Manual dispatch (optionally with `pr`) runs the same sweep, restricted to that
@@ -56,7 +63,7 @@ name: Review approvals — reconcile lost atlan-ci approvals
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/30 * * * *"
   # Straight after a review source's approval step has run -- the moment an
   # approval can have been lost. `workflow_run` always runs this file from the
   # default branch and checks out the default branch, so no PR-controlled code

@@ -171,7 +171,7 @@ _ET = TypeVar("_ET", bound=ExtractionTaskInput)
 #: (legacy / connector-specific shapes the v3 publisher accepts).
 _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 
-#: SQL row batch size used by ``_extract_entity`` when streaming results
+#: SQL row batch size used by ``extract_entity`` when streaming results
 #: through ``client.run_query()``. Caps the in-flight set at
 #: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
 _EXTRACT_BATCH_SIZE: int = 10_000
@@ -547,6 +547,35 @@ class SqlApp(App):
     A connector that also has to bridge the tree across an SDR store boundary
     passes the finalised declaration to ``App.upload_refs`` — which verifies
     its own delivery — and returns the prefix that comes back.
+
+    An override that does not call ``super().run()`` must end in
+    :meth:`finalize_extraction`: it is the only thing that checks the
+    transformed tree is whole before publish diffs the tenant against it.
+    Conformance rule P068 flags an override that does neither.
+
+    **The per-entity surface.** Below ``run()``, these are the supported
+    extension points; everything else is implementation:
+
+    - ``sql_client_class`` and the ``fetch_*_sql`` templates — set them.
+    - ``map_*`` — override; the base raises for the ones you have not
+      written.
+    - ``extract_*`` / ``transform_*`` — override to change one entity's SQL
+      or mapper, or to split it across targets.
+    - :meth:`extract_entity` / :meth:`transform_entity` — call them from those
+      overrides. They own the streaming, the event-loop offload, the progress
+      marks and the canonical ``FileReference`` keys; re-implementing them is
+      how a connector's output ends up where publish does not look.
+    - :meth:`resolve_output_path` — the directory those two write under, for
+      a connector writing files of its own beside them.
+    - ``entity_envelope`` and :meth:`decorate_entity` — declare how the
+      finished line is shaped. No connector overrides ``decorate_entity``
+      today; it exists so the first one that owes a downstream app a
+      root-level field adds it to ``EntityDecorations`` instead of
+      post-processing the line.
+
+    Some connectors also override ``_init_sql_client`` or ``_prepare_sql``.
+    Those are not yet promoted to this surface, so a rename can still reach
+    them; raise it before adding another override of an underscore name.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
@@ -646,7 +675,7 @@ class SqlApp(App):
     @task(timeout_seconds=120, retry_max_attempts=1)
     async def prime_sql_auth(self, input: ExtractionTaskInput) -> PrimeAuthOutput:
         """Single sequential probe that primes the SQL server's auth cache
-        before the parallel ``_extract_entity`` burst.
+        before the parallel ``extract_entity`` burst.
 
         Background — why this exists (BLDX-1295):
             v3's parallel-activity execution model fans out
@@ -1011,7 +1040,7 @@ class SqlApp(App):
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
         """Stream database/catalog rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="database",
             sql_template=self.fetch_database_sql,
             input=input,
@@ -1020,7 +1049,7 @@ class SqlApp(App):
     @task()
     async def extract_schemas(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream schema rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="schema",
             sql_template=self.fetch_schema_sql,
             input=input,
@@ -1029,7 +1058,7 @@ class SqlApp(App):
     @task()
     async def extract_tables(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream table rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="table",
             sql_template=self.fetch_table_sql,
             input=input,
@@ -1038,7 +1067,7 @@ class SqlApp(App):
     @task()
     async def extract_columns(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream column rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="column",
             sql_template=self.fetch_column_sql,
             input=input,
@@ -1047,7 +1076,7 @@ class SqlApp(App):
     @task()
     async def extract_views(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream view rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="view",
             sql_template=self.fetch_view_sql,
             input=input,
@@ -1064,7 +1093,7 @@ class SqlApp(App):
         (Process / ColumnProcess entities) — matches the legacy Argo
         crawler output layout.
         """
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="extras-procedure",
             sql_template=self.fetch_procedure_sql,
             input=input,
@@ -1083,7 +1112,7 @@ class SqlApp(App):
     @task()
     async def transform_databases(self, input: TransformInput) -> TransformOutput:
         """Map raw database records to Atlan assets via ``map_database``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="database",
             mapper_fn=self.map_database,
             input=input,
@@ -1092,7 +1121,7 @@ class SqlApp(App):
     @task()
     async def transform_schemas(self, input: TransformInput) -> TransformOutput:
         """Map raw schema records to Atlan assets via ``map_schema``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="schema",
             mapper_fn=self.map_schema,
             input=input,
@@ -1101,7 +1130,7 @@ class SqlApp(App):
     @task()
     async def transform_tables(self, input: TransformInput) -> TransformOutput:
         """Map raw table records to Atlan assets via ``map_table``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="table",
             mapper_fn=self.map_table,
             input=input,
@@ -1110,7 +1139,7 @@ class SqlApp(App):
     @task()
     async def transform_columns(self, input: TransformInput) -> TransformOutput:
         """Map raw column records to Atlan assets via ``map_column``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="column",
             mapper_fn=self.map_column,
             input=input,
@@ -1124,7 +1153,7 @@ class SqlApp(App):
         Table specialisation (typeName ``View``) — connectors differentiate
         via the ``table_kind`` field on the record.
         """
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="view",
             mapper_fn=self.map_table,
             input=input,
@@ -1133,7 +1162,7 @@ class SqlApp(App):
     @task()
     async def transform_procedures(self, input: TransformInput) -> TransformOutput:
         """Map raw procedure records to Atlan assets via ``map_procedure``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="extras-procedure",
             mapper_fn=self.map_procedure,
             input=input,
@@ -1612,8 +1641,19 @@ class SqlApp(App):
         )
 
     @staticmethod
-    def _resolve_output_path(input: ExtractionTaskInput) -> str:
-        """Resolve output_path — auto-set from build_output_path() in activity context."""
+    def resolve_output_path(input: ExtractionTaskInput) -> str:
+        """Return the local directory this task writes under.
+
+        ``input.output_path`` when the caller set one; otherwise the run's
+        path under ``TEMPORARY_PATH``, from ``build_output_path()``, which
+        reads the activity context — so call this inside a task, not in
+        ``run()``.
+
+        Public because connectors that write their own files beside the
+        template's (a custom extract, a miner) need the same directory
+        :meth:`extract_entity` and :meth:`transform_entity` use, or their
+        output lands outside the tree the upload walks.
+        """
         if not input.output_path:
             resolved = build_output_path()
             logger.info("Auto-resolved output_path: %s", resolved)
@@ -1755,6 +1795,15 @@ class SqlApp(App):
     # which is a fleet-wide outage traded for a tidier diff. They delegate, so
     # there is exactly one implementation either way.
     #
+    # ``_extract_entity``, ``_transform_entity`` and ``_resolve_output_path``
+    # joined them in FND-4686. Of the seven connectors that subclass SqlApp,
+    # app code in db2, mssql and sapase calls ``_transform_entity``, db2 and
+    # teradata call ``_extract_entity``, and db2, mssql (app + miner) and
+    # sapase call ``_resolve_output_path``; clickhouse and db2 tests call
+    # ``_transform_entity`` directly. That is the surface they actually build
+    # on. None of the seven overrides any of the three, so delegating shims
+    # keep every caller working unchanged.
+    #
     # What the shims do NOT save: a test that patches one of these names. The
     # patch lands on the shim while every SDK-internal caller now goes to the
     # public name, so the mock is never reached — quieter than a broken import
@@ -1801,10 +1850,27 @@ class SqlApp(App):
         """
         return SqlApp.build_transform_input(base, raw_file)
 
-    # =====================================================================
-    # Internal helpers
-    # =====================================================================
+    @staticmethod
+    @deprecated(
+        "SqlApp._resolve_output_path is deprecated; use the public "
+        "SqlApp.resolve_output_path instead. Will be removed in v4.0.0."
+    )
+    def _resolve_output_path(input: ExtractionTaskInput) -> str:
+        """**Deprecated** — use :meth:`resolve_output_path`.
 
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching this name no longer intercepts the SDK** — see
+            :meth:`_resolve_credential_ref` for why. Move the patch site to
+            :meth:`resolve_output_path`.
+        """
+        return SqlApp.resolve_output_path(input)
+
+    @deprecated(
+        "SqlApp._extract_entity is deprecated; use the public "
+        "SqlApp.extract_entity instead. Will be removed in v4.0.0."
+    )
     async def _extract_entity(
         self,
         *,
@@ -1812,7 +1878,75 @@ class SqlApp(App):
         sql_template: str,
         input: ExtractionTaskInput,
     ) -> ExtractionTaskOutput:
+        """**Deprecated** — use :meth:`extract_entity`.
+
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching or overriding this name no longer intercepts the SDK**
+            — see :meth:`_resolve_credential_ref` for why. Move the patch site
+            or the override to :meth:`extract_entity`.
+        """
+        return await self.extract_entity(
+            entity_type=entity_type, sql_template=sql_template, input=input
+        )
+
+    @deprecated(
+        "SqlApp._transform_entity is deprecated; use the public "
+        "SqlApp.transform_entity instead. Will be removed in v4.0.0."
+    )
+    async def _transform_entity(
+        self,
+        *,
+        entity_type: str,
+        mapper_fn: _MapperFn,
+        input: TransformInput,
+    ) -> TransformOutput:
+        """**Deprecated** — use :meth:`transform_entity`.
+
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching or overriding this name no longer intercepts the SDK**
+            — see :meth:`_resolve_credential_ref` for why. Move the patch site
+            or the override to :meth:`transform_entity`.
+        """
+        return await self.transform_entity(
+            entity_type=entity_type, mapper_fn=mapper_fn, input=input
+        )
+
+    # =====================================================================
+    # Per-entity engine — extract_entity / transform_entity
+    # =====================================================================
+    #
+    # Public because they are what connectors build on: every SQL app that
+    # adds an entity, splits a source across targets, or runs flavour-specific
+    # mappers calls these from its own extract_* / transform_* tasks rather
+    # than re-implementing the streaming, the offload and the FileReference
+    # pinning below.
+
+    async def extract_entity(
+        self,
+        *,
+        entity_type: str,
+        sql_template: str,
+        input: ExtractionTaskInput,
+    ) -> ExtractionTaskOutput:
         """Stream SQL rows verbatim into ``raw/<entity>/records.json`` JSONL.
+
+        The body of every ``extract_*`` task. Call it from your own override
+        to extract an entity with different SQL, or one the template does not
+        know about::
+
+            @task()
+            async def extract_functions(
+                self, input: ExtractionTaskInput
+            ) -> ExtractionTaskOutput:
+                return await self.extract_entity(
+                    entity_type="function",
+                    sql_template=self.fetch_function_sql,
+                    input=input,
+                )
 
         1. Open SQL client, render the template with the input filters.
         2. Stream rows in batches of ``_EXTRACT_BATCH_SIZE`` via the
@@ -1828,7 +1962,7 @@ class SqlApp(App):
             logger.warning("No SQL configured for %s — skipping", entity_type)
             return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
 
-        output_path = self._resolve_output_path(input)
+        output_path = self.resolve_output_path(input)
         if not output_path:
             return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
 
@@ -1931,7 +2065,7 @@ class SqlApp(App):
             raw_file=raw_ref,
         )
 
-    async def _transform_entity(
+    async def transform_entity(
         self,
         *,
         entity_type: str,
@@ -1939,6 +2073,23 @@ class SqlApp(App):
         input: TransformInput,
     ) -> TransformOutput:
         """Read raw JSONL → mapper → transformed JSONL.
+
+        The body of every ``transform_*`` task. Call it from your own override
+        to run an entity through a different mapper::
+
+            @task()
+            async def transform_functions(
+                self, input: TransformInput
+            ) -> TransformOutput:
+                return await self.transform_entity(
+                    entity_type="function",
+                    mapper_fn=self.map_function,
+                    input=input,
+                )
+
+        It also applies ``entity_envelope``, :meth:`decorate_entity`, and the
+        ``connectionName`` / ``lastSync*`` attributes to every line, so going
+        through it is how a custom entity's output matches the rest.
 
         Reads the raw records.json via the ``FileReference`` threaded
         through from the matching ``extract_*`` activity, runs each
@@ -1959,7 +2110,7 @@ class SqlApp(App):
             returning ``total_record_count=0`` — matches the historical
             contract that the publish step relies on.
         """
-        output_path = self._resolve_output_path(input)
+        output_path = self.resolve_output_path(input)
         if not output_path:
             return TransformOutput(typename=entity_type, total_record_count=0)
 
@@ -2082,7 +2233,7 @@ class SqlApp(App):
         # entity gets archived as "removed from source" on the next
         # publish run. ``get_object_store_prefix`` strips
         # ``TEMPORARY_PATH`` from the local path to derive the
-        # matching object-store key; see ``_extract_entity`` for the
+        # matching object-store key; see ``extract_entity`` for the
         # corresponding canonical key on the raw side.
         #
         # Tier = RETAINED (vs. TRANSIENT on raw_file): the

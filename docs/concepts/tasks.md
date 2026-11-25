@@ -483,7 +483,7 @@ class MyExtractionOutput(ExtractionOutput):   # transformed_files comes with a d
 The field carries the `AssetArtifact` marker, which says its declaration *is* the
 `pyatlan_v9` `Asset` model. It is the SDK's field end to end — declared on
 `ExtractionOutput`, populated by `SqlApp.run()`, written by
-`SqlApp._transform_entity` — so no connector authors any part of it, and the only
+`SqlApp.transform_entity` — so no connector authors any part of it, and the only
 envelope a connector could hand-write for it would be a partial restatement of a
 500-type model.
 

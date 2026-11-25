@@ -1887,7 +1887,7 @@
       ],
       [
         "workflow_args",
-        "dict[str, str | int | float | bool | None]",
+        "dict[str, bool | float | int | str | None]",
         "active"
       ],
       [
@@ -2065,7 +2065,7 @@
       ],
       [
         "workflow_args",
-        "dict[str, str | int | float | bool | None]",
+        "dict[str, bool | float | int | str | None]",
         "active"
       ],
       [

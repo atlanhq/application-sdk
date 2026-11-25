@@ -92,6 +92,9 @@ RENAME_OWNER = "SqlApp"
 PUBLIC_RENAMES: dict[str, tuple[str, str]] = {
     "_resolve_credential_ref": ("resolve_credential_ref", "3.33.2"),
     "_build_transform_input": ("build_transform_input", "3.33.2"),
+    "_extract_entity": ("extract_entity", "3.60.0"),
+    "_transform_entity": ("transform_entity", "3.60.0"),
+    "_resolve_output_path": ("resolve_output_path", "3.60.0"),
 }
 
 _SKIP_DIRS = frozenset(

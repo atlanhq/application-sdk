@@ -96,7 +96,7 @@ explicit `@entrypoint`. "The public boundary" is therefore uniformly every `Entr
 
 "App-authored" is the rule for artifacts the app owns. It is the wrong rule for an artifact the SDK
 declares, populates and writes — `ExtractionOutput.transformed_files`, which `SqlApp.run()` fills and
-`SqlApp._transform_entity` writes, and which no connector authors any part of. The boundary path
+`SqlApp.transform_entity` writes, and which no connector authors any part of. The boundary path
 originally built a `ContractSource` **unconditionally**, so that field reported `not_declared` on a
 public boundary unless every SQL connector hand-authored an envelope for it — while the upload path
 was already validating the same bytes against the full `Asset` model. One of three canonical apps had

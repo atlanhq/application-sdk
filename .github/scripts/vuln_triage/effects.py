@@ -23,7 +23,7 @@ import security_scan_create_linear as ssl
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
-SCAN_WORKFLOW = "daily-security-scan.yml"
+SCAN_WORKFLOW = "hourly-security-scan.yml"
 SCAN_ARTIFACT = "security-scan-raw-results"
 USER_AGENT = "vuln-triage/1.0 (+https://github.com/atlanhq/application-sdk)"
 

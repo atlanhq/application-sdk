@@ -387,8 +387,11 @@ application_sdk/
 │   │                       # _legacy_codes.py: deprecated AAF-{COMPONENT}-{ID} ErrorCode constants (removed in v4.0)
 ├── constants.py            # Import-time configuration (env vars, path templates)
 ├── version.py              # Package version (__version__)
+├── _shutdown_policy.py     # Post-drain exit deadline + event-loop stall bound (used by main.py)
 └── main.py                 # Unified CLI entry point (--mode worker|handler|combined)
 ```
+
+`main.py` owns `AppConfig`, the three run modes, signal handling and the CLI. The pieces it runs are kept beside the layer they belong to: the Dapr infrastructure bootstrap in `infrastructure/_bootstrap.py`, the worker restart supervisor and poll-state observer in `execution/_temporal/supervisor.py`, the shutdown policy in `_shutdown_policy.py`, and `run_dev_combined` in `dev/_runner.py` (still imported as `application_sdk.main.run_dev_combined`).
 
 Packages prefixed with `_` (e.g., `execution/_temporal/`, `infrastructure/_dapr/`) are private implementation details — never import from them directly. The public interface is everything without the underscore prefix.
 

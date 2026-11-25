@@ -26,7 +26,7 @@ on contracts.  In **strict** mode the fingerprint-set includes unsuppressed
 WARNING results, which is where the rest of B-series remediation runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007/B008/B009 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008/B009/B010 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 
@@ -392,6 +392,25 @@ human audit):
   directory already covers it before porting.  Target shape: every SDK import
   in `atlan-openapi-app` `tests/integration/conftest.py` names a module that
   exists today.
+
+- **B010 SdkGlobalRebind** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app rebinds or deletes an attribute of
+  something it imported from `application_sdk` (a module global or a class
+  attribute), so its behaviour depends on the SDK reading that exact name in
+  every process that serves the app.  The finding names the rebound path and,
+  where one exists, what replaces it.  The two known cases: a rebind of
+  `application_sdk.handler.service._CREDENTIAL_KEYS` is deleted outright,
+  because the SDK lifts every top-level field of the app's generated credential
+  form into the credentials (check the extra key is a top-level property of the
+  credential form `contract/app.pkl` generates; if it is not, it belongs there,
+  not in code).  A wrapper bound to `service._normalize_credentials` is a
+  legacy request shape: the brief says which fields it rewrites, and the fix is
+  for the caller to send the fields the input contract declares, or a gap
+  raised with the SDK.  Do not move the rewrite elsewhere in the app.  Delete
+  the patch, its `try/except` guard and the module import together.  Target
+  shape: `atlan-openapi-app` `app/handler.py` customises behaviour only on its
+  handler subclass.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when
