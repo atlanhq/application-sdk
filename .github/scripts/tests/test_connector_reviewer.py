@@ -16589,3 +16589,45 @@ def test_a_truncated_index_reply_is_no_note_not_a_failed_job():
         raise http.client.IncompleteRead(b"partial")
 
     assert gate_mod.latest_release("https://pypi.org/simple", truncated) == ""
+
+
+def test_a_gate_step_whose_output_cannot_be_written_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-316c84: `gate-ref` and `gate-base` hand the refs of the later
+    checkouts on through `$GITHUB_OUTPUT`, and `gate-fact` hands the review
+    its fact file. A write that fails exits 1 and says so: the steps after it
+    are skipped, no fact reaches the review, and the review says the check
+    did not run. It is never a green step with its outputs missing."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "missing" / "github_output"))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"issue": {"number": 7, "pull_request": {}}}))
+    ref = ["gate-ref", "--event-name", "issue_comment", "--event-path", str(event)]
+    assert cli.main(ref) == 1
+    assert "could not write the step output" in capsys.readouterr().err
+    assert cli.main(["gate-base", "--merge-checkout", str(tmp_path / "absent")]) == 1
+    assert "could not write the step output" in capsys.readouterr().err
+
+    # The fact's directory cannot be made: a file stands where it would go.
+    blocked = tmp_path / "blocked"
+    blocked.write_text("")
+    fact = blocked / "connector-reviewer-gate.json"
+    argv = [
+        "gate-fact",
+        "--checkout",
+        str(tmp_path / "absent"),
+        "--venv",
+        str(tmp_path / "venv"),
+        "--base-checkout",
+        str(tmp_path / "absent"),
+        "--out",
+        str(fact),
+    ]
+    assert cli.main(argv) == 1
+    assert "could not write the gate fact" in capsys.readouterr().err
+    # What the review then makes of it: no fact, so no finding, and a note.
+    got = gate_mod.evaluate(str(fact), [], head="a" * 40, base_lock_text=None)
+    assert got.findings is None
+    assert got.notes == ["Gate-file check not made: the gate check did not run."]

@@ -99,9 +99,11 @@ jobs:
   # bootstrap-managed gate file (a managed workflow shim, the reviewer's own
   # among them, or a vendored action or script) is compared with what the
   # conformance version it pins renders, and a mismatch is one finding in the
-  # review. No secret here, on purpose (see the header). Every step either
-  # cannot fail the job or writes a fact that says why the check was not made,
-  # and the review runs whatever happens here.
+  # review. No secret here, on purpose (see the header). A check that cannot
+  # be made is a fact that says why; a step that cannot hand on its output
+  # (`gate-ref`, `gate-base`, `gate-fact`) fails, the steps after it are
+  # skipped, and the review says the check did not run. Never a finding, and
+  # the review runs whatever happens here.
   gate:
     name: Gate-file check
     runs-on: ubuntu-latest
@@ -129,7 +131,8 @@ jobs:
 
       # `ref=refs/pull/<n>/head` from the event, the number an int, in tested
       # Python (connector_reviewer/gate.py, `head_ref_output`); empty when the
-      # event names no pull request. Always exits 0.
+      # event names no pull request. Exits 1 only when $GITHUB_OUTPUT cannot
+      # be written: the steps after it are then skipped, and no fact is made.
       - name: Resolve the pull request's head ref
         id: gate-ref
         working-directory: sdk/.github/scripts
@@ -178,6 +181,7 @@ jobs:
           path: gate-merge
           persist-credentials: false
 
+      # Exits 1 only when $GITHUB_OUTPUT cannot be written, as `gate-ref`.
       - name: Resolve the pull request's base commit
         id: gate-base
         working-directory: sdk/.github/scripts
@@ -202,8 +206,9 @@ jobs:
 
       # Installs the pinned conformance version into a fresh venv and runs its
       # C002 check over the checkout (connector_reviewer/gate.py, `make_fact`).
-      # Always exits 0 and always writes the fact: a check that cannot be made
-      # is `status: unavailable` with the reason, never a finding.
+      # A check that cannot be made is a fact with `status: unavailable` and
+      # the reason, never a finding. Exits 1 only when the fact file cannot be
+      # written: nothing is uploaded, and the review says the check did not run.
       - name: Compare the gate files with the pinned conformance version's render
         working-directory: sdk/.github/scripts
         run: >-

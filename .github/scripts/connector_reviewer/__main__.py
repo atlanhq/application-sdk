@@ -15,8 +15,11 @@ request's head ref (`ref=refs/pull/<n>/head`, empty when there is none) for a
 sparse checkout of the head, read as data; `gate-fact` installs the
 conformance version that head's `uv.lock` pins into a fresh venv, compares the
 bootstrap-managed gate files with its render, and writes the fact file the
-review reads (`--gate-fact`, or `CONNECTOR_REVIEWER_GATE_FACT`). Both always
-exit 0: a check that cannot be made is a fact that says why.
+review reads (`--gate-fact`, or `CONNECTOR_REVIEWER_GATE_FACT`). A check that
+cannot be made is a fact that says why, and exit 0. `gate-ref`, `gate-base`
+and `gate-fact` exit 1 only when they cannot write their output (the step
+output, or the fact file): the gate job's later steps are then skipped, no
+fact reaches the review, and the review says the check did not run.
 
 `base-ref` reads the pull request through the REST API and writes its base
 commit (`base=`, 40 hex, empty when there is none) to `$GITHUB_OUTPUT`; the
@@ -628,42 +631,51 @@ def _read_event(args: argparse.Namespace) -> dict[str, Any]:
     return event if isinstance(event, dict) else {}
 
 
-def _write_output(out: str) -> None:
+def _write_output(out: str) -> bool:
+    """Append `out` to `$GITHUB_OUTPUT` (stdout when it is unset, a local
+    run). False, with the reason on stderr, when the write fails."""
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
         print(out, end="")
-        return
+        return True
     try:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(out)
     except OSError as e:
         print(
-            f"connector-reviewer: could not write the step output: {e}", file=sys.stderr
+            f"connector-reviewer: could not write the step output ({e}); the "
+            "gate-file check is not made",
+            file=sys.stderr,
         )
+        return False
+    return True
 
 
 def _gate_ref(args: argparse.Namespace) -> int:
-    """`gate-ref`: always exit 0. No pull request is an empty ref: the
-    checkout then fails on its own, and the fact says the head was not checked
-    out."""
+    """`gate-ref`: exit 0 when the output is written. No pull request is an
+    empty ref: the checkout is then skipped, and the fact says the head was
+    not checked out. Exit 1 when `$GITHUB_OUTPUT` cannot be written: the
+    steps after it are skipped, and the review says the check did not run."""
     out = gate.head_ref_output(args.event_name or "", _read_event(args), args.pr or 0)
     print(f"connector-reviewer: gate-file check reads {out.strip() or 'no ref'}")
-    _write_output(out)
-    return 0
+    return 0 if _write_output(out) else 1
 
 
 def _gate_base(args: argparse.Namespace) -> int:
-    """`gate-base`: always exit 0. No base is an empty output: the base
-    checkout is skipped, and the fact says the base was not checked out."""
+    """`gate-base`: exit 0 when the output is written. No base is an empty
+    output: the base checkout is skipped, and the fact says the base was not
+    checked out. Exit 1 when `$GITHUB_OUTPUT` cannot be written, as
+    `gate-ref`."""
     out = gate.base_ref_output(Path(args.merge_checkout))
     print(f"connector-reviewer: gate-file check base: {out.strip() or 'none'}")
-    _write_output(out)
-    return 0
+    return 0 if _write_output(out) else 1
 
 
 def _gate_fact(args: argparse.Namespace) -> int:
-    """`gate-fact`: always exit 0. A check that cannot be made is a fact with
-    `status: unavailable` and the reason, which the review states."""
+    """`gate-fact`: exit 0 when the fact file is written. A check that cannot
+    be made is a fact with `status: unavailable` and the reason, which the
+    review states. Exit 1 when the file cannot be written: nothing is
+    uploaded, and the review says the check did not run."""
     fact = gate.make_fact(
         Path(args.checkout), Path(args.venv), Path(args.base_checkout)
     )
@@ -673,8 +685,11 @@ def _gate_fact(args: argparse.Namespace) -> int:
         out.write_text(json.dumps(fact), encoding="utf-8")
     except OSError as e:
         print(
-            f"connector-reviewer: could not write the gate fact: {e}", file=sys.stderr
+            f"connector-reviewer: could not write the gate fact ({e}); the "
+            "gate-file check is not made",
+            file=sys.stderr,
         )
+        return 1
     if fact.get("status") == "ok":
         mism = fact.get("mismatches") or {}
         print(

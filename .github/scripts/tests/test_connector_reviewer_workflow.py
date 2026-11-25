@@ -362,9 +362,9 @@ def test_the_gate_job_checks_out_the_head_sparse_from_a_tested_ref(
 def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
     gate_job: dict[str, Any], job: dict[str, Any]
 ) -> None:
-    """The fact step always exits 0; its file is uploaded (with the repo's
-    retry) and downloaded by the review, which runs after the gate job
-    whatever its outcome, short of a cancel."""
+    """The fact step fails only when it cannot write the fact; its file is
+    uploaded (with the repo's retry) and downloaded by the review, which runs
+    after the gate job whatever its outcome, short of a cancel."""
     steps = _steps(gate_job)
     [fact] = [s for s in steps if "gate-fact" in str(s.get("run", ""))]
     assert fact["working-directory"] == "sdk/.github/scripts"
