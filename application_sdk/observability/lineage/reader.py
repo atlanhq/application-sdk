@@ -131,6 +131,7 @@ class DerivedAsset:
     name: str | None = None
     processes: int = 0
     process_qualified_name: str | None = None
+    inputs: int = 0
     refs: int = 0
     resolvable_refs: int = 0
     ref_connectors: frozenset[str] = frozenset()
@@ -138,6 +139,8 @@ class DerivedAsset:
     fields_total: int = 0
     fields_with_lineage: int = 0
     fields_pending: int = 0
+    column_refs: int = 0
+    resolvable_column_refs: int = 0
     attributes: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -160,6 +163,7 @@ class ReadStats:
 class _Out:
     processes: int = 0
     first: str | None = None
+    inputs: int = 0
     refs: int = 0
     resolvable: int = 0
     connectors: set[str] = field(default_factory=set)
@@ -223,7 +227,8 @@ def read_run_output(
     field_rules = {rule.type_name: rule for rule in spec.fields}
 
     outputs: dict[str, _Out] = {}
-    field_lineage: dict[bytes, bool] = {}  # digest -> waits on the lookup
+    # digest of a field with lineage -> [lookup refs, resolvable lookup refs]
+    field_lineage: dict[bytes, list[int]] = {}
     for path in paths:
         stats.files += 1
         for record in _lines(path, stats):
@@ -241,12 +246,15 @@ def read_run_output(
             targets = [_ref_qn(o) for o in attributes.get("outputs") or []]
             if type_name == _COLUMN_PROCESS:
                 stats.column_processes += 1
+                resolvable_count = sum(
+                    spec.ref_resolvable(identity.get("components") or {})
+                    for identity in identities
+                )
                 for target in targets:
                     if target:
-                        key = _digest(target)
-                        field_lineage[key] = field_lineage.get(key, False) or bool(
-                            identities
-                        )
+                        counts = field_lineage.setdefault(_digest(target), [0, 0])
+                        counts[0] += len(identities)
+                        counts[1] += resolvable_count
                 continue
             stats.processes += 1
             for target in targets:
@@ -257,6 +265,7 @@ def read_run_output(
                     out = outputs[target] = _Out()
                 out.processes += 1
                 out.first = out.first or process_qn
+                out.inputs += len(attributes.get("inputs") or [])
                 for identity in identities:
                     components = identity.get("components") or {}
                     resolvable = spec.ref_resolvable(components)
@@ -289,7 +298,8 @@ def read_run_output(
             inbound.setdefault(source_type, []).append(attribute)
     named: set[str] = set()  # qualifiedNames some entity names as its target
     parents: dict[str, DerivedAsset] = {}
-    field_counts: dict[str, list[int]] = {}  # parent qn -> [total, lineage, pending]
+    # parent qn -> [fields, with lineage, pending, column refs, resolvable column refs]
+    field_counts: dict[str, list[int]] = {}
     for path in paths:
         for record in _lines(path, None):
             type_name = record.get("typeName")
@@ -316,12 +326,14 @@ def read_run_output(
                 parent = parent or qualified_name.rsplit("/", 1)[0]
                 counts = field_counts.get(parent)
                 if counts is None:
-                    counts = field_counts[parent] = [0, 0, 0]
+                    counts = field_counts[parent] = [0, 0, 0, 0, 0]
                 counts[0] += 1
-                waits = field_lineage.get(_digest(qualified_name))
-                if waits is not None:
+                lineage = field_lineage.get(_digest(qualified_name))
+                if lineage is not None:
                     counts[1] += 1
-                    counts[2] += waits
+                    counts[2] += lineage[0] > 0
+                    counts[3] += lineage[0]
+                    counts[4] += lineage[1]
                 continue
             rule = asset_rules.get(type_name)
             if rule is None:
@@ -348,11 +360,18 @@ def read_run_output(
         if out is not None:
             asset.processes = out.processes
             asset.process_qualified_name = out.first
+            asset.inputs = out.inputs
             asset.refs = out.refs
             asset.resolvable_refs = out.resolvable
             asset.ref_connectors = frozenset(out.connectors)
         counts = field_counts.get(qualified_name)
         if counts is not None:
-            asset.fields_total, asset.fields_with_lineage, asset.fields_pending = counts
+            (
+                asset.fields_total,
+                asset.fields_with_lineage,
+                asset.fields_pending,
+                asset.column_refs,
+                asset.resolvable_column_refs,
+            ) = counts
         yield asset
     stats.process_outputs_without_an_asset = len(outputs)
