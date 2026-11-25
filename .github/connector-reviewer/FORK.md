@@ -527,7 +527,9 @@ equivalent.
   --event-path …` runs after the App token is minted (reading the pull request
   needs `pull-requests` scope, which the job's own token lacks), takes the pull
   request from the event, writes `ref`, `label` and the `head` it read to
-  `$GITHUB_OUTPUT` and always exits 0. `--root <dir>` alone still reads a local
+  `$GITHUB_OUTPUT`, and exits 0 unless that write fails (then 1: the step is
+  `continue-on-error`, and the review runs without the SDK source and says
+  so; `base-ref` likewise). `--root <dir>` alone still reads a local
   checkout's lock. A checkout of
   `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
   (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,

@@ -563,8 +563,10 @@ def _finalize(args: argparse.Namespace) -> int:
 
 
 def _sdk_ref(args: argparse.Namespace) -> int:
-    """`sdk-ref`: always exit 0. No ref is an empty output, and the review then
-    runs without the SDK source; it is never a reason to fail the job."""
+    """`sdk-ref`: exit 0 when the output is written. No ref is an empty output,
+    and the review then runs without the SDK source. Exit 1 when
+    `$GITHUB_OUTPUT` cannot be written: the step is `continue-on-error`, so the
+    review still runs, without the SDK source, and says so."""
     head = ""
     if args.repo:
         number = args.pr or 0
@@ -588,24 +590,15 @@ def _sdk_ref(args: argparse.Namespace) -> int:
         if res.pin
         else f"connector-reviewer: SDK source not available: {res.reason}"
     )
-    path = os.environ.get("GITHUB_OUTPUT")
-    if path:
-        try:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(out)
-        except OSError as e:
-            print(
-                f"connector-reviewer: could not write the step output: {e}",
-                file=sys.stderr,
-            )
-    else:
-        print(out, end="")
-    return 0
+    return 0 if _write_output(out, "the review runs without the SDK source") else 1
 
 
 def _base_ref(args: argparse.Namespace) -> int:
-    """`base-ref`: always exit 0. No base is an empty output: the app checkout
-    then takes its default ref, and the review says it is off the base."""
+    """`base-ref`: exit 0 when the output is written. No base is an empty
+    output: the app checkout then takes its default ref, and the review says
+    it is off the base. Exit 1 when `$GITHUB_OUTPUT` cannot be written: the
+    step is `continue-on-error`, so the review still runs, off the base, and
+    says so."""
     number = args.pr or 0
     if not number and args.event_name and args.event_path:
         try:
@@ -615,19 +608,10 @@ def _base_ref(args: argparse.Namespace) -> int:
         number = pr_number(args.event_name, event) if isinstance(event, dict) else 0
     out, said = base_ref_output(GitHub(args.repo), number)
     print(f"connector-reviewer: pull request base: {said}")
-    path = os.environ.get("GITHUB_OUTPUT")
-    if path:
-        try:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(out)
-        except OSError as e:
-            print(
-                f"connector-reviewer: could not write the step output: {e}",
-                file=sys.stderr,
-            )
-    else:
-        print(out, end="")
-    return 0
+    off_base = (
+        "the app checkout takes its default ref, and the review says it is off the base"
+    )
+    return 0 if _write_output(out, off_base) else 1
 
 
 def _read_event(args: argparse.Namespace) -> dict[str, Any]:

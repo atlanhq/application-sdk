@@ -328,7 +328,8 @@ jobs:
       # request changes which SDK its code calls. Reading the pull request needs
       # the App token (the job's own token has no pull-requests scope). Writes
       # `ref` (empty when there is none), `label` and the `head` it read as
-      # step outputs. Always exits 0.
+      # step outputs. Exits 1 only when $GITHUB_OUTPUT cannot be written; the
+      # step continues on error, and the review runs without the SDK source.
       - name: Resolve the application-sdk version the pull request pins
         id: sdk-ref
         continue-on-error: true
@@ -347,8 +348,10 @@ jobs:
       # The pull request's base commit, read through the REST API (the event of
       # a `/review` comment does not carry it; reading the pull request needs
       # the App token). Writes `base` (40 hex, or empty) as a step output, in
-      # tested Python (connector_reviewer/review.py, `base_ref_output`). Always
-      # exits 0.
+      # tested Python (connector_reviewer/review.py, `base_ref_output`). Exits 1
+      # only when $GITHUB_OUTPUT cannot be written; the step continues on
+      # error, and the checkout below takes the default ref (the review says
+      # it is off the base).
       - name: Resolve the pull request's base commit
         id: base-ref
         continue-on-error: true

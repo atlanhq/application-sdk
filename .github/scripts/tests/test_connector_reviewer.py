@@ -16659,6 +16659,33 @@ def test_a_gate_step_whose_output_cannot_be_written_fails(
     assert got.notes == ["Gate-file check not made: the gate check did not run."]
 
 
+def test_the_review_jobs_ref_steps_fail_when_their_output_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """lens F-a7a6c0: `sdk-ref` and `base-ref` exit 1, saying what the review
+    goes without, when `$GITHUB_OUTPUT` cannot be written, as the gate steps
+    do. Both steps are `continue-on-error` in the review job, so the review
+    still runs: with no `ref` the SDK checkout is skipped and the review says
+    the SDK source is not available; with no `base` the app checkout takes its
+    default ref and the review says it is off the base. Neither is a pass."""
+    import connector_reviewer.__main__ as cli  # noqa: PLC0415 - module under test
+
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "missing" / "github_output"))
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "uv.lock").write_text(_lock('{ registry = "https://pypi.org/simple" }'))
+    assert cli.main(["sdk-ref", "--root", str(app)]) == 1
+    err = capsys.readouterr().err
+    assert "could not write the step output" in err
+    assert "without the SDK source" in err
+
+    monkeypatch.setattr(cli, "GitHub", lambda repo: fake_github(base=_SHA_BASE))
+    assert cli.main(["base-ref", "--repo", "o/r", "--pr", "7"]) == 1
+    err = capsys.readouterr().err
+    assert "could not write the step output" in err
+    assert "off the base" in err
+
+
 @pytest.mark.parametrize(
     "argv",
     [
