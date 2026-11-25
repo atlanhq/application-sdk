@@ -1251,9 +1251,18 @@ Three of the harness's four asset knobs are about **shape**:
 | `expected_exact_counts` | per-type exact counts |
 | `expected_asset_qn_depth` | qualifiedName nesting depth below the connection |
 
-None of them reads an asset attribute, so a connector can publish a structurally
-perfect asset tree in which every computed attribute is `0` and the suite stays
-green. Two knobs close that — one about a whole type, one about a named asset.
+The depth is the number of `/`-separated segments below the connection. A `/`
+inside a name (a table named `a/b`, or one under a schema named `a/b`) makes
+that read too deep, so the depth samples also carry each asset's ancestor
+qualified names, and when the count reads too deep those boundaries decide
+instead. They are named by `asset_qn_ancestor_attributes`, the SQL hierarchy by
+default (`databaseQualifiedName`, `schemaQualifiedName`, then
+`tableQualifiedName` or `viewQualifiedName`). A BI or object-store connector
+whose qualified names embed `/` can set its own parent attributes there.
+
+None of them reads a computed asset attribute, so a connector can publish a
+structurally perfect asset tree in which every computed attribute is `0` and
+the suite stays green. Two knobs close that — one about a whole type, one about a named asset.
 
 ### `expected_asset_attributes` — the claim every asset of a type shares
 

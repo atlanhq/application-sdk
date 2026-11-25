@@ -21,9 +21,11 @@ import pytest
 from application_sdk.testing.harness.expectations import (
     UNREADABLE,
     AssetExpectations,
+    LocatedName,
     Unreadable,
     evaluate_counts,
     evaluate_locations,
+    sampled_qualified_names,
 )
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
@@ -216,6 +218,111 @@ def test_correct_hierarchy_passes() -> None:
         "Column": ["default/x/123/db/sch/tbl/col"],
     }
     assert evaluate_locations(samples, _sql_locations()) == []
+
+
+# A "/" inside a name: the "/" count reads too deep, the ancestor boundaries decide.
+_C = "default/x/123"
+
+
+def test_a_table_whose_name_holds_a_slash_passes_on_its_ancestors() -> None:
+    table = LocatedName(f"{_C}/db/sch/a/b", (f"{_C}/db", f"{_C}/db/sch"), "a/b")
+    assert evaluate_locations({"Table": [table]}, _sql_locations()) == []
+
+
+def test_the_table_from_the_snowflake_crawler_e2e_failure_passes() -> None:
+    """The qualified name that failed `crawler-au` and `crawler-is` legs."""
+    name = "my !@#%^&*()_+=[]***:;|\\/?><~`,"
+    db = f"{_C}/E2E_TEST_DBT_FOOD_BEVARAGE"
+    table = LocatedName(f"{db}/PUBLIC/{name}", (db, f"{db}/PUBLIC"), name)
+    assert evaluate_locations({"Table": [table]}, _sql_locations()) == []
+
+
+def test_a_column_under_a_schema_whose_name_holds_a_slash_passes() -> None:
+    schema = f"{_C}/db/s/x"
+    column = LocatedName(f"{schema}/tbl/col", (f"{_C}/db", schema, f"{schema}/tbl"))
+    assert evaluate_locations({"Column": [column]}, _sql_locations()) == []
+
+
+def test_a_name_that_disagrees_with_its_ancestors_still_fails() -> None:
+    # The schema it claims is not a prefix of its own qualified name.
+    table = LocatedName(f"{_C}/db/sch/extra/tbl", (f"{_C}/db", f"{_C}/db/other"))
+    findings = evaluate_locations({"Table": [table]}, _sql_locations())
+    assert [(f.subject, f.expectation) for f in findings] == [("Table", "depth")]
+
+
+def test_ancestors_that_add_a_level_still_fail() -> None:
+    # Every boundary lines up, but they place the table four levels down.
+    table = LocatedName(
+        f"{_C}/db/sch/sub/tbl",
+        (f"{_C}/db", f"{_C}/db/sch", f"{_C}/db/sch/sub"),
+    )
+    findings = evaluate_locations({"Table": [table]}, _sql_locations())
+    assert [(f.subject, f.expectation) for f in findings] == [("Table", "depth")]
+
+
+def test_a_slashed_name_without_ancestors_fails_as_before() -> None:
+    findings = evaluate_locations(
+        {"Table": [LocatedName(f"{_C}/db/sch/a/b")]}, _sql_locations()
+    )
+    assert [(f.subject, f.expectation) for f in findings] == [("Table", "depth")]
+
+
+def test_a_name_at_depth_never_reads_its_ancestors() -> None:
+    # Ancestors that do not line up at all are ignored when the count is right.
+    table = LocatedName(f"{_C}/db/sch/tbl", ("garbage", "more/garbage"))
+    assert evaluate_locations({"Table": [table]}, _sql_locations()) == []
+
+
+def test_a_duplicated_segment_in_the_asset_name_still_fails() -> None:
+    # The ancestors are right, but the qualified name repeats the schema: the
+    # last step `sch/tbl` is not the table's name `tbl`.
+    table = LocatedName(f"{_C}/db/sch/sch/tbl", (f"{_C}/db", f"{_C}/db/sch"), "tbl")
+    findings = evaluate_locations({"Table": [table]}, _sql_locations())
+    assert [(f.subject, f.expectation) for f in findings] == [("Table", "depth")]
+
+
+def test_a_slashed_last_step_without_a_name_read_fails() -> None:
+    table = LocatedName(f"{_C}/db/sch/a/b", (f"{_C}/db", f"{_C}/db/sch"))
+    findings = evaluate_locations({"Table": [table]}, _sql_locations())
+    assert [(f.subject, f.expectation) for f in findings] == [("Table", "depth")]
+
+
+def test_a_last_step_without_a_slash_is_never_compared_to_the_name() -> None:
+    # A schema with a "/" sends the walk; the table's segment is quoted
+    # differently from its display name, which must not matter.
+    schema = f"{_C}/db/s/x"
+    table = LocatedName(f'{schema}/"tbl"', (f"{_C}/db", schema), "tbl")
+    assert evaluate_locations({"Table": [table]}, _sql_locations()) == []
+
+
+def test_too_shallow_is_not_rescued_by_ancestors() -> None:
+    table = LocatedName(f"{_C}/db/tbl", (f"{_C}/db",))
+    findings = evaluate_locations({"Table": [table]}, _sql_locations())
+    assert [(f.subject, f.expectation) for f in findings] == [("Table", "depth")]
+
+
+def test_an_ancestor_equal_to_the_asset_is_not_a_level() -> None:
+    # A view may carry its own qualified name in viewQualifiedName.
+    view = LocatedName(
+        f"{_C}/db/sch/a/b", (f"{_C}/db", f"{_C}/db/sch", f"{_C}/db/sch/a/b"), "a/b"
+    )
+    assert evaluate_locations({"View": [view]}, _sql_locations()) == []
+
+
+def test_sampled_qualified_names_projects_records_and_keeps_bare_names() -> None:
+    """Both entry shapes come back as bare qualified-name strings, in order, so a
+    caller indexing ``asset_qn_samples`` never receives a ``LocatedName``."""
+    sample = [
+        LocatedName(f"{_C}/db/sch/a/b", (f"{_C}/db", f"{_C}/db/sch"), "a/b"),
+        f"{_C}/db/sch/tbl",
+        LocatedName(f"{_C}/db/sch/t2"),
+    ]
+    assert sampled_qualified_names(sample) == [
+        f"{_C}/db/sch/a/b",
+        f"{_C}/db/sch/tbl",
+        f"{_C}/db/sch/t2",
+    ]
+    assert sampled_qualified_names([]) == []
 
 
 def test_wrong_depth_names_the_type_and_the_expected_depth() -> None:
