@@ -178,7 +178,9 @@ def write_coverage(
             by_type.setdefault(asset.type_name, Counter())[
                 assessment.verdict.value
             ] += 1
-            assets_out.write(orjson.dumps(_row(asset, recorded, assessment, key)))
+            assets_out.write(
+                orjson.dumps(_row(asset, recorded, assessment, key), default=str)
+            )
             assets_out.write(b"\n")
             rows += 1
     recorder_error = getattr(recorder, "error", None)
@@ -208,7 +210,7 @@ def write_coverage(
         "outcome": coverage_outcome_fields(counts, spec.app_name),
     }
     with open(os.path.join(output_dir, SUMMARY_FILE), "wb") as fh:
-        fh.write(orjson.dumps(summary, option=orjson.OPT_INDENT_2))
+        fh.write(orjson.dumps(summary, option=orjson.OPT_INDENT_2, default=str))
     return summary
 
 
