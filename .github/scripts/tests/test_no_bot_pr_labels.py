@@ -131,12 +131,6 @@ _GRANDFATHERED: dict[str, tuple[int, str]] = {
         1,
         "actions/stale on application-sdk's own issues/PRs.",
     ),
-    ".github/workflow-templates/stale.yml": (
-        1,
-        "Starter template running actions/stale on the job's GITHUB_TOKEN; "
-        "events from GITHUB_TOKEN do not start workflow runs, so its label "
-        "adds trigger no Tests run.",
-    ),
 }
 
 

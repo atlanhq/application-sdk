@@ -1,0 +1,66 @@
+name: Download artifact (with retry)
+description: |
+  `actions/download-artifact` with the retry every gating download in this repo
+  needs. `download-artifact` treats the artifact service's `ListArtifacts` 403
+  ("Error from intermediary") as non-retryable and fails on the first
+  occurrence, even though the artifact is intact. This action is the one place
+  the retry lives:
+
+    1. The first attempt is `continue-on-error`, so a 403 does not end the job
+       before the retry runs.
+    2. A 20-second wait sits between the attempts. The 403 comes from an
+       intermediary having a moment; an immediate retry lands in the same
+       window.
+    3. The retry fetches the same `pattern` into the same `path`. A failed read
+       burns nothing, so unlike an upload retry it needs no new name.
+
+  It always downloads by `pattern` with `merge-multiple: true`. An artifact
+  uploaded through `upload-artifact-retry` lands as `<name>` or `<name>-retry`,
+  so pass `<name>*`, never the bare name. With `pattern`, nothing matching is a
+  SUCCESS, not a failure: check for the files (`hashFiles(...)`), not this
+  step's outcome.
+
+  The step fails only when both attempts fail. Set `continue-on-error: true`
+  on the calling step when a missing artifact must not fail the job.
+
+  The caller's `if:` is the only gate: the first attempt runs whenever this
+  step does, including after an earlier step failed (`if: always()` here).
+
+  Reusable workflows and composites must reference this as
+  `atlanhq/application-sdk/.github/actions/download-artifact-retry@main`, not
+  `./…`: a relative path resolves against the caller's workspace, which in a
+  consumer repo has no copy of this action.
+
+inputs:
+  pattern:
+    required: true
+    description: Artifact name glob, normally `<name>*`.
+  path:
+    required: true
+    description: Directory to download into. Matching artifacts are merged into it.
+
+runs:
+  using: composite
+  steps:
+    - name: Download
+      id: download
+      if: always()
+      continue-on-error: true
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        pattern: ${{ inputs.pattern }}
+        merge-multiple: true
+        path: ${{ inputs.path }}
+
+    - name: Wait before the download retry
+      if: always() && steps.download.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+
+    - name: Download (retry)
+      if: always() && steps.download.outcome == 'failure'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      with:
+        pattern: ${{ inputs.pattern }}
+        merge-multiple: true
+        path: ${{ inputs.path }}

@@ -3731,49 +3731,15 @@ jobs:
           uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
 
-      # `upload-artifact` classifies the artifact service's finalize 403 as
-      # non-retryable and fails on the first occurrence, even though the bytes
-      # already landed and the next attempt normally succeeds. That failed the
-      # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once, and never fail the gate on it:
-      # the scorecard is reporting, not a gate.
+      # Non-fatal: the scorecard is reporting, not a gate.
       - name: Upload scorecard
-        id: upload-scorecard
         if: hashFiles('results/test-readiness.json') != ''
         continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: test-readiness-scorecard
           path: results/test-readiness.json
           retention-days: 14
-          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
-          # a run, so re-running a failed job would otherwise 409 here and burn the
-          # retry on a conflict that has nothing to do with a finalize failure. It is
-          # also what holds the invariant every consumer of this upload globs on:
-          # at most ONE live artifact ever matches `<name>*`.
-          overwrite: true
-
-      # A finalize 403 comes from an intermediary having a moment, and the
-      # retry runs about a second later — well inside the same window. Wait
-      # it out, so the two attempts fail independently or not at all.
-      - name: Wait before the upload retry
-        if: steps.upload-scorecard.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload scorecard (retry)
-        if: steps.upload-scorecard.outcome == 'failure'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
-          # failure leaves an unfinalized record holding that name for the whole
-          # run. The list API cannot see it, so `overwrite` cannot clear it and
-          # CreateArtifact 409s — a same-named retry could never have worked.
-          # Consumers resolve this artifact by `<name>*` glob, not exact name.
-          name: test-readiness-scorecard-retry
-          path: results/test-readiness.json
-          retention-days: 14
-          overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
   #
