@@ -7,14 +7,18 @@
     python -m connector_reviewer sdk-ref --root <app checkout>
     python -m connector_reviewer base-ref --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
     python -m connector_reviewer gate-ref --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
-    python -m connector_reviewer gate-fact --checkout <head checkout> --venv <new venv dir> --out <fact.json>
+    python -m connector_reviewer gate-base --merge-checkout <test-merge checkout>
+    python -m connector_reviewer gate-fact --checkout <head checkout> --venv <new venv dir> --base-checkout <base checkout> --out <fact.json>
 
-`gate-ref` and `gate-fact` run in the workflow's `gate` job, which holds no
-secret (FND-5325, connector_reviewer/gate.py). `gate-ref` writes the pull
-request's head ref (`ref=refs/pull/<n>/head`, empty when there is none) for a
-sparse checkout of the head, read as data; `gate-fact` installs the
-conformance version that head's `uv.lock` pins into a fresh venv, compares the
-bootstrap-managed gate files with its render, and writes the fact file the
+`gate-ref`, `gate-base` and `gate-fact` run in the workflow's `gate` job,
+which holds no secret (FND-5325, connector_reviewer/gate.py). `gate-ref`
+writes the pull request's head ref (`ref=refs/pull/<n>/head`, empty when there
+is none) for a sparse checkout of the head, read as data, and its test-merge
+ref (`merge=`); `gate-base` writes the base the pull request merges into
+(`base=`, the first parent of that merge, 40 hex); `gate-fact` installs the
+conformance version that base's `uv.lock` pins (the head's own pin is never
+read) into a fresh venv, compares the head's bootstrap-managed gate files with
+its render, and writes the fact file the
 review reads (`--gate-fact`, or `CONNECTOR_REVIEWER_GATE_FACT`). A check that
 cannot be made is a fact that says why, and exit 0. `gate-ref`, `gate-base`
 and `gate-fact` exit 1 only when they cannot write their output (the step
@@ -219,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     gf = sub.add_parser(
         "gate-fact",
         help="compare the head's bootstrap-managed gate files with the render of the "
-        "conformance version its uv.lock pins, and write the fact file",
+        "conformance version the base's uv.lock pins, and write the fact file",
     )
     gf.add_argument(
         "--checkout", required=True, help="the pull request head, read as data"

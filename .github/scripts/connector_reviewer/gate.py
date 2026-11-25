@@ -22,8 +22,10 @@ the lock names); the review job, which holds the App token and the model key,
 still runs nothing but this package.
 
 1. `gate-ref` (`head_ref_output`) writes the pull request's head ref for a
-   sparse checkout of the head's CI directories, read as data. The
-   repository's default branch is checked out too, `uv.lock` alone.
+   sparse checkout of the head's CI directories, read as data, and its
+   test-merge ref. `gate-base` (`base_ref_output`) writes the base the pull
+   request merges into, the first parent of that merge, whose `uv.lock` alone
+   is checked out too.
 2. `gate-fact` (`make_fact`) reads the conformance version the BASE branch's
    `uv.lock` pins (`conformance_pin`; PyPI or its mirror only, a released
    version only), installs exactly that version into a fresh venv with
@@ -345,8 +347,8 @@ def make_fact(
 ) -> dict[str, Any]:
     """The fact for the pull request head checked out at `checkout`,
     rendered at the conformance version the base branch pins (`uv.lock` of
-    `base_checkout`, the repository's default branch). Never raises: whatever
-    goes wrong is `status: unavailable` with a reason.
+    `base_checkout`, the base the pull request merges into). Never raises:
+    whatever goes wrong is `status: unavailable` with a reason.
 
     The base's pin, not the head's: the files are judged against what the
     branch they merge into would install. A pull request that bumps the pin

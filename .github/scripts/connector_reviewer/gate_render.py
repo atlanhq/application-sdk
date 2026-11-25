@@ -3,8 +3,8 @@
 Not part of the engine, and never imported by it: the engine is standard
 library only, and this file imports the conformance package. The `gate-fact`
 step (`gate.make_fact`) runs it with the interpreter of an isolated venv that
-holds exactly the `atlan-application-sdk-conformance` version the pull request
-head's `uv.lock` pins:
+holds exactly the `atlan-application-sdk-conformance` version the `uv.lock` of
+the base the pull request merges into pins (the head's own pin is never read):
 
     <venv>/bin/python -I gate_render.py --root <head checkout> --out <json>
 

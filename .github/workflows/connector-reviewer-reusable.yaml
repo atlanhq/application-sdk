@@ -98,7 +98,8 @@ jobs:
   # The gate-file check (FND-5325): a pull request that changes a
   # bootstrap-managed gate file (a managed workflow shim, the reviewer's own
   # among them, or a vendored action or script) is compared with what the
-  # conformance version it pins renders, and a mismatch is one finding in the
+  # conformance version its base pins renders (never the head's own pin), and
+  # a mismatch is one finding in the
   # review. No secret here, on purpose (see the header). A check that cannot
   # be made is a fact that says why; a step that cannot hand on its output
   # (`gate-ref`, `gate-base`, `gate-fact`) fails, the steps after it are
