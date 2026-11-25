@@ -298,8 +298,9 @@ class TaskMetadata:
     """
 
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
-    """Full retry policy for this task. When provided, takes precedence over
-    retry_max_attempts and retry_max_interval_seconds."""
+    """Full retry policy for this task. When provided, the activity is
+    dispatched with it as-is and the three ``retry_*`` scalars below are never
+    read; ``@task`` warns when both are passed (an error from v4.0.0)."""
 
     retry_max_attempts: int = 3
     """Maximum retry attempts for this task. Ignored when retry_policy is set."""
@@ -451,6 +452,35 @@ def _validate_task_signature(
     return input_type, output_type
 
 
+#: The release in which passing ``retry_policy`` together with any of
+#: ``retry_max_attempts``, ``retry_initial_interval_seconds`` or
+#: ``retry_max_interval_seconds`` stops warning and raises
+#: :class:`TaskDeclarationError` at decoration.
+RETRY_OVERRIDE_ERROR_VERSION = "4.0.0"
+
+
+def _warn_retry_overrides_ignored(task_name: str | None, overrides: list[str]) -> None:
+    """Complain that ``retry_policy`` makes the named retry arguments dead.
+
+    The activity wrapper dispatches ``retry_policy`` as-is and never reads the
+    three scalar arguments when one is set, so an author who passes both loses
+    the scalars without a word. A ``DeprecationWarning`` (so ``-W error`` and
+    test suites catch it) plus a logged WARNING (so a worker's log shows it)
+    today; a :class:`TaskDeclarationError` in v4.0.0.
+    """
+    where = f"@task(name={task_name!r})" if task_name else "@task"
+    message = (
+        f"{where}: {', '.join(overrides)} "
+        f"{'is' if len(overrides) == 1 else 'are'} ignored because retry_policy "
+        "is also passed, and the policy alone sets the task's retries. Put the "
+        "value on the RetryPolicy (max_attempts, initial_interval, "
+        "max_interval) and drop the argument; this warning will be an error "
+        f"in v{RETRY_OVERRIDE_ERROR_VERSION} (TaskDeclarationError)."
+    )
+    warnings.warn(message, DeprecationWarning, stacklevel=3)
+    logger.warning("%s", message)
+
+
 @overload
 def task(func: F) -> F: ...
 
@@ -483,9 +513,9 @@ def task(
     timeout_seconds: int | object = _USE_DEFAULT,
     schedule_to_close_seconds: int | None | object = _USE_DEFAULT,
     retry_policy: "RetryPolicy | None" = None,
-    retry_max_attempts: int = 3,
-    retry_initial_interval_seconds: int = 1,
-    retry_max_interval_seconds: int = 30,
+    retry_max_attempts: int | object = _USE_DEFAULT,
+    retry_initial_interval_seconds: int | object = _USE_DEFAULT,
+    retry_max_interval_seconds: int | object = _USE_DEFAULT,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
     pool: str | None = None,
@@ -570,18 +600,22 @@ def task(
             ``ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS`` when that env var is set
             to a positive value; passing ``None`` explicitly opts this task out
             of that fleet-wide ceiling.
-        retry_policy: Full retry policy. When provided, takes precedence over
-            retry_max_attempts and retry_max_interval_seconds.
-        retry_max_attempts: Maximum retry attempts (default 3). Ignored when
-            retry_policy is provided.
+        retry_policy: Full retry policy. When provided, it replaces
+            retry_max_attempts, retry_initial_interval_seconds and
+            retry_max_interval_seconds: put those settings on the policy
+            instead. Passing any of the three alongside ``retry_policy`` warns
+            at decoration today and raises :class:`TaskDeclarationError` from
+            v4.0.0.
+        retry_max_attempts: Maximum retry attempts (default 3). Not allowed
+            together with retry_policy.
         retry_initial_interval_seconds: Delay before the first retry, in seconds
             (default 1). Later delays grow from it by the backoff coefficient,
             so this is the knob that widens the window a small attempt budget
             spans — raise it when the task's dependency fails for tens of
-            seconds at a time. Ignored when retry_policy is provided.
+            seconds at a time. Not allowed together with retry_policy.
         retry_max_interval_seconds: Maximum interval between retries in seconds.
             Caps exponential backoff to prevent very long waits. Default: 30 seconds.
-            Ignored when retry_policy is provided.
+            Not allowed together with retry_policy.
         heartbeat_timeout_seconds: Heartbeat timeout in seconds — if no heartbeat
             is received within this window, Temporal restarts the activity. Set to
             None to disable heartbeating entirely. Defaults to
@@ -647,6 +681,31 @@ def task(
                 "the pool name, so mixed or upper case creates a lookup mismatch."
             )
 
+    retry_overrides = [
+        arg_name
+        for arg_name, value in (
+            ("retry_max_attempts", retry_max_attempts),
+            ("retry_initial_interval_seconds", retry_initial_interval_seconds),
+            ("retry_max_interval_seconds", retry_max_interval_seconds),
+        )
+        if value is not _USE_DEFAULT
+    ]
+    if retry_policy is not None and retry_overrides:
+        _warn_retry_overrides_ignored(name, retry_overrides)
+    resolved_retry_max_attempts: int = (
+        3 if retry_max_attempts is _USE_DEFAULT else cast("int", retry_max_attempts)
+    )
+    resolved_retry_initial_interval: int = (
+        1
+        if retry_initial_interval_seconds is _USE_DEFAULT
+        else cast("int", retry_initial_interval_seconds)
+    )
+    resolved_retry_max_interval: int = (
+        30
+        if retry_max_interval_seconds is _USE_DEFAULT
+        else cast("int", retry_max_interval_seconds)
+    )
+
     # Resolve sentinels at decoration time so test-side monkeypatching of
     # _DEFAULT_* constants takes effect on subsequent @task uses; env-var values
     # themselves are read once at module import via env_int().
@@ -706,9 +765,9 @@ def task(
             schedule_to_close_seconds=resolved_schedule_to_close,
             pool=pool,
             retry_policy=retry_policy,
-            retry_max_attempts=retry_max_attempts,
-            retry_initial_interval_seconds=retry_initial_interval_seconds,
-            retry_max_interval_seconds=retry_max_interval_seconds,
+            retry_max_attempts=resolved_retry_max_attempts,
+            retry_initial_interval_seconds=resolved_retry_initial_interval,
+            retry_max_interval_seconds=resolved_retry_max_interval,
             heartbeat_timeout_seconds=resolved_heartbeat_timeout,
             auto_heartbeat_seconds=resolved_auto_heartbeat,
             progress_watchdog=resolved_watchdog,

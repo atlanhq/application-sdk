@@ -1552,6 +1552,8 @@ class MyConnector(App):
     async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
 ```
 
+A `retry_policy` replaces the `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds` arguments: the task is dispatched with the policy and those three are never read. Put the values on the policy instead. Passing any of them together with `retry_policy` warns at decoration today and raises `TaskDeclarationError` from v4.0.0.
+
 `RetryPolicy` is a frozen dataclass with fluent builder methods:
 
 ```python
