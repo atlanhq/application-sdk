@@ -2899,7 +2899,7 @@ Dev entry point — run_dev_combined() and AppConfig for local execution and con
 - **Import:** `from application_sdk.main import run_dev_combined`
 - **Signature:** `run_dev_combined(app_class: type[App], *, ...)`
 - **Summary:** Run worker + handler in a single process for local development.
-- **Defined in:** `application_sdk/main.py`
+- **Defined in:** `application_sdk/dev/_runner.py` (re-exported from `application_sdk.main`)
 
 ## `application_sdk.observability`
 

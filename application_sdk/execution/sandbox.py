@@ -37,6 +37,7 @@ _SDK_PASSTHROUGH_PACKAGES: frozenset[str] = frozenset(
         "_obstore_config",
         "_proxy",
         "_runtime",
+        "_shutdown_policy",
         "app",
         "clients",
         "common",

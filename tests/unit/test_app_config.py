@@ -7,7 +7,8 @@ import dataclasses
 
 import pytest
 
-from application_sdk.main import AppConfig, _build_dev_config, _env_int
+from application_sdk.dev._runner import _build_dev_config
+from application_sdk.main import AppConfig, _env_int
 
 
 def _minimal_args(**overrides: str) -> argparse.Namespace:

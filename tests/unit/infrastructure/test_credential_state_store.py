@@ -51,7 +51,7 @@ class TestDaprRequiredStartup:
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
-        from application_sdk.main import _create_infrastructure
+        from application_sdk.infrastructure._bootstrap import _create_infrastructure
 
         with pytest.raises(DaprNotDetectedError) as exc_info:
             await _create_infrastructure()
@@ -63,7 +63,7 @@ class TestDaprRequiredStartup:
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
-        from application_sdk.main import _create_infrastructure
+        from application_sdk.infrastructure._bootstrap import _create_infrastructure
 
         try:
             await _create_infrastructure()
