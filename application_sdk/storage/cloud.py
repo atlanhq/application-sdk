@@ -34,14 +34,14 @@ Credential format (standard ``csa-connectors-objectstore``)::
     S3:   authType="s3",   username=access_key, password=secret_key,
           token?=session_token (temporary STS credentials),
           extra={s3_bucket, region?, aws_role_arn?, aws_external_id?,
-                 endpoint?, allow_http?, allow_invalid_certificates?,
-                 force_path_style?, disable_tagging?, conditional_put?,
+                 endpoint?, force_path_style?, disable_tagging?, conditional_put?,
                  copy_if_not_exists?, checksum_algorithm?,
                  server_side_encryption?, sse_kms_key_id?}
           (a blank region is looked up from the bucket before the first
-          call, unless a custom endpoint is set; an http:// endpoint allows
-          plain HTTP, and a non-AWS endpoint disables object tagging unless
-          disable_tagging says otherwise)
+          call, unless a non-AWS endpoint is set; a non-AWS endpoint
+          disables object tagging unless disable_tagging says otherwise;
+          the endpoint must be https:// — CloudStore always uses TLS with
+          certificate verification)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
           (no password: Application Default Credentials, including a
@@ -836,6 +836,26 @@ def _extra_str(extra: dict[str, Any], key: str) -> str:
     return str(extra.get(key) or "").strip()
 
 
+def _tls_endpoint(extra: dict[str, Any]) -> str:
+    """``extra["endpoint"]``, refusing a plain-HTTP one.
+
+    CloudStore's credential is entered by a customer and reaches a bucket
+    over networks the SDK does not control, so it always uses TLS with
+    certificate verification: there is no ``allow_http`` or
+    ``allow_invalid_certificates`` here, and an ``http://`` endpoint (which
+    the shared translation would turn into plain HTTP) is a config error.
+    The Dapr binding's ``disableSSL`` / ``insecureSSL`` are operator-set in
+    the component YAML and stay as they are.
+    """
+    endpoint = _extra_str(extra, "endpoint")
+    if endpoint.lower().startswith("http://"):
+        raise StorageConfigError(
+            "CloudStore requires an https:// endpoint (extra.endpoint); "
+            "plain HTTP would send credentials and data unencrypted"
+        )
+    return endpoint
+
+
 def _create_s3_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
@@ -897,18 +917,10 @@ def _create_s3_store(
         )
         _log().debug("S3 cross-account assume-role auth configured")
 
-    insecure = bool(_extra_bool(extra, "allow_invalid_certificates"))
-    if insecure:
-        _log().warning(
-            "S3: allow_invalid_certificates=true disables certificate verification"
-        )
-
     settings = S3StoreSettings(
         bucket=bucket,
         region=extra.get("region") or "",
-        endpoint=_extra_str(extra, "endpoint"),
-        allow_http=bool(_extra_bool(extra, "allow_http")),
-        allow_invalid_certificates=insecure,
+        endpoint=_tls_endpoint(extra),
         force_path_style=bool(_extra_bool(extra, "force_path_style")),
         disable_tagging=_extra_bool(extra, "disable_tagging"),
         access_key_id=access_key,
@@ -987,7 +999,7 @@ def _create_azure_store(
     settings = AzureStoreSettings(
         container=container,
         account_name=storage_account,
-        endpoint=_extra_str(extra, "endpoint"),
+        endpoint=_tls_endpoint(extra),
         account_key=account_key,
         tenant_id=tenant_id if service_principal else "",
         client_id=client_id if service_principal else "",

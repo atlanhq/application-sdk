@@ -481,13 +481,12 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 |-------|--------|
 | `username` + `password` | Static access key; `token` adds the STS session token for temporary credentials |
 | `extra.aws_role_arn` | AssumeRole via STS (+ optional `aws_external_id`, `aws_role_session_name`); `username`/`password`/`token` become the base identity |
-| `extra.endpoint` | S3-compatible endpoint (MinIO, R2, ...). `http://` allows plain HTTP; a non-AWS endpoint disables object tagging and skips the bucket-region lookup (an AWS endpoint keeps the lookup) |
+| `extra.endpoint` | S3-compatible endpoint (MinIO, R2, ...). Must be `https://`: CloudStore always uses TLS with certificate verification and refuses an `http://` endpoint. A non-AWS endpoint disables object tagging and skips the bucket-region lookup (an AWS endpoint keeps the lookup) |
 | `extra.force_path_style`, `extra.disable_tagging` | Path-style requests; explicit tagging override (wins over the non-AWS auto-detect) |
-| `extra.allow_http`, `extra.allow_invalid_certificates` | Plain HTTP without an `http://` endpoint; skip TLS certificate verification (logged as a warning) |
 | `extra.conditional_put`, `extra.copy_if_not_exists`, `extra.checksum_algorithm` | obstore's `aws_conditional_put`, `aws_copy_if_not_exists`, `aws_checksum_algorithm` |
 | `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
 
-ADLS also accepts `extra.endpoint` (e.g. Azurite). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
+ADLS also accepts `extra.endpoint` (`https://` only). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
 
 Store construction lives in `application_sdk/_obstore_config.py`: each front-end (the Dapr binding, `CloudStore`, the API host) fills an `S3StoreSettings`, `AzureStoreSettings` or `GCSStoreSettings`, and `build_*_store` is the only code that turns settings into obstore config. A fix to that translation reaches every path.
 

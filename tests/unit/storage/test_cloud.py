@@ -357,7 +357,7 @@ class TestSharedStoreSettings:
         )
         assert "aws_session_token" not in kwargs["config"]
 
-    def test_http_endpoint_allows_http_and_disables_tagging(self):
+    def test_non_aws_endpoint_disables_tagging(self):
         kwargs = self._s3_kwargs(
             {
                 "authType": "s3",
@@ -366,16 +366,56 @@ class TestSharedStoreSettings:
                 "extra": {
                     "s3_bucket": "b",
                     "region": "us-east-1",
-                    "endpoint": "http://minio:9000",
+                    "endpoint": "https://minio.example.com",
                     "force_path_style": True,
                 },
             }
         )
         config = kwargs["config"]
-        assert config["aws_endpoint"] == "http://minio:9000"
+        assert config["aws_endpoint"] == "https://minio.example.com"
         assert config["aws_disable_tagging"] == "true"
         assert config["aws_virtual_hosted_style_request"] == "false"
-        assert kwargs["client_options"]["allow_http"] is True
+        assert "allow_http" not in kwargs["client_options"]
+
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}},
+            {
+                "authType": "adls",
+                "password": base64.b64encode(b"0" * 32).decode(),
+                "extra": {"storage_account_name": "acct"},
+            },
+        ],
+        ids=["s3", "adls"],
+    )
+    @pytest.mark.parametrize("endpoint", ["http://minio:9000", "HTTP://minio:9000"])
+    def test_plain_http_endpoint_is_refused(self, credentials, endpoint):
+        """A customer credential never turns off TLS: an http:// endpoint
+        would send keys and data in cleartext."""
+        credentials = {
+            **credentials,
+            "extra": {**credentials["extra"], "endpoint": endpoint},
+        }
+        with pytest.raises(StorageConfigError, match="https://"):
+            CloudStore.from_credentials(credentials)
+
+    def test_tls_opt_outs_in_extra_are_ignored(self):
+        """``allow_http`` / ``allow_invalid_certificates`` are not CloudStore
+        options: TLS with certificate checks always applies."""
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "allow_http": "true",
+                    "allow_invalid_certificates": True,
+                },
+            }
+        )
+        assert "allow_http" not in kwargs["client_options"]
+        assert "allow_invalid_certificates" not in kwargs["client_options"]
 
     def test_explicit_disable_tagging_false_wins_over_auto_detect(self):
         kwargs = self._s3_kwargs(
@@ -413,7 +453,7 @@ class TestSharedStoreSettings:
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         assert _cloud_module._needs_region_lookup({"s3_bucket": "b"})
         assert not _cloud_module._needs_region_lookup(
-            {"s3_bucket": "b", "endpoint": "http://minio:9000"}
+            {"s3_bucket": "b", "endpoint": "https://minio.example.com"}
         )
 
     @pytest.mark.parametrize(
@@ -448,37 +488,28 @@ class TestSharedStoreSettings:
         assert "only one was set" in mock_log.return_value.warning.call_args.args[0]
 
     def test_remaining_s3_knobs_pass_through(self):
-        with patch.object(_cloud_module, "_log") as mock_log:
-            kwargs = self._s3_kwargs(
-                {
-                    "authType": "s3",
-                    "extra": {
-                        "s3_bucket": "b",
-                        "region": "us-east-1",
-                        "endpoint": "https://minio.example.com",
-                        "allow_http": "true",
-                        "allow_invalid_certificates": True,
-                        "conditional_put": "etag",
-                        "copy_if_not_exists": "header:x-copy:true",
-                        "checksum_algorithm": "SHA256",
-                    },
-                }
-            )
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "conditional_put": "etag",
+                    "copy_if_not_exists": "header:x-copy:true",
+                    "checksum_algorithm": "SHA256",
+                },
+            }
+        )
         config = kwargs["config"]
         assert config["aws_conditional_put"] == "etag"
         assert config["aws_copy_if_not_exists"] == "header:x-copy:true"
         assert config["aws_checksum_algorithm"] == "SHA256"
-        assert kwargs["client_options"]["allow_http"] is True
-        assert kwargs["client_options"]["allow_invalid_certificates"] is True
-        warning = mock_log.return_value.warning.call_args.args[0]
-        assert "allow_invalid_certificates" in warning
 
     def test_knobs_default_off(self):
         kwargs = self._s3_kwargs(
             {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}}
         )
-        assert "allow_http" not in kwargs["client_options"]
-        assert "allow_invalid_certificates" not in kwargs["client_options"]
         config = kwargs["config"] or {}
         for key in (
             "aws_conditional_put",
@@ -537,15 +568,15 @@ class TestSharedStoreSettings:
                     "password": fake_key,
                     "extra": {
                         "storage_account_name": "acct",
-                        "endpoint": "http://azurite:10000/acct",
+                        "endpoint": "https://azurite.example.com/acct",
                     },
                 }
             )
         kwargs = mock_az_cls.call_args.kwargs
         assert kwargs["config"]["azure_storage_endpoint"] == (
-            "http://azurite:10000/acct"
+            "https://azurite.example.com/acct"
         )
-        assert kwargs["client_options"]["allow_http"] is True
+        assert "allow_http" not in kwargs["client_options"]
 
     def test_binding_and_cloudstore_build_the_same_s3_store(self, tmp_path):
         """The same S3 credentials give one obstore config on both paths."""
@@ -556,7 +587,7 @@ class TestSharedStoreSettings:
         meta = {
             "bucket": "b",
             "region": "eu-west-1",
-            "endpoint": "http://minio:9000",
+            "endpoint": "https://minio.example.com",
             "accessKey": "AKID-EXAMPLE",
             "secretKey": "secret-example",
             "sessionToken": "session-token-example",
@@ -591,7 +622,7 @@ class TestSharedStoreSettings:
                 "extra": {
                     "s3_bucket": "b",
                     "region": "eu-west-1",
-                    "endpoint": "http://minio:9000",
+                    "endpoint": "https://minio.example.com",
                     "server_side_encryption": "AES256",
                 },
             }
