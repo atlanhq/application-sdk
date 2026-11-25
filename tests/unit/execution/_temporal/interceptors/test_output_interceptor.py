@@ -5,9 +5,9 @@ workflow outputs from activities.
 """
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 from unittest import mock
 
 import orjson
@@ -46,6 +46,7 @@ from application_sdk.outputs.skipped import (
     merge_run_log,
     merge_run_skips,
 )
+from tests.unit._doubles import ActivityInfo, ExecuteInput
 
 _RUN_PREFIX = "artifacts/apps/app/workflows/wf-1/run-1"
 
@@ -81,27 +82,7 @@ class _IntMetricsModel(BaseModel):
 
 
 @dataclass
-class MockExecuteWorkflowInput:
-    """Mock ExecuteWorkflowInput for testing."""
-
-    args: Sequence[Any] = field(default_factory=list)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class MockExecuteActivityInput:
-    """Mock ExecuteActivityInput for testing."""
-
-    fn: Any = None
-    args: Sequence[Any] = field(default_factory=list)
-    headers: Mapping[str, Any] = field(default_factory=dict)
-    executor: Any = None
-
-
-@dataclass
-class MockActivityInfo:
-    """Mock activity.info() return value."""
-
+class MockActivityInfo(ActivityInfo):
     workflow_run_id: str = "test-workflow-run-id"
     activity_type: str = "test_activity"
     activity_id: str = "activity-123"
@@ -145,7 +126,7 @@ class TestOutputActivityInboundInterceptor:
             return {"status": "success"}
 
         mock_next_inbound.execute_activity.side_effect = capture_collector
-        input_data = MockExecuteActivityInput()
+        input_data = ExecuteInput()
 
         with mock.patch(
             "application_sdk.execution._temporal.interceptors.outputs.activity"
@@ -166,7 +147,7 @@ class TestOutputActivityInboundInterceptor:
         """Test that the original activity result is returned unchanged."""
         expected_result = {"status": "success", "data": [1, 2, 3]}
         mock_next_inbound.execute_activity.return_value = expected_result
-        input_data = MockExecuteActivityInput()
+        input_data = ExecuteInput()
 
         with mock.patch(
             "application_sdk.execution._temporal.interceptors.outputs.activity"
@@ -187,7 +168,7 @@ class TestOutputActivityInboundInterceptor:
 
         mock_next_inbound.execute_activity.side_effect = activity_with_outputs
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert result == {
             "status": "ok",
@@ -207,7 +188,7 @@ class TestOutputActivityInboundInterceptor:
 
         mock_next_inbound.execute_activity.side_effect = activity_with_outputs
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert isinstance(result, _TaskOutput)
         assert result.rows == 3
@@ -226,7 +207,7 @@ class TestOutputActivityInboundInterceptor:
         upstream = _TaskOutput(rows=1, metrics={"rows": 1}, artifacts={"a": "p"})
         mock_next_inbound.execute_activity.return_value = upstream
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert result.metrics is None
         assert result.artifacts is None
@@ -252,7 +233,7 @@ class TestOutputActivityInboundInterceptor:
             ) as mock_logger,
         ):
             mock_activity.info.return_value = MockActivityInfo()
-            result = await interceptor.execute_activity(MockExecuteActivityInput())
+            result = await interceptor.execute_activity(ExecuteInput())
 
         assert result is None
         mock_logger.warning.assert_called_once()
@@ -264,7 +245,7 @@ class TestOutputActivityInboundInterceptor:
         own = {"metrics": "not ours"}
         mock_next_inbound.execute_activity.return_value = own
 
-        result = await interceptor.execute_activity(MockExecuteActivityInput())
+        result = await interceptor.execute_activity(ExecuteInput())
 
         assert result is own
 
@@ -328,7 +309,7 @@ class TestOutputWorkflowInboundInterceptor:
         expected_result = {"key": "value"}
         mock_next_inbound.execute_workflow.return_value = expected_result
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == expected_result
 
@@ -357,7 +338,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {
             "base": "data",
@@ -379,7 +360,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"early": 1}}
 
@@ -404,7 +385,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"local": 2}}
 
@@ -425,7 +406,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"locked": 1}}
 
@@ -445,7 +426,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"status": "recovered"}
 
@@ -467,7 +448,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"status": "done"}
 
@@ -488,7 +469,7 @@ class TestOutputWorkflowInboundInterceptor:
         activity_next.execute_activity.side_effect = activity_body
         carried = await OutputActivityInboundInterceptor(
             activity_next
-        ).execute_activity(MockExecuteActivityInput())
+        ).execute_activity(ExecuteInput())
 
         mock_next_outbound.start_activity.return_value = self._completed(carried)
 
@@ -498,7 +479,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result["connection_qualified_name"] == "default/redshift/prod"
         assert result["metrics"] == {"tables": 100}
@@ -516,7 +497,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"status": "ok", "metrics": {"rows": 2}}
 
@@ -531,7 +512,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result == {"metrics": {"m": 1}}
 
@@ -547,7 +528,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = workflow_with_outputs
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result["metrics"]["workflow-metric"] == 999
         assert result["status"] == "done"
@@ -568,7 +549,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert isinstance(result, _AliasedOutput)
         assert result.schema_name == "sales"
@@ -588,7 +569,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert isinstance(result, _AliasedOutput)
         assert result.schema_name == "sales"
@@ -609,7 +590,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result is original
 
@@ -625,7 +606,7 @@ class TestOutputWorkflowInboundInterceptor:
 
         mock_next_inbound.execute_workflow.side_effect = run
 
-        result = await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        result = await interceptor.execute_workflow(ExecuteInput())
 
         assert result is original
         assert result.metrics == 1
@@ -771,7 +752,7 @@ class TestSkippedRecordsThroughInterceptors:
         nxt = mock.AsyncMock()
         nxt.execute_activity.side_effect = body
         return await OutputActivityInboundInterceptor(nxt).execute_activity(
-            MockExecuteActivityInput()
+            ExecuteInput()
         )
 
     @staticmethod
@@ -797,7 +778,7 @@ class TestSkippedRecordsThroughInterceptors:
             return result
 
         nxt.execute_workflow.side_effect = run
-        return await interceptor.execute_workflow(MockExecuteWorkflowInput())
+        return await interceptor.execute_workflow(ExecuteInput())
 
     async def test_skips_reach_workflow_output(self, uploads, tmp_path):
         async def extract(input):
@@ -1112,9 +1093,7 @@ class TestSkippedPartsUseTheRunningApp:
 
         nxt = mock.AsyncMock()
         nxt.execute_activity = mock.AsyncMock(side_effect=body)
-        await OutputActivityInboundInterceptor(nxt).execute_activity(
-            MockExecuteActivityInput()
-        )
+        await OutputActivityInboundInterceptor(nxt).execute_activity(ExecuteInput())
 
     async def test_part_uploads_under_the_app_not_the_env_name(self, uploaded):
         await self._run_activity("my-app")

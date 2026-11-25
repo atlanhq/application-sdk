@@ -32,7 +32,6 @@ import pytest
 
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.contracts.types import FileReference
-from application_sdk.storage.factory import create_local_store
 from application_sdk.storage.reference import (
     materialize_file_reference,
     persist_file_reference,
@@ -89,12 +88,6 @@ class _ConcreteSqlApp(SqlApp):
                 "qualifiedName": f"{connection_qn}/{record['database_name']}",
             },
         }
-
-
-@pytest.fixture
-def store(tmp_path):
-    """Real local object store backed by a temp directory."""
-    return create_local_store(tmp_path / "store")
 
 
 def _make_extract_input(tmp_path: Path) -> ExtractionTaskInput:

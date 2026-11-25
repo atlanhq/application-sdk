@@ -24,42 +24,12 @@ pandas can't mask a regression. If a future change adds a top-level
 
 from __future__ import annotations
 
-import subprocess
-import sys
-import textwrap
-
-
-def _modules_loaded_after_import(import_stmt: str) -> set[str]:
-    """Run ``import_stmt`` in a fresh subprocess and return loaded module names.
-
-    Subprocess isolation is intentional — running this in-process would
-    inherit pandas / pandera from earlier suite imports, masking any
-    regression. The subprocess inherits the venv but starts with an
-    empty `sys.modules` cache outside the stdlib bootstrap.
-    """
-    script = textwrap.dedent(
-        f"""
-        import sys
-        {import_stmt}
-        # Emit one module name per line so the parent can read them back
-        # without worrying about quoting / escaping.
-        for name in sorted(sys.modules):
-            print(name)
-        """
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
-    return set(result.stdout.splitlines())
+from tests.unit._doubles import loaded_after_running
 
 
 def test_importing_integration_does_not_load_pandas() -> None:
     """`from application_sdk.testing.integration import *` must not load pandas."""
-    loaded = _modules_loaded_after_import(
+    loaded = loaded_after_running(
         "from application_sdk.testing.integration import Scenario, equals, is_not_empty"
     )
     pandas_modules = {m for m in loaded if m.startswith("pandas")}
@@ -82,7 +52,7 @@ def test_importing_sdr_does_not_load_pandas() -> None:
     the same lazy-pandas contract must hold for the SDR adoption path
     that triggered BLDX-1235.
     """
-    loaded = _modules_loaded_after_import(
+    loaded = loaded_after_running(
         "from application_sdk.testing.sdr import BaseSDRIntegrationTest"
     )
     pandas_modules = {m for m in loaded if m.startswith("pandas")}
@@ -99,7 +69,7 @@ def test_importing_validation_module_does_not_load_pandas() -> None:
     must remain importable without the pandas extra installed; only
     *calling* it should trigger the load.
     """
-    loaded = _modules_loaded_after_import(
+    loaded = loaded_after_running(
         "from application_sdk.testing.integration.validation import "
         "validate_with_pandera, format_validation_report"
     )

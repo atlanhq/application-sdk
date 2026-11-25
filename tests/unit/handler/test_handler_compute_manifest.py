@@ -21,19 +21,12 @@ from fastapi.testclient import TestClient
 
 from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler import (
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
     Handler,
     ManifestInput,
-    MetadataInput,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataOutput,
 )
 from application_sdk.handler.asgi import build_asgi_app
 from application_sdk.handler.metadata_routes import handler_compute_manifest
+from tests.unit._doubles import StaticHandler
 
 _GENERATED = {
     "execution_mode": "automation-engine",
@@ -46,18 +39,7 @@ _GENERATED = {
 }
 
 
-class _StaticHandler(Handler):
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS)
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
-        return SqlMetadataOutput(objects=[])
-
-
-class _ComputingHandler(_StaticHandler):
+class _ComputingHandler(StaticHandler):
     """Computes ``computed``; serves every other entry point as generated."""
 
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
@@ -78,19 +60,19 @@ class _ComputingHandler(_StaticHandler):
         }
 
 
-class _FailingHandler(_StaticHandler):
+class _FailingHandler(StaticHandler):
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
         raise RuntimeError("catalog lookup failed for token sk-do-not-leak")
 
 
-class _RefusingHandler(_StaticHandler):
+class _RefusingHandler(StaticHandler):
     """Answers the caller itself: its detail is written for them."""
 
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
         raise HTTPException(status_code=422, detail="policy_id is required")
 
 
-class _OversharingHandler(_StaticHandler):
+class _OversharingHandler(StaticHandler):
     """Puts a fetched URL, token and all, in the detail it answers with."""
 
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
@@ -100,7 +82,7 @@ class _OversharingHandler(_StaticHandler):
         )
 
 
-class _InvalidInputHandler(_StaticHandler):
+class _InvalidInputHandler(StaticHandler):
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
         raise InvalidInputError(
             message="policy_id is not a valid policy", field="policy_id"
@@ -191,7 +173,7 @@ def test_none_serves_the_generated_manifest_unchanged(
     generated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, computing = _clients(_ComputingHandler(), generated, monkeypatch)
-    _, static = _clients(_StaticHandler(), generated, monkeypatch)
+    _, static = _clients(StaticHandler(), generated, monkeypatch)
     body = {"entrypoint": "static"}
     assert computing.post("/manifest", json=body).content == (
         static.post("/manifest", json=body).content
@@ -199,7 +181,7 @@ def test_none_serves_the_generated_manifest_unchanged(
 
 
 def test_a_handler_without_the_override_resolves_no_hook() -> None:
-    resolve = handler_compute_manifest(_StaticHandler(), lambda: "parity")
+    resolve = handler_compute_manifest(StaticHandler(), lambda: "parity")
     assert resolve("computed") is None
 
 

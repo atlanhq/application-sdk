@@ -14,11 +14,12 @@ already loaded, so ``sys.modules`` would show them whatever the import pulls in.
 from __future__ import annotations
 
 import importlib
-import os
 import subprocess
 import sys
 
 import pytest
+
+from tests.unit._doubles import loaded_after_importing
 
 #: Packages none of the probed imports may load. ``_pytest`` is listed beside
 #: ``pytest`` because ``pytest`` is a thin re-export of it.
@@ -35,29 +36,6 @@ _LIGHT_IMPORTS = (
 )
 
 
-def _loaded_after_importing(module: str) -> set[str]:
-    """Import *module* in a fresh interpreter; return the top-level packages loaded."""
-    env = dict(os.environ)
-    # ``application_sdk.constants`` loads the checkout's ``.env``; whatever the
-    # host has there (OTLP export, say) must not decide what gets imported.
-    env["PYTHON_DOTENV_DISABLED"] = "1"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            f"import sys, importlib; importlib.import_module({module!r});"
-            "print('\\n'.join(sys.modules))",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-        env=env,
-    )
-    assert result.returncode == 0, f"importing {module} failed:\n{result.stderr}"
-    return {line.split(".")[0] for line in result.stdout.splitlines() if line}
-
-
 @pytest.mark.parametrize("module", _LIGHT_IMPORTS)
 def test_import_loads_no_test_runner_or_runtime_stack(module: str) -> None:
     """Importing *module* loads none of pytest, pyatlan, obstore or Temporal.
@@ -65,7 +43,8 @@ def test_import_loads_no_test_runner_or_runtime_stack(module: str) -> None:
     Fix a failure by serving the new name from the package's ``_LAZY`` map
     rather than importing it at the top of ``__init__``.
     """
-    offenders = sorted(_loaded_after_importing(module) & _HEAVY_PACKAGES)
+    packages = {name.split(".")[0] for name in loaded_after_importing(module)}
+    offenders = sorted(packages & _HEAVY_PACKAGES)
     assert not offenders, f"importing {module} loaded: {', '.join(offenders)}"
 
 

@@ -13,23 +13,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from application_sdk._runtime.progress import ClosedHold, ProgressTracker
+from tests.unit._doubles import FakeClock
 
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FakeClock:
-    """A monotonic clock the test advances explicitly."""
-
-    now: float = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 @dataclass

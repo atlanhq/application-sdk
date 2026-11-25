@@ -31,27 +31,11 @@ from application_sdk.execution.progress_telemetry import (
     closed_hold_observer,
     record_closed_hold,
 )
+from tests.unit._doubles import FakeClock
 
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class FakeClock:
-    """A monotonic clock the test advances explicitly.
-
-    Injected rather than patched: an asyncio loop shares ``time.monotonic``, so
-    patching it globally makes the loop itself misbehave.
-    """
-
-    now: float = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 @dataclass

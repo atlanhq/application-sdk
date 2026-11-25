@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock
 
 from application_sdk.execution._temporal.interceptors.liveness import (
     LivenessInterceptor,
 )
-
-
-@dataclass
-class _MockExecuteActivityInput:
-    headers: dict = field(default_factory=dict)
-    args: list = field(default_factory=list)
+from tests.unit._doubles import ExecuteInput
 
 
 async def test_records_on_activity_execution() -> None:
@@ -24,7 +18,7 @@ async def test_records_on_activity_execution() -> None:
     inbound = LivenessInterceptor(lambda: calls.append(1)).intercept_activity(
         next_inbound
     )
-    result = await inbound.execute_activity(_MockExecuteActivityInput())
+    result = await inbound.execute_activity(ExecuteInput())
 
     assert result == "done"
     assert calls == [1]
@@ -58,7 +52,7 @@ async def test_record_callback_failure_never_blocks_activity() -> None:
         raise RuntimeError("record blew up")
 
     inbound = LivenessInterceptor(_boom).intercept_activity(next_inbound)
-    result = await inbound.execute_activity(_MockExecuteActivityInput())
+    result = await inbound.execute_activity(ExecuteInput())
 
     assert result == "done"
     next_inbound.execute_activity.assert_awaited_once()
