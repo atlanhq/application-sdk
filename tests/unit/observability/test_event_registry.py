@@ -25,7 +25,11 @@ def test_existing_names_moved_unchanged() -> None:
 def test_the_new_names_are_the_fourth_and_fifth() -> None:
     assert events.ARTIFACT_VALIDATION_EVENT == "Artifact validation outcome"
     assert events.ARTIFACT_VALIDATION_POSTURE_EVENT == "Artifact validation posture"
-    assert len(events.OUTCOME_EVENT_NAMES) == 6
+    assert len(events.OUTCOME_EVENT_NAMES) == 7
+
+
+def test_the_lineage_coverage_name() -> None:
+    assert events.LINEAGE_COVERAGE_EVENT == "Lineage coverage outcome"
 
 
 def test_the_interactive_preflight_name() -> None:
@@ -43,6 +47,7 @@ def test_names_are_distinct() -> None:
         events.ASSET_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_POSTURE_EVENT,
+        events.LINEAGE_COVERAGE_EVENT,
     ]
     assert len(set(names)) == len(names)
     assert all(name.strip() for name in names)
@@ -56,6 +61,7 @@ def test_registry_is_the_full_set() -> None:
         events.ASSET_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_EVENT,
         events.ARTIFACT_VALIDATION_POSTURE_EVENT,
+        events.LINEAGE_COVERAGE_EVENT,
     }
 
 
