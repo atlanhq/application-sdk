@@ -206,6 +206,17 @@ def test_main_reports_io_failure(tmp_path: Path, monkeypatch, capsys) -> None:
     # Point the components dir at a path whose parent is a file → mkdir fails.
     clash = tmp_path / "afile"
     clash.write_text("x")
-    rc = main([str(clash / "components")])
+    rc = main(
+        [
+            str(clash / "components"),
+            "--objectstore-root",
+            str(tmp_path / "obj"),
+            "--eventstore-root",
+            str(tmp_path / "evt"),
+        ]
+    )
     assert rc == 1
     assert "::error::" in capsys.readouterr().err
+    # A failed write leaves no binding roots behind.
+    assert not (tmp_path / "obj").exists()
+    assert not (tmp_path / "evt").exists()

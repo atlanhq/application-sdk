@@ -126,6 +126,9 @@ def write_components(
     happened to each component, so the caller (and tests) can assert coverage.
     Existing files are never overwritten.
     """
+    # Output dir first: if it can't be created, fail before leaving the binding
+    # roots behind in the caller's working tree.
+    components_dir.mkdir(parents=True, exist_ok=True)
     objectstore_root.mkdir(parents=True, exist_ok=True)
     eventstore_root.mkdir(parents=True, exist_ok=True)
     rendered = render_components(
