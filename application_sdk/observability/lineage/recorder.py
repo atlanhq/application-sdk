@@ -29,7 +29,7 @@ from typing import Any
 
 import orjson
 
-from application_sdk.observability.lineage.guard import guarded
+from application_sdk.observability.lineage.guard import guarded, stop_recording
 from application_sdk.observability.lineage.taxonomy import LineageReason
 
 __all__ = [
@@ -124,28 +124,32 @@ class CoverageRecorder:
         except Exception:  # noqa: BLE001
             return None
 
-    @guarded
     def save(self, path: str) -> None:
         """Write what was recorded, so a later step (another activity, another
         process) can run coverage. The file holds reason codes, the details and
-        attributes the app passed, and whether recording stopped early."""
-        payload = {
-            "error": self.error,
-            "keys": {
-                key: {
-                    "missing": entry.missing,
-                    "partial": entry.partial,
-                    "unusable": entry.unusable,
-                    "details": entry.details,
-                    "attributes": entry.attributes,
-                    "fieldMissing": dict(entry.field_missing),
-                }
-                for key, entry in self._by_key.items()
-            },
-        }
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "wb") as fh:
-            fh.write(orjson.dumps(payload, default=str))
+        attributes the app passed, and whether recording stopped early. Written
+        even after recording stopped, so the later step can say why. Never raises.
+        """
+        try:
+            payload = {
+                "error": self.error,
+                "keys": {
+                    key: {
+                        "missing": entry.missing,
+                        "partial": entry.partial,
+                        "unusable": entry.unusable,
+                        "details": entry.details,
+                        "attributes": entry.attributes,
+                        "fieldMissing": dict(entry.field_missing),
+                    }
+                    for key, entry in self._by_key.items()
+                },
+            }
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(orjson.dumps(payload, default=str))
+        except Exception as exc:  # noqa: BLE001 - coverage must not fail the step
+            stop_recording(self, exc)
 
     @classmethod
     def load(cls, path: str) -> CoverageRecorder:
