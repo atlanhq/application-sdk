@@ -452,13 +452,6 @@ def _validate_task_signature(
     return input_type, output_type
 
 
-#: The release in which passing ``retry_policy`` together with any of
-#: ``retry_max_attempts``, ``retry_initial_interval_seconds`` or
-#: ``retry_max_interval_seconds`` stops warning and raises
-#: :class:`TaskDeclarationError` at decoration.
-RETRY_OVERRIDE_ERROR_VERSION = "4.0.0"
-
-
 def _warn_retry_overrides_ignored(task_name: str | None, overrides: list[str]) -> None:
     """Complain that ``retry_policy`` makes the named retry arguments dead.
 
@@ -469,15 +462,24 @@ def _warn_retry_overrides_ignored(task_name: str | None, overrides: list[str]) -
     today; a :class:`TaskDeclarationError` in v4.0.0.
     """
     where = f"@task(name={task_name!r})" if task_name else "@task"
-    message = (
-        f"{where}: retry_policy alone sets the task's retries, so these "
-        f"arguments are ignored: {', '.join(overrides)}. Use the RetryPolicy fields "
-        "instead (max_attempts, initial_interval, max_interval) and drop the "
-        "argument; passing both will be an error in "
-        f"v{RETRY_OVERRIDE_ERROR_VERSION} (TaskDeclarationError)."
+    ignored = ", ".join(overrides)
+    # stacklevel=3: this helper, then task(), then the decorator line.
+    _deprecation.warn_deprecated(
+        f"{where} with retry_policy and {ignored}",
+        "the matching RetryPolicy field (max_attempts, initial_interval, max_interval)",
+        "4.0.0",
+        note=f"retry_policy alone sets the task's retries, so {ignored} is "
+        "ignored; from v4.0.0 passing both raises TaskDeclarationError",
+        stacklevel=3,
     )
-    warnings.warn(message, DeprecationWarning, stacklevel=3)
-    logger.warning("%s", message)
+    logger.warning(
+        "%s: retry_policy alone sets the task's retries, so these arguments "
+        "are ignored: %s. Put the values on the RetryPolicy (max_attempts, "
+        "initial_interval, max_interval) and drop the arguments; passing both "
+        "raises TaskDeclarationError from v4.0.0",
+        where,
+        ignored,
+    )
 
 
 @overload
