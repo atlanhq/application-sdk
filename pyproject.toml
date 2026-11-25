@@ -626,6 +626,10 @@ extend-select = [
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
+# The dev runner's terminal banner (endpoints, example curl) is the developer
+# interface of `run_dev_combined`; tests assert on it via capsys. Moved here
+# from main.py with the function (FND-4689), same exemption.
+"application_sdk/dev/_runner.py" = ["T201"]
 # A developer-facing CLI (`python -m application_sdk.dev.pkl`): its stdout IS
 # the product — a generate task captures it — and its diagnostics go to stderr.
 # The SDK logger is deliberately not used; it writes to stdout for OTel

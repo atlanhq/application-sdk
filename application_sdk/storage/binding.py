@@ -42,20 +42,20 @@ if TYPE_CHECKING:
     )
 
 #: ``{secret_name: {key: value}}`` — the shape Dapr's secret API returns, keyed
-#: by the ``secretKeyRef.name`` that asked for it.  Built by ``main.py`` from a
+#: by the ``secretKeyRef.name`` that asked for it.  Built by ``infrastructure/_bootstrap.py`` from a
 #: component's ``auth.secretStore`` and passed into the (synchronous) resolvers.
 SecretMap = Mapping[str, Mapping[str, str]]
 
 # Matches un-substituted Helm / Mustache template placeholders (e.g. {{tenant}}).
 _TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 
-#: Process-wide cache of the secrets ``main._create_infrastructure`` fetched
+#: Process-wide cache of the secrets ``infrastructure._bootstrap._create_infrastructure`` fetched
 #: from the Dapr sidecar at startup, keyed by binding component name.  Sync
 #: consumers constructed after startup — ``DaprCredentialVault.__init__`` is
 #: the canonical case — cannot call the sidecar themselves, so they re-run
 #: ``is_binding_configured`` without a ``secrets`` argument.  Without this
 #: cache that second call would fall back to env-only resolution and reach a
-#: different "is the upstream store usable" verdict than the one main.py made
+#: different "is the upstream store usable" verdict than the one the bootstrap made
 #: with the sidecar-fetched secrets — the exact broken-vs-absent divergence
 #: BLDX-1619 fixes at the resolver layer.
 #:
@@ -71,13 +71,13 @@ _FETCHED_BINDING_SECRETS: dict[str, SecretMap] = {}
 def set_fetched_binding_secrets(name: str, secrets: SecretMap) -> None:
     """Publish the secrets startup fetched for *name* to later sync callers.
 
-    Called by ``main._create_infrastructure`` after ``_fetch_binding_secrets``
+    Called by ``infrastructure._bootstrap._create_infrastructure`` after ``_fetch_binding_secrets``
     so sync consumers that run later (and therefore cannot call the Dapr secret
     API themselves) resolve the binding against the same secret values the
     startup resolver used.  Without this, ``DaprCredentialVault.__init__``
     re-runs ``is_binding_configured`` env-only and, on the secure k8s path
     (``secretKeyRef`` + ``auth.secretStore``, env vars deliberately absent),
-    concludes the upstream store is unusable while main.py resolved it fine.
+    concludes the upstream store is unusable while the bootstrap resolved it fine.
     """
     _FETCHED_BINDING_SECRETS[name] = secrets
 
@@ -175,7 +175,7 @@ def _resolve_secret_ref(ref: dict, secrets: SecretMap | None) -> str | None:
     """Resolve a Dapr ``secretKeyRef``, or ``None`` when no source holds it.
 
     A component's ``auth.secretStore`` is authoritative, so *secrets* — the
-    bundle ``main.py`` fetched from that store — wins.  Environment variables
+    bundle ``infrastructure/_bootstrap.py`` fetched from that store — wins.  Environment variables
     stay as the fallback: they are what ``secretstores.local.env`` resolves to
     in Docker Compose / SDR-local runs, and they are all the synchronous call
     sites (observability exporter, credential utils) can reach.
@@ -293,7 +293,7 @@ def read_binding_secret_refs(
 ) -> BindingSecretRefs:
     """Report the ``secretKeyRef`` entries of the component named *name*.
 
-    Callers that can reach the Dapr sidecar (``main.py``, after
+    Callers that can reach the Dapr sidecar (``infrastructure/_bootstrap.py``, after
     ``wait_for_dapr_sidecar()``) use this to fetch the secrets and pass them
     back in as the ``secrets`` argument of the store-creation functions.
 
@@ -329,7 +329,7 @@ def is_binding_configured(
     cloud SDK clients.
 
     When *secrets* is ``None`` the resolver falls back to the startup-fetched
-    cache populated by ``main._create_infrastructure`` (see
+    cache populated by ``infrastructure._bootstrap._create_infrastructure`` (see
     :func:`set_fetched_binding_secrets`), so a sync consumer that runs after
     startup — for example ``DaprCredentialVault.__init__`` — reaches the same
     verdict the startup resolver reached with the sidecar-fetched secrets,
@@ -721,7 +721,7 @@ def create_store_from_binding_with_put_attrs(
     every write through the returned store.  Returns ``(store, None)`` when no
     binding-level put attributes are configured.
 
-    Use this in infrastructure-setup code (``main.py``) when you want to
+    Use this in infrastructure-setup code (``infrastructure/_bootstrap.py``) when you want to
     honour ``storageClass`` and similar per-write attributes without threading
     them through every call site.
     """
@@ -744,7 +744,7 @@ def _create_store_core(
     to apply on every write, or ``None`` when no overrides are needed.
 
     When *secrets* is ``None`` the resolver falls back to the startup-fetched
-    cache populated by ``main._create_infrastructure`` (see
+    cache populated by ``infrastructure._bootstrap._create_infrastructure`` (see
     :func:`set_fetched_binding_secrets`), so a sync caller that runs after
     startup — for example the observability exporter or
     ``credentials/utils.py`` — resolves against the same secret values the
@@ -954,7 +954,7 @@ def _create_store_from_binding_optional_with_put_attrs(
 ) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
     """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
 
-    Internal helper for infrastructure-wiring code (``main.py``).
+    Internal helper for infrastructure-wiring code (``infrastructure/_bootstrap.py``).
 
     When ``required=False`` a missing component logs at INFO (absent is the
     normal non-SDR path) and a broken one logs at WARNING; both yield

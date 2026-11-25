@@ -1,6 +1,6 @@
-"""BLDX-1619: main.py pre-resolves a binding's secretKeyRef entries.
+"""BLDX-1619: the infrastructure bootstrap pre-resolves a binding's secretKeyRef entries.
 
-``main.py`` awaits ``wait_for_dapr_sidecar()`` before it builds the object
+``_create_infrastructure`` (``application_sdk.infrastructure._bootstrap``) awaits ``wait_for_dapr_sidecar()`` before it builds the object
 stores, so it is the one place that can reach the Dapr secret store on the
 worker's behalf.  It fetches the secrets there and hands them to the (still
 synchronous, still public) obstore resolver.
@@ -63,7 +63,7 @@ class TestFetchBindingSecrets:
     async def test_fetches_each_secret_from_the_declared_store(
         self, tmp_path: Path
     ) -> None:
-        from application_sdk.main import _fetch_binding_secrets
+        from application_sdk.infrastructure._bootstrap import _fetch_binding_secrets
 
         client = mock.Mock()
         client.get_secret = mock.AsyncMock(
@@ -93,7 +93,7 @@ class TestFetchBindingSecrets:
         self, tmp_path: Path
     ) -> None:
         """No auth.secretStore means the env path — do not call the sidecar."""
-        from application_sdk.main import _fetch_binding_secrets
+        from application_sdk.infrastructure._bootstrap import _fetch_binding_secrets
 
         client = mock.Mock()
         client.get_secret = mock.AsyncMock()
@@ -111,7 +111,7 @@ class TestFetchBindingSecrets:
         self, tmp_path: Path
     ) -> None:
         """One unreadable secret must not hide the ones that did resolve."""
-        from application_sdk.main import _fetch_binding_secrets
+        from application_sdk.infrastructure._bootstrap import _fetch_binding_secrets
 
         body = COMPONENT_WITH_SECRET_STORE.replace(
             """      secretKeyRef:
@@ -148,7 +148,7 @@ class TestFetchBindingSecrets:
         non-retryable pin is asserted here rather than left to the kwarg.
         """
         from application_sdk.errors import DependencyUnavailableError
-        from application_sdk.main import _fetch_binding_secrets
+        from application_sdk.infrastructure._bootstrap import _fetch_binding_secrets
 
         client = mock.Mock()
         client.get_secret = mock.AsyncMock(side_effect=RuntimeError("store down"))
@@ -166,7 +166,7 @@ class TestFetchBindingSecrets:
         assert isinstance(excinfo.value.__cause__, RuntimeError)
 
     async def test_an_absent_component_is_not_an_error(self, tmp_path: Path) -> None:
-        from application_sdk.main import _fetch_binding_secrets
+        from application_sdk.infrastructure._bootstrap import _fetch_binding_secrets
 
         empty = tmp_path / "empty"
         empty.mkdir()
@@ -186,8 +186,8 @@ class TestFetchBindingSecrets:
 async def test_infrastructure_passes_the_fetched_secrets_to_the_resolver(
     tmp_path: Path, required: bool
 ) -> None:
-    """The secrets main.py fetched must reach the upstream store resolver."""
-    from application_sdk import main as main_mod
+    """The secrets the bootstrap fetched must reach the upstream store resolver."""
+    from application_sdk.infrastructure import _bootstrap
 
     components = _components(tmp_path, COMPONENT_WITH_SECRET_STORE)
     fetched = {"atlan-auth-secret": {"ATLAN_AUTH_CLIENT_ID": "id-1"}}
@@ -201,7 +201,7 @@ async def test_infrastructure_passes_the_fetched_secrets_to_the_resolver(
             },
         ),
         mock.patch.object(
-            main_mod, "_log_dapr_components", new=mock.AsyncMock(return_value=[])
+            _bootstrap, "_log_dapr_components", new=mock.AsyncMock(return_value=[])
         ),
         mock.patch(
             "application_sdk.infrastructure._dapr.http.wait_for_dapr_sidecar",
@@ -209,7 +209,9 @@ async def test_infrastructure_passes_the_fetched_secrets_to_the_resolver(
         ),
         mock.patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", required),
         mock.patch.object(
-            main_mod, "_fetch_binding_secrets", new=mock.AsyncMock(return_value=fetched)
+            _bootstrap,
+            "_fetch_binding_secrets",
+            new=mock.AsyncMock(return_value=fetched),
         ),
         mock.patch(
             "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
@@ -221,6 +223,6 @@ async def test_infrastructure_passes_the_fetched_secrets_to_the_resolver(
         ),
         mock.patch("application_sdk.infrastructure._dapr.http.AsyncDaprClient"),
     ):
-        await main_mod._create_infrastructure()
+        await _bootstrap._create_infrastructure()
 
     assert upstream_resolver.call_args.kwargs["secrets"] == fetched

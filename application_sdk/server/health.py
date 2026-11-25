@@ -161,7 +161,8 @@ class WorkerHealthServer:
         # Two of them also gate ``/live`` (FND-4641): a sustained definitive
         # zero-poller reading, and a fatal poll error with no recovery. Both fail
         # open on anything that is not definitive evidence of a dead poll loop.
-        # See ``main.py::_observe_worker_poll_state`` for the readings.
+        # See ``execution/_temporal/supervisor.py::_observe_worker_poll_state``
+        # for the readings.
         self._last_fatal_at: datetime | None = None
         self._last_fatal_type: str | None = None
         self._fatal_count: int = 0
@@ -334,7 +335,7 @@ class WorkerHealthServer:
           stalled poll loop, disabled by default because it false-positives on
           legitimately idle queues (see BLDX-1552).
 
-        The restart supervisor in ``main.py`` already recovers a worker whose
+        The restart supervisor (``execution/_temporal/supervisor.py``) already recovers a worker whose
         ``run()`` returns/raises, so this probe targets the harder case where
         the poll loop parks without the worker ever exiting.
 
