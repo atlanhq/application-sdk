@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.58.1
-source-sha:    d5043463095a10dfa169004618140d9746959440
-source-date:   2026-11-24T12:10:31Z
+sdk-version:   3.59.0
+source-sha:    46974fbc34383e90ec6732a3a351a5f83240baa8
+source-date:   2026-11-25T10:01:31-08:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -29,7 +29,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 43 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 80 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 15 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
@@ -2907,6 +2907,20 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 ### Classes
 
+#### `Assessment`
+
+- **Import:** `from application_sdk.observability.lineage import Assessment`
+- **Signature:** `class Assessment(verdict: Verdict, reason: type[LineageReason] | None = None, basis: str = 'default')`
+- **Summary:** One asset's verdict and, when lineage is missing or partial, why.
+- **Defined in:** `application_sdk/observability/lineage/assessment.py`
+
+#### `AssetNotFound`
+
+- **Import:** `from application_sdk.observability.lineage import AssetNotFound`
+- **Signature:** `class AssetNotFound`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
 #### `AtlanLoggerAdapter`
 
 - **Import:** `from application_sdk.observability import AtlanLoggerAdapter`
@@ -2921,12 +2935,110 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Emit the spans ``@observability`` and app code record, through OpenTelemetry.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
+#### `BiDefinitionUnavailable`
+
+- **Import:** `from application_sdk.observability.lineage import BiDefinitionUnavailable`
+- **Signature:** `class BiDefinitionUnavailable`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `BiReferenceAmbiguous`
+
+- **Import:** `from application_sdk.observability.lineage import BiReferenceAmbiguous`
+- **Signature:** `class BiReferenceAmbiguous`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `BiReferenceUnresolved`
+
+- **Import:** `from application_sdk.observability.lineage import BiReferenceUnresolved`
+- **Signature:** `class BiReferenceUnresolved`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `BiUpstreamExcludedByFilter`
+
+- **Import:** `from application_sdk.observability.lineage import BiUpstreamExcludedByFilter`
+- **Signature:** `class BiUpstreamExcludedByFilter`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `BiUpstreamNotExtracted`
+
+- **Import:** `from application_sdk.observability.lineage import BiUpstreamNotExtracted`
+- **Signature:** `class BiUpstreamNotExtracted`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `CacheMiss`
+
+- **Import:** `from application_sdk.observability.lineage import CacheMiss`
+- **Signature:** `class CacheMiss`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `ColumnProcessNullQualifiedName`
+
+- **Import:** `from application_sdk.observability.lineage import ColumnProcessNullQualifiedName`
+- **Signature:** `class ColumnProcessNullQualifiedName`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `ConnectorLimitation`
+
+- **Import:** `from application_sdk.observability.lineage import ConnectorLimitation`
+- **Signature:** `class ConnectorLimitation`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
 #### `CorrelationContext`
 
 - **Import:** `from application_sdk.observability import CorrelationContext`
 - **Signature:** `class CorrelationContext(correlation_id: str = '')`
 - **Summary:** Holds the current correlation ID for a request or workflow run.
 - **Defined in:** `application_sdk/observability/correlation.py`
+
+#### `CoverageCounts`
+
+- **Import:** `from application_sdk.observability.lineage import CoverageCounts`
+- **Signature:** `class CoverageCounts(verdicts: Counter[Verdict] = Counter(), ...)`
+- **Summary:** Run totals. PENDING and VALID_NONE stay out of the coverage rate.
+- **Defined in:** `application_sdk/observability/lineage/assessment.py`
+
+#### `CustomSqlEmptyQuery`
+
+- **Import:** `from application_sdk.observability.lineage import CustomSqlEmptyQuery`
+- **Signature:** `class CustomSqlEmptyQuery`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `CustomSqlNoTablesParsed`
+
+- **Import:** `from application_sdk.observability.lineage import CustomSqlNoTablesParsed`
+- **Signature:** `class CustomSqlNoTablesParsed`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `CustomSqlParserFailure`
+
+- **Import:** `from application_sdk.observability.lineage import CustomSqlParserFailure`
+- **Signature:** `class CustomSqlParserFailure`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `CustomSqlTableUnparsed`
+
+- **Import:** `from application_sdk.observability.lineage import CustomSqlTableUnparsed`
+- **Signature:** `class CustomSqlTableUnparsed`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `EdgeBuildFailed`
+
+- **Import:** `from application_sdk.observability.lineage import EdgeBuildFailed`
+- **Signature:** `class EdgeBuildFailed`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
 
 #### `ExecutionContext`
 
@@ -2935,12 +3047,138 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Immutable snapshot of the current Temporal execution context.
 - **Defined in:** `application_sdk/observability/context.py`
 
+#### `GapCategory`
+
+- **Import:** `from application_sdk.observability.lineage import GapCategory`
+- **Signature:** `class GapCategory`
+- **Summary:** Which stage owns a gap.
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `GenericConnectionType`
+
+- **Import:** `from application_sdk.observability.lineage import GenericConnectionType`
+- **Signature:** `class GenericConnectionType`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `LineageDisabledBySetting`
+
+- **Import:** `from application_sdk.observability.lineage import LineageDisabledBySetting`
+- **Signature:** `class LineageDisabledBySetting`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `LineageReason`
+
+- **Import:** `from application_sdk.observability.lineage import LineageReason`
+- **Signature:** `class LineageReason`
+- **Summary:** Base for every lineage reason. Record a leaf or a subclass, never this.
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `LineageStatus`
+
+- **Import:** `from application_sdk.observability.lineage import LineageStatus`
+- **Signature:** `class LineageStatus`
+- **Summary:** What the app itself did for an asset. Same values as application-sdk#2204.
+- **Defined in:** `application_sdk/observability/lineage/assessment.py`
+
+#### `MissingMetadata`
+
+- **Import:** `from application_sdk.observability.lineage import MissingMetadata`
+- **Signature:** `class MissingMetadata`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `NonSqlSource`
+
+- **Import:** `from application_sdk.observability.lineage import NonSqlSource`
+- **Signature:** `class NonSqlSource`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `NoSearchableDialect`
+
+- **Import:** `from application_sdk.observability.lineage import NoSearchableDialect`
+- **Signature:** `class NoSearchableDialect`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `NoUpstreamData`
+
+- **Import:** `from application_sdk.observability.lineage import NoUpstreamData`
+- **Signature:** `class NoUpstreamData`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `NoUpstreamTables`
+
+- **Import:** `from application_sdk.observability.lineage import NoUpstreamTables`
+- **Signature:** `class NoUpstreamTables`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `ObservabilityDisabled`
+
+- **Import:** `from application_sdk.observability.lineage import ObservabilityDisabled`
+- **Signature:** `class ObservabilityDisabled`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `ParserFailure`
+
+- **Import:** `from application_sdk.observability.lineage import ParserFailure`
+- **Signature:** `class ParserFailure`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `ProcessMappingFailure`
+
+- **Import:** `from application_sdk.observability.lineage import ProcessMappingFailure`
+- **Signature:** `class ProcessMappingFailure`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
 #### `PushGatewayClient`
 
 - **Import:** `from application_sdk.observability.pushgateway import PushGatewayClient`
 - **Signature:** `class PushGatewayClient(*, ...)`
 - **Summary:** Periodic + shutdown Prometheus Pushgateway pusher.
 - **Defined in:** `application_sdk/observability/pushgateway.py`
+
+#### `ReasonCategory`
+
+- **Import:** `from application_sdk.observability.lineage import ReasonCategory`
+- **Signature:** `class ReasonCategory`
+- **Summary:** Why lineage is missing. Frozen at twelve, as in application-sdk#2204.
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `ReasonRegistry`
+
+- **Import:** `from application_sdk.observability.lineage import ReasonRegistry`
+- **Signature:** `class ReasonRegistry(reasons: Iterable[type[LineageReason]] = ())`
+- **Summary:** Code -> reason class for one app: the SDK's reasons plus the app's own.
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `RefOutcome`
+
+- **Import:** `from application_sdk.observability.lineage import RefOutcome`
+- **Signature:** `class RefOutcome`
+- **Summary:** What the asset lookup did with one ref (stage 2).
+- **Defined in:** `application_sdk/observability/lineage/assessment.py`
+
+#### `RelationshipFallback`
+
+- **Import:** `from application_sdk.observability.lineage import RelationshipFallback`
+- **Signature:** `class RelationshipFallback`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `TemplatedSqlUnresolved`
+
+- **Import:** `from application_sdk.observability.lineage import TemplatedSqlUnresolved`
+- **Signature:** `class TemplatedSqlUnresolved`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
 
 #### `TemporalCoreCollector`
 
@@ -2956,7 +3194,84 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** A dataclass representing a trace record in the system.
 - **Defined in:** `application_sdk/observability/models.py`
 
+#### `UninstrumentedPath`
+
+- **Import:** `from application_sdk.observability.lineage import UninstrumentedPath`
+- **Signature:** `class UninstrumentedPath`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `UnsupportedSourceFeature`
+
+- **Import:** `from application_sdk.observability.lineage import UnsupportedSourceFeature`
+- **Signature:** `class UnsupportedSourceFeature`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `UpstreamAmbiguous`
+
+- **Import:** `from application_sdk.observability.lineage import UpstreamAmbiguous`
+- **Signature:** `class UpstreamAmbiguous`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `UpstreamIdentityTooSparse`
+
+- **Import:** `from application_sdk.observability.lineage import UpstreamIdentityTooSparse`
+- **Signature:** `class UpstreamIdentityTooSparse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `UpstreamNotInAtlan`
+
+- **Import:** `from application_sdk.observability.lineage import UpstreamNotInAtlan`
+- **Signature:** `class UpstreamNotInAtlan`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `UpstreamTableNameMissing`
+
+- **Import:** `from application_sdk.observability.lineage import UpstreamTableNameMissing`
+- **Signature:** `class UpstreamTableNameMissing`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `UpstreamTypeNotRequested`
+
+- **Import:** `from application_sdk.observability.lineage import UpstreamTypeNotRequested`
+- **Signature:** `class UpstreamTypeNotRequested`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
+#### `Verdict`
+
+- **Import:** `from application_sdk.observability.lineage import Verdict`
+- **Signature:** `class Verdict`
+- **Summary:** The per-asset answer.
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
+
 ### Functions
+
+#### `assess`
+
+- **Import:** `from application_sdk.observability.lineage import assess`
+- **Signature:** `assess(status: LineageStatus, reason: type[LineageReason] | None = None)`
+- **Summary:** Stage-1 verdict from what the app did.
+- **Defined in:** `application_sdk/observability/lineage/assessment.py`
+
+#### `components_hash`
+
+- **Import:** `from application_sdk.observability.lineage import components_hash`
+- **Signature:** `components_hash(components: Mapping[str, Any] | None)`
+- **Summary:** SHA-256 hex of the canonical identity string.
+- **Defined in:** `application_sdk/observability/lineage/identity.py`
+
+#### `coverage_outcome_fields`
+
+- **Import:** `from application_sdk.observability.lineage.outcome import coverage_outcome_fields`
+- **Signature:** `coverage_outcome_fields(counts: CoverageCounts, app_name: str) -> dict[str, Any]`
+- **Summary:** Keyword arguments for the :data:`LINEAGE_COVERAGE_EVENT` log call.
+- **Defined in:** `application_sdk/observability/lineage/outcome.py`
 
 #### `create_counter`
 
@@ -2999,6 +3314,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `create_up_down_counter(name: str, *, unit: str = '', description: str = '') -> UpDownCounter`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/metrics.py`
+
+#### `funnel_bucket`
+
+- **Import:** `from application_sdk.observability.lineage import funnel_bucket`
+- **Signature:** `funnel_bucket(assessment: Assessment)`
+- **Summary:** The lineage-funnel bucket for one asset's verdict, or ``None``.
+- **Defined in:** `application_sdk/observability/lineage/funnel.py`
 
 #### `get_correlation_context`
 
@@ -3048,6 +3370,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Set the current execution context.
 - **Defined in:** `application_sdk/observability/context.py`
 
+#### `settle`
+
+- **Import:** `from application_sdk.observability.lineage import settle`
+- **Signature:** `settle(assessment: Assessment, outcomes: Sequence[RefOutcome | None])`
+- **Summary:** Fold the lookup's per-ref outcomes into a PENDING asset.
+- **Defined in:** `application_sdk/observability/lineage/assessment.py`
+
 #### `setup_tracer_provider`
 
 - **Import:** `from application_sdk.observability.traces_adaptor import setup_tracer_provider`
@@ -3085,6 +3414,21 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
 
+#### `IDENTITY_SCHEMA_VERSION`
+
+- **Import:** `from application_sdk.observability.lineage import IDENTITY_SCHEMA_VERSION`
+- **Signature:** `IDENTITY_SCHEMA_VERSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/lineage/identity.py`
+
+#### `LINEAGE_COVERAGE_EVENT`
+
+- **Import:** `from application_sdk.observability.events import LINEAGE_COVERAGE_EVENT`
+- **Also importable from:** `application_sdk.observability.lineage.outcome`
+- **Signature:** `LINEAGE_COVERAGE_EVENT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/events.py`
+
 #### `OUTCOME_EVENT_NAMES`
 
 - **Import:** `from application_sdk.observability.events import OUTCOME_EVENT_NAMES`
@@ -3119,6 +3463,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `request_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
+
+#### `SDK_REASONS`
+
+- **Import:** `from application_sdk.observability.lineage import SDK_REASONS`
+- **Signature:** `SDK_REASONS: tuple[type[LineageReason], ...]`
+- **Summary:** Every reason the SDK ships: the generic reasons first, then the sub-reasons.
+- **Defined in:** `application_sdk/observability/lineage/taxonomy.py`
 
 ## `application_sdk.outputs`
 
