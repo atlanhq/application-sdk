@@ -53,54 +53,13 @@ from application_sdk.testing.harness.automation_engine import (
 )
 from application_sdk.testing.harness.temporal import PollerInfo, TaskQueueType
 from tests.unit.private_stdlib import private_stdlib
+from tests.unit.testing._ae_fakes import FakeAE, node, run_result
 
 
 @asynccontextmanager
 async def _null_atlas_client() -> AsyncIterator[object]:
     """Stand-in for the Atlas client, for a test that patches what reads it."""
     yield object()
-
-
-class _FakeAE:
-    """Async stand-in for the AE client ``BaseE2ETest`` holds, recording calls.
-
-    Async because everything below the pytest boundary is (FND-224's decision
-    D1): the base class talks to
-    :class:`~application_sdk.testing.harness.automation_engine.AEClient`
-    directly now, not through the sync ``AEWorkflowClient`` shim, so a
-    ``MagicMock`` would hand back coroutine-shaped nonsense.
-    """
-
-    def __init__(self, *, poll: object = None) -> None:
-        self._poll = poll
-        self.submits: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        self.polls: list[dict[str, Any]] = []
-        self.listed: list[tuple[str, str]] = []
-        self.closed = False
-
-    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
-        self.submits.append((payload, kwargs))
-        # The real client reports the id through this sink the instant it knows
-        # it, which is how a run gets tracked for teardown.
-        on_run_id = kwargs.get("on_run_id")
-        if on_run_id is not None:
-            on_run_id("run-1")
-        return "run-1"
-
-    async def poll_native_status(self, run_id: str, **kwargs: Any) -> Any:
-        self.polls.append(kwargs)
-        if isinstance(self._poll, BaseException):
-            raise self._poll
-        return self._poll
-
-    async def get_published_version(self, slug: str) -> None:
-        return None
-
-    async def probe_run_is_listed(self, slug: str, run_id: str) -> None:
-        self.listed.append((slug, run_id))
-
-    async def aclose(self) -> None:
-        self.closed = True
 
 
 def _stub_bootstrap(monkeypatch: pytest.MonkeyPatch, slug: str = "slug") -> None:
@@ -1125,11 +1084,12 @@ class TestSubmitRetryKwargs:
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = "default/test/1234567890"
         # Stop right after the submit — the polls beyond it are covered elsewhere.
-        harness._ae = _FakeAE(poll=RuntimeError("stop after submit"))
+        harness._ae = FakeAE(RuntimeError("stop after submit"))
         _stub_bootstrap(monkeypatch)
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
-        _, kwargs = harness._ae.submits[0]
+        kwargs = dict(harness._ae.calls_to("submit_workflow")[0])
+        kwargs.pop("payload")
         # on_run_id is the teardown-tracking sink the submit always carries; the
         # budget is the rest.
         assert kwargs.pop("on_run_id") == harness._track_unsettled_run
@@ -1207,11 +1167,11 @@ class TestResolvedProgressStallSeconds:
         harness = _ConcreteE2ETest()
         harness.ae_poll_timeout_seconds = 1800
         harness.connection_qualified_name = "default/test/1234567890"
-        harness._ae = _FakeAE(poll=RuntimeError("stop at poll"))
+        harness._ae = FakeAE(RuntimeError("stop at poll"))
         _stub_bootstrap(monkeypatch)
         with pytest.raises(RuntimeError, match="stop at poll"):
             harness.run_full_dag()
-        kwargs = harness._ae.polls[0]
+        kwargs = harness._ae.calls_to("poll_native_status")[0]
         assert kwargs["progress_stall_seconds"] == 600
 
 
@@ -1276,34 +1236,17 @@ class TestWatchdogConfigValidation:
 # ---------------------------------------------------------------------------
 
 
-def _node(
-    name: str,
-    status: DAGNodeStatus,
-    *,
-    error: str | None = None,
-    started_at_ms: int | None = None,
-    completed_at_ms: int | None = None,
-) -> DAGNodeResult:
-    return DAGNodeResult(
-        name=name,
-        status=status,
-        started_at_ms=started_at_ms,
-        completed_at_ms=completed_at_ms,
-        error_message=error,
-    )
-
-
 def _timed_out_result(
     nodes: list[DAGNodeResult],
     *,
     ceiling: float = 1800.0,
     stalled: float | None = 1311.0,
 ) -> DAGRunResult:
-    return DAGRunResult(
+    return run_result(
+        DAGRunStatus.RUNNING,
+        *nodes,
         run_id="run-1",
         workflow_slug="slug",
-        status=DAGRunStatus.RUNNING,
-        nodes=nodes,
         timed_out_after_seconds=ceiling,
         seconds_since_last_progress=stalled,
     )
@@ -1320,11 +1263,11 @@ def _stalled_result(
     The watchdog stop, not the ceiling: ``timed_out`` stays False so a
     diagnostic cannot mislabel a 600s stall as the 1800s ceiling.
     """
-    return DAGRunResult(
+    return run_result(
+        DAGRunStatus.RUNNING,
+        *nodes,
         run_id="run-1",
         workflow_slug="slug",
-        status=DAGRunStatus.RUNNING,
-        nodes=nodes,
         progress_stalled_after_seconds=window,
         seconds_since_last_progress=stalled,
     )
@@ -1435,7 +1378,7 @@ class TestDagOutcomeHeadline:
     def test_timeout_names_the_ceiling_and_the_frozen_window(self) -> None:
         harness = _ConcreteE2ETest()
         headline = harness._dag_outcome_headline(
-            _timed_out_result([_node("publish", DAGNodeStatus.PENDING)])
+            _timed_out_result([node("publish", DAGNodeStatus.PENDING)])
         )
         assert "DAG did not complete within 1800s" in headline
         assert "AE status=Running" in headline
@@ -1444,18 +1387,18 @@ class TestDagOutcomeHeadline:
     def test_timeout_without_a_stall_window_omits_the_clause(self) -> None:
         harness = _ConcreteE2ETest()
         headline = harness._dag_outcome_headline(
-            _timed_out_result([_node("publish", DAGNodeStatus.PENDING)], stalled=None)
+            _timed_out_result([node("publish", DAGNodeStatus.PENDING)], stalled=None)
         )
         assert "DAG did not complete within 1800s" in headline
         assert "changed state" not in headline
 
     def test_terminal_run_keeps_the_plain_status_line(self) -> None:
         harness = _ConcreteE2ETest()
-        result = DAGRunResult(
+        result = run_result(
+            DAGRunStatus.FAILED,
+            node("publish", DAGNodeStatus.FAILED, error="boom"),
             run_id="run-1",
             workflow_slug="slug",
-            status=DAGRunStatus.FAILED,
-            nodes=[_node("publish", DAGNodeStatus.FAILED, error="boom")],
         )
         assert harness._dag_outcome_headline(result) == "AE status=Failed"
 
@@ -1464,7 +1407,7 @@ class TestDagOutcomeHeadline:
         this is the headline the FND-708 shape actually produces."""
         harness = _ConcreteE2ETest()
         headline = harness._dag_outcome_headline(
-            _stalled_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+            _stalled_result([node("lineage-publish", DAGNodeStatus.PENDING)])
         )
         assert "600s watchdog window closed before the poll ceiling" in headline
         assert "AE status=Running" in headline
@@ -1495,7 +1438,7 @@ class TestDescribeDagNodes:
         reader at the connector instead."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+            _timed_out_result([node("lineage-publish", DAGNodeStatus.PENDING)])
         )
         assert "AE reports Pending at the 1800s poll ceiling" in line
         assert "atlan-publish-production" in line
@@ -1510,7 +1453,7 @@ class TestDescribeDagNodes:
         must not claim the queue is unpolled."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+            _timed_out_result([node("lineage-publish", DAGNodeStatus.PENDING)])
         )
         assert "NEVER SCHEDULED" not in line
         assert "Nothing appears to be polling" not in line
@@ -1520,7 +1463,7 @@ class TestDescribeDagNodes:
         its ID is ``{ae_run_id}-{node_id}`` — so the line must carry it."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+            _timed_out_result([node("lineage-publish", DAGNodeStatus.PENDING)])
         )
         assert "'run-1-lineage-publish'" in line
 
@@ -1528,11 +1471,11 @@ class TestDescribeDagNodes:
         """A terminal run can still carry a Pending node (an older service
         downgrading Skipped), where there is no ceiling to name."""
         harness = self._harness()
-        result = DAGRunResult(
+        result = run_result(
+            DAGRunStatus.FAILED,
+            node("lineage-publish", DAGNodeStatus.PENDING),
             run_id="run-1",
             workflow_slug="slug",
-            status=DAGRunStatus.FAILED,
-            nodes=[_node("lineage-publish", DAGNodeStatus.PENDING)],
         )
         line = harness._describe_dag_nodes(result)
         assert "AE reports Pending —" in line
@@ -1543,7 +1486,7 @@ class TestDescribeDagNodes:
         the queue points at the app that owns the stuck worker."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _timed_out_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "STILL RUNNING at the 1800s poll ceiling" in line
         assert "atlan-publish-production" in line
@@ -1553,7 +1496,7 @@ class TestDescribeDagNodes:
         is the path the FND-708 shape now takes."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+            _stalled_result([node("lineage-publish", DAGNodeStatus.PENDING)])
         )
         assert "AE reports Pending when the 600s progress watchdog closed" in line
         assert "atlan-publish-production" in line
@@ -1566,7 +1509,7 @@ class TestDescribeDagNodes:
         must not fall through to ``status=Running error=None``."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "STILL RUNNING when the 600s progress watchdog closed" in line
         assert "atlan-publish-production" in line
@@ -1580,7 +1523,7 @@ class TestDescribeDagNodes:
         the reader into connector code instead."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "A worker claimed it and stopped making progress" not in line
         assert "so this does not say which" in line
@@ -1591,7 +1534,7 @@ class TestDescribeDagNodes:
         with the child workflow as the second step, not the first."""
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "startup line (queue=...)" in line
         assert "'run-1-publish'" in line
@@ -1603,7 +1546,7 @@ class TestDescribeDagNodes:
         harness = self._harness()
         harness._queue_pollers = {"atlan-publish-production": _reading()}
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "NO poller has claimed it" in line
         assert "0 pollers on 'atlan-publish-production'" in line
@@ -1625,7 +1568,7 @@ class TestDescribeDagNodes:
             )
         }
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "Something IS holding 'atlan-publish-production'" in line
         assert "rules out a queue-name mismatch" in line
@@ -1647,7 +1590,7 @@ class TestDescribeDagNodes:
             )
         }
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "1 poller(s), the Workflow half only" in line
         assert "polling only the other half of the queue" in line
@@ -1663,7 +1606,7 @@ class TestDescribeDagNodes:
             "atlan-something-else": _reading("atlan-something-else")
         }
         line = harness._describe_dag_nodes(
-            _stalled_result([_node("publish", DAGNodeStatus.RUNNING)])
+            _stalled_result([node("publish", DAGNodeStatus.RUNNING)])
         )
         assert "so this does not say which" in line
         assert "NO poller has claimed it" not in line
@@ -1672,11 +1615,11 @@ class TestDescribeDagNodes:
         """Only a ceiling makes "still running" meaningful; a terminal run's
         Running node (AE raced us) keeps the plain status line."""
         harness = self._harness()
-        result = DAGRunResult(
+        result = run_result(
+            DAGRunStatus.FAILED,
+            node("publish", DAGNodeStatus.RUNNING),
             run_id="run-1",
             workflow_slug="slug",
-            status=DAGRunStatus.FAILED,
-            nodes=[_node("publish", DAGNodeStatus.RUNNING)],
         )
         assert harness._describe_dag_nodes(result) == (
             "  - publish: status=Running error=None"
@@ -1685,7 +1628,7 @@ class TestDescribeDagNodes:
     def test_failed_node_still_leads_with_its_error(self) -> None:
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("publish", DAGNodeStatus.FAILED, error="boom")])
+            _timed_out_result([node("publish", DAGNodeStatus.FAILED, error="boom")])
         )
         assert line == "  - publish: status=Failed error=boom"
 
@@ -1696,7 +1639,7 @@ class TestDescribeDagNodes:
         line = harness._describe_dag_nodes(
             _timed_out_result(
                 [
-                    _node(
+                    node(
                         "extract",
                         DAGNodeStatus.SUCCEEDED,
                         started_at_ms=1_000_000,
@@ -1710,7 +1653,7 @@ class TestDescribeDagNodes:
     def test_skipped_node_is_not_reported_as_a_failure(self) -> None:
         harness = self._harness()
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("qi", DAGNodeStatus.SKIPPED)])
+            _timed_out_result([node("qi", DAGNodeStatus.SKIPPED)])
         )
         assert line == "  - qi: Skipped (AE did not run it)"
 
@@ -1718,7 +1661,7 @@ class TestDescribeDagNodes:
         harness = _ConcreteE2ETest()
         harness._node_dispatch = {}
         line = harness._describe_dag_nodes(
-            _timed_out_result([_node("lineage-publish", DAGNodeStatus.PENDING)])
+            _timed_out_result([node("lineage-publish", DAGNodeStatus.PENDING)])
         )
         assert "task queue not resolvable from the seed DAG" in line
 
@@ -1745,13 +1688,13 @@ class TestFullDagAssertionMessage:
         outcome = FullDAGOutcome(
             ae_result=_timed_out_result(
                 [
-                    _node(
+                    node(
                         "publish",
                         DAGNodeStatus.SUCCEEDED,
                         started_at_ms=0,
                         completed_at_ms=152_000,
                     ),
-                    _node("lineage-publish", DAGNodeStatus.PENDING),
+                    node("lineage-publish", DAGNodeStatus.PENDING),
                 ]
             ),
             connection_qualified_name="default/openapi/1",
@@ -1786,7 +1729,7 @@ class TestProgressStallDiagnostics:
                 app_name="publish", task_queue="atlan-publish-production"
             )
         }
-        harness._ae = _FakeAE(poll=poll)
+        harness._ae = FakeAE(poll)
         _stub_bootstrap(monkeypatch)
         return harness
 
@@ -1802,13 +1745,13 @@ class TestProgressStallDiagnostics:
                 message="No DAG node changed state for 600s for run run-1",
                 result=_stalled_result(
                     [
-                        _node(
+                        node(
                             "extract",
                             DAGNodeStatus.SUCCEEDED,
                             started_at_ms=0,
                             completed_at_ms=98_000,
                         ),
-                        _node("lineage-publish", DAGNodeStatus.PENDING),
+                        node("lineage-publish", DAGNodeStatus.PENDING),
                     ]
                 ),
             ),
@@ -2108,34 +2051,30 @@ class TestResolvedConnectorConfigName:
 # ---------------------------------------------------------------------------
 
 
-class _TerminatingFakeAE(_FakeAE):
-    """``_FakeAE`` that also records ``terminate_run`` calls.
+class _OrderedAE(FakeAE):
+    """``FakeAE`` whose ``terminate_run`` also lands in a shared ``order``.
 
     ``order`` is shared with the teardown stubs so a test can assert the
-    terminate happens *before* the connection delete.
+    terminate happens *before* the connection delete. Appended before the
+    recorded call, so a scripted terminate failure still shows the attempt.
     """
 
     def __init__(
-        self,
-        *,
-        poll: object = None,
-        order: list[str] | None = None,
-        terminate_raises: BaseException | None = None,
+        self, *polls: DAGRunResult | BaseException, order: list[str], **kwargs: Any
     ) -> None:
-        super().__init__(poll=poll)
-        self.terminated: list[str] = []
-        self.order = order if order is not None else []
-        self._terminate_raises = terminate_raises
+        super().__init__(*polls, **kwargs)
+        self.order = order
 
     async def terminate_run(self, run_id: str) -> bool | None:
         self.order.append(f"terminate:{run_id}")
-        if self._terminate_raises is not None:
-            raise self._terminate_raises
-        self.terminated.append(run_id)
-        return True
+        return await super().terminate_run(run_id)
+
+    @property
+    def terminated(self) -> list[str]:
+        return self.args("terminate_run", "run_id")
 
 
-class _AmbiguousSubmitFakeAE(_TerminatingFakeAE):
+class _AmbiguousSubmitAE(_OrderedAE):
     """Submit fires ``on_run_id`` (the run was created) and *then* raises.
 
     Models the ambiguous submit: AE accepted the run and started it, but the
@@ -2146,15 +2085,12 @@ class _AmbiguousSubmitFakeAE(_TerminatingFakeAE):
     the caller never got a return value to record.
     """
 
-    def __init__(self, *, error: BaseException, order: list[str] | None = None) -> None:
+    def __init__(self, *, error: BaseException, order: list[str]) -> None:
         super().__init__(order=order)
         self._submit_error = error
 
     async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
-        self.submits.append((payload, kwargs))
-        on_run_id = kwargs.get("on_run_id")
-        if on_run_id is not None:
-            on_run_id("run-1")
+        await super().submit_workflow(payload, **kwargs)
         raise self._submit_error
 
 
@@ -2198,7 +2134,7 @@ class TestTeardownTerminatesUnsettledRuns:
     that runs on every outcome, so it is where the run is stopped.
     """
 
-    def _harness(self, ae: _FakeAE) -> _ConcreteE2ETest:
+    def _harness(self, ae: FakeAE) -> _ConcreteE2ETest:
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = "default/test/1234567890"
         harness._ae = ae
@@ -2208,7 +2144,7 @@ class TestTeardownTerminatesUnsettledRuns:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         order: list[str] = []
-        ae = _TerminatingFakeAE(poll=RuntimeError("watchdog stop"), order=order)
+        ae = _OrderedAE(RuntimeError("watchdog stop"), order=order)
         harness = self._harness(ae)
         _stub_bootstrap(monkeypatch)
         _stub_teardown_io(monkeypatch, order)
@@ -2225,8 +2161,8 @@ class TestTeardownTerminatesUnsettledRuns:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         order: list[str] = []
-        ceiling = _timed_out_result([_node("extract", DAGNodeStatus.RUNNING)])
-        ae = _TerminatingFakeAE(poll=ceiling, order=order)
+        ceiling = _timed_out_result([node("extract", DAGNodeStatus.RUNNING)])
+        ae = _OrderedAE(ceiling, order=order)
         harness = self._harness(ae)
         _stub_bootstrap(monkeypatch)
         _stub_post_poll(monkeypatch)
@@ -2239,13 +2175,13 @@ class TestTeardownTerminatesUnsettledRuns:
 
     def test_a_settled_run_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         order: list[str] = []
-        settled = DAGRunResult(
+        settled = run_result(
+            DAGRunStatus.SUCCEEDED,
+            node("extract", DAGNodeStatus.SUCCEEDED),
             run_id="run-1",
             workflow_slug="slug",
-            status=DAGRunStatus.SUCCEEDED,
-            nodes=[_node("extract", DAGNodeStatus.SUCCEEDED)],
         )
-        ae = _TerminatingFakeAE(poll=settled, order=order)
+        ae = _OrderedAE(settled, order=order)
         harness = self._harness(ae)
         _stub_bootstrap(monkeypatch)
         _stub_post_poll(monkeypatch)
@@ -2269,7 +2205,7 @@ class TestTeardownTerminatesUnsettledRuns:
         before it could record anything itself.
         """
         order: list[str] = []
-        ae = _AmbiguousSubmitFakeAE(
+        ae = _AmbiguousSubmitAE(
             error=AtlanApiTimeoutError(
                 message=(
                     "submit_workflow timed out after 1 attempt(s) [delivery=ambiguous]"
@@ -2298,7 +2234,7 @@ class TestTeardownTerminatesUnsettledRuns:
         returned id tracked: run_full_dag records it on return as an idempotent
         fallback, so a stalled run from such a suite is not an orphan."""
         order: list[str] = []
-        ae = _TerminatingFakeAE(poll=RuntimeError("watchdog stop"), order=order)
+        ae = _OrderedAE(RuntimeError("watchdog stop"), order=order)
 
         class _OwnSubmit(_ConcreteE2ETest):
             async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
@@ -2321,7 +2257,7 @@ class TestTeardownTerminatesUnsettledRuns:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         order: list[str] = []
-        ae = _TerminatingFakeAE(order=order)
+        ae = _OrderedAE(order=order)
         harness = self._harness(ae)
         _stub_teardown_io(monkeypatch, order)
 
@@ -2333,10 +2269,10 @@ class TestTeardownTerminatesUnsettledRuns:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         order: list[str] = []
-        ae = _TerminatingFakeAE(
-            poll=RuntimeError("watchdog stop"),
+        ae = _OrderedAE(
+            RuntimeError("watchdog stop"),
             order=order,
-            terminate_raises=RuntimeError("AE unreachable"),
+            errors={"terminate_run": RuntimeError("AE unreachable")},
         )
         harness = self._harness(ae)
         _stub_bootstrap(monkeypatch)

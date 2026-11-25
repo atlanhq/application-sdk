@@ -27,6 +27,7 @@ from typing import Any
 
 import pytest
 
+from application_sdk.testing.harness.automation_engine import PublishedVersion
 from application_sdk.testing.harness.seed import (
     SEED_PUBLISH_NODE_ID,
     TRANSFORMED_FILE_NAME,
@@ -46,6 +47,7 @@ from application_sdk.testing.harness.seed import (
     seed_prefix_root,
 )
 from application_sdk.validation.assets import AssetValidationReport, ReferentialFailure
+from tests.unit.testing._ae_fakes import FakeAE, failed, succeeded
 
 _CONNECTION_QN = "default/snowflake/1787587123106596"
 _PREFIX_ROOT = "artifacts/apps/coalesce/e2e-seed/default%2Fsnowflake%2F1787587123106596"
@@ -258,47 +260,8 @@ class TestSeedPublishNode:
         assert SEED_PUBLISH_NODE_ID != "publish"
 
 
-class _FakeAE:
-    """Records the submit and answers one scripted ``native-status``.
-
-    ``submit_published_version`` rather than ``submit_workflow``: the seed's
-    submit takes no payload at all, because there is no envelope to name an app
-    with (FND-1766). A fake that still accepted one would let a regression back
-    onto the Heracles path unnoticed.
-    """
-
-    def __init__(
-        self,
-        *,
-        all_succeeded: bool = True,
-        ran_nodes: tuple[str, ...] = (SEED_PUBLISH_NODE_ID,),
-        foreign: str = "",
-    ) -> None:
-        self.submitted: list[str] = []
-        self.guarded: list[tuple[str, tuple[str, ...]]] = []
-        self._all_succeeded = all_succeeded
-        self._ran_nodes = ran_nodes
-        self._foreign = foreign
-
-    async def submit_published_version(self, slug: str, **_: Any) -> str:
-        self.submitted.append(slug)
-        return "ae-run-1"
-
-    async def foreign_published_dag(
-        self, slug: str, *, expected: tuple[str, ...]
-    ) -> str:
-        self.guarded.append((slug, tuple(expected)))
-        return self._foreign
-
-    async def poll_native_status(self, run_id: str, **_: Any) -> SimpleNamespace:
-        return SimpleNamespace(
-            run_id=run_id,
-            all_nodes_succeeded=self._all_succeeded,
-            nodes=[SimpleNamespace(name=name) for name in self._ran_nodes],
-            status=SimpleNamespace(
-                value="Success" if self._all_succeeded else "Failed"
-            ),
-        )
+#: What AE serves when nothing was published over the seed's own version.
+_SEED_PUBLISHED = PublishedVersion(version=1, dag={SEED_PUBLISH_NODE_ID: {}})
 
 
 def _verifier(count: int | None) -> Callable[[str, int], Awaitable[int | None]]:
@@ -321,8 +284,8 @@ def _wire(
     report: AssetValidationReport | None = None,
     all_succeeded: bool = True,
     ran_nodes: tuple[str, ...] = (SEED_PUBLISH_NODE_ID,),
-    foreign: str = "",
-) -> tuple[_FakeAE, list[tuple[str, str]]]:
+    published: PublishedVersion = _SEED_PUBLISHED,
+) -> tuple[FakeAE, list[tuple[str, str]]]:
     """Patch the three collaborators a seed reaches for, recording each."""
     uploaded: list[tuple[str, str]] = []
 
@@ -344,7 +307,11 @@ def _wire(
             "application_sdk.testing.harness.seed.validate_transformed_dir",
             lambda *_a, **_k: report,
         )
-    fake = _FakeAE(all_succeeded=all_succeeded, ran_nodes=ran_nodes, foreign=foreign)
+    # ``submit_published_version`` rather than ``submit_workflow`` is asserted
+    # by the tests below: the seed's submit takes no payload at all, because
+    # there is no envelope to name an app with (FND-1766).
+    reading = succeeded(*ran_nodes) if all_succeeded else failed(*ran_nodes)
+    fake = FakeAE(reading, published=published)
     return fake, uploaded
 
 
@@ -367,7 +334,7 @@ class TestSeedAssetsSequence:
         assert seeded.prefix == _PREFIX_ROOT
         assert seeded.transformed_data_prefix == f"{_PREFIX_ROOT}/transformed"
         assert seeded.ae_workflow_slug == "slug-1"
-        assert seeded.ae_run_id == "ae-run-1"
+        assert seeded.ae_run_id == "run-1"
 
     async def test_the_ndjson_lands_under_the_transformed_prefix(
         self, monkeypatch: pytest.MonkeyPatch
@@ -410,7 +377,7 @@ class TestSeedAssetsSequence:
                 verify=_verifier(4),
             )
         assert uploaded == []
-        assert ae.submitted == []
+        assert ae.methods == []
         assert "PUBLIC" in str(caught.value)
 
     async def test_a_publish_that_did_not_succeed_is_a_failure_not_a_seed(
@@ -428,7 +395,7 @@ class TestSeedAssetsSequence:
                 verify=_verifier(4),
             )
         assert "slug-1" in str(caught.value)
-        assert "ae-run-1" in str(caught.value)
+        assert "run-1" in str(caught.value)
 
     async def test_a_succeeded_publish_that_landed_nothing_is_a_failure(
         self, monkeypatch: pytest.MonkeyPatch
@@ -447,7 +414,7 @@ class TestSeedAssetsSequence:
                 verify=_verifier(0),
             )
         assert f"{_PREFIX_ROOT}/transformed" in str(caught.value)
-        assert "ae-run-1" in str(caught.value)
+        assert "run-1" in str(caught.value)
 
     async def test_a_short_count_is_reported_but_not_fatal(
         self, monkeypatch: pytest.MonkeyPatch
@@ -517,18 +484,33 @@ class TestTheGraphThatRuns:
         await seed_assets(
             _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
         )
-        assert ae.submitted == ["slug-1"]
+        assert ae.args("submit_published_version", "slug") == ["slug-1"]
+        assert "submit_workflow" not in ae.methods
 
     async def test_the_guard_asks_for_the_seeds_own_node(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The seed's node id is unique to the seed, so — unlike teardown's,
-        which is the delete app's own — any other name at all is foreign."""
+        which is the delete app's own — any other name at all is foreign.
+
+        Through the real guard over a scripted read: the seed's own node passes,
+        and one extra name beside it does not."""
         ae, _uploaded = _wire(monkeypatch)
         await seed_assets(
             _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
         )
-        assert ae.guarded == [("slug-1", (SEED_PUBLISH_NODE_ID,))]
+        assert ae.args("get_published_version", "slug") == ["slug-1"]
+
+        ae, _uploaded = _wire(
+            monkeypatch,
+            published=PublishedVersion(
+                version=1, dag={SEED_PUBLISH_NODE_ID: {}, "extract": {}}
+            ),
+        )
+        with pytest.raises(SeedDagSupersededError):
+            await seed_assets(
+                _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+            )
 
     async def test_a_substituted_version_is_refused_before_the_poll(
         self, monkeypatch: pytest.MonkeyPatch
@@ -537,7 +519,8 @@ class TestTheGraphThatRuns:
         failing — or succeeding against the connection under test — while
         nothing seeds."""
         ae, _uploaded = _wire(
-            monkeypatch, foreign="AE serves version 7 with node(s) extract, publish"
+            monkeypatch,
+            published=PublishedVersion(version=7, dag={"extract": {}, "publish": {}}),
         )
         with pytest.raises(SeedDagSupersededError) as caught:
             await seed_assets(
@@ -560,7 +543,7 @@ class TestTheGraphThatRuns:
                 _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
             )
         assert "extract, publish" in str(caught.value)
-        assert "ae-run-1" in str(caught.value)
+        assert "run-1" in str(caught.value)
 
     async def test_a_run_reporting_no_nodes_is_not_treated_as_foreign(
         self, monkeypatch: pytest.MonkeyPatch
@@ -568,7 +551,11 @@ class TestTheGraphThatRuns:
         """An empty node list is an unanswered read, not a substitution. Failing
         on one would turn a status blip into a seed defect."""
         ae, _uploaded = _wire(monkeypatch, ran_nodes=())
-        seeded = await seed_assets(
-            _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
-        )
-        assert seeded.ae_run_id == "ae-run-1"
+        # Graded by the success check instead — an empty node list is never
+        # ``all_nodes_succeeded`` — which names the status, not a foreign DAG.
+        with pytest.raises(SeedPublishFailedError) as caught:
+            await seed_assets(
+                _resolved(), store=object(), ae=ae, plan=_plan(), verify=_verifier(4)
+            )
+        assert not isinstance(caught.value, SeedDagSupersededError)
+        assert "run-1" in str(caught.value)
