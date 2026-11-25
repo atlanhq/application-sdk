@@ -435,7 +435,7 @@ class TestFourDirectoryRefs:
                     peak_writers = max(peak_writers, open_writers)
                     if open_writers >= 2:
                         both_open.set()
-                    await both_open.wait()
+                    await asyncio.wait_for(both_open.wait(), _TIMEOUT)
                     return inner
 
                 async def __aexit__(self, *exc: Any) -> Any:
