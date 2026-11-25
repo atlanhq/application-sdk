@@ -10,8 +10,6 @@ timeout.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -26,18 +24,14 @@ from application_sdk._obstore_config import (
     obstore_client_options,
     obstore_retry_config,
 )
-from tests.unit.private_stdlib import private_stdlib
 
 
-@contextmanager
-def _getproxies(**kwargs: Any) -> Iterator[MagicMock]:
-    """Patch ``urllib.request.getproxies`` for ``_obstore_config`` alone."""
-    with (
-        private_stdlib(_obstore_config, "urllib") as local_urllib,
-        private_stdlib(local_urllib, "request") as local_request,
-        patch.object(local_request, "getproxies", **kwargs) as mock_getproxies,
-    ):
-        yield mock_getproxies
+def _proxy_env(proxies: dict[str, str]) -> Any:
+    """Set ``<scheme>_proxy`` for each entry of *proxies* (``"no"`` is
+    ``no_proxy``), with every other proxy variable unset."""
+    env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
+    env.update({f"{scheme}_proxy": url for scheme, url in proxies.items()})
+    return patch.dict(os.environ, env, clear=True)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +89,7 @@ class TestClientOptionsOverrides:
         # Pin no proxy and no custom CA so the exact-dict assertion is
         # deterministic regardless of the host's proxy env / SSL_CERT_DIR.
         with (
-            _getproxies(return_value={}),
+            _proxy_env({}),
             patch(
                 "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
@@ -244,32 +238,35 @@ class TestDurationEnvValues:
 
 
 class TestClientOptionsProxy:
-    """proxy_url is forwarded from the standard proxy env vars; getproxies is
-    patched so the result is platform-independent (it reads system config on
-    macOS)."""
+    """proxy_url is the ``https`` proxy from ``_proxy``: HTTPS_PROXY, then
+    ALL_PROXY, from the process environment only."""
 
     def test_no_proxy_url_when_env_unset(self) -> None:
-        with _getproxies(return_value={}):
+        with _proxy_env({}):
             opts = obstore_client_options()
         assert "proxy_url" not in opts
 
     def test_https_proxy_is_used(self) -> None:
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
+        with _proxy_env(
+            {"https": "http://proxy.corp:8080"},
         ):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://proxy.corp:8080"
 
-    def test_http_proxy_used_as_fallback(self) -> None:
-        with _getproxies(
-            return_value={"http": "http://proxy.corp:3128"},
-        ):
+    def test_http_proxy_is_not_used_for_https(self) -> None:
+        # Object stores are reached over HTTPS; HTTP_PROXY applies to http only.
+        with _proxy_env({"http": "http://proxy.corp:3128"}):
+            opts = obstore_client_options()
+        assert "proxy_url" not in opts
+
+    def test_all_proxy_is_used(self) -> None:
+        with _proxy_env({"all": "http://proxy.corp:3128"}):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://proxy.corp:3128"
 
     def test_https_preferred_over_http(self) -> None:
-        with _getproxies(
-            return_value={
+        with _proxy_env(
+            {
                 "https": "http://secure.corp:8080",
                 "http": "http://plain.corp:3128",
             },
@@ -282,37 +279,33 @@ class TestClientOptionsProxyExcludes:
     """NO_PROXY is forwarded as ``proxy_excludes`` — but only when a proxy URL is
     resolved (obstore ignores it otherwise)."""
 
-    def test_no_proxy_excludes_forwarded_when_proxy_set(self, monkeypatch) -> None:
-        monkeypatch.setenv("NO_PROXY", "localhost,.svc.cluster.local,10.0.0.0/8")
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
+    def test_no_proxy_excludes_forwarded_when_proxy_set(self) -> None:
+        with _proxy_env(
+            {
+                "https": "http://proxy.corp:8080",
+                "no": "localhost,.svc.cluster.local,10.0.0.0/8",
+            }
         ):
             opts = obstore_client_options()
         assert opts["proxy_excludes"] == "localhost,.svc.cluster.local,10.0.0.0/8"
 
-    def test_lowercase_no_proxy_is_honored(self, monkeypatch) -> None:
-        monkeypatch.delenv("NO_PROXY", raising=False)
-        monkeypatch.setenv("no_proxy", "internal.example.com")
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
+    def test_uppercase_no_proxy_is_honored(self) -> None:
+        with (
+            _proxy_env({"https": "http://proxy.corp:8080"}),
+            patch.dict(os.environ, {"NO_PROXY": "internal.example.com"}),
         ):
             opts = obstore_client_options()
         assert opts["proxy_excludes"] == "internal.example.com"
 
-    def test_excludes_omitted_without_proxy_url(self, monkeypatch) -> None:
+    def test_excludes_omitted_without_proxy_url(self) -> None:
         # obstore only consults proxy_excludes when proxy_url is set, so don't
         # emit a dangling exclude list when there's no proxy.
-        monkeypatch.setenv("NO_PROXY", "localhost")
-        with _getproxies(return_value={}):
+        with _proxy_env({"no": "localhost"}):
             opts = obstore_client_options()
         assert "proxy_excludes" not in opts
 
-    def test_excludes_omitted_when_no_proxy_unset(self, monkeypatch) -> None:
-        monkeypatch.delenv("NO_PROXY", raising=False)
-        monkeypatch.delenv("no_proxy", raising=False)
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
-        ):
+    def test_excludes_omitted_when_no_proxy_unset(self) -> None:
+        with _proxy_env({"https": "http://proxy.corp:8080"}):
             opts = obstore_client_options()
         assert "proxy_excludes" not in opts
 
@@ -328,7 +321,7 @@ class TestClientOptionsRootCertificate:
     def test_root_certificate_set_when_custom_ca_present(self) -> None:
         pem = b"-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----"
         with (
-            _getproxies(return_value={}),
+            _proxy_env({}),
             patch(
                 "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=pem,
@@ -339,7 +332,7 @@ class TestClientOptionsRootCertificate:
 
     def test_root_certificate_omitted_without_custom_ca(self) -> None:
         with (
-            _getproxies(return_value={}),
+            _proxy_env({}),
             patch(
                 "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,

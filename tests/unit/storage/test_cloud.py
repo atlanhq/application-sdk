@@ -1100,25 +1100,37 @@ class TestS3RegionLookup:
         assert len(heads) == 1
 
     async def test_lookup_uses_sdk_ssl_context_and_proxy_env(self, monkeypatch):
+        """The SDK TLS context, and the proxy from ``_proxy`` per lookup host:
+        ``NO_PROXY`` applies to each host, and httpx's ``trust_env`` (which
+        also reads OS proxy settings) is off."""
         import httpx
 
         from application_sdk.clients import ssl_utils
 
+        for var in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
+        monkeypatch.setenv("no_proxy", "amazonaws.com.cn")
+        monkeypatch.delenv("NO_PROXY", raising=False)
         sentinel = object()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
-        client_kwargs: dict = {}
+        clients: list[dict] = []
         real_init = httpx.AsyncClient.__init__
 
         def _init(self, **kwargs):
-            client_kwargs.update(kwargs)
+            clients.append(kwargs)
             real_init(self, **{**kwargs, "verify": True})
 
         monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
         self._stub_head(monkeypatch, headers={})
         await _REAL_LOOKUP_BUCKET_REGION("b")
-        assert client_kwargs["verify"] is sentinel
-        assert client_kwargs["trust_env"] is True
-        assert client_kwargs["timeout"] == 10.0
+        assert [c["proxy"] for c in clients] == ["http://proxy.internal:3128", None]
+        for client_kwargs in clients:
+            assert client_kwargs["verify"] is sentinel
+            assert client_kwargs["trust_env"] is False
+            assert client_kwargs["timeout"] == 10.0
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
         from application_sdk import _obstore_config
