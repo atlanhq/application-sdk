@@ -550,6 +550,34 @@ def test_b001_real_manifest_flags_sql_app_private_run_helpers() -> None:
     assert all("v4.0.0" in f.message for f in findings)
 
 
+def test_b001_real_manifest_flags_sql_app_per_entity_engine_shims() -> None:
+    """FND-4686: the per-entity engine's old underscore names are visible to B001.
+
+    Connectors call ``_extract_entity`` / ``_transform_entity`` /
+    ``_resolve_output_path`` from their own tasks. ``@deprecated`` on the shims
+    puts them in the manifest; this test is the tripwire on that marker.
+    """
+    manifest = load_manifest()
+    src = (
+        "class MyConnector(SqlApp):\n"
+        "    async def extract_functions(self, input):\n"
+        "        path = self._resolve_output_path(input)\n"
+        "        return await self._extract_entity(\n"
+        "            entity_type='function', sql_template='', input=input\n"
+        "        )\n"
+        "    async def transform_functions(self, input):\n"
+        "        return await self._transform_entity(\n"
+        "            entity_type='function', mapper_fn=self.map_table, input=input\n"
+        "        )\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    findings = scan_consumer(tree, "app/connector.py", manifest, directives)
+    assert [f.rule_id for f in findings] == ["B001", "B001", "B001"]
+    for name in ("_resolve_output_path", "_extract_entity", "_transform_entity"):
+        assert any(name in f.message for f in findings)
+    assert all("v4.0.0" in f.message for f in findings)
+
+
 # ── B002 MalformedDeprecationNotice (sdk scope) ─────────────────────────────────
 
 

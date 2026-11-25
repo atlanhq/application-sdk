@@ -52,7 +52,7 @@ Public API::
     )
 
 Non-SQL apps get the same behaviour from the same call — this module is the
-shared seam, and nothing in it is SQL-specific. ``SqlApp._transform_entity``
+shared seam, and nothing in it is SQL-specific. ``SqlApp.transform_entity``
 is simply its first caller.
 """
 

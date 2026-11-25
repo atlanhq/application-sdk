@@ -1,11 +1,11 @@
 """FND-282: the SqlApp extract/transform bodies must not starve the event loop.
 
 ``SqlApp`` is the base class every SQL connector inherits, so a blocking loop
-in ``_extract_entity`` / ``_transform_entity`` is a fleet-wide starvation site:
+in ``extract_entity`` / ``transform_entity`` is a fleet-wide starvation site:
 the auto-heartbeat coroutine cannot run, and Temporal kills an activity that
 was making progress throughout (ADR-0010, ADR-0018 *Problem 2*).
 
-``_transform_entity`` is the sharper case — it maps every raw record for the
+``transform_entity`` is the sharper case — it maps every raw record for the
 entity (JSON parse, the connector's ``map_*`` function, serialise, write) with
 no await anywhere in the loop, so its hold scales with the source table.
 
@@ -131,7 +131,7 @@ async def test_transform_entity_does_not_block_the_loop(
             f.write(b"\n")
 
     result = await app.probe.run(
-        lambda: app._transform_entity(
+        lambda: app.transform_entity(
             entity_type="database",
             mapper_fn=app.map_database,
             input=_transform_input(tmp_path),
@@ -140,7 +140,7 @@ async def test_transform_entity_does_not_block_the_loop(
 
     assert result.total_record_count == 2
     assert app.mapped == 2, "the mapper never ran"
-    app.probe.assert_loop_stayed_free("_transform_entity")
+    app.probe.assert_loop_stayed_free("transform_entity")
 
 
 async def test_extract_entity_does_not_block_the_loop(
@@ -159,7 +159,7 @@ async def test_extract_entity_does_not_block_the_loop(
     monkeypatch.setattr("application_sdk.templates.sql_app.orjson.dumps", _slow_dumps)
 
     result = await app.probe.run(
-        lambda: app._extract_entity(
+        lambda: app.extract_entity(
             entity_type="database",
             sql_template=_SlowMapperApp.fetch_database_sql,
             input=_extract_input(tmp_path),
@@ -168,7 +168,7 @@ async def test_extract_entity_does_not_block_the_loop(
 
     assert result.total_record_count == 2
     assert slowed["done"], "the serialise path never ran"
-    app.probe.assert_loop_stayed_free("_extract_entity")
+    app.probe.assert_loop_stayed_free("extract_entity")
 
 
 async def test_extract_entity_never_hands_the_file_handle_to_a_thread(
@@ -194,7 +194,7 @@ async def test_extract_entity_never_hands_the_file_handle_to_a_thread(
 
     monkeypatch.setattr(sql_app_module, "run_in_thread", _recording_run_in_thread)
 
-    result = await app._extract_entity(
+    result = await app.extract_entity(
         entity_type="database",
         sql_template=_SlowMapperApp.fetch_database_sql,
         input=_extract_input(tmp_path),

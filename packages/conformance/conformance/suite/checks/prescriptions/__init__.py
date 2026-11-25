@@ -63,6 +63,9 @@ Currently implemented:
   instead of a ``pyatlan_v9`` asset.  Per-file.
 * ``P059`` JsonEncodedContractField — a ``str`` / ``list[str]`` contract field
   whose value the app encodes or decodes as JSON.  Cross-file.
+* ``P068`` SqlAppRunOverrideUnverified — a ``run()`` on an ``SqlApp`` subclass
+  that calls neither ``super().run()`` nor ``finalize_extraction``.
+  Cross-file; silent below the SDK release that ships ``finalize_extraction``.
 
 Inline suppression
 ------------------
@@ -120,6 +123,7 @@ from ._prefix_transfer import check_p044
 from ._qualified_name import check_p028
 from ._raw_dict_entity import check_p058
 from ._relationship_direction import check_p055
+from ._run_override_unverified import check_p068
 from ._store_construction import check_p009
 from ._typed_boundaries import check_p013_p014
 from ._unbounded_fields import UnboundedContractFieldsChecker, reused_class_names
@@ -216,6 +220,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     Pass 6 — emit P059 (text contract field carrying JSON): match ``json.dumps``
     writers and ``json.loads`` readers to contract fields by name across files.
+
+    Pass 7 — emit P068 (``SqlApp.run()`` replacement that never verifies),
+    resolving ``SqlApp`` ancestry through the same class registry.
     """
     findings: list[Finding] = []
 
@@ -337,6 +344,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     # Pass 6 — emit P059 (text contract field carrying JSON)
     findings.extend(check_p059(file_trees, file_directives, root))
+
+    # Pass 7 — emit P068 (SqlApp.run() replacement that never verifies)
+    findings.extend(check_p068(file_records, by_name, file_directives, root))
 
     return findings
 

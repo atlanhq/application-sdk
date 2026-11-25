@@ -122,6 +122,13 @@ so it drafts a proposal for human review.  (This rule is backed by a separate
 `suite.checks.run_scratch` check, silent below the SDK release that ships
 `App.run_scratch_dir` — see its module docs.)
 
+The SqlApp run-override rule (P068, FND-4686) is also P-series and
+suggest-only.  The fix adds a `finalize_extraction` call to a `run()` that
+replaces `SqlApp.run()`, but which transform outputs it must be handed depends
+on every entity the override drives, so it drafts a proposal for human review.
+(This rule is backed by `suite.checks.prescriptions`, silent below the SDK
+release that ships `finalize_extraction`.)
+
 The determinism / async-correctness rules (P020–P024) are also P-series
 and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
 concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
@@ -1010,6 +1017,25 @@ package): `docs/concepts/clients.md`.
   anything, wrap it in `try` / `finally` with the super call in the
   `finally`.  There is no case
   where skipping the base close is correct, so do not propose a suppression.
+
+**SqlApp run-override rule (P068)** — suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  Read the whole `run()` and every
+task it calls before drafting.  For the human reading the brief (in the
+`atlanhq/application-sdk` repo, not shipped with this package): the `SqlApp`
+class docstring in `application_sdk/templates/sql_app.py`.
+
+- **P068 SqlAppRunOverrideUnverified** — a `run()` on an `SqlApp` subclass
+  calls neither `super().run()` (or `<Ancestor>.run(self, ...)`) nor
+  `finalize_extraction`, so the `transformed_data_prefix` it returns is never
+  checked against what the transforms declared.  Do not propose
+  `super().run()`: replacing `run()` is a documented path.  Draft: collect
+  every `TransformOutput` the override's `transform_*` calls return, build the
+  `ExtractionOutput` as the override already does, and return
+  `await self.finalize_extraction(base, transform_outputs)` in place of the
+  bare return.  If the override also hands the tree to `App.upload_refs`,
+  call `finalize_extraction` first and keep the hand-off after it.  Propose
+  `# conformance: ignore[P068] <reason>` only when the override verifies its
+  output another way, and name that way in the reason.
 
 **Offload-cancel rules (P064/P065)** — scope=app, WARN-tier.  A cancel stops
 only the coroutine awaiting `run_in_thread`; the thread runs on.  Read the whole
