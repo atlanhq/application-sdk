@@ -61,7 +61,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       # pytest comes from the locked `test` group (a default group, as is
       # `dev`, which carries the conformance workspace package several of these
@@ -92,7 +92,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       # pyright is the exact pin in the locked `dev` group, equal to the
       # pre-commit hook's rev. `--extra workflows` installs what the scripts
