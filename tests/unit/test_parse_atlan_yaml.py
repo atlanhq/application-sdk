@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,19 @@ _SCRIPT_PATH = (
 _spec = importlib.util.spec_from_file_location("parse_atlan_yaml", _SCRIPT_PATH)
 assert _spec and _spec.loader
 parse_atlan_yaml = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(parse_atlan_yaml)
+# The script imports its sibling helper (``from _gha import ...``), which
+# resolves from ``.github/scripts`` the way it does when CI runs the script.
+# Only for the import: neither the directory nor a newly imported helper stays
+# behind on the worker, for the reason above.
+_modules_before = set(sys.modules)
+sys.path.insert(0, str(_SCRIPT_PATH.parent))
+try:
+    _spec.loader.exec_module(parse_atlan_yaml)
+finally:
+    sys.path.remove(str(_SCRIPT_PATH.parent))
+    for _name in set(sys.modules) - _modules_before:
+        if _name.startswith("_gh"):
+            del sys.modules[_name]
 
 AtlanYamlError = parse_atlan_yaml.AtlanYamlError
 
