@@ -281,7 +281,6 @@ def test_saving_never_raises_and_a_stopped_recorder_stays_degraded(tmp_path, run
     assert recorder.error in ("NotADirectoryError", "FileExistsError")
     stopped = CoverageRecorder()
     stopped.missing("k", object())  # type: ignore[arg-type]
-    stopped.enabled = True  # as if saved just before the error turned it off
     stopped.save(str(tmp_path / "recorded.json"))
     loaded = CoverageRecorder.load(str(tmp_path / "recorded.json"))
     summary = run_coverage_step(run_files, str(tmp_path / "c"), SPEC, loaded, REGISTRY)
