@@ -766,6 +766,38 @@ context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
   Test adapted: `test_principles_are_rendered_once_each_with_their_files_and_five_fields`
   now expects the everywhere principle FP02 after the repo's RP01.
 
+- **Limits (both copies, unless the limit exists only here).** Sized so a pull request
+  of 100 files and about 4,000 changed lines (2x a 50-file / 2,000-line one) finishes
+  without hitting any of them. Every cap stays; the reasons are in the config comments.
+
+  | Limit | Old | New | Copies |
+  |---|---|---|---|
+  | `[agent] context_limit_tokens` | 60,000 | 200,000 | both |
+  | `[agent] max_tool_turns` / `max_tool_turns_cap` | 16 / 30 | 24 / 48 | both |
+  | `[agent] plan_max_tokens` | 8,000 | 24,000 | both |
+  | `[agent] bundle_time_limit_s` | 120 | 240 | connector-reviewer (lens has none) |
+  | `[agent] principles_max_tokens` | none | 24,000 | connector-reviewer (lens has rule cards) |
+  | `[budget] cap_usd_per_pr` | 1.00 | 3.75 | both |
+  | `[scope] max_bundles` | 8 | 16 | both |
+  | `[scope] max_changed_files` | 60 | 200 | both |
+  | re-pack size past `max_bundles` | half the ceiling (30,000) | `review.MAX_REPACK_DIFF_TOKENS` = 30,000 | both |
+  | approach check `max_input_tokens` / `max_lookups` (`holistic.check`) | 8,000 / 4 | 32,000 / 8 | both |
+  | `review_max_tokens`, `final_retry_max_tokens` | 24,000 | 24,000 (unchanged) | both |
+
+  The window: the LiteLLM proxy reports `max_input_tokens` 922,000 for gpt-6-luna, as
+  quoted in mothership's `atlanClaw/src/agent.ts`. Nothing in this repository or the
+  gateway's docs states it, so it is cited as that. The ceiling of 200,000 is 22% of
+  it. It also stays under 272,000: the provider bills a longer prompt on separate
+  long-context meters (abacus: `6-luna LongCo`), whose rate `[model.price]` does not
+  carry, so the reservation would under-price it. No `max_tokens` goes above 24,000,
+  the value every review turn already sends: a 400 is fatal in `llm.Client` and
+  opens the run-wide breaker. The re-pack size had been half the ceiling, and would
+  have become a 100,000-token diff with no room left to read anything, so it is a
+  constant at its old value. Tests adapted: the shipped-config tests allow a cap up
+  to $4.00 and a time limit up to 300 s (16 bundles, 4 at a time, inside 20 minutes);
+  `test_files_past_the_bundle_cap_are_unread` patches `MAX_REPACK_DIFF_TOKENS`
+  instead of the ceiling.
+
 ## Not changed, and worth knowing before the next change
 
 Nothing listed at the moment. The three items that were here (the test-file

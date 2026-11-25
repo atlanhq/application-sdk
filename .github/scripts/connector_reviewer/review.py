@@ -2509,11 +2509,19 @@ BUNDLE_CAP = "bundle cap"
 MAX_RANGES_SHOWN = 6  # line ranges named per partly reviewed file
 
 
+# The most diff a re-packed bundle may hold (estimated tokens). It was half
+# the context ceiling, 30,000 at a 60,000 ceiling; the ceiling is now 200,000
+# (FND-5316), and a 100,000-token diff would start a bundle near it with no room
+# to read anything. Kept at the old value: past `max_bundles` the fix is more
+# bundles, not deeper ones.
+MAX_REPACK_DIFF_TOKENS = 30_000
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     """Bundles in review order — riskiest first — within `max_bundles`.
 
-    Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed. If that is still over the cap,
+    Past the cap, bundles are first re-packed larger (up to
+    `MAX_REPACK_DIFF_TOKENS` of diff) so every file still gets reviewed. If that is still over the cap,
     the code the app ships (app, then contract, build files and CI) and the
     rest (tests, then anything else) are packed apart, in that order
     (FND-5316): a test file no longer rides in the bundle of the source it
@@ -2524,10 +2532,7 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
-        bigger = min(
-            max(total // cfg.max_bundles + 1, 9000),
-            cfg.limits.context_limit_tokens // 2,
-        )
+        bigger = min(max(total // cfg.max_bundles + 1, 9000), MAX_REPACK_DIFF_TOKENS)
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
         if len(bundles) > cfg.max_bundles:
             diffs = cast("list[FileDiff]", files)

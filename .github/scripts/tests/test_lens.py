@@ -1120,11 +1120,69 @@ def test_state_is_only_trusted_from_the_bot_comment(repo: Path):
 # ---- config ------------------------------------------------------------------------------------------
 
 
+# The model's window as the LiteLLM proxy reports it (max_input_tokens), and where
+# the provider's long-context billing starts; see the comment on
+# context_limit_tokens in config.toml.
+LUNA_WINDOW = 922_000
+LONG_CONTEXT_FROM = 272_000
+GATEWAY_MAX_TOKENS = 24_000  # the largest max_output_tokens the route is known to take
+
+
+def _large_pr(prefix: str) -> list[Any]:
+    """100 files and 4,000 changed lines over 18 directories."""
+    out = ""
+    for i in range(100):
+        p = f"application_sdk/d{i % 18}/f{i}.py"
+        body = "".join(
+            f"-    old_value_{j} = compute(argument_{j}, other)\n"
+            f"+    new_value_{j} = compute_more(argument_{j}, other, more)\n"
+            for j in range(20)
+        )
+        out += (
+            f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1,20 +1,20 @@\n{body}"
+        )
+    return parse_unified_diff(out)
+
+
+def test_the_shipped_limits_let_a_100_file_pr_finish_without_a_cap():
+    """FND-5316: a live 42-file review hit the context ceiling in 3 of 5 bundles,
+    one at turn 3. Every limit is sized for 100 files and 4,000 changed lines."""
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    lim = cfg.limits
+    # The ceiling: roomy, well under the window, under the long-context rate.
+    assert 200_000 <= lim.context_limit_tokens <= 0.75 * LUNA_WINDOW
+    assert lim.context_limit_tokens * 1.25 < LONG_CONTEXT_FROM
+    # No max_tokens past what the gateway route is known to accept; the plan
+    # turn no longer stops at 8,000.
+    sent = [lim.review_max_tokens, lim.plan_max_tokens, lim.reflect_max_tokens]
+    sent += [lim.verify_max_tokens, lim.verify_max_tokens_opt_in]
+    assert max(sent) <= GATEWAY_MAX_TOKENS and lim.plan_max_tokens == GATEWAY_MAX_TOKENS
+    # Twice the 12 turns the deepest live bundle used, before any size bonus.
+    assert lim.turn_budget(1, 0) >= 24 and lim.turn_budget(8, 229) >= 32
+    # Every file of the large PR is in a bundle.
+    files = _large_pr("application_sdk")
+    assert len(files) == 100 and sum(f.additions + f.deletions for f in files) == 4000
+    assert cfg.max_changed_files >= 2 * len(files)
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert res.skipped_files == [] and sum(len(b.files) for b in bundles) == 100
+    # Round 1's line-review ledger covers the estimated ~$1.00 of line review and
+    # four calls in flight, each reserving its prompt's bytes at the cache-write rate.
+    line_review = cfg.cap_usd_per_pr * cfg.first_round_share * (1 - 0.15 - 0.10)
+    held = (
+        cfg.concurrency
+        * (lim.context_limit_tokens * 3.5 * 0.125 + lim.review_max_tokens * 0.5)
+        / 1e6
+    )
+    assert line_review >= 1.00 + held
+
+
 def test_shipped_config_and_rules_load_and_validate():
     cfg_dir = Path(__file__).resolve().parents[2] / "lens"
     cfg = load_config(cfg_dir)
     assert validate(cfg) == []
-    assert cfg.cap_usd_per_pr <= 1.0
+    # About 3x the estimated cost of a 100-file, 4,000-line PR (FND-5316).
+    assert cfg.cap_usd_per_pr <= 4.0
     rules = load_rules(cfg_dir)
     missing = {c for _, cards in rules.entries for c in cards} - set(rules.cards)
     assert not missing, f"rules.toml names cards that do not exist: {missing}"

@@ -1849,21 +1849,26 @@ def _risk(b: Bundle) -> tuple[int, int]:
     return (0 if risky else 1, -b.changed_lines)
 
 
+# The most diff a re-packed bundle may hold (estimated tokens). It was half
+# the context ceiling, 30,000 at a 60,000 ceiling; the ceiling is now 200,000
+# (FND-5316), and a 100,000-token diff would start a bundle near it with no room
+# to read anything. Kept at the old value: past `max_bundles` the fix is more
+# bundles, not deeper ones.
+MAX_REPACK_DIFF_TOKENS = 30_000
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # noqa: ANN001
     """Bundles in review order — riskiest first — within `max_bundles`.
 
-    Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed; only if that is not enough are
+    Past the cap, bundles are first re-packed larger (up to
+    `MAX_REPACK_DIFF_TOKENS` of diff) so every file still gets reviewed; only if that is not enough are
     the lowest-risk bundles set aside, and each skipped file is named in the
     summary. Ordering by risk means that whatever a short budget cuts is the
     least important code, never the credentials path."""
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
-        bigger = min(
-            max(total // cfg.max_bundles + 1, 9000),
-            cfg.limits.context_limit_tokens // 2,
-        )
+        bigger = min(max(total // cfg.max_bundles + 1, 9000), MAX_REPACK_DIFF_TOKENS)
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
     bundles.sort(key=_risk)
     # A file over the token cap is reviewed in parts (`bundle._parts`), and its
