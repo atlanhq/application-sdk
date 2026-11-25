@@ -787,22 +787,22 @@ def _create_store_core(
 
     # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig so
     # timeouts and pool sizes are sized for GB-class transfers.  Translating the
-    # settings into obstore config is delegated to make_*_store in
+    # settings into obstore config is delegated to build_*_store in
     # application_sdk/_obstore_config.py — the single source of truth shared with
     # cloud.py and the API host.
     from application_sdk._obstore_config import (  # noqa: PLC0415
-        make_azure_store,
-        make_gcs_store,
-        make_s3_store,
+        build_azure_store,
+        build_gcs_store,
+        build_s3_store,
     )
 
     if store_kind == "s3":
         s3_settings, put_attrs = _build_s3_config(name, meta)
-        return make_s3_store(s3_settings), put_attrs
+        return build_s3_store(s3_settings), put_attrs
 
     if store_kind == "azure":
         az_settings, put_attrs = _build_azure_config(name, meta)
-        return make_azure_store(az_settings), put_attrs
+        return build_azure_store(az_settings), put_attrs
 
     if store_kind == "gcs":
         gcs_settings, put_attrs = _build_gcs_config(meta)
@@ -821,7 +821,7 @@ def _create_store_core(
             gcs_settings = dataclasses.replace(
                 gcs_settings, credential_provider=make_gcs_adc_provider()
             )
-        return make_gcs_store(gcs_settings), put_attrs
+        return build_gcs_store(gcs_settings), put_attrs
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
 

@@ -106,7 +106,7 @@ def captured_s3_config():
         captured["config"] = kwargs["config"]
         return mock.Mock(name="S3Store")
 
-    # Patch obstore's class, not make_s3_store, so the capture is the config
+    # Patch obstore's class, not build_s3_store, so the capture is the config
     # the shared settings translation actually produces.
     with mock.patch("obstore.store.S3Store", side_effect=_fake_s3_store):
         yield captured

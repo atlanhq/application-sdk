@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
     from obstore.store import ClientConfig, ObjectStore, RetryConfig
 
+from application_sdk._deprecation import deprecated
 from application_sdk._env import env_duration, env_int, env_str
 from application_sdk._logging import get_logger
 from application_sdk._proxy import no_proxy, proxy_for
@@ -234,7 +235,7 @@ def obstore_retry_config() -> RetryConfig | None:
 # Three front-ends build stores from credentials: the Dapr binding
 # (``storage/binding.py``), ``CloudStore`` (``storage/cloud.py``) and the API
 # host (``handler/object_routes.py``). Each reads its own input format and
-# fills one of the settings dataclasses below; ``make_*_store`` is the only
+# fills one of the settings dataclasses below; ``build_*_store`` is the only
 # code that turns settings into obstore ``config`` / ``client_options``. A fix
 # to that translation (an endpoint rule, a header a store rejects, a credential
 # key) therefore reaches every front-end at once.
@@ -369,7 +370,27 @@ def s3_store_args(
     return (config or None), opts  # pyright: ignore[reportReturnType]
 
 
-def make_s3_store(
+def _new_s3_store(
+    bucket: str,
+    config: dict[str, str] | None,
+    client_options: ClientConfig,
+    credential_provider: object,
+    label: str,
+) -> ObjectStore:
+    """Construct the S3Store with the SDK retry config, logging what is set."""
+    from obstore.store import S3Store  # noqa: PLC0415
+
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=client_options, retry_config=retry)
+    kw: dict[str, object] = dict(
+        bucket=bucket, config=config, client_options=client_options, retry_config=retry
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return S3Store(**kw)  # pyright: ignore[reportArgumentType]
+
+
+def build_s3_store(
     settings: S3StoreSettings,
     *,
     label: str = "s3",
@@ -382,18 +403,33 @@ def make_s3_store(
     log output stay consistent across all S3 paths. Pass *client_options* to
     replace the SDK default client options before *settings* adjust them.
     """
-    from obstore.store import S3Store  # noqa: PLC0415
-
     base = client_options if client_options is not None else obstore_client_options()
     config, opts = s3_store_args(settings, base)
-    retry = obstore_retry_config()
-    log_obstore_config(label, client_options=opts, retry_config=retry)
-    kw: dict[str, object] = dict(
-        bucket=settings.bucket, config=config, client_options=opts, retry_config=retry
+    return _new_s3_store(
+        settings.bucket, config, opts, settings.credential_provider, label
     )
-    if settings.credential_provider is not None:
-        kw["credential_provider"] = settings.credential_provider
-    return S3Store(**kw)  # pyright: ignore[reportArgumentType]
+
+
+@deprecated(
+    "make_s3_store is deprecated; use build_s3_store with an S3StoreSettings, "
+    "which applies the shared endpoint, tagging and credential rules — will be "
+    "removed in v4.0.0."
+)
+def make_s3_store(
+    bucket: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "s3",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create an S3Store from a raw obstore *config*.
+
+    .. deprecated:: 3.60
+        Use :func:`build_s3_store`. Will be removed in v4.0.0.
+    """
+    opts = client_options if client_options is not None else obstore_client_options()
+    return _new_s3_store(bucket, config, opts, credential_provider, label)
 
 
 # obstore-rs reads ``AZURE_*`` from the environment at AzureStore construction
@@ -518,7 +554,35 @@ def azure_store_args(
     return (config or None), opts  # pyright: ignore[reportReturnType]
 
 
-def make_azure_store(
+def _new_azure_store(
+    container: str,
+    config: dict[str, str] | None,
+    client_options: ClientConfig,
+    credential_provider: object,
+    label: str,
+) -> ObjectStore:
+    """Construct the AzureStore, isolated from ambient ``AZURE_*`` when the
+    caller supplies its own credential (see ``_suppress_ambient_azure_env``)."""
+    from obstore.store import AzureStore  # noqa: PLC0415
+
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=client_options, retry_config=retry)
+    kw: dict[str, object] = dict(
+        container_name=container,
+        config=config,
+        client_options=client_options,
+        retry_config=retry,
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    isolate = (
+        _azure_config_has_explicit_credential(config) or credential_provider is not None
+    )
+    with _suppress_ambient_azure_env(isolate):
+        return AzureStore(**kw)  # pyright: ignore[reportArgumentType]
+
+
+def build_azure_store(
     settings: AzureStoreSettings,
     *,
     label: str = "azure",
@@ -526,33 +590,40 @@ def make_azure_store(
 ) -> ObjectStore:
     """Create an AzureStore from *settings* with SDK-default client/retry config.
 
-    See :func:`make_s3_store` for rationale. When the settings carry an
+    See :func:`build_s3_store` for rationale. When the settings carry an
     explicit credential *or* a ``credential_provider``, the ambient
     ``AZURE_*`` environment is suppressed for the construction so the host's
     own identity can't override it (see ``_suppress_ambient_azure_env``). The
     cert-auth path in ``binding.py`` uses ``credential_provider`` instead of
     a key in ``config``, so both cases activate env stripping.
     """
-    from obstore.store import AzureStore  # noqa: PLC0415
-
     base = client_options if client_options is not None else obstore_client_options()
     config, opts = azure_store_args(settings, base)
-    retry = obstore_retry_config()
-    log_obstore_config(label, client_options=opts, retry_config=retry)
-    kw: dict[str, object] = dict(
-        container_name=settings.container,
-        config=config,
-        client_options=opts,
-        retry_config=retry,
+    return _new_azure_store(
+        settings.container, config, opts, settings.credential_provider, label
     )
-    if settings.credential_provider is not None:
-        kw["credential_provider"] = settings.credential_provider
-    isolate = (
-        _azure_config_has_explicit_credential(config)
-        or settings.credential_provider is not None
-    )
-    with _suppress_ambient_azure_env(isolate):
-        return AzureStore(**kw)  # pyright: ignore[reportArgumentType]
+
+
+@deprecated(
+    "make_azure_store is deprecated; use build_azure_store with an "
+    "AzureStoreSettings, which applies the shared endpoint and credential "
+    "rules — will be removed in v4.0.0."
+)
+def make_azure_store(
+    container: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "azure",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create an AzureStore from a raw obstore *config*.
+
+    .. deprecated:: 3.60
+        Use :func:`build_azure_store`. Will be removed in v4.0.0.
+    """
+    opts = client_options if client_options is not None else obstore_client_options()
+    return _new_azure_store(container, config, opts, credential_provider, label)
 
 
 @dataclass(frozen=True)
@@ -569,7 +640,27 @@ class GCSStoreSettings:
     credential_provider: object = field(default=None, repr=False, compare=False)
 
 
-def make_gcs_store(
+def _new_gcs_store(
+    bucket: str,
+    config: dict[str, str] | None,
+    client_options: ClientConfig,
+    credential_provider: object,
+    label: str,
+) -> ObjectStore:
+    """Construct the GCSStore with the SDK retry config, logging what is set."""
+    from obstore.store import GCSStore  # noqa: PLC0415
+
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=client_options, retry_config=retry)
+    kw: dict[str, object] = dict(
+        bucket=bucket, config=config, client_options=client_options, retry_config=retry
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return GCSStore(**kw)  # pyright: ignore[reportArgumentType]
+
+
+def build_gcs_store(
     settings: GCSStoreSettings,
     *,
     label: str = "gcs",
@@ -577,30 +668,44 @@ def make_gcs_store(
 ) -> ObjectStore:
     """Create a GCSStore from *settings* with SDK-default client/retry config.
 
-    See :func:`make_s3_store` for rationale. On the ADC / Workload-Identity path
-    ``binding.py`` passes a ``credential_provider`` (obstore.auth.google, backed
-    by google-auth) instead of a key: obstore's built-in GCS credential-file
-    decoder only understands ``service_account`` / ``authorized_user`` files,
-    NOT a Workload Identity Federation ``external_account`` file — google-auth
-    handles all of them.
+    See :func:`build_s3_store` for rationale. On the ADC / Workload-Identity
+    path ``binding.py`` passes a ``credential_provider`` (obstore.auth.google,
+    backed by google-auth) instead of a key: obstore's built-in GCS
+    credential-file decoder only understands ``service_account`` /
+    ``authorized_user`` files, NOT a Workload Identity Federation
+    ``external_account`` file — google-auth handles all of them.
     """
-    from obstore.store import GCSStore  # noqa: PLC0415
-
     opts = client_options if client_options is not None else obstore_client_options()
-    retry = obstore_retry_config()
-    log_obstore_config(label, client_options=opts, retry_config=retry)
     # ``None`` (not {}) so obstore uses Application Default Credentials.
     config = (
         {"google_service_account_key": settings.service_account_key}
         if settings.service_account_key
         else None
     )
-    kw: dict[str, object] = dict(
-        bucket=settings.bucket, config=config, client_options=opts, retry_config=retry
+    return _new_gcs_store(
+        settings.bucket, config, opts, settings.credential_provider, label
     )
-    if settings.credential_provider is not None:
-        kw["credential_provider"] = settings.credential_provider
-    return GCSStore(**kw)  # pyright: ignore[reportArgumentType]
+
+
+@deprecated(
+    "make_gcs_store is deprecated; use build_gcs_store with a GCSStoreSettings "
+    "— will be removed in v4.0.0."
+)
+def make_gcs_store(
+    bucket: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "gcs",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create a GCSStore from a raw obstore *config*.
+
+    .. deprecated:: 3.60
+        Use :func:`build_gcs_store`. Will be removed in v4.0.0.
+    """
+    opts = client_options if client_options is not None else obstore_client_options()
+    return _new_gcs_store(bucket, config, opts, credential_provider, label)
 
 
 def log_obstore_config(

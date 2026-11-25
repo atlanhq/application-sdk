@@ -1150,7 +1150,7 @@ class TestS3RegionLookup:
             built.append(settings.region or None)
             return MemoryStore()
 
-        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.setattr(_obstore_config, "build_s3_store", _make)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         return built
@@ -1369,7 +1369,7 @@ class TestS3RegionLookup:
             built.append((settings.bucket, dict(config or {})))
             return MemoryStore()
 
-        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.setattr(_obstore_config, "build_s3_store", _make)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))

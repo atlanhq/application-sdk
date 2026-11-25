@@ -487,7 +487,7 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 
 ADLS also accepts `extra.endpoint` (e.g. Azurite).
 
-Store construction lives in `application_sdk/_obstore_config.py`: each front-end (the Dapr binding, `CloudStore`, the API host) fills an `S3StoreSettings`, `AzureStoreSettings` or `GCSStoreSettings`, and `make_*_store` is the only code that turns settings into obstore config. A fix to that translation reaches every path.
+Store construction lives in `application_sdk/_obstore_config.py`: each front-end (the Dapr binding, `CloudStore`, the API host) fills an `S3StoreSettings`, `AzureStoreSettings` or `GCSStoreSettings`, and `build_*_store` is the only code that turns settings into obstore config. A fix to that translation reaches every path.
 
 ---
 

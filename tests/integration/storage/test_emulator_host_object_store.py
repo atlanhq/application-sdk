@@ -28,8 +28,8 @@ from fastapi.testclient import TestClient
 from application_sdk._obstore_config import (
     AzureStoreSettings,
     S3StoreSettings,
-    make_azure_store,
-    make_s3_store,
+    build_azure_store,
+    build_s3_store,
     obstore_client_options,
 )
 from application_sdk.handler import (
@@ -84,7 +84,7 @@ def _http_options() -> dict[str, object]:
 
 def _minio(bucket: str) -> HostObjectStore:
     require_reachable(f"{MINIO_ENDPOINT}/minio/health/live", "MinIO")
-    store = make_s3_store(
+    store = build_s3_store(
         S3StoreSettings(
             bucket=bucket,
             endpoint=MINIO_ENDPOINT,
@@ -102,7 +102,7 @@ def _minio(bucket: str) -> HostObjectStore:
 
 def _azurite(container: str) -> HostObjectStore:
     require_reachable(f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}", "Azurite")
-    store = make_azure_store(
+    store = build_azure_store(
         AzureStoreSettings(
             container=container,
             account_name=AZURITE_ACCOUNT,

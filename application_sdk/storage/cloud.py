@@ -834,7 +834,7 @@ def _create_s3_store(
     """
     from application_sdk._obstore_config import (  # noqa: PLC0415
         S3StoreSettings,
-        make_s3_store,
+        build_s3_store,
     )
 
     bucket = extra.get("s3_bucket", "")
@@ -903,7 +903,7 @@ def _create_s3_store(
         {"Storage-Class": storage_class} if storage_class else None
     )
 
-    return make_s3_store(settings, label="cloud-s3"), put_attrs
+    return build_s3_store(settings, label="cloud-s3"), put_attrs
 
 
 def _create_gcs_store(
@@ -912,7 +912,7 @@ def _create_gcs_store(
     """Create a GCS store from credentials."""
     from application_sdk._obstore_config import (  # noqa: PLC0415
         GCSStoreSettings,
-        make_gcs_store,
+        build_gcs_store,
     )
 
     bucket = extra.get("gcs_bucket", "")
@@ -927,7 +927,7 @@ def _create_gcs_store(
     settings = GCSStoreSettings(
         bucket=bucket, service_account_key=creds.get("password") or ""
     )
-    return make_gcs_store(settings, label="cloud-gcs"), put_attrs
+    return build_gcs_store(settings, label="cloud-gcs"), put_attrs
 
 
 def _create_azure_store(
@@ -936,7 +936,7 @@ def _create_azure_store(
     """Create an Azure (ADLS) store from credentials."""
     from application_sdk._obstore_config import (  # noqa: PLC0415
         AzureStoreSettings,
-        make_azure_store,
+        build_azure_store,
     )
 
     storage_account = extra.get("storage_account_name", "")
@@ -969,4 +969,4 @@ def _create_azure_store(
         {"x-ms-access-tier": storage_class} if storage_class else None
     )
 
-    return make_azure_store(settings, label="cloud-azure"), put_attrs
+    return build_azure_store(settings, label="cloud-azure"), put_attrs

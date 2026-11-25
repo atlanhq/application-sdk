@@ -347,7 +347,9 @@ class _Built:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.calls: list[tuple[str, str, dict[str, str] | None, str]] = []
         for kind in ("s3", "azure"):
-            monkeypatch.setattr(_obstore_config, f"make_{kind}_store", self._make(kind))
+            monkeypatch.setattr(
+                _obstore_config, f"build_{kind}_store", self._make(kind)
+            )
 
     def _make(self, kind: str) -> Any:
         # Record the obstore config the shared translation derives from the
@@ -583,7 +585,7 @@ def test_without_obstore_there_is_no_store(
     def _missing(*_: object, **__: object) -> None:
         raise ModuleNotFoundError("No module named 'obstore'", name="obstore")
 
-    monkeypatch.setattr(_obstore_config, "make_s3_store", _missing)
+    monkeypatch.setattr(_obstore_config, "build_s3_store", _missing)
     monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
     assert HostObjectStore.from_env() is None
     assert "atlan-application-sdk-api[obstore]" in log.lines[0]

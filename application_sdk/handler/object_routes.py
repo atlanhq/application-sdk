@@ -891,7 +891,7 @@ def _s3_store(bucket: str) -> ObjectStore:
         or os.environ.get("AWS_REGION", "")
         or os.environ.get("AWS_DEFAULT_REGION", "")
     )
-    return _obstore_config.make_s3_store(
+    return _obstore_config.build_s3_store(
         _obstore_config.S3StoreSettings(bucket=bucket, region=region),
         label="host-s3",
     )
@@ -923,7 +923,7 @@ def _gcs_store(bucket: str) -> ObjectStore | None:
         access_key_id=access_key,
         secret_access_key=secret,
     )
-    return _obstore_config.make_s3_store(settings, label="host-gcs")
+    return _obstore_config.build_s3_store(settings, label="host-gcs")
 
 
 def _azure_store(account: str) -> ObjectStore | None:
@@ -948,7 +948,7 @@ def _azure_store(account: str) -> ObjectStore | None:
         account_name=account,
         account_key=_resolved_env("ATLAN_AZURE_STORAGE_ACCESS_KEY"),
     )
-    return _obstore_config.make_azure_store(settings, label="host-azure")
+    return _obstore_config.build_azure_store(settings, label="host-azure")
 
 
 def host_object_source(
