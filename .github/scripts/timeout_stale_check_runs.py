@@ -19,66 +19,37 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+
+from _gh import GhError, gh, gh_paginated
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the `gh` CLI."""
-    return subprocess.run(cmd, **kwargs)
-
-
 def list_open_prs(repo: str) -> list[dict]:
-    # --paginate follows Link: rel="next" across pages; --jq + tojson prints
-    # one compact JSON object per PR regardless of page count, so a repo
-    # with >100 open PRs doesn't silently lose the watchdog's coverage of
-    # the rest.
-    result = run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{repo}/pulls?state=open&per_page=100",
-            "--jq",
-            ".[] | tojson",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
+    """Every open PR, across all pages, so a repo with >100 open PRs keeps the
+    watchdog's coverage of the rest."""
+    try:
+        return gh_paginated(f"repos/{repo}/pulls?state=open&per_page=100")
+    except GhError as exc:
         raise SystemExit(
-            f"::error::failed to list open PRs for {repo}: {result.stderr}"
-        )
-    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+            f"::error::failed to list open PRs for {repo}: {exc.stderr}"
+        ) from exc
 
 
 def list_check_runs(repo: str, sha: str) -> list[dict]:
-    # Same pagination rationale as list_open_prs, applied to the nested
-    # `check_runs` array.
-    result = run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
-            "--jq",
-            ".check_runs[] | tojson",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(
-            f"::error::failed to list check runs for {repo}@{sha}: {result.stderr}"
+    """Every check run on ``sha``, across all pages."""
+    try:
+        return gh_paginated(
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key="check_runs"
         )
-    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    except GhError as exc:
+        raise SystemExit(
+            f"::error::failed to list check runs for {repo}@{sha}: {exc.stderr}"
+        ) from exc
 
 
 def is_stale(check_run: dict, max_age: timedelta, now: datetime) -> bool:
@@ -105,25 +76,22 @@ def timeout_check_run(repo: str, check_run_id: int, name: str) -> None:
             ),
         },
     }
-    result = run(
-        [
-            "gh",
-            "api",
-            "--method",
-            "PATCH",
-            f"repos/{repo}/check-runs/{check_run_id}",
-            "--input",
-            "-",
-        ],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(
-            f"::error::failed to time out check run {check_run_id} on {repo}: {result.stderr}"
+    try:
+        gh(
+            [
+                "api",
+                "--method",
+                "PATCH",
+                f"repos/{repo}/check-runs/{check_run_id}",
+                "--input",
+                "-",
+            ],
+            input=json.dumps(payload),
         )
+    except GhError as exc:
+        raise SystemExit(
+            f"::error::failed to time out check run {check_run_id} on {repo}: {exc.stderr}"
+        ) from exc
 
 
 def sweep(

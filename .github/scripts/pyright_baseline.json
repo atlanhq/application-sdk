@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 444,
-    "warning": 5516
+    "warning": 5493
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -46,7 +46,7 @@
       "error:reportOptionalMemberAccess": 1
     },
     ".github/scripts/complete_check_run.py": {
-      "warning:reportUnknownMemberType": 7
+      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/config_validator.py": {
       "warning:reportUnknownMemberType": 36
@@ -63,9 +63,6 @@
     },
     ".github/scripts/contract_toolkit_release.py": {
       "warning:reportUnknownMemberType": 11
-    },
-    ".github/scripts/create_check_run.py": {
-      "warning:reportUnknownMemberType": 2
     },
     ".github/scripts/create_multiarch_manifest.py": {
       "warning:reportUnknownMemberType": 4
@@ -140,9 +137,6 @@
     ".github/scripts/guard_release_files.py": {
       "warning:reportUnknownMemberType": 8
     },
-    ".github/scripts/harbor_release_tags.py": {
-      "warning:reportUnknownMemberType": 2
-    },
     ".github/scripts/import_smoke.py": {
       "error:reportOptionalMemberAccess": 1
     },
@@ -198,7 +192,7 @@
     },
     ".github/scripts/poll_check_runs_gate.py": {
       "error:reportAttributeAccessIssue": 1,
-      "warning:reportUnknownMemberType": 22
+      "warning:reportUnknownMemberType": 18
     },
     ".github/scripts/poll_dispatched_run.py": {
       "warning:reportUnknownMemberType": 2
@@ -534,7 +528,7 @@
       "warning:reportUnknownMemberType": 30
     },
     ".github/scripts/tests/test_harbor_release_tags.py": {
-      "warning:reportUnknownMemberType": 7
+      "warning:reportUnknownMemberType": 6
     },
     ".github/scripts/tests/test_label_trigger_gates.py": {
       "error:reportArgumentType": 1,
@@ -813,7 +807,7 @@
       "warning:reportUnknownMemberType": 6
     },
     ".github/scripts/timeout_stale_check_runs.py": {
-      "warning:reportUnknownMemberType": 15
+      "warning:reportUnknownMemberType": 6
     },
     ".github/scripts/unit_test_command.py": {
       "error:reportArgumentType": 2

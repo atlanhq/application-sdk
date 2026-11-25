@@ -164,7 +164,7 @@ def test_the_multiline_tag_list_is_heredoc_quoted(
     job would create the manifest under only the first tag."""
     out = tmp_path / "out.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
-    mod._write_outputs({"tag_prefix": "main", "tags": "a\nb\nc"})
+    mod.set_outputs({"tag_prefix": "main", "tags": "a\nb\nc"})
 
     body = out.read_text(encoding="utf-8")
     assert "tag_prefix=main" in body

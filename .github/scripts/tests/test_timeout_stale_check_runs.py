@@ -6,6 +6,8 @@ import json
 import subprocess
 from datetime import datetime, timedelta, timezone
 
+import _gh
+import pytest
 import timeout_stale_check_runs as mod
 
 REPO = "atlanhq/application-sdk"
@@ -17,10 +19,15 @@ def _completed(stdout: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
-def _ndjson(items: list[dict]) -> subprocess.CompletedProcess:
-    """What `gh api --paginate --jq '... | tojson'` produces: one compact
-    JSON object per line, across however many pages it took."""
-    return _completed("\n".join(json.dumps(i) for i in items) + ("\n" if items else ""))
+def _pr_pages(prs: list[dict]) -> subprocess.CompletedProcess:
+    """What `gh api --paginate --slurp .../pulls` prints: an array of pages."""
+    return _completed(json.dumps([prs]))
+
+
+def _check_run_pages(runs: list[dict]) -> subprocess.CompletedProcess:
+    """What `gh api --paginate --slurp .../check-runs` prints: a JSON array
+    holding every page; one page is enough for these tests."""
+    return _completed(json.dumps([{"total_count": len(runs), "check_runs": runs}]))
 
 
 def _is_open_prs_call(cmd: list[str]) -> bool:
@@ -55,9 +62,9 @@ def test_list_open_prs_uses_paginate(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return _ndjson([{"number": 1, "head": {"sha": "s"}}])
+        return _pr_pages([{"number": 1, "head": {"sha": "s"}}])
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     prs = mod.list_open_prs(REPO)
 
     assert "--paginate" in captured["cmd"]
@@ -69,9 +76,9 @@ def test_list_check_runs_uses_paginate(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return _ndjson([{"id": 1, "name": "x"}])
+        return _check_run_pages([{"id": 1, "name": "x"}])
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     runs = mod.list_check_runs(REPO, "sha1")
 
     assert "--paginate" in captured["cmd"]
@@ -104,15 +111,15 @@ def test_sweep_times_out_only_stale_matching_checks(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         if _is_open_prs_call(cmd):
-            return _ndjson(prs)
+            return _pr_pages(prs)
         if _is_check_runs_call(cmd):
-            return _ndjson(check_runs)
+            return _check_run_pages(check_runs)
         if cmd[:3] == ["gh", "api", "--method"]:
             patched.append((cmd[4], json.loads(kwargs["input"])))
             return _completed("{}")
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     timed_out = mod.sweep(REPO, PREFIX, 130, now=NOW)
 
     assert timed_out == [f"{PREFIX}atlan-openapi-app (PR #42)"]
@@ -126,10 +133,10 @@ def test_sweep_times_out_only_stale_matching_checks(monkeypatch):
 def test_sweep_returns_empty_when_nothing_stale(monkeypatch):
     def fake_run(cmd, **kwargs):
         if _is_open_prs_call(cmd):
-            return _ndjson([])
+            return _pr_pages([])
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     assert mod.sweep(REPO, PREFIX, 130, now=NOW) == []
 
 
@@ -139,7 +146,7 @@ def test_list_open_prs_raises_on_failure(monkeypatch):
             args=[], returncode=1, stdout="", stderr="rate limited"
         )
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     try:
         mod.list_open_prs(REPO)
         assert False, "expected SystemExit"
@@ -160,12 +167,84 @@ def test_main_reports_timed_out_runs(monkeypatch, capsys):
 
     def fake_run(cmd, **kwargs):
         if _is_open_prs_call(cmd):
-            return _ndjson(prs)
+            return _pr_pages(prs)
         if _is_check_runs_call(cmd):
-            return _ndjson(check_runs)
+            return _check_run_pages(check_runs)
         return _completed("{}")
 
-    monkeypatch.setattr(mod, "run", fake_run)
+    monkeypatch.setattr(_gh, "run", fake_run)
     rc = mod.main(["--repo", REPO])
     assert rc == 0
     assert "Timed out 1 stuck check run" in capsys.readouterr().out
+
+
+def _fail(stderr: str) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+
+
+def test_sweep_fails_when_the_timeout_patch_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused PATCH must fail the watchdog, not leave the check pending silently."""
+    prs = [{"number": 42, "head": {"sha": "sha1"}}]
+    stale = {
+        "id": 7,
+        "name": f"{PREFIX}atlan-openapi-app",
+        "status": "in_progress",
+        "started_at": _iso(NOW - timedelta(minutes=200)),
+    }
+    patches: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if _is_open_prs_call(cmd):
+            return _pr_pages(prs)
+        if _is_check_runs_call(cmd):
+            return _check_run_pages([stale])
+        patches.append(cmd)
+        return _fail("gh: Resource not accessible by integration (HTTP 403)")
+
+    monkeypatch.setattr(_gh, "run", fake_run)
+    with pytest.raises(SystemExit, match="failed to time out check run 7"):
+        mod.sweep(REPO, PREFIX, 130, now=NOW)
+    assert len(patches) == 1  # a permission 403 is not retried
+
+
+def test_sweep_fails_after_the_timeout_patch_exhausts_its_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prs = [{"number": 42, "head": {"sha": "sha1"}}]
+    stale = {
+        "id": 7,
+        "name": f"{PREFIX}atlan-openapi-app",
+        "status": "in_progress",
+        "started_at": _iso(NOW - timedelta(minutes=200)),
+    }
+    patches: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if _is_open_prs_call(cmd):
+            return _pr_pages(prs)
+        if _is_check_runs_call(cmd):
+            return _check_run_pages([stale])
+        patches.append(cmd)
+        return _fail("gh: Bad Gateway (HTTP 502)")
+
+    monkeypatch.setattr(_gh, "run", fake_run)
+    with pytest.raises(SystemExit, match="HTTP 502"):
+        mod.sweep(REPO, PREFIX, 130, now=NOW)
+    assert len(patches) == _gh.DEFAULT_RETRIES + 1
+
+
+def test_sweep_fails_when_listing_check_runs_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prs = [{"number": 42, "head": {"sha": "sha1"}}]
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if _is_open_prs_call(cmd):
+            return _pr_pages(prs)
+        return _fail("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(_gh, "run", fake_run)
+    with pytest.raises(SystemExit, match="failed to list check runs for"):
+        mod.sweep(REPO, PREFIX, 130, now=NOW)
