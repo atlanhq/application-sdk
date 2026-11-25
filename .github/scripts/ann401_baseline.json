@@ -51,7 +51,7 @@
   "application_sdk/infrastructure/_dapr/http.py": 2,
   "application_sdk/infrastructure/_secret_utils.py": 1,
   "application_sdk/infrastructure/secrets.py": 3,
-  "application_sdk/main.py": 11,
+  "application_sdk/main.py": 5,
   "application_sdk/observability/_objectstore_metric_exporter.py": 2,
   "application_sdk/observability/background_loop.py": 1,
   "application_sdk/observability/dapr_log_forwarder.py": 2,

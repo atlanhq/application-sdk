@@ -66,6 +66,11 @@ name, can fire it; that is a false positive, ignore it with that reason.
 B008 never fires on relative imports,
 on names that exist in the repo, or on dunders.
 
+A B001 or B008 finding on `application_sdk.handler.service._CREDENTIAL_KEYS`
+or `_normalize_credentials` is a runtime patch, not an import to swap: B010
+reports the same line, and `programs/areas/deprecation.prose.md` (B010) says
+what replaces it.
+
 `detect` does not scan `tests/`, but test code breaks on the same SDK
 changes. Find those sites yourself and add them to the inventory:
 `grep -rnE 'application_sdk[^ ]*\._|from application_sdk[^ ]* import .*\b_[A-Za-z]|PreflightStatus\.PARTIAL|in PreflightStatus|list\(PreflightStatus' tests/`

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    064ee8566de4d44f99749bf6483da4e67414dc34
-source-date:   2026-11-25T18:44:47Z
+source-sha:    002732cfd27b95af0222c0c049aa985ca70aa52d
+source-date:   2026-11-25T19:57:36Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2920,7 +2920,7 @@ Dev entry point — run_dev_combined() and AppConfig for local execution and con
 - **Import:** `from application_sdk.main import run_dev_combined`
 - **Signature:** `run_dev_combined(app_class: type[App], *, ...)`
 - **Summary:** Run worker + handler in a single process for local development.
-- **Defined in:** `application_sdk/main.py`
+- **Defined in:** `application_sdk/dev/_runner.py`
 
 ## `application_sdk.observability`
 

@@ -316,6 +316,328 @@ class TestFromCredentials:
 # ---------------------------------------------------------------------------
 
 
+class TestSharedStoreSettings:
+    """CloudStore translates into the same settings the Dapr binding does.
+
+    Before FND-4681 CloudStore built its own obstore config: it dropped the STS
+    session token on static keys and had no endpoint, allow_http, tagging or
+    SSE handling, so the same credentials produced a different store here than
+    through the binding.
+    """
+
+    @staticmethod
+    def _s3_kwargs(credentials: dict) -> dict:
+        with patch("obstore.store.S3Store") as mock_s3_cls:
+            mock_s3_cls.return_value = MemoryStore()
+            CloudStore.from_credentials(credentials)
+        return mock_s3_cls.call_args.kwargs
+
+    def test_static_keys_carry_the_session_token(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "username": "AKID-EXAMPLE",
+                "password": "secret-example",
+                "token": "session-token-example",
+                "extra": {"s3_bucket": "b", "region": "us-east-1"},
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_access_key_id"] == "AKID-EXAMPLE"
+        assert config["aws_secret_access_key"] == "secret-example"
+        assert config["aws_session_token"] == "session-token-example"
+
+    def test_a_token_without_keys_is_not_sent(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "token": "session-token-example",
+                "extra": {"s3_bucket": "b", "region": "us-east-1"},
+            }
+        )
+        assert "aws_session_token" not in kwargs["config"]
+
+    def test_non_aws_endpoint_disables_tagging(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "username": "AKID-EXAMPLE",
+                "password": "secret-example",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "force_path_style": True,
+                },
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_endpoint"] == "https://minio.example.com"
+        assert config["aws_disable_tagging"] == "true"
+        assert config["aws_virtual_hosted_style_request"] == "false"
+        assert "allow_http" not in kwargs["client_options"]
+
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}},
+            {
+                "authType": "adls",
+                "password": base64.b64encode(b"0" * 32).decode(),
+                "extra": {"storage_account_name": "acct"},
+            },
+        ],
+        ids=["s3", "adls"],
+    )
+    @pytest.mark.parametrize("endpoint", ["http://minio:9000", "HTTP://minio:9000"])
+    def test_plain_http_endpoint_is_refused(self, credentials, endpoint):
+        """A customer credential never turns off TLS: an http:// endpoint
+        would send keys and data in cleartext."""
+        credentials = {
+            **credentials,
+            "extra": {**credentials["extra"], "endpoint": endpoint},
+        }
+        with pytest.raises(StorageConfigError, match="https://"):
+            CloudStore.from_credentials(credentials)
+
+    def test_tls_opt_outs_in_extra_are_ignored(self):
+        """``allow_http`` / ``allow_invalid_certificates`` are not CloudStore
+        options: TLS with certificate checks always applies."""
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "allow_http": "true",
+                    "allow_invalid_certificates": True,
+                },
+            }
+        )
+        assert "allow_http" not in kwargs["client_options"]
+        assert "allow_invalid_certificates" not in kwargs["client_options"]
+
+    def test_explicit_disable_tagging_false_wins_over_auto_detect(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "disable_tagging": "false",
+                },
+            }
+        )
+        assert "aws_disable_tagging" not in kwargs["config"]
+        assert "allow_http" not in kwargs["client_options"]
+
+    def test_server_side_encryption_passes_through(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "server_side_encryption": "aws:kms",
+                    "sse_kms_key_id": "kms-key-example",
+                },
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_server_side_encryption"] == "aws:kms"
+        assert config["aws_sse_kms_key_id"] == "kms-key-example"
+
+    def test_custom_endpoint_skips_the_bucket_region_lookup(self, monkeypatch):
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        assert _cloud_module._needs_region_lookup({"s3_bucket": "b"})
+        assert not _cloud_module._needs_region_lookup(
+            {"s3_bucket": "b", "endpoint": "https://minio.example.com"}
+        )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://s3.us-west-2.amazonaws.com",
+            "https://s3.cn-north-1.amazonaws.com.cn",
+        ],
+    )
+    def test_aws_endpoint_keeps_the_bucket_region_lookup(self, monkeypatch, endpoint):
+        """An AWS endpoint is still AWS S3: a bucket in another region needs
+        its own region to sign, so the lookup must still run."""
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        assert _cloud_module._needs_region_lookup(
+            {"s3_bucket": "b", "endpoint": endpoint}
+        )
+
+    def test_partial_static_keys_warn_and_fall_back_to_ambient(self):
+        with patch.object(_cloud_module, "_log") as mock_log:
+            kwargs = self._s3_kwargs(
+                {
+                    "authType": "s3",
+                    "username": "AKID-EXAMPLE",
+                    "token": "session-token-example",
+                    "extra": {"s3_bucket": "b", "region": "us-east-1"},
+                }
+            )
+        config = kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_session_token" not in config
+        assert "only one was set" in mock_log.return_value.warning.call_args.args[0]
+
+    def test_remaining_s3_knobs_pass_through(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "conditional_put": "etag",
+                    "copy_if_not_exists": "header:x-copy:true",
+                    "checksum_algorithm": "SHA256",
+                },
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_conditional_put"] == "etag"
+        assert config["aws_copy_if_not_exists"] == "header:x-copy:true"
+        assert config["aws_checksum_algorithm"] == "SHA256"
+
+    def test_knobs_default_off(self):
+        kwargs = self._s3_kwargs(
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}}
+        )
+        config = kwargs["config"] or {}
+        for key in (
+            "aws_conditional_put",
+            "aws_copy_if_not_exists",
+            "aws_checksum_algorithm",
+        ):
+            assert key not in config
+
+    @staticmethod
+    def _gcs_kwargs(credentials: dict) -> dict:
+        with (
+            patch("obstore.store.GCSStore") as mock_gcs_cls,
+            patch(
+                "application_sdk.storage._credential_providers.make_gcs_adc_provider"
+            ) as mock_adc,
+        ):
+            mock_gcs_cls.return_value = MemoryStore()
+            mock_adc.return_value = "adc-provider"
+            CloudStore.from_credentials(credentials)
+        return mock_gcs_cls.call_args.kwargs
+
+    def test_gcs_without_key_uses_the_wif_provider(self, monkeypatch, tmp_path):
+        """Keyless GCS on a Workload Identity Federation ADC file gets the
+        google-auth provider, as the binding does; obstore can't parse it."""
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "external_account"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        kwargs = self._gcs_kwargs({"authType": "gcs", "extra": {"gcs_bucket": "b"}})
+        assert kwargs["config"] is None
+        assert kwargs["credential_provider"] == "adc-provider"
+
+    def test_gcs_with_key_or_plain_adc_gets_no_provider(self, monkeypatch, tmp_path):
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "external_account"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        keyed = self._gcs_kwargs(
+            {
+                "authType": "gcs",
+                "password": '{"type":"service_account"}',
+                "extra": {"gcs_bucket": "b"},
+            }
+        )
+        assert "credential_provider" not in keyed
+
+        adc.write_text(json.dumps({"type": "service_account"}))
+        plain = self._gcs_kwargs({"authType": "gcs", "extra": {"gcs_bucket": "b"}})
+        assert "credential_provider" not in plain
+
+    def test_adls_endpoint_reaches_the_store(self):
+        fake_key = base64.b64encode(b"0" * 32).decode()
+        with patch("obstore.store.AzureStore") as mock_az_cls:
+            mock_az_cls.return_value = MemoryStore()
+            CloudStore.from_credentials(
+                {
+                    "authType": "adls",
+                    "password": fake_key,
+                    "extra": {
+                        "storage_account_name": "acct",
+                        "endpoint": "https://azurite.example.com/acct",
+                    },
+                }
+            )
+        kwargs = mock_az_cls.call_args.kwargs
+        assert kwargs["config"]["azure_storage_endpoint"] == (
+            "https://azurite.example.com/acct"
+        )
+        assert "allow_http" not in kwargs["client_options"]
+
+    def test_binding_and_cloudstore_build_the_same_s3_store(self, tmp_path):
+        """The same S3 credentials give one obstore config on both paths."""
+        import yaml
+
+        from application_sdk.storage.binding import create_store_from_binding
+
+        meta = {
+            "bucket": "b",
+            "region": "eu-west-1",
+            "endpoint": "https://minio.example.com",
+            "accessKey": "AKID-EXAMPLE",
+            "secretKey": "secret-example",
+            "sessionToken": "session-token-example",
+            "serverSideEncryption": "AES256",
+        }
+        components = tmp_path / "components"
+        components.mkdir()
+        (components / "objectstore.yaml").write_text(
+            yaml.dump(
+                {
+                    "apiVersion": "dapr.io/v1alpha1",
+                    "kind": "Component",
+                    "metadata": {"name": "objectstore"},
+                    "spec": {
+                        "type": "bindings.aws.s3",
+                        "metadata": [{"name": k, "value": v} for k, v in meta.items()],
+                    },
+                }
+            )
+        )
+        with patch("obstore.store.S3Store") as mock_s3_cls:
+            mock_s3_cls.return_value = MemoryStore()
+            create_store_from_binding("objectstore", components_dir=components)
+        binding_kwargs = mock_s3_cls.call_args.kwargs
+
+        cloud_kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "username": "AKID-EXAMPLE",
+                "password": "secret-example",
+                "token": "session-token-example",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "eu-west-1",
+                    "endpoint": "https://minio.example.com",
+                    "server_side_encryption": "AES256",
+                },
+            }
+        )
+
+        assert cloud_kwargs["bucket"] == binding_kwargs["bucket"]
+        assert cloud_kwargs["config"] == binding_kwargs["config"]
+        # Only the Dapr-parity User-Agent differs, by design.
+        binding_opts = dict(binding_kwargs["client_options"])
+        cloud_opts = dict(cloud_kwargs["client_options"])
+        binding_opts.pop("user_agent")
+        cloud_opts.pop("user_agent")
+        assert cloud_opts == binding_opts
+
+
 class TestCloudStoreOps:
     """Unit tests for async operations using a local store."""
 
@@ -951,11 +1273,11 @@ class TestS3RegionLookup:
 
         built: list[str | None] = []
 
-        def _make(bucket, config=None, **_kwargs):
-            built.append((config or {}).get("aws_region"))
+        def _make(settings, **_kwargs):
+            built.append(settings.region or None)
             return MemoryStore()
 
-        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.setattr(_obstore_config, "build_s3_store", _make)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         return built
@@ -1169,11 +1491,12 @@ class TestS3RegionLookup:
 
         built: list[tuple[str, dict]] = []
 
-        def _make(bucket, config=None, **_kwargs):
-            built.append((bucket, dict(config or {})))
+        def _make(settings, **_kwargs):
+            config, _opts = _obstore_config.s3_store_args(settings, {})
+            built.append((settings.bucket, dict(config or {})))
             return MemoryStore()
 
-        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.setattr(_obstore_config, "build_s3_store", _make)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))

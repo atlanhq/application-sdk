@@ -10,6 +10,33 @@
       "symbol": "APP_CONTEXT_ERROR"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_azure_store is deprecated; use build_azure_store with an AzureStoreSettings, which applies the shared endpoint and credential rules \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_azure_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_gcs_store is deprecated; use build_gcs_store with a GCSStoreSettings \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_gcs_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_s3_store is deprecated; use build_s3_store with an S3StoreSettings, which applies the shared endpoint, tagging and credential rules \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_s3_store"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "ARTIFACT_SCHEMAS_STEM is deprecated; use application_sdk.common._generated_tree.ARTIFACT_SCHEMAS_STEM \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
@@ -1628,6 +1655,24 @@
       "module": "application_sdk.handler.object_routes",
       "removal_version": "4.0.0",
       "symbol": "S3ObjectStore"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_CREDENTIAL_KEYS is deprecated; use the app's generated credential form (contract/app.pkl) \u2014 every top-level field the form declares is now a credential key on every surface, so drop the rebind. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_CREDENTIAL_KEYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_normalize_credentials is deprecated; use a field the entry point's input contract declares \u2014 send the field the input reads; a legacy request shape the contract cannot express is a gap to raise with the SDK, not a request to rewrite. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_normalize_credentials"
     },
     {
       "kind": "function",
