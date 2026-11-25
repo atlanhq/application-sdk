@@ -1,0 +1,81 @@
+name: Queue tree diff
+
+# Merge-queue entry only: did combining the PR with the base change what a
+# check reads? The one implementation of the `queue-diff` job (FND-3321,
+# FND-4928), called by:
+#
+#   - checks-reusable.yaml       `pre-commit` skips on identical == 'true'
+#   - conformance-reusable.yaml  `suite` skips on identical == 'true'
+#   - build-and-scan.yaml        `build` / `security-gate` skip on
+#                                image_changed == 'false'
+#
+# Each caller keeps its own `if:` (when the diff is worth asking) and reads
+# `needs.queue-diff.outputs.<x>` exactly as before: the outputs below carry the
+# script's answers under the same names. An empty output (caller job skipped,
+# or this job failed) is never a skip answer, so every check then runs.
+#
+# Called as `./.github/workflows/queue-diff-reusable.yaml`. A local `uses:`
+# resolves to the same commit as the workflow containing it, so a fleet app
+# calling checks-reusable.yaml@<ref> gets this file at that same <ref>, and
+# the script checkout below is pinned to it through `job.workflow_sha`.
+#
+# docs/standards/ci.md ("What a merge-queue entry re-runs") has the
+# classification of every queue check. tests-reusable.yaml's `queue-proof`
+# runs the same diff plus a proof step, and a drift test pins it to this job.
+
+on:
+  workflow_call:
+    outputs:
+      identical:
+        description: >-
+          'true' when the queue commit's tree is the PR head's and the base had
+          nothing the PR did not carry.
+        value: ${{ jobs.diff.outputs.identical }}
+      image_changed:
+        description: >-
+          'true' when any path the scanned image depends on may differ from
+          what the PR's checks tested.
+        value: ${{ jobs.diff.outputs.image_changed }}
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    name: Queue tree diff
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      identical: ${{ steps.diff.outputs.identical }}
+      image_changed: ${{ steps.diff.outputs.image_changed }}
+    steps:
+      # The queue commit, depth 1. Credentials stay persisted: the script
+      # fetches the PR head from this same remote, and the repo may be private.
+      - name: Checkout queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      # Pinned to `job.workflow_sha` so the script always matches the workflow
+      # running it: no caller-supplied ref can reach a checkout whose payload
+      # is then run.
+      - name: Fetch queue_tree_diff.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/queue_tree_diff.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Compare the queue commit with the PR head
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py

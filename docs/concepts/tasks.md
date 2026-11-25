@@ -191,6 +191,16 @@ env:
 
 Explicit `@task(timeout_seconds=...)` values always take precedence over the env vars.
 
+**Which knob governs `SqlApp`.** The twelve `extract_*` / `transform_*` tasks on
+`SqlApp` declare no timing values, so they take the env vars above:
+`ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` (24 h backstop) and
+`ATLAN_HEARTBEAT_TIMEOUT_SECONDS` (60 s), with the framework beating every 10 s. Set
+those in the app's deployment env to change them; there is no SqlApp-specific
+variable. The one exception is `prime_sql_auth`, which keeps `timeout_seconds=120`:
+its work is a single probe that does not scale with the source, and
+`retry_max_attempts=1` makes a hung probe terminal. An app that overrides a task
+and passes its own values to `@task` takes those instead.
+
 ### The three knobs
 
 Timeout-shaped settings are easy to confuse, so it is worth being explicit about which

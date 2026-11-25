@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tools.migrate_v3.check_migration import FAIL, WARN, check_directory, check_file
 
 # ---------------------------------------------------------------------------
@@ -40,34 +42,22 @@ class TestHandlerTypedSignatures:
 
     _HANDLER_BASE = "from application_sdk.handler import Handler\n\n"
 
-    def test_handler_kwargs_detected_test_auth(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "method",
+        [
+            pytest.param(
+                "async def test_auth(self, *args, **kwargs) -> bool:", id="test_auth"
+            ),
+            pytest.param("async def preflight_check(self, **kwargs):", id="preflight"),
+            pytest.param(
+                "async def fetch_metadata(self, *args, **kwargs):", id="fetch_metadata"
+            ),
+        ],
+    )
+    def test_handler_kwargs_detected(self, tmp_path: Path, method: str) -> None:
         source = (
             self._HANDLER_BASE + "class MyHandler(Handler):\n"
-            "    async def test_auth(self, *args, **kwargs) -> bool:\n"
-            "        return True\n"
-        )
-        path = _write(tmp_path, "handler.py", source)
-        results = check_file(path)
-        assert any(
-            r.rule == "handler-typed-signatures" and r.level == FAIL for r in results
-        )
-
-    def test_handler_kwargs_detected_preflight(self, tmp_path: Path) -> None:
-        source = (
-            self._HANDLER_BASE + "class MyHandler(Handler):\n"
-            "    async def preflight_check(self, **kwargs):\n"
-            "        pass\n"
-        )
-        path = _write(tmp_path, "handler.py", source)
-        results = check_file(path)
-        assert any(
-            r.rule == "handler-typed-signatures" and r.level == FAIL for r in results
-        )
-
-    def test_handler_kwargs_detected_fetch_metadata(self, tmp_path: Path) -> None:
-        source = (
-            self._HANDLER_BASE + "class MyHandler(Handler):\n"
-            "    async def fetch_metadata(self, *args, **kwargs):\n"
+            f"    {method}\n"
             "        pass\n"
         )
         path = _write(tmp_path, "handler.py", source)
@@ -209,14 +199,41 @@ class TestNoV2DirectoryStructure:
 class TestAppSubclassMissingExcludesTests:
     """WARN for app-subclass-missing should only look at production code."""
 
-    def test_app_subclass_in_prod_not_warned(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                "from application_sdk.templates import SqlMetadataExtractor\n\n"
+                "class MyConnector(SqlMetadataExtractor): pass\n",
+                id="single_base",
+            ),
+            pytest.param(
+                "from application_sdk.templates import SqlMetadataExtractor\n\n"
+                "class MyConnector(\n    SqlMetadataExtractor\n): pass\n",
+                id="multiline_class_signature",
+            ),
+            pytest.param(
+                "from application_sdk.templates import SqlApp\n\n"
+                "class MyConnector(SqlApp): pass\n",
+                id="sql_app",
+            ),
+            pytest.param(
+                "from application_sdk.app import App\n\n"
+                "class MyConnector(App, SomeMixin): pass\n",
+                id="app_with_mixin",
+            ),
+            # Mixins come first in the MRO, so the v3 base is often not the first base.
+            pytest.param(
+                "from application_sdk.templates import SqlApp\n\n"
+                "class MyConnector(\n    SomeMixin,\n    SqlApp,\n): pass\n",
+                id="sql_app_after_mixin",
+            ),
+        ],
+    )
+    def test_app_subclass_in_prod_not_warned(self, tmp_path: Path, source: str) -> None:
         app_dir = tmp_path / "app"
         app_dir.mkdir()
-        (app_dir / "my_connector.py").write_text(
-            "from application_sdk.templates import SqlMetadataExtractor\n\n"
-            "class MyConnector(SqlMetadataExtractor): pass\n",
-            encoding="utf-8",
-        )
+        (app_dir / "my_connector.py").write_text(source, encoding="utf-8")
         _, advisories = check_directory(
             tmp_path, app_subclass_required=True, entry_point_required=False
         )
@@ -235,59 +252,6 @@ class TestAppSubclassMissingExcludesTests:
             tmp_path, app_subclass_required=True, entry_point_required=False
         )
         assert any("app-subclass-missing" in a for a in advisories)
-
-    def test_multiline_class_signature_detected(self, tmp_path: Path) -> None:
-        app_dir = tmp_path / "app"
-        app_dir.mkdir()
-        (app_dir / "my_connector.py").write_text(
-            "from application_sdk.templates import SqlMetadataExtractor\n\n"
-            "class MyConnector(\n    SqlMetadataExtractor\n): pass\n",
-            encoding="utf-8",
-        )
-        _, advisories = check_directory(
-            tmp_path, app_subclass_required=True, entry_point_required=False
-        )
-        assert not any("app-subclass-missing" in a for a in advisories)
-
-    def test_sql_app_subclass_detected(self, tmp_path: Path) -> None:
-        app_dir = tmp_path / "app"
-        app_dir.mkdir()
-        (app_dir / "my_connector.py").write_text(
-            "from application_sdk.templates import SqlApp\n\n"
-            "class MyConnector(SqlApp): pass\n",
-            encoding="utf-8",
-        )
-        _, advisories = check_directory(
-            tmp_path, app_subclass_required=True, entry_point_required=False
-        )
-        assert not any("app-subclass-missing" in a for a in advisories)
-
-    def test_app_subclass_with_mixin_detected(self, tmp_path: Path) -> None:
-        app_dir = tmp_path / "app"
-        app_dir.mkdir()
-        (app_dir / "my_connector.py").write_text(
-            "from application_sdk.app import App\n\n"
-            "class MyConnector(App, SomeMixin): pass\n",
-            encoding="utf-8",
-        )
-        _, advisories = check_directory(
-            tmp_path, app_subclass_required=True, entry_point_required=False
-        )
-        assert not any("app-subclass-missing" in a for a in advisories)
-
-    def test_sql_app_after_mixin_detected(self, tmp_path: Path) -> None:
-        # Mixins come first in the MRO, so the v3 base is often not the first base.
-        app_dir = tmp_path / "app"
-        app_dir.mkdir()
-        (app_dir / "my_connector.py").write_text(
-            "from application_sdk.templates import SqlApp\n\n"
-            "class MyConnector(\n    SomeMixin,\n    SqlApp,\n): pass\n",
-            encoding="utf-8",
-        )
-        _, advisories = check_directory(
-            tmp_path, app_subclass_required=True, entry_point_required=False
-        )
-        assert not any("app-subclass-missing" in a for a in advisories)
 
     def test_base_name_suffix_not_detected(self, tmp_path: Path) -> None:
         # ``MyApp`` / ``NotSqlApp`` are not v3 bases: the match is on whole names.
@@ -311,32 +275,31 @@ class TestAppSubclassMissingExcludesTests:
 class TestEntryPointExpansion:
     """Entry-point check should detect CLI references in Dockerfile and pyproject.toml."""
 
-    def test_entry_point_in_py_file(self, tmp_path: Path) -> None:
-        (tmp_path / "main.py").write_text(
-            "from application_sdk.main import run_dev_combined\n"
-            "import asyncio\nasyncio.run(run_dev_combined(MyApp))\n",
-            encoding="utf-8",
-        )
-        _, advisories = check_directory(
-            tmp_path, app_subclass_required=False, entry_point_required=True
-        )
-        assert not any("entry-point" in a for a in advisories)
-
-    def test_entry_point_in_dockerfile(self, tmp_path: Path) -> None:
-        (tmp_path / "Dockerfile").write_text(
-            'FROM python:3.11\nCMD ["application-sdk", "--mode", "combined"]\n',
-            encoding="utf-8",
-        )
-        _, advisories = check_directory(
-            tmp_path, app_subclass_required=False, entry_point_required=True
-        )
-        assert not any("entry-point" in a for a in advisories)
-
-    def test_entry_point_in_pyproject(self, tmp_path: Path) -> None:
-        (tmp_path / "pyproject.toml").write_text(
-            '[project.scripts]\nmy-connector = "application_sdk --mode combined"\n',
-            encoding="utf-8",
-        )
+    @pytest.mark.parametrize(
+        ("filename", "content"),
+        [
+            pytest.param(
+                "main.py",
+                "from application_sdk.main import run_dev_combined\n"
+                "import asyncio\nasyncio.run(run_dev_combined(MyApp))\n",
+                id="py_file",
+            ),
+            pytest.param(
+                "Dockerfile",
+                'FROM python:3.11\nCMD ["application-sdk", "--mode", "combined"]\n',
+                id="dockerfile",
+            ),
+            pytest.param(
+                "pyproject.toml",
+                '[project.scripts]\nmy-connector = "application_sdk --mode combined"\n',
+                id="pyproject",
+            ),
+        ],
+    )
+    def test_entry_point_found(
+        self, tmp_path: Path, filename: str, content: str
+    ) -> None:
+        (tmp_path / filename).write_text(content, encoding="utf-8")
         _, advisories = check_directory(
             tmp_path, app_subclass_required=False, entry_point_required=True
         )

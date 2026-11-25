@@ -284,9 +284,10 @@ def test_queue_proof_reads_statuses_only_for_an_identical_tree() -> None:
 
 
 def test_queue_proof_diffs_exactly_as_the_other_queue_diff_jobs() -> None:
-    """Same checkout and diff step as checks-reusable's queue-diff, so a fix to
-    one (FND-4344's head lookup) cannot miss this copy."""
-    checks = steps(job(load_workflow("checks-reusable.yaml"), "queue-diff"))
+    """Same checkout and diff step as queue-diff-reusable.yaml, which the other
+    three queue-diff jobs call (FND-4928), so a fix to it (FND-4344's head
+    lookup) cannot miss this copy."""
+    checks = steps(job(load_workflow("queue-diff-reusable.yaml"), "diff"))
     mine = steps(job(load_workflow("tests-reusable.yaml"), "queue-proof"))
     assert mine[0]["uses"] == checks[0]["uses"]
     assert mine[0]["with"] == checks[0]["with"]

@@ -29,18 +29,13 @@ from application_sdk.testing.e2e.base import (
     FullDAGOutcome,
     ResolvedDAG,
 )
-from application_sdk.testing.harness.automation_engine import (
-    DAGNodeResult,
-    DAGNodeStatus,
-    DAGRunResult,
-    DAGRunStatus,
-)
 from application_sdk.testing.harness.expectations import (
     LineageEdge,
     LineageEdgeCounts,
     Unreadable,
 )
 from application_sdk.testing.harness.outcome import Indeterminate, Settled
+from tests.unit.testing._ae_fakes import succeeded
 
 _QN = "default/sigma/1700000000123456"
 _EDGE = LineageEdge("SigmaDataElementField", "SigmaDataModelColumn")
@@ -69,27 +64,10 @@ def _suite(cls: type[BaseE2ETest] = _Sigma) -> BaseE2ETest:
     return suite
 
 
-def _succeeded() -> DAGRunResult:
-    return DAGRunResult(
-        run_id="r",
-        workflow_slug="s",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[
-            DAGNodeResult(
-                name="extract",
-                status=DAGNodeStatus.SUCCEEDED,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-        ],
-    )
-
-
 def _outcome(edge_read: Any) -> FullDAGOutcome:
     """A run that passed every other assertion, so only the edges are on trial."""
     return FullDAGOutcome(
-        ae_result=_succeeded(),
+        ae_result=succeeded("extract"),
         connection_qualified_name=_QN,
         connection_in_atlas=True,
         asset_counts={"SigmaDataElementField": 5},
@@ -313,7 +291,7 @@ class TestTheRead:
             _settled({"SigmaDataElementField": 5}),
         )
 
-        outcome = await _suite()._read_inventory(object(), _succeeded())
+        outcome = await _suite()._read_inventory(object(), succeeded("extract"))
 
         assert calls == [(_QN, [_EDGE])]
         assert outcome.lineage_edge_counts == {_EDGE_KEY: 3}
@@ -346,7 +324,7 @@ class TestTheRead:
             _settled({"SigmaDataElementField": 5}),
         )
 
-        outcome = await _suite()._read_inventory(object(), _succeeded())
+        outcome = await _suite()._read_inventory(object(), succeeded("extract"))
 
         assert isinstance(outcome.lineage_edge_reads, Unreadable)
         assert outcome.lineage_edge_counts == {}
@@ -376,6 +354,6 @@ class TestTheRead:
             _settled({"SigmaDataElementField": 1}),
         )
 
-        outcome = await _suite(_NoEdges)._read_inventory(object(), _succeeded())
+        outcome = await _suite(_NoEdges)._read_inventory(object(), succeeded("extract"))
         assert not called
         assert outcome.lineage_edge_reads is None

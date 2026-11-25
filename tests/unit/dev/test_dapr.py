@@ -24,7 +24,6 @@ import pytest
 
 from application_sdk.dev import _dapr
 from application_sdk.dev._dapr import (
-    _COMPONENTS_YAML,
     EmbeddedDapr,
     _daprd_archive_ext,
     _daprd_binary_name,
@@ -34,6 +33,7 @@ from application_sdk.dev._dapr import (
     _write_components,
     embedded_dapr,
 )
+from application_sdk.dev._dapr_components import COMPONENT_TEMPLATES
 from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
     DaprComponentsDirNotFoundError,
@@ -96,7 +96,7 @@ class TestWriteComponents:
 
         _write_components(components_dir, objectstore_root, eventstore_root)
 
-        expected = sorted(_COMPONENTS_YAML.keys())
+        expected = sorted(COMPONENT_TEMPLATES.keys())
         actual = sorted(p.name for p in components_dir.iterdir())
         assert actual == expected
 

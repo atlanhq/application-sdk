@@ -49,6 +49,11 @@ from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 PR_BODY_CHARS = 4000
 
 
+# A bundle whose final turn the context ceiling forces before this turn was
+# reviewed shallowly (`BundleResult.shallow`), and the review is incomplete.
+SHALLOW_BEFORE_TURN = 4
+
+
 @dataclass
 class AgentLimits:
     max_tool_turns: int = 8  # base turn budget for a one-file bundle
@@ -98,6 +103,17 @@ class BundleResult:
     sources: list[dict[str, Any]] = field(default_factory=list)
     # Set when the model provider refused a request (stop == "refused").
     refusal: dict[str, Any] = field(default_factory=dict)
+    # The turn on which the final turn was forced by the context ceiling (its
+    # number, 1-based), or 0. Before `SHALLOW_BEFORE_TURN` the bundle had read
+    # little past its own diff (`shallow`): its findings are not a full review.
+    ceiling_turn: int = 0
+
+    @property
+    def shallow(self) -> bool:
+        """The context ceiling forced this bundle's final turn before turn
+        `SHALLOW_BEFORE_TURN` (FND-5316: a live bundle hit it at turn 3 of 24,
+        and the summary called the review complete)."""
+        return 0 < self.ceiling_turn < SHALLOW_BEFORE_TURN
 
 
 # ---- prompt manifest -----------------------------------------------------------
@@ -548,6 +564,8 @@ def _loop(
                 if turns >= turn_budget
                 else ("context ceiling" if over else "bundle budget share")
             )
+            if why == "context ceiling":
+                res.ceiling_turn = res.turns + 1
             trace.line(
                 f"[{bundle.label}] final turn forced ({why}): only code_comment/task_done now"
             )

@@ -1178,6 +1178,15 @@ improves — a wedge is now visible one budget in, where before it was only ever
 luck. See [ADR-0018 → Migration](adr/0018-progress-aware-heartbeat.md#migration--backward-compatibility--what-if-i-do-nothing)
 for why that trade is the one being made.
 
+**`SqlApp` apps get the backstop without editing anything.** `SqlApp`'s twelve
+`extract_*` / `transform_*` tasks used to pin `timeout_seconds=1800`,
+`heartbeat_timeout_seconds=120` and `auto_heartbeat_seconds=30`, which hid both the
+backstop and the env vars from every app built on it. They now declare nothing, so
+an attempt that ran longer than 30 minutes is no longer killed, and the heartbeat
+window is `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` (default 60 s, beating every 10 s). If
+your app overrode those methods only to raise the 30-minute limit, the override can
+go. See [Tasks → Which knob governs `SqlApp`](concepts/tasks.md#process-wide-timeout-defaults-via-env-vars).
+
 ### Declaring holds is an eventual optimisation, not an upgrade task
 
 Wrapping opaque calls in `holding_progress()` is work you take on when you want the

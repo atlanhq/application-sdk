@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 442,
-    "warning": 5312
+    "warning": 5297
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -348,7 +348,7 @@
       "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/tests/test_bound_lock_branch.py": {
-      "warning:reportUnknownMemberType": 59
+      "warning:reportUnknownMemberType": 44
     },
     ".github/scripts/tests/test_build_app_image_action.py": {
       "warning:reportUnknownMemberType": 4

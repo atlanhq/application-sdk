@@ -19,14 +19,9 @@ from application_sdk.storage.batch import (
     upload_prefix,
 )
 from application_sdk.storage.errors import StorageError
-from application_sdk.storage.factory import create_local_store, create_memory_store
+from application_sdk.storage.factory import create_local_store
 from application_sdk.storage.ops import _get_bytes, _put
 from tests.unit.private_stdlib import private_stdlib
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 def _list_with_phantom(phantom: str):

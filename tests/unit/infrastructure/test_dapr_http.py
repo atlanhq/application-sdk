@@ -1303,3 +1303,19 @@ class TestWarmSidecarReadRetry:
 
         assert attempts["n"] == 1
         await client.close()
+
+
+class TestDaprBaseUrl:
+    """FND-5223: an empty ``DAPR_HTTP_PORT`` used to build ``http://localhost:``."""
+
+    def test_empty_port_is_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from application_sdk.infrastructure._dapr.http import _dapr_base_url
+
+        monkeypatch.setenv("DAPR_HTTP_PORT", "")
+        assert _dapr_base_url() == "http://localhost:3500"
+
+    def test_port_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from application_sdk.infrastructure._dapr.http import _dapr_base_url
+
+        monkeypatch.setenv("DAPR_HTTP_PORT", " 3600 ")
+        assert _dapr_base_url() == "http://localhost:3600"

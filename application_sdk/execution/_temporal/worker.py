@@ -28,6 +28,7 @@ from application_sdk.app.registry import (
     get_activity_name,
     resolve_pool_queue,
 )
+from application_sdk.common._env import env_str
 from application_sdk.constants import (
     _LOCK_METADATA_KEY,
     APP_BUILD_ID,
@@ -513,7 +514,7 @@ async def _emit_worker_start_event(
         BindingUnavailableError,
     )
 
-    deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
+    deployment_name = env_str("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
 
     # Discover which Dapr binding types back the object/secret stores. Best-effort

@@ -23,6 +23,11 @@
     - `packages/conformance/tests/` shares helpers through `tests/_helpers.py`
       (`ids`, `active_ids`, `write_py`, `scan_files`, `uv_lock`, `extract_node`,
       `sdk_root`); import from it rather than defining a local copy
+    - The SDK's unit tests share doubles through `tests/unit/_doubles.py`
+      (`FakeClock`, `StaticHandler`, `SiblingProbe`, `loaded_after_importing`,
+      `record_connect_params`, the Temporal `ExecuteInput` / `WorkflowInfo` /
+      `ActivityInfo`) and the shipped `application_sdk.testing.mocks`
+      (`MockSecretStore`); import from them rather than defining a local copy
 
 - **Connector-App Testing Tiers (Agreed Architecture)**
 

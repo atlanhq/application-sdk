@@ -184,9 +184,9 @@ this function is ever invoked with an explicit `--enforce` or
   package — not merely a `packages/conformance/` directory existing, which a
   consumer monorepo could contain coincidentally and silently trip the
   guard), `bootstrap` skips this write entirely: `.claude/skills/remediate/
-  SKILL.md` there is hand-maintained prose (this very file's sibling), not
-  generated template output, so overwriting it would destroy human-authored
-  content rather than re-sync a deterministic template. This guard is
+  SKILL.md` there is a symlink to the template itself
+  (`conformance/bootstrap/templates/remediate.md`), so a write through it
+  would edit the template source rather than re-sync a copy. This guard is
   enforced in code (`main` in `conformance/bootstrap/command.py`), not just
   documented here — the same invocation's JSON line reports
   `"skipped": true` and empty `touched`/`unchanged` arrays in that case.

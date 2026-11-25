@@ -53,9 +53,11 @@ Two halves, two jobs
 --------------------
 Regenerating the table installs and imports the freshly-resolved pyatlan. That
 must not happen in a job holding the push-capable App token, so the workflow
-splits: ``--no-commit`` bounds and regenerates in a job with a read-only token
-and hands the files over as an artifact, and ``--apply-from`` copies exactly
-``OUTPUT_PATHS`` out of that artifact and commits them in the job that pushes.
+splits (renovate-branch-fixup.yaml): ``--no-commit`` bounds and regenerates in
+a job with a read-only token, ``--stage-to`` copies ``OUTPUT_PATHS`` into one
+folder at their repo paths for the artifact upload, and ``--apply-from`` copies
+exactly ``OUTPUT_PATHS`` out of that artifact and commits them in the job that
+pushes.
 The second half runs no resolver and installs nothing.
 
 Fail-closed, like the driver it wraps. If any project's bound cannot be applied,
@@ -222,6 +224,40 @@ def apply_outputs(
         shutil.copyfile(source / path, root / path)
 
 
+def stage_outputs(
+    root: Path, dest: Path, paths: tuple[str, ...] = OUTPUT_PATHS
+) -> None:
+    """Copy ``paths`` from the checkout into ``dest`` at their repo paths.
+
+    renovate-branch-fixup.yaml uploads ``dest`` as the artifact's one folder,
+    so the artifact holds ``packages/conformance/uv.lock`` and not just
+    ``uv.lock``. renovate_conformance_lock_sync.py reuses this with its own
+    output list. Given
+    several file paths, upload-artifact roots the artifact at their least
+    common ancestor and drops that prefix, which ``apply_outputs`` (correctly)
+    reads as a missing output (FND-5015). One folder has no such rule to trip.
+
+    Same guards as ``apply_outputs``, in the other direction: every path must
+    exist, a symlink along a path is refused rather than followed, ``dest``
+    must be empty so nothing stale rides along, and everything is checked
+    before anything is copied.
+    """
+    for path in paths:
+        src = root
+        for part in Path(path).parts:
+            src = src / part
+            if src.is_symlink():
+                raise ValueError(f"refusing symlinked output: {path}")
+        if not src.is_file():
+            raise FileNotFoundError(f"missing output to stage: {path}")
+    if dest.exists() and any(dest.iterdir()):
+        raise FileExistsError(f"staging folder is not empty: {dest}")
+    for path in paths:
+        target = dest / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / path, target)
+
+
 def stage_and_commit(
     root: Path, paths: list[str], message: str = COMMIT_MESSAGE
 ) -> bool:
@@ -282,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
         "another job to commit.",
     )
     mode.add_argument(
+        "--stage-to",
+        type=Path,
+        metavar="DIR",
+        help="Skip the bound: copy OUTPUT_PATHS into DIR at their repo paths, "
+        "for the artifact upload.",
+    )
+    mode.add_argument(
         "--apply-from",
         type=Path,
         metavar="DIR",
@@ -291,6 +334,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path.cwd()
+    if args.stage_to is not None:
+        stage_outputs(root, args.stage_to)
+        return 0
+
     if args.apply_from is not None:
         apply_outputs(args.apply_from, root)
         stage_and_commit(root, list(OUTPUT_PATHS))

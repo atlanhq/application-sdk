@@ -425,6 +425,32 @@ def test_storage_integration_waits_for_a_successful_changes_job() -> None:
     assert evaluate(expression, {"github": github, "needs": needs}) is False
 
 
+@pytest.mark.parametrize("workflow", ["pull_request.yaml", "schedule.yaml"])
+def test_both_storage_runs_share_one_job_body(workflow: str) -> None:
+    """FND-4928: the PR and nightly runs call one reusable, so a fix to the
+    job lands once. Each caller grants the OIDC permission the reusable's job
+    needs; a called workflow can only narrow it."""
+    job = load_workflow(workflow)["jobs"]["storage-integration"]
+    assert job["uses"] == "./.github/workflows/storage-integration-reusable.yaml"
+    assert job["permissions"] == {"id-token": "write", "contents": "read"}
+
+
+def test_a_change_to_the_storage_job_body_runs_it_on_its_own_pr() -> None:
+    changes = load_workflow("pull_request.yaml")["jobs"]["changes"]
+    filters = next(s for s in changes["steps"] if s.get("id") == "filter")
+    storage = yaml.safe_load(filters["with"]["filters"])["storage"]
+    assert ".github/workflows/storage-integration-reusable.yaml" in storage
+
+
+def test_the_storage_job_fails_rather_than_skips_a_missing_cloud() -> None:
+    reusable = load_workflow("storage-integration-reusable.yaml")
+    (job,) = reusable["jobs"].values()
+    run = next(
+        s for s in job["steps"] if "tests/integration/storage/" in s.get("run", "")
+    )
+    assert run["env"]["STORAGE_CLOUD_REQUIRED"] == "1"
+
+
 # ── FND-851: integration on an `e2e`-labelled PR even under a merge queue ───
 #
 # `detect-integration` and `integration` share the same event/queue/label

@@ -32,7 +32,6 @@ from application_sdk.storage import batch as batch_module
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix, list_keys, upload_prefix
 from application_sdk.storage.errors import StorageConfigError, StorageError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 
 #: How long the offloaded "slow" call blocks its thread. Long enough that an
@@ -54,11 +53,6 @@ async def _wait_started(event: threading.Event) -> None:
     """
     if not await asyncio.to_thread(event.wait, _START_TIMEOUT):
         raise AssertionError("offloaded call did not start")
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 class _BlockingCall:

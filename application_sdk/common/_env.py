@@ -11,10 +11,12 @@ module: importing it runs ``application_sdk.common.__init__``, which imports
 """
 
 from collections.abc import Collection
+from typing import overload
 
 from application_sdk import _env
 from application_sdk._env import FALSE_VALUES as FALSE_VALUES
 from application_sdk._env import TRUE_VALUES as TRUE_VALUES
+from application_sdk._env import env_str as env_str
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +26,13 @@ def _report(message: str) -> None:
     logger.warning("Ignoring env var: %s", message)
 
 
-def env_int(key: str, default: int = 0, *, minimum: int | None = None) -> int:
+@overload
+def env_int(key: str, default: int = 0, *, minimum: int | None = None) -> int: ...
+@overload
+def env_int(key: str, default: None, *, minimum: int | None = None) -> int | None: ...
+def env_int(
+    key: str, default: int | None = 0, *, minimum: int | None = None
+) -> int | None:
     """Read an int env var; see :func:`application_sdk._env.env_int`.
 
     A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
@@ -33,9 +41,22 @@ def env_int(key: str, default: int = 0, *, minimum: int | None = None) -> int:
     return _env.env_int(key, default, minimum=minimum, report=_report)
 
 
-def env_float(key: str, default: float, *, minimum: float | None = None) -> float:
+@overload
+def env_float(key: str, default: float, *, minimum: float | None = None) -> float: ...
+@overload
+def env_float(
+    key: str, default: None, *, minimum: float | None = None
+) -> float | None: ...
+def env_float(
+    key: str, default: float | None, *, minimum: float | None = None
+) -> float | None:
     """Read a finite float env var; see :func:`application_sdk._env.env_float`."""
     return _env.env_float(key, default, minimum=minimum, report=_report)
+
+
+def env_duration(key: str, default: str) -> str:
+    """Read a duration env var; see :func:`application_sdk._env.env_duration`."""
+    return _env.env_duration(key, default, report=_report)
 
 
 def env_bool(key: str, default: bool = False) -> bool:

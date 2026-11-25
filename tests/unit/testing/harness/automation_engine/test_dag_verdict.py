@@ -40,9 +40,7 @@ from application_sdk.testing.harness.automation_engine.client import (
     _DAGProgress,
 )
 from application_sdk.testing.harness.automation_engine.wire import (
-    DAGNodeResult,
     DAGNodeStatus,
-    DAGRunResult,
     DAGRunStatus,
 )
 from application_sdk.testing.harness.outcome import (
@@ -52,29 +50,9 @@ from application_sdk.testing.harness.outcome import (
     Settled,
     Stalled,
 )
+from tests.unit.testing._ae_fakes import numbered
 
 _RUN_ID = "run-1"
-
-
-def _result(
-    run_status: DAGRunStatus = DAGRunStatus.RUNNING,
-    *node_statuses: DAGNodeStatus,
-) -> DAGRunResult:
-    return DAGRunResult(
-        run_id=_RUN_ID,
-        workflow_slug="slug",
-        status=run_status,
-        nodes=[
-            DAGNodeResult(
-                name=f"node{index}",
-                status=status,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-            for index, status in enumerate(node_statuses)
-        ],
-    )
 
 
 def _verdict(outcome, **overrides):  # type: ignore[no-untyped-def]
@@ -115,7 +93,7 @@ class TestAnyNodeStarted:
 
     @pytest.mark.parametrize("status", [DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED])
     def test_the_not_started_set_is_not_a_start(self, status: DAGNodeStatus) -> None:
-        assert not _any_node_started(_result(DAGRunStatus.RUNNING, status))
+        assert not _any_node_started(numbered(DAGRunStatus.RUNNING, status))
 
     def test_a_live_run_over_pending_nodes_has_not_started(self) -> None:
         """The one case a run-level latch would get wrong.
@@ -125,7 +103,7 @@ class TestAnyNodeStarted:
         unpolled. Keying the latch on the run status would report every unpolled
         task queue as started, and the no-worker verdict would be unreachable.
         """
-        run = _result(
+        run = numbered(
             DAGRunStatus.RUNNING, DAGNodeStatus.PENDING, DAGNodeStatus.PENDING
         )
         assert run.status is DAGRunStatus.RUNNING
@@ -133,11 +111,11 @@ class TestAnyNodeStarted:
 
     def test_one_started_node_is_enough(self) -> None:
         assert _any_node_started(
-            _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING, DAGNodeStatus.RUNNING)
+            numbered(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING, DAGNodeStatus.RUNNING)
         )
 
     def test_a_run_with_no_nodes_has_not_started(self) -> None:
-        assert not _any_node_started(_result(DAGRunStatus.PENDING))
+        assert not _any_node_started(numbered(DAGRunStatus.PENDING))
 
 
 class TestAbsorbAEBlip:
@@ -180,7 +158,7 @@ class TestDAGProgress:
         """The number stamped onto a timed-out observation.
         :class:`~application_sdk.testing.harness.outcome.Expired` does not carry
         it, so the ledger is the only thing that can answer it."""
-        frozen = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        frozen = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
         with fake_clock() as clock:
             progress = _DAGProgress()
             progress.observe(frozen)
@@ -192,9 +170,9 @@ class TestDAGProgress:
     def test_a_changed_summary_resets_the_gap(self) -> None:
         with fake_clock() as clock:
             progress = _DAGProgress()
-            progress.observe(_result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING))
+            progress.observe(numbered(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING))
             clock.sleep(40)
-            progress.observe(_result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING))
+            progress.observe(numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING))
             assert progress.quiet_seconds == 0.0
 
     def test_the_line_is_logged_on_a_change_and_then_throttled(self) -> None:
@@ -204,7 +182,7 @@ class TestDAGProgress:
         asserted rather than described: three identical readings inside the
         heartbeat window produce one line.
         """
-        frozen = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        frozen = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
         with fake_clock() as clock, patch.object(_client_module, "logger") as logged:
             progress = _DAGProgress()
             for _ in range(3):
@@ -215,7 +193,7 @@ class TestDAGProgress:
     def test_a_frozen_summary_still_gets_a_heartbeat(self) -> None:
         """A lineage stage sits unchanged for minutes; without this an operator
         cannot tell "still polling" from "harness wedged"."""
-        frozen = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        frozen = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
         with fake_clock() as clock, patch.object(_client_module, "logger") as logged:
             progress = _DAGProgress()
             progress.observe(frozen)
@@ -240,7 +218,7 @@ class TestVerdictMapping:
     """Each generic verdict, and the AE answer it becomes."""
 
     def test_settled_returns_the_reading_unstamped(self) -> None:
-        run = _result(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
+        run = numbered(DAGRunStatus.SUCCEEDED, DAGNodeStatus.SUCCEEDED)
         returned = _verdict(
             Settled(label="AE run", attempts=1, elapsed=timedelta(0), value=run)
         )
@@ -255,7 +233,7 @@ class TestVerdictMapping:
                     attempts=19,
                     elapsed=timedelta(seconds=180),
                     grace=timedelta(seconds=180),
-                    last=_result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING),
+                    last=numbered(DAGRunStatus.PENDING, DAGNodeStatus.PENDING),
                 )
             )
 
@@ -267,7 +245,7 @@ class TestVerdictMapping:
                     attempts=19,
                     elapsed=timedelta(seconds=180),
                     grace=timedelta(seconds=180),
-                    last=_result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING),
+                    last=numbered(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING),
                 ),
                 stall_task_queue="atlan-openapi-e2e-full-ci",
             )
@@ -277,7 +255,7 @@ class TestVerdictMapping:
         window says which guard fired, the *observed* gap says how long it had
         actually been frozen. They differ whenever a probe overran its interval.
         """
-        run = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        run = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
         with pytest.raises(DAGProgressStalledError) as excinfo:
             _verdict(
                 Stalled(
@@ -299,7 +277,7 @@ class TestVerdictMapping:
         """A caller needs the node breakdown to say which node was where when the
         harness stopped watching, and ``timed_out`` is what stops it reading the
         breakdown as a verdict."""
-        run = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        run = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
         progress = _DAGProgress()
         with fake_clock() as clock:
             progress.observe(run)
@@ -354,7 +332,7 @@ class TestVerdictMappingWithoutAReading:
         lie that sends the reader hunting a phantom. The observed quiet gap is
         true whatever the configuration was.
         """
-        run = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        run = numbered(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
         with pytest.raises(DAGProgressStalledError) as excinfo:
             _verdict(
                 Stalled(

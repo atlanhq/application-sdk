@@ -26,6 +26,7 @@ from lens import context as lens_context
 from lens import findings as findings_mod
 from lens import prompts as prompts_mod
 from lens import review as review_mod
+from lens import select as select_mod
 from lens.agent import BundleResult
 from lens.bundle import group
 from lens.config import Config, load_config, validate
@@ -1120,11 +1121,69 @@ def test_state_is_only_trusted_from_the_bot_comment(repo: Path):
 # ---- config ------------------------------------------------------------------------------------------
 
 
+# The model's window as the LiteLLM proxy reports it (max_input_tokens), and where
+# the provider's long-context billing starts; see the comment on
+# context_limit_tokens in config.toml.
+LUNA_WINDOW = 922_000
+LONG_CONTEXT_FROM = 272_000
+GATEWAY_MAX_TOKENS = 24_000  # the largest max_output_tokens the route is known to take
+
+
+def _large_pr(prefix: str) -> list[Any]:
+    """100 files and 4,000 changed lines over 18 directories."""
+    out = ""
+    for i in range(100):
+        p = f"application_sdk/d{i % 18}/f{i}.py"
+        body = "".join(
+            f"-    old_value_{j} = compute(argument_{j}, other)\n"
+            f"+    new_value_{j} = compute_more(argument_{j}, other, more)\n"
+            for j in range(20)
+        )
+        out += (
+            f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1,20 +1,20 @@\n{body}"
+        )
+    return parse_unified_diff(out)
+
+
+def test_the_shipped_limits_let_a_100_file_pr_finish_without_a_cap():
+    """FND-5316: a live 42-file review hit the context ceiling in 3 of 5 bundles,
+    one at turn 3. Every limit is sized for 100 files and 4,000 changed lines."""
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    lim = cfg.limits
+    # The ceiling: roomy, well under the window, under the long-context rate.
+    assert 200_000 <= lim.context_limit_tokens <= 0.75 * LUNA_WINDOW
+    assert lim.context_limit_tokens * 1.25 < LONG_CONTEXT_FROM
+    # No max_tokens past what the gateway route is known to accept; the plan
+    # turn no longer stops at 8,000.
+    sent = [lim.review_max_tokens, lim.plan_max_tokens, lim.reflect_max_tokens]
+    sent += [lim.verify_max_tokens, lim.verify_max_tokens_opt_in]
+    assert max(sent) <= GATEWAY_MAX_TOKENS and lim.plan_max_tokens == GATEWAY_MAX_TOKENS
+    # Twice the 12 turns the deepest live bundle used, before any size bonus.
+    assert lim.turn_budget(1, 0) >= 24 and lim.turn_budget(8, 229) >= 32
+    # Every file of the large PR is in a bundle.
+    files = _large_pr("application_sdk")
+    assert len(files) == 100 and sum(f.additions + f.deletions for f in files) == 4000
+    assert cfg.max_changed_files >= 2 * len(files)
+    res = RunResult("reviewed")
+    bundles = plan_bundles(files, cfg, res)
+    assert res.skipped_files == [] and sum(len(b.files) for b in bundles) == 100
+    # Round 1's line-review ledger covers the estimated ~$1.00 of line review and
+    # four calls in flight, each reserving its prompt's bytes at the cache-write rate.
+    line_review = cfg.cap_usd_per_pr * cfg.first_round_share * (1 - 0.15 - 0.10)
+    held = (
+        cfg.concurrency
+        * (lim.context_limit_tokens * 3.5 * 0.125 + lim.review_max_tokens * 0.5)
+        / 1e6
+    )
+    assert line_review >= 1.00 + held
+
+
 def test_shipped_config_and_rules_load_and_validate():
     cfg_dir = Path(__file__).resolve().parents[2] / "lens"
     cfg = load_config(cfg_dir)
     assert validate(cfg) == []
-    assert cfg.cap_usd_per_pr <= 1.0
+    # About 3x the estimated cost of a 100-file, 4,000-line PR (FND-5316).
+    assert cfg.cap_usd_per_pr <= 4.0
     rules = load_rules(cfg_dir)
     missing = {c for _, cards in rules.entries for c in cards} - set(rules.cards)
     assert not missing, f"rules.toml names cards that do not exist: {missing}"
@@ -1846,8 +1905,9 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
             _file_diff(f"d{i}.yaml", ["timeout: 30"], ["timeout: 60"]) for i in range(3)
         )  # duplicate x3
         + _file_diff("real.py", ["    return a"], ["    return a / b"])  # real change
+        + _GET_X_DEF  # the renamed function's own definition
     )
-    t = triage(files, {}, {})
+    t = triage(files, _GET_X_OLD, _GET_X_NEW)
     assert [f.path for f in t.reviewed] == [
         "d0.yaml",
         "real.py",
@@ -1855,7 +1915,12 @@ def test_triage_sets_aside_whitespace_imports_renames_and_duplicates():
     assert t.renames == [("get_x", "fetch_x")]
     assert set(t.duplicate_of) == {"d1.yaml", "d2.yaml"}
     assert "imports only" in t.mechanical and "whitespace-only" in t.mechanical
-    assert set(t.mechanical["mechanical rename"]) == {"r0.py", "r1.py", "r2.py"}
+    assert set(t.mechanical["mechanical rename"]) == {
+        "r0.py",
+        "r1.py",
+        "r2.py",
+        "x_def.py",
+    }
 
 
 def test_a_one_off_swap_is_an_edit_not_a_rename():
@@ -1876,6 +1941,182 @@ def test_a_file_mixing_real_and_mechanical_hunks_keeps_only_the_real_ones():
     assert len(fd.hunks) == 1 and "a / b" in fd.render()
 
 
+# Both names of a rename are defined here (FND-5316): the def site's base and
+# head copies are among the changed files.
+_GET_X_OLD = {"x_def.py": "def get_x(i):\n    return i\n"}
+_GET_X_NEW = {"x_def.py": "def fetch_x(i):\n    return i\n"}
+# ... and its diff, which every test that hands triage those copies includes.
+_GET_X_DEF = _file_diff("x_def.py", ["def get_x(i):"], ["def fetch_x(i):"])
+
+
+def test_a_library_name_swapped_across_files_is_line_reviewed_not_a_rename():
+    """FND-5316: a live review withheld nine files as "mechanical rename" whose
+    swaps were `logger.error` -> `logger.warning` and `json` -> `orjson`. Neither
+    name is defined in the repository, so neither is a rename: both change
+    what the code does, and every hunk goes to the line review. A local
+    variable called `error` does not make the method `error` a repo member."""
+    logger_swaps = "".join(
+        _file_diff(
+            f"application_sdk/m{i}.py",
+            [f'    logger.error("failed %s", e{i})'],
+            [f'    logger.warning("failed %s", e{i})'],
+        )
+        for i in range(3)
+    )
+    json_swaps = "".join(
+        _file_diff(
+            f"application_sdk/j{i}.py",
+            [f"    return json.dumps(v{i})"],
+            [f"    return orjson.dumps(v{i})"],
+        )
+        for i in range(3)
+    )
+    files = parse_unified_diff(logger_swaps + json_swaps)
+    # Each file binds `json`/`orjson` by import only, and `error`/`warning` as locals.
+    old = {
+        **{
+            f"application_sdk/m{i}.py": "import logging\nerror = warning = None\nlogger = logging.getLogger()\n"
+            f'def f(e{i}):\n    logger.error("failed %s", e{i})\n'
+            for i in range(3)
+        },
+        **{f"application_sdk/j{i}.py": "import json\n" for i in range(3)},
+    }
+    new = {
+        **{
+            f"application_sdk/m{i}.py": "import logging\nerror = warning = None\nlogger = logging.getLogger()\n"
+            f'def f(e{i}):\n    logger.warning("failed %s", e{i})\n'
+            for i in range(3)
+        },
+        **{f"application_sdk/j{i}.py": "import orjson\n" for i in range(3)},
+    }
+    t = triage(files, old, new)
+    assert sorted(f.path for f in t.reviewed) == sorted(fd.path for fd in files)
+    assert t.renames == [] and "mechanical rename" not in t.mechanical
+
+
+def test_a_swapped_import_module_is_not_imports_only():
+    """`import json` -> `import orjson` changes which code runs (FND-5316)."""
+    swapped = parse_unified_diff(
+        _file_diff("application_sdk/echo.py", ["import json"], ["import orjson"])
+    )
+    assert [f.path for f in triage(swapped, {}, {}).reviewed] == [
+        "application_sdk/echo.py"
+    ]
+    moved = parse_unified_diff(
+        _file_diff(
+            "application_sdk/a.py",
+            ["from application_sdk.util import f"],
+            ["from application_sdk.helpers import f"],
+        )
+    )
+    assert [f.path for f in triage(moved, {}, {}).reviewed] == ["application_sdk/a.py"]
+
+
+def test_an_import_of_a_module_this_pr_renames_stays_imports_only():
+    diff = (
+        "diff --git a/application_sdk/util.py b/application_sdk/helpers.py\nsimilarity index 100%\n"
+        "rename from application_sdk/util.py\nrename to application_sdk/helpers.py\n"
+        + _file_diff(
+            "application_sdk/a.py",
+            ["from application_sdk.util import f"],
+            ["from application_sdk.helpers import f"],
+        )
+    )
+    t = triage(parse_unified_diff(diff), {}, {})
+    assert t.reviewed == [] and t.mechanical == {
+        "imports only": ["application_sdk/a.py"]
+    }
+
+
+def test_a_rename_of_a_repo_function_or_method_stays_mechanical():
+    """True local renames keep being set aside: the old name is defined in a
+    base copy, the new one in a head copy, by a def or as a class member."""
+    calls = "".join(
+        _file_diff(f"r{i}.py", [f"x = get_x({i})"], [f"x = fetch_x({i})"])
+        for i in range(3)
+    )
+    t = triage(parse_unified_diff(calls + _GET_X_DEF), _GET_X_OLD, _GET_X_NEW)
+    assert t.renames == [("get_x", "fetch_x")]
+    assert set(t.mechanical["mechanical rename"]) == {
+        "r0.py",
+        "r1.py",
+        "r2.py",
+        "x_def.py",
+    }
+    methods = "".join(
+        _file_diff(
+            f"c{i}.py",
+            [f"        y = self.read_all({i})"],
+            [f"        y = self.read_every({i})"],
+        )
+        for i in range(3)
+    ) + _file_diff(
+        "client.py", ["    def read_all(self, i):"], ["    def read_every(self, i):"]
+    )
+    old = {"client.py": "class Client:\n    def read_all(self, i):\n        return i\n"}
+    new = {
+        "client.py": "class Client:\n    def read_every(self, i):\n        return i\n"
+    }
+    t = triage(parse_unified_diff(methods), old, new)
+    assert t.renames == [("read_all", "read_every")] and t.reviewed == []
+    # The same swap with no definition on either side is an edit.
+    assert len(triage(parse_unified_diff(methods), {}, {}).reviewed) == 4
+
+
+def test_a_library_member_swap_is_not_blessed_by_an_unrelated_rename():
+    """lens F-80e1ac: member names were pooled across files, so a changed
+    helper that renames its own `error` to `warning` made `logger.error` ->
+    `logger.warning` at three call sites a "rename". A member swap is a rename
+    only after a receiver of this repository: `self`, `cls`, a class or a
+    changed module defined here."""
+    calls = "".join(
+        _file_diff(
+            f"application_sdk/m{i}.py",
+            [f'    logger.error("failed %s", e{i})'],
+            [f'    logger.warning("failed %s", e{i})'],
+        )
+        for i in range(3)
+    ) + _file_diff("application_sdk/levels.py", ["def error():"], ["def warning():"])
+    old = {"application_sdk/levels.py": "def error():\n    return 1\n"}
+    new = {"application_sdk/levels.py": "def warning():\n    return 1\n"}
+    t = triage(parse_unified_diff(calls), old, new)
+    assert sorted(f.path for f in t.reviewed if "/m" in f.path) == [
+        "application_sdk/m0.py",
+        "application_sdk/m1.py",
+        "application_sdk/m2.py",
+    ]
+    # Through the module that defines it, the same rename is mechanical.
+    via_module = "".join(
+        _file_diff(
+            f"application_sdk/u{i}.py",
+            [f"    levels.error({i})"],
+            [f"    levels.warning({i})"],
+        )
+        for i in range(3)
+    ) + _file_diff("application_sdk/levels.py", ["def error():"], ["def warning():"])
+    t = triage(parse_unified_diff(via_module), old, new)
+    assert t.reviewed == []
+
+
+def test_an_import_that_swaps_a_name_or_alias_is_not_imports_only():
+    """lens F-f160ec: `from m import f as send` -> `from m import g as send`
+    keeps the module but binds `send` to other code."""
+    for old, new in (
+        ("from m import f as send", "from m import g as send"),
+        ("from pkg import safe", "from pkg import unsafe"),
+        ("import a.b as c", "import a.d as c"),
+    ):
+        diff = parse_unified_diff(_file_diff("application_sdk/x.py", [old], [new]))
+        assert [f.path for f in triage(diff, {}, {}).reviewed] == [
+            "application_sdk/x.py"
+        ]
+    # A name added to an import list is still imports only.
+    added = parse_unified_diff(
+        _file_diff("application_sdk/x.py", ["from m import f"], ["from m import f, g"])
+    )
+    assert triage(added, {}, {}).reviewed == []
+
+
 def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
     gh = FakeGitHub()
     diff = "".join(
@@ -1883,6 +2124,13 @@ def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
             f"application_sdk/m{i}.py", [f"y = get_x({i})"], [f"y = fetch_x({i})"]
         )
         for i in range(100)
+    )
+    # The renamed function's own definition is in the PR: both names are defined here.
+    gh.files[("application_sdk/x_def.py", "b0")] = "def get_x(i):\n    return i\n"
+    gh.files[("application_sdk/x_def.py", "h1")] = "def fetch_x(i):\n    return i\n"
+    diff = (
+        _file_diff("application_sdk/x_def.py", ["def get_x(i):"], ["def fetch_x(i):"])
+        + diff
     )
     gh.diffs[("b0", "h1")] = diff
     script = Script()
@@ -1897,10 +2145,10 @@ def test_a_hundred_file_mechanical_pr_costs_no_review_calls(repo: Path):
     assert (
         script.requests == []
     )  # no line review at all; only the (routed) approach check
-    assert len(res.triage.mechanical.get("mechanical rename") or []) == 100
+    assert len(res.triage.mechanical.get("mechanical rename") or []) == 101
     body = gh.comments[0]["body"]
     assert (
-        "100 file(s) with mechanical changes" in body and "`get_x` → `fetch_x`" in body
+        "101 file(s) with mechanical changes" in body and "`get_x` → `fetch_x`" in body
     )
     assert gh.statuses[-1]["state"] == "success"
 
@@ -4448,6 +4696,133 @@ def _round_two_elsewhere(gh):
     gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")] + HELPER_DIFF
     gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2
     gh.files[("application_sdk/storage/helper.py", "h2")] = HELPER
+
+
+def _round_two_with_exclude(
+    repo: Path, exclude: list[str]
+) -> tuple[str, RunResult, PRState]:
+    """Round one raises a finding in fetch.py; round two runs with `exclude`."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    assert first.state is not None
+    fid = first.state.findings[0].id
+    _round_two_elsewhere(gh)
+    cfg = cfg_for(repo)
+    cfg.exclude = exclude
+    second = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=rules,
+        client_factory=_factory(
+            Script(response([tool_call("verdicts", {"items": []})]))
+        ),
+    )
+    assert second.state is not None
+    return fid, second, second.state
+
+
+def test_a_finding_in_a_file_now_excluded_is_closed(repo: Path):
+    """PR #5096 F-8f8879: a finding raised before its file was excluded. Every
+    diff verify sees drops an excluded file's, so verify could never judge it
+    fixed, and a blocking one would hold the PR for good."""
+    fid, second, state = _round_two_with_exclude(repo, ["application_sdk/storage/*.py"])
+    [f] = [x for x in state.findings if x.id == fid]
+    assert (f.status, f.fixed_by, f.fixed_round) == ("fixed", "excluded", 2)
+    assert fid in second.resolved_free
+    assert state.open_findings() == []
+    assert "closed: its file is now excluded from review" in render_summary(second)
+
+
+def test_a_finding_in_a_file_still_reviewed_stays_open(repo: Path):
+    fid, _, state = _round_two_with_exclude(repo, ["application_sdk/common/**"])
+    assert [f.id for f in state.open_findings()] == [fid]
+
+
+def _rerun_unchanged_head(
+    repo: Path, exclude: list[str], *, round_cap: int | None = None
+) -> tuple[str, FakeGitHub, Script, RunResult]:
+    """Round one raises a finding in fetch.py at h1; a plain `/lens` then runs
+    again on the SAME head (the skip path) with `exclude` in the config."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    assert first.state is not None
+    fid = first.state.findings[0].id
+    cfg = cfg_for(repo)
+    cfg.exclude = exclude
+    if round_cap is not None:
+        cfg.max_rounds = round_cap
+    script = Script()
+    again = run(
+        gh=cast(GitHub, gh),
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    return fid, gh, script, again
+
+
+@pytest.mark.parametrize("round_cap", [None, 1], ids=["unchanged-head", "round-cap"])
+def test_a_plain_rerun_with_nothing_new_closes_a_finding_in_a_now_excluded_file(
+    repo: Path, round_cap: int | None
+):
+    """lens F-dd33b2: an already-reviewed PR (#5096) re-asked with `/lens` on the
+    same head, or past the round cap, returns before any review. The closure
+    must happen there too, or the finding still blocks the PR."""
+    fid, gh, script, again = _rerun_unchanged_head(
+        repo, ["application_sdk/storage/*.py"], round_cap=round_cap
+    )
+    assert again.action == "dismissed" and again.mode == "excluded"
+    assert again.state is not None and again.state.open_findings() == []
+    assert script.requests == [] and script.approach_requests == []  # no model call
+    summary = next(c["body"] for c in gh.comments if SUMMARY_MARKER in c["body"])
+    assert "closed: its file is now excluded from review" in summary
+    assert f"closure after round 1 · {fid}" in gh.posted[-1]
+    assert gh.statuses[-1]["state"] == "success"
+    assert approve_mod.decision_for(again)["action"] == "approve"
+
+
+def test_a_plain_rerun_with_nothing_excluded_still_skips(repo: Path):
+    fid, _, script, again = _rerun_unchanged_head(repo, ["application_sdk/common/**"])
+    assert again.action == "skipped"
+    assert again.state is not None
+    assert [f.id for f in again.state.open_findings()] == [fid]
+    assert script.requests == []
+
+
+def test_generated_baselines_are_excluded_from_review():
+    """Their consistency is proven by check_pyright_baseline.py and
+    check_ann401_baseline.py on every PR; a line review of their counts after a
+    base merge sees a totals line move without the per-file counts that moved it."""
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    patterns = review_mod.exclude_patterns(cfg)
+    for path in (
+        ".github/scripts/pyright_baseline.json",
+        ".github/scripts/ann401_baseline.json",
+    ):
+        assert select_mod.excluded(path, patterns), path
+    assert not select_mod.excluded(
+        ".github/scripts/check_pyright_baseline.py", patterns
+    )
 
 
 def test_a_fix_in_another_file_is_still_rechecked(repo: Path):
@@ -8018,8 +8393,15 @@ def test_a_hunk_that_only_removes_imports_is_not_mechanical():
     t = triage(parse_unified_diff(removed), {}, {})
     assert [f.path for f in t.reviewed] == ["application_sdk/handlers/__init__.py"]
     assert t.mechanical == {}
+    # An import swapped for another module changes which code runs (FND-5316);
+    # the same imports regrouped are still proven mechanical.
     swapped = _one_hunk("application_sdk/x.py", ["-import os", "+import sys"])
     t = triage(parse_unified_diff(swapped), {}, {})
+    assert [f.path for f in t.reviewed] == ["application_sdk/x.py"]
+    regrouped = _one_hunk(
+        "application_sdk/x.py", ["-import os", "-import sys", "+import os, sys"]
+    )
+    t = triage(parse_unified_diff(regrouped), {}, {})
     assert t.reviewed == [] and t.mechanical == {
         "imports only": ["application_sdk/x.py"]
     }
@@ -9102,7 +9484,8 @@ def test_a_real_rename_across_files_is_still_mechanical():
         )
         for i in range(3)
     )
-    t = _triaged(diff)
+    # The function's definition, renamed in the PR, is defined on each side.
+    t = triage(parse_unified_diff(diff + _GET_X_DEF), _GET_X_OLD, _GET_X_NEW)
     assert t.reviewed == [] and t.renames == [("get_x", "fetch_x")]
 
 
@@ -9127,8 +9510,11 @@ def test_a_python_dedent_is_not_whitespace_only():
     [
         ("import os", "import os; dangerous()", False),
         ("import os", "import os as _os\nrun()", False),
-        ("import os", "import sys  # noqa: F401", True),
-        ("from a import (", "from b import (", True),
+        ("import os", "import os, sys  # noqa: F401", True),
+        ("from a import (", "from a import (  # grouped", True),
+        # A module swapped for another changes which code runs (FND-5316).
+        ("import os", "import sys  # noqa: F401", False),
+        ("from a import (", "from b import (", False),
         ("from a import x", "from a import x, y; x.boot()", False),
     ],
 )
@@ -9647,3 +10033,36 @@ def test_the_review_prompt_caps_an_unread_control_bypass():
     text = " ".join(prompts_mod.REVIEW_SYSTEM.split())
     assert "must name that control and cite where you read it" in text
     assert 'at most medium and is worded "verify that <control> covers this"' in text
+
+
+# ---- a bundle the context ceiling stops early is a shallow review (FND-5316) ------------------
+
+
+def test_a_bundle_the_context_ceiling_stops_before_turn_4_is_shallow(repo: Path):
+    ws, bundle = _ws(repo)
+    lim = agent_mod.AgentLimits(context_limit_tokens=10, plan=0)
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    res = agent_mod.review_bundle(client, ws, bundle, RuleSet([], {}), {}, [], lim)
+    assert (res.ceiling_turn, res.shallow) == (1, True)
+    assert not agent_mod.BundleResult("b", ceiling_turn=4).shallow
+
+
+def test_a_shallow_bundle_makes_the_review_incomplete_and_retries_its_files(repo: Path):
+    gh = FakeGitHub()
+    cfg = cfg_for(repo)
+    cfg.limits.context_limit_tokens = 10
+    cfg.limits.plan = 0
+    script = Script(response([tool_call("task_done", {"state": "DONE"})]))
+    res = run(
+        gh=cast(Any, gh),
+        number=1,
+        root=repo,
+        cfg=cfg,
+        rules=RuleSet([], {}),
+        client_factory=_factory(script),
+    )
+    body = gh.comments[0]["body"]
+    assert "was reviewed shallowly: it reached the context ceiling at turn 1" in body
+    assert gh.statuses[-1]["state"] == "error"
+    assert res.state is not None and res.state.reviewed_head == ""
