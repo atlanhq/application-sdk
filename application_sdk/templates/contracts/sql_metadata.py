@@ -477,7 +477,7 @@ class ExtractionOutput(Output, PublishInputMixin):
 
     **Declared by the model, not by the app** (FND-1863).  This field is the
     SDK's own: it is declared here, populated by ``SqlApp.run()``, and written
-    by ``SqlApp._transform_entity`` — no connector authors any part of it.  The
+    by ``SqlApp.transform_entity`` — no connector authors any part of it.  The
     :class:`~application_sdk.contracts.types.AssetArtifact` marker says so, and
     it is what keeps every SQL connector from having to hand-write an
     ``artifactSchemas`` envelope for an artifact the SDK already validates
@@ -613,7 +613,7 @@ class PrimeAuthOutput(Output):
 
     The task itself is a single serial probe — it issues one ``SELECT 1``
     to populate the SQL server's auth cache (notably MySQL 8's
-    ``caching_sha2_password``) before the parallel ``_extract_entity``
+    ``caching_sha2_password``) before the parallel ``extract_entity``
     burst.
 
     Failure-as-data contract:
@@ -681,7 +681,7 @@ class PrimeAuthOutput(Output):
 class ExtractionTaskOutput(Output):
     """Output from a per-entity ``extract_*`` task.
 
-    Returned by ``SqlApp._extract_entity`` so the matching ``transform_*``
+    Returned by ``SqlApp.extract_entity`` so the matching ``transform_*``
     activity can consume the raw output via the ``FileReference``
     contract rather than reading from local FS directly.
 
@@ -699,7 +699,7 @@ class ExtractionTaskOutput(Output):
 
     File vs directory: a ``FileReference`` can point at either a single
     file or a directory — the interceptor handles both shapes. The v3
-    ``SqlApp.template's _extract_entity`` writes exactly one JSONL
+    ``SqlApp.extract_entity`` writes exactly one JSONL
     output (``raw/<entity>/records.json``) per entity per run, so the
     ref it produces is a single-file ref. A future connector that
     needs multi-file output (chunked extracts, partitioned writes)
@@ -745,7 +745,7 @@ class TransformInput(ExtractionTaskInput):
     Connectors implementing a custom ``transform_data`` (the legacy
     v2 activity) may read ``raw_file`` directly; v3's per-entity
     ``transform_*`` tasks consume it through the helper
-    ``SqlApp._transform_entity``.
+    ``SqlApp.transform_entity``.
 
     The legacy ``file_names`` field remains on the schema as a no-op
     placeholder — it was never populated by the SDK and reading it

@@ -892,16 +892,19 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
 
 
 #: Inline required-check gates whose merge_group pass-through must be a
-#: job-level skip, mapped to that skip's exact `if:`.
+#: job-level skip, mapped to the gate's job id and that skip's exact `if:`.
+#: Release Gate's workflow also holds the job that re-runs it on a review
+#: verdict (FND-5321), so the gate is named by its job id.
 _MERGE_GROUP_SKIPPING_GATES = {
-    "release-gate.yaml": "github.event_name == 'pull_request'",
+    "release-gate.yaml": (
+        "release-gate",
+        "github.event_name == 'pull_request'",
+    ),
 }
 
 
-@pytest.mark.parametrize(
-    ("name", "job_if"), sorted(_MERGE_GROUP_SKIPPING_GATES.items())
-)
-def test_gate_skips_merge_group_at_job_level(name: str, job_if: str) -> None:
+@pytest.mark.parametrize(("name", "gate"), sorted(_MERGE_GROUP_SKIPPING_GATES.items()))
+def test_gate_skips_merge_group_at_job_level(name: str, gate: tuple[str, str]) -> None:
     """FND-3320: on merge_group these gates have nothing to check.
 
     A job that starts only to skip every step is billed a runner minute per
@@ -910,8 +913,9 @@ def test_gate_skips_merge_group_at_job_level(name: str, job_if: str) -> None:
     the job `name:` is a static string, so the skipped run carries the exact
     ruleset context, and no step re-tests the event the job already selected.
     """
+    job_id, job_if = gate
     workflow = yaml.safe_load(render(name))
-    (job,) = workflow["jobs"].values()
+    job = workflow["jobs"][job_id]
     assert job["if"] == job_if
     assert "${{" not in job["name"]
     for step in job["steps"]:
@@ -920,7 +924,6 @@ def test_gate_skips_merge_group_at_job_level(name: str, job_if: str) -> None:
 
 _SUPERSEDING_CALLERS = {
     "conformance.yaml": "conformance-",
-    "release-gate.yaml": "release-gate-",
     "generated-freshness.yaml": "generated-freshness-caller-",
 }
 
@@ -942,6 +945,22 @@ def test_caller_supersedes_only_on_a_new_pr_commit(name: str, prefix: str) -> No
         + "${{ github.event_name == 'pull_request' && contains(fromJSON("
         + '\'["opened", "synchronize"]\'), github.event.action)'
         + " && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' && "
+        "github.event.action == 'synchronize' }}",
+    }
+
+
+def test_release_gate_supersedes_only_on_a_new_pr_commit() -> None:
+    """The same rule as the callers above (FND-3314), for the one caller on
+    the pull request number (FND-5321), so one PR's push never cancels
+    another PR's gate."""
+    concurrency = yaml.safe_load(render("release-gate.yaml"))["concurrency"]
+    assert concurrency == {
+        "group": "release-gate-"
+        + "${{ github.event_name == 'pull_request' && contains(fromJSON("
+        + '\'["opened", "synchronize"]\'), github.event.action)'
+        + " && format('pr-{0}', github.event.pull_request.number)"
+        + " || github.run_id }}",
         "cancel-in-progress": "${{ github.event_name == 'pull_request' && "
         "github.event.action == 'synchronize' }}",
     }
@@ -2948,12 +2967,10 @@ _MONOREPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _IN_MONOREPO = (_MONOREPO_ROOT / "application_sdk").is_dir()
 
 # MANAGED_ACTION_FILES entries whose template IS the only source: this repo
-# does not run them itself, so there is nothing to drift from.
-_TEMPLATE_ONLY_ACTION_FILES: frozenset[str] = frozenset(
-    {
-        ".github/scripts/release_gate.py",
-    }
-)
+# does not run them itself, so there is nothing to drift from. Empty since
+# FND-5321 retired the vendored ``release_gate.py``: the gate now runs from
+# this repo's own ``.github/scripts/release_gate.py``.
+_TEMPLATE_ONLY_ACTION_FILES: frozenset[str] = frozenset()
 
 
 def test_template_only_action_files_are_managed_entries() -> None:

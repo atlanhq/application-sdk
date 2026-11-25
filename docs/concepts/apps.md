@@ -479,7 +479,7 @@ either inline (``value:``) or via a ``secretKeyRef:`` that names a secret in the
 ``auth.secretStore``.  On the secure k8s SDR path the chart deliberately omits the matching
 environment variables and resolves credentials only through the secret store.
 
-At startup ``_create_infrastructure`` (in ``application_sdk.main``) reads each store's
+At startup ``_create_infrastructure`` (in ``application_sdk.infrastructure._bootstrap``) reads each store's
 ``secretKeyRef`` entries via ``read_binding_secret_refs``, fetches the referenced secrets from
 the Dapr sidecar (``_fetch_binding_secrets``), and hands them to the synchronous store
 factories (``create_store_from_binding*``) as the ``secrets=`` keyword.  The same secrets are
@@ -1213,7 +1213,7 @@ The marker does two things at once, and neither of them is "turn the check off":
 
 **You almost certainly do not need to write this.** `ExtractionOutput.transformed_files` is the
 SDK's own field — declared by the SDK, populated by `SqlApp.run()`, written by
-`SqlApp._transform_entity` — so every SQL connector inherits the marker and needs no
+`SqlApp.transform_entity` — so every SQL connector inherits the marker and needs no
 `artifactSchemas` entry for it. Your `MyExtractionOutput(ExtractionOutput)` is covered with no
 change, and stays covered if you **redeclare** the field to narrow its type or attach your own
 `Field(...)`: the marker is resolved across the contract's MRO, so a subclass cannot silently

@@ -364,7 +364,7 @@ class TestAssetArtifactMarker:
         """The fleet-wide fact this exists for, asserted on the real contract.
 
         ``ExtractionOutput.transformed_files`` is declared by the SDK, populated
-        by ``SqlApp.run()`` and written by ``SqlApp._transform_entity``.  If this
+        by ``SqlApp.run()`` and written by ``SqlApp.transform_entity``.  If this
         marker were ever dropped, every SQL connector would be back to
         hand-authoring an envelope for it — an error at v4.0.
         """

@@ -502,7 +502,7 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
 
     Args:
         infra: The fully populated ``InfrastructureContext`` returned by
-            ``_create_infrastructure`` in ``main.py``.
+            ``_create_infrastructure`` in ``infrastructure/_bootstrap.py``.
 
     Raises:
         ObjectStorePreflightError: If any store is inaccessible or the upstream

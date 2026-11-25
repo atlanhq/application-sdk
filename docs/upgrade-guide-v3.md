@@ -307,7 +307,12 @@ class MyIncrementalExtractor(SqlApp):
 
 `SqlApp` does not provide the v2 4-phase sequence (marker → fetch → diff →
 finalize). Write the phases the connector needs as `@task` methods and call
-them from `run()`.
+them from `run()`. With SDK ≥ 3.60.0, build each entity's tasks on
+`extract_entity` / `transform_entity` (older SDKs name them
+`_extract_entity` / `_transform_entity`), and end the `run()` in
+`finalize_extraction` (SDK ≥ 3.33.2), which
+verifies the transformed tree before publish reads it (conformance rule P068
+flags a `run()` that calls neither it nor `super().run()`).
 
 ---
 
@@ -490,6 +495,12 @@ class MyHandler(Handler):
 ```
 
 The `load()` method is removed — handler context (secrets, state) is injected automatically via `self.context`. Access credentials in handler methods with `await self.context.get_secret(name)`.
+
+### Connector-specific credential keys
+
+Do not patch `application_sdk.handler.service` to change how requests are normalized. Rebinding `service._CREDENTIAL_KEYS` or `service._normalize_credentials` is deprecated (removal in v4.0.0), reaches only the worker, and is flagged by conformance rules B001 and B010.
+
+When a v2 flat credential arrives (top-level `host`, `authType`, ...), the SDK lifts the shared keys into `input.credentials` and, on the worker and the API host alike, also every top-level field of your generated credential form (for example `kerberos` or an auth-type object such as `basic`). Declare the field in `contract/app.pkl` and regenerate; there is nothing to configure in code. A field the form declares never makes a body a credential on its own.
 
 ---
 

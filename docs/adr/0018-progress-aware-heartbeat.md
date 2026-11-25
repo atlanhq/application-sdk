@@ -431,7 +431,7 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
    | `storage/transfer.py` — `_upload_one` / `_upload_from_store` / `_download_one` | one file transferred *or* skipped on a hash match | `storage.upload_file`, `storage.copy_file`, `storage.download_file` |
    | `storage/cloud.py` — `CloudStore.upload` | one part to an external store | `cloudstore.upload_part` |
    | `storage/file_ref_sync.py` — `_replace_refs` | one `FileReference` persisted / materialised | `file_ref.persist`, `file_ref.materialize` |
-   | `templates/sql_app.py` — `_extract_entity` | one fetched page written to raw JSONL | `extract.page` |
+   | `templates/sql_app.py` — `extract_entity` | one fetched page written to raw JSONL | `extract.page` |
    | `templates/sql_metadata_extractor.py` — `fetch_databases` / `fetch_schemas` / `fetch_tables` / `fetch_columns` | one fetched page | `fetch_*.page` |
 
    Two grains on purpose: **per part/chunk** inside the byte loops, so a single
@@ -451,7 +451,7 @@ Detection latency is `max_no_progress_seconds` plus at most one loop tick (10s).
    there is no write side to cover for them.
 
    **Where mechanism 1 stops and mechanism 2 starts.** A hook only helps a loop
-   that yields *and* has a boundary worth marking. `SqlApp._transform_entity` has
+   that yields *and* has a boundary worth marking. `SqlApp.transform_entity` has
    neither: rollout step 1 (FND-282) offloaded its whole record map into a single
    `run_in_thread` hop, and the loop inside is line-by-line with no batch
    boundary — the only boundary available is the per-record one this rule

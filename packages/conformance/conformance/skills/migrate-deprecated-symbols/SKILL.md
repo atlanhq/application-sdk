@@ -66,6 +66,11 @@ name, can fire it; that is a false positive, ignore it with that reason.
 B008 never fires on relative imports,
 on names that exist in the repo, or on dunders.
 
+A B001 or B008 finding on `application_sdk.handler.service._CREDENTIAL_KEYS`
+or `_normalize_credentials` is a runtime patch, not an import to swap: B010
+reports the same line, and `programs/areas/deprecation.prose.md` (B010) says
+what replaces it.
+
 `detect` does not scan `tests/`, but test code breaks on the same SDK
 changes. Find those sites yourself and add them to the inventory:
 `grep -rnE 'application_sdk[^ ]*\._|from application_sdk[^ ]* import .*\b_[A-Za-z]|PreflightStatus\.PARTIAL|in PreflightStatus|list\(PreflightStatus' tests/`
@@ -163,6 +168,9 @@ fixed in this skill, except the **owner decisions**.
   - `SqlApp._resolve_credential_ref` → `SqlApp.resolve_credential_ref`, and
     `SqlApp._build_transform_input` → `SqlApp.build_transform_input` (same
     signature; the old names delegate; `atlan-mysql-app` `app/mysql.py:521`).
+    Likewise `SqlApp._extract_entity` → `SqlApp.extract_entity`,
+    `SqlApp._transform_entity` → `SqlApp.transform_entity` and
+    `SqlApp._resolve_output_path` → `SqlApp.resolve_output_path` (SDK ≥ 3.60.0).
     When the app defines or binds either name, it is an **owner
     decision** (below), not a swap. An unmarked call on a receiver that is
     not the app's `SqlApp` (another library's object of the same method
@@ -331,8 +339,9 @@ fixed in this skill, except the **owner decisions**.
     layout and the transform change together. Hand it to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
-  - **SqlApp override** — the app defines `_resolve_credential_ref` or
-    `_build_transform_input` (or the public name) on an `SqlApp` subclass,
+  - **SqlApp override** — the app defines `_resolve_credential_ref`,
+    `_build_transform_input`, `_extract_entity`, `_transform_entity` or
+    `_resolve_output_path` (or the public name) on an `SqlApp` subclass,
     including a class-level alias (`_resolve_credential_ref = custom`).
     The SDK's `run()` and preflight gate call only the public name, so an
     override on the old name is not reached today; renaming it to the
@@ -428,7 +437,7 @@ asks.
 
 ```decided-defaults
 {"rule": "B008", "fix_shape": "public-reexport", "decision": "Import the same names from the public module that re-exports them (application_sdk.execution for get_object_store_prefix and build_output_path). A module-level import stays module level and needs no test change; a function-local import stays local, and a test patch of the private path moves to the public module path (patch(\"application_sdk.execution.<name>\")).", "why": "The public module re-exports the same objects, so behaviour cannot change; a function-local import now looks the name up on the public module when it runs."}
-{"rule": "B001", "fix_shape": "public-rename", "decision": "Change the call to the public SqlApp method (resolve_credential_ref, build_transform_input) and move test patches of the old name to the public one. Only when the app defines no method of either name; otherwise the site is the sql-app-override owner decision.", "why": "The deprecated names delegate to the public ones with the same signature, so a call changes nothing."}
+{"rule": "B001", "fix_shape": "public-rename", "decision": "Change the call to the public SqlApp method (resolve_credential_ref, build_transform_input, extract_entity, transform_entity, resolve_output_path) and move test patches of the old name to the public one. Only when the app defines no method of either name; otherwise the site is the sql-app-override owner decision.", "why": "The deprecated names delegate to the public ones with the same signature, so a call changes nothing."}
 {"rule": "B001", "fix_shape": "base-to-app", "decision": "class X(App) in place of class X(BaseMetadataExtractor) when the app does not read the source with SQL through an SDK SQL client. First change every call of the SDK upload_to_atlan task to self.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)) and read the same count from its UploadOutput; a method of that name the app defines itself stays. Update tests that assert the task is inherited.", "why": "The base adds only the deprecated upload_to_atlan task. Reference shape: atlan-metabase-app app/connector.py MetabaseApp(App) and its self.upload call.", "interface": false}
 {"rule": "B001", "fix_shape": "transformer-wrapper", "decision": "Drop the TransformerInterface or QueryBasedTransformer base from a class that does its own mapping (no call reaches the base transform_metadata, no YAML template, no super() call). Delete an override that exists only to satisfy the base, with the error class and the test that only covered it. An annotation of the base becomes the app's own class.", "why": "Nothing the app runs uses the base, so removing it changes no output."}
 {"rule": "B008", "fix_shape": "workflow-identity", "decision": "get_workflow_id() becomes input.workflow_id when the task's typed Input is in scope, else self.context.workflow_id; get_workflow_run_id() becomes self.run_id or self.context.run_id. Keep every key, path and log field built from the value.", "why": "App.run_id is the workflow run id and the task context carries the same workflow and run ids the private helpers read, so the values do not change."}
@@ -444,5 +453,5 @@ asks.
 {"rule": "B001", "match": "PreflightStatus\\.PARTIAL", "block": "PreflightStatus.PARTIAL becomes READY or NOT_READY; either changes the status label the UI, Pulse and the Automation Engine show.", "brief": "READY (the gate behaves as today) or NOT_READY (the run blocks)? Either way keep the undetermined-readiness message."}
 {"rule": "B008", "fix_shape": "^no-public-equivalent$", "block": "The private name has no public equivalent, or the app rebinds it to change the owner's own behaviour. The end state is an ignore that names a tracking issue.", "brief": "Which issue asks the owner (atlanhq/application-sdk for an SDK name) for a public API? The ignore then reads '# conformance: ignore[B008] no public equivalent — tracked in <id>'."}
 {"rule": "B001", "fix_shape": "own-method-ignore", "suppress": true, "reason": "calls the app's own method of this name, not the SDK's deprecated one", "decision": "Add # conformance: ignore[B001] calls the app's own method of this name, not the SDK's deprecated one on the call line. Only when the receiver is self (or the app's own instance) and the first class in that class's base order that defines the method is an app class with no deprecated SDK base above it.", "why": "B001 matches method calls by name only; the rule names a reasoned ignore as the end state for a call that is not the SDK's."}
-{"rule": "B001", "fix_shape": "^sql-app-override$", "block": "The app defines _resolve_credential_ref or _build_transform_input (or the public name) on an SqlApp subclass. The SDK's run() and preflight gate call only the public name, so renaming the override makes the SDK start calling the app's body.", "brief": "Should the SDK call this app's credential or transform-input override (rename it to the public name), or should the override be removed?"}
+{"rule": "B001", "fix_shape": "^sql-app-override$", "block": "The app defines _resolve_credential_ref, _build_transform_input, _extract_entity, _transform_entity or _resolve_output_path (or the public name) on an SqlApp subclass. The SDK's run(), tasks and preflight gate call only the public name, so renaming the override makes the SDK start calling the app's body.", "brief": "Should the SDK call this app's override (rename it to the public name), or should the override be removed?"}
 ```

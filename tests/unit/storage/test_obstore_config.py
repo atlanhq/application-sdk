@@ -19,9 +19,12 @@ import pytest
 
 from application_sdk import _obstore_config
 from application_sdk._obstore_config import (
+    AzureStoreSettings,
+    GCSStoreSettings,
+    S3StoreSettings,
     _azure_config_has_explicit_credential,
+    build_azure_store,
     log_obstore_config,
-    make_azure_store,
     obstore_client_options,
     obstore_retry_config,
 )
@@ -218,16 +221,18 @@ class TestDurationEnvValues:
     def test_empty_timeout_constructs_an_s3_store(self) -> None:
         """The reproduction from the issue, in a fresh interpreter.
 
-        Before, ``make_s3_store`` raised ``Generic Config error: failed to parse
+        Before, ``build_s3_store`` raised ``Generic Config error: failed to parse
         "" as Duration`` whenever ``ATLAN_OBSTORE_TIMEOUT`` was set but empty.
         """
         import subprocess
         import sys
 
         code = (
-            "from application_sdk._obstore_config import make_s3_store\n"
-            "make_s3_store('probe-bucket', {'aws_region': 'us-east-1', "
-            "'aws_skip_signature': 'true'})\n"
+            "from application_sdk._obstore_config import S3StoreSettings, "
+            "build_s3_store\n"
+            "build_s3_store(S3StoreSettings(bucket='probe-bucket', "
+            "region='us-east-1', access_key_id='probe', "
+            "secret_access_key='probe'))\n"
         )
         env = {**os.environ, "ATLAN_OBSTORE_TIMEOUT": ""}
         result = subprocess.run(
@@ -580,19 +585,25 @@ class TestCloudPlumbsClientOptions:
 
 
 # ---------------------------------------------------------------------------
-# make_azure_store — ambient AZURE_* env isolation
+# build_azure_store — ambient AZURE_* env isolation
 # ---------------------------------------------------------------------------
+
+
+def _azure_settings(config: dict[str, str]) -> AzureStoreSettings:
+    """Settings whose obstore config is *config* (``azure_storage_<field>`` keys)."""
+    fields = {k.removeprefix("azure_storage_"): v for k, v in config.items()}
+    return AzureStoreSettings(container="container", **fields)
 
 
 class TestAzureAmbientEnvIsolation:
     """obstore reads ``AZURE_*`` from the environment at construction and lets a
-    host-injected value outrank the caller's explicit credential. ``make_azure_store``
+    host-injected value outrank the caller's explicit credential. ``build_azure_store``
     must strip the ambient env while building from an explicit credential, and leave it
     in place for the managed/workload-identity case.
     """
 
     def _build_and_capture(self, config: dict | None) -> dict:
-        """Build via make_azure_store with ``obstore.store.AzureStore`` stubbed; return
+        """Build via build_azure_store with ``obstore.store.AzureStore`` stubbed; return
         the AZURE_* env visible *during* construction plus the kwargs passed to obstore."""
         captured: dict = {}
 
@@ -604,7 +615,7 @@ class TestAzureAmbientEnvIsolation:
             return MagicMock(name="AzureStore")
 
         with patch("obstore.store.AzureStore", new=fake_azure_store):
-            make_azure_store("container", config)
+            build_azure_store(_azure_settings(config))
         return captured
 
     def test_explicit_account_key_strips_ambient_env_during_build(self, monkeypatch):
@@ -656,12 +667,10 @@ class TestAzureAmbientEnvIsolation:
 
         with patch("obstore.store.AzureStore", new=boom):
             with pytest.raises(RuntimeError, match="construction failed"):
-                make_azure_store(
-                    "container",
-                    {
-                        "azure_storage_account_name": "a",
-                        "azure_storage_account_key": "k",
-                    },
+                build_azure_store(
+                    AzureStoreSettings(
+                        container="container", account_name="a", account_key="k"
+                    )
                 )
         assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
 
@@ -707,10 +716,12 @@ class TestAzureAmbientEnvIsolation:
 
         fake_provider = MagicMock(name="cert-credential-provider")
         with patch("obstore.store.AzureStore", new=fake_azure_store):
-            make_azure_store(
-                "container",
-                {"azure_storage_account_name": "acct"},
-                credential_provider=fake_provider,
+            build_azure_store(
+                AzureStoreSettings(
+                    container="container",
+                    account_name="acct",
+                    credential_provider=fake_provider,
+                )
             )
 
         assert captured["azure_env"] == {}, (
@@ -726,7 +737,7 @@ class TestAzureAmbientEnvIsolation:
 # ---------------------------------------------------------------------------
 # Config passthrough — regression guard for binding.py / cloud.py
 #
-# These tests verify that make_s3_store / make_gcs_store forward the caller's
+# These tests verify that build_s3_store / build_gcs_store forward the caller's
 # config dict to the obstore constructor without dropping or mutating keys.
 # The Rust-layer credential precedence (explicit config vs. ambient env vars)
 # was confirmed by live requests during the PR audit but cannot be exercised
@@ -737,7 +748,7 @@ class TestAzureAmbientEnvIsolation:
 class TestS3ConfigPassthrough:
     """Regression guard: the config dict reaches S3Store unchanged.
 
-    These tests assert that make_s3_store passes the caller's config dict to the
+    These tests assert that build_s3_store passes the caller's config dict to the
     S3Store constructor without dropping or mutating keys.  They do NOT verify the
     Rust-layer credential precedence (explicit config vs. ambient env vars) — that
     behaviour is tested by integration tests against a real or mocked S3 endpoint.
@@ -749,15 +760,15 @@ class TestS3ConfigPassthrough:
 
         with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
-            from application_sdk._obstore_config import make_s3_store
+            from application_sdk._obstore_config import build_s3_store
 
-            make_s3_store(
-                "test-bucket",
-                {
-                    "aws_access_key_id": "CONFIG-ACCESS-KEY",
-                    "aws_secret_access_key": "CONFIG-SECRET-KEY",
-                    "aws_region": "us-east-1",
-                },
+            build_s3_store(
+                S3StoreSettings(
+                    bucket="test-bucket",
+                    access_key_id="CONFIG-ACCESS-KEY",
+                    secret_access_key="CONFIG-SECRET-KEY",
+                    region="us-east-1",
+                )
             )
 
         config = mock_s3.call_args.kwargs["config"]
@@ -770,9 +781,9 @@ class TestS3ConfigPassthrough:
 
         with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
-            from application_sdk._obstore_config import make_s3_store
+            from application_sdk._obstore_config import build_s3_store
 
-            make_s3_store("test-bucket", None)
+            build_s3_store(S3StoreSettings(bucket="test-bucket"))
 
         assert mock_s3.call_args.kwargs["config"] is None
 
@@ -780,7 +791,7 @@ class TestS3ConfigPassthrough:
 class TestGCSConfigPassthrough:
     """Regression guard: the config dict reaches GCSStore unchanged.
 
-    These tests assert that make_gcs_store passes the caller's config dict to the
+    These tests assert that build_gcs_store passes the caller's config dict to the
     GCSStore constructor without dropping or mutating keys.  They do NOT verify the
     Rust-layer credential precedence (SA key in config vs. ADC / Workload Identity) —
     that behaviour is tested by integration tests against a real or mocked GCS endpoint.
@@ -791,11 +802,13 @@ class TestGCSConfigPassthrough:
 
         with patch("obstore.store.GCSStore") as mock_gcs:
             mock_gcs.return_value = MagicMock()
-            from application_sdk._obstore_config import make_gcs_store
+            from application_sdk._obstore_config import build_gcs_store
 
-            make_gcs_store(
-                "test-bucket",
-                {"google_service_account_key": '{"type":"service_account"}'},
+            build_gcs_store(
+                GCSStoreSettings(
+                    bucket="test-bucket",
+                    service_account_key='{"type":"service_account"}',
+                )
             )
 
         config = mock_gcs.call_args.kwargs["config"]
@@ -812,8 +825,70 @@ class TestGCSConfigPassthrough:
 
         with patch("obstore.store.GCSStore") as mock_gcs:
             mock_gcs.return_value = MagicMock()
-            from application_sdk._obstore_config import make_gcs_store
+            from application_sdk._obstore_config import build_gcs_store
 
-            make_gcs_store("test-bucket", None)
+            build_gcs_store(GCSStoreSettings(bucket="test-bucket"))
 
         assert mock_gcs.call_args.kwargs["config"] is None
+
+
+class TestStoreSettingsRepr:
+    """A logged settings object must not carry a credential."""
+
+    def test_s3_settings_repr_hides_credentials(self) -> None:
+        text = repr(
+            S3StoreSettings(
+                bucket="b",
+                access_key_id="AKID-EXAMPLE",
+                secret_access_key="secret-example",
+                session_token="token-example",
+            )
+        )
+        assert "b" in text
+        for secret in ("AKID-EXAMPLE", "secret-example", "token-example"):
+            assert secret not in text
+
+    def test_azure_and_gcs_settings_repr_hide_credentials(self) -> None:
+        az = repr(
+            AzureStoreSettings(
+                container="c",
+                account_key="key-example",
+                sas_key="sas-example",
+                client_secret="cs-example",
+            )
+        )
+        gcs = repr(GCSStoreSettings(bucket="b", service_account_key="sa-example"))
+        for secret in ("key-example", "sas-example", "cs-example"):
+            assert secret not in az
+        assert "sa-example" not in gcs
+
+
+class TestDeprecatedMakeStore:
+    """The pre-settings ``make_*_store(bucket, config)`` names still work.
+
+    They pass the raw config through untouched and warn, naming the
+    ``build_*_store`` replacement and the v4.0.0 removal.
+    """
+
+    @pytest.mark.parametrize(
+        ("name", "cls", "first_kw"),
+        [
+            ("make_s3_store", "S3Store", "bucket"),
+            ("make_gcs_store", "GCSStore", "bucket"),
+            ("make_azure_store", "AzureStore", "container_name"),
+        ],
+    )
+    def test_legacy_signature_passes_config_through_and_warns(
+        self, name: str, cls: str, first_kw: str
+    ) -> None:
+        config = {"probe_key": "probe-value"}
+        provider = MagicMock(name="provider")
+        with patch(f"obstore.store.{cls}") as mock_cls:
+            with pytest.warns(DeprecationWarning, match=r"build_.*v4\.0\.0"):
+                getattr(_obstore_config, name)(
+                    "target", config, label="legacy", credential_provider=provider
+                )
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs[first_kw] == "target"
+        assert kwargs["config"] == config
+        assert kwargs["credential_provider"] is provider

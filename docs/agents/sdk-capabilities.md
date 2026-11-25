@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    18a0b106336073703b1c919d9d9efa7616368a66
-source-date:   2026-11-25T22:53:31+05:30
+source-sha:    45a47dded962bd3e291c56c54e6fe3daa9f33e5b
+source-date:   2026-11-25T19:47:41Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1226,9 +1226,9 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `canonical_type_str`
 
 - **Import:** `from application_sdk.contracts.compat import canonical_type_str`
-- **Signature:** `canonical_type_str(tp: object) -> str`
+- **Signature:** `canonical_type_str(tp: object)`
 - **Summary:** Return a normalized string representation of a type annotation.
-- **Defined in:** `application_sdk/contracts/compat.py`
+- **Defined in:** `application_sdk/contracts/base.py`
 
 #### `check_backwards_compatible`
 
@@ -2899,7 +2899,7 @@ Dev entry point — run_dev_combined() and AppConfig for local execution and con
 - **Import:** `from application_sdk.main import run_dev_combined`
 - **Signature:** `run_dev_combined(app_class: type[App], *, ...)`
 - **Summary:** Run worker + handler in a single process for local development.
-- **Defined in:** `application_sdk/main.py`
+- **Defined in:** `application_sdk/dev/_runner.py`
 
 ## `application_sdk.observability`
 
