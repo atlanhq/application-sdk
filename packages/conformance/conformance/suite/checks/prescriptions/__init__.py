@@ -64,7 +64,7 @@ Currently implemented:
 * ``P059`` JsonEncodedContractField — a ``str`` / ``list[str]`` contract field
   whose value the app encodes or decodes as JSON.  Cross-file.
 * ``P068`` SqlAppRunOverrideUnverified — a ``run()`` on an ``SqlApp`` subclass
-  that calls neither ``super().run()`` nor ``finalize_extraction``.
+  that awaits neither ``super().run()`` nor ``finalize_extraction``.
   Cross-file; silent below the SDK release that ships ``finalize_extraction``.
 
 Inline suppression
@@ -346,7 +346,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     findings.extend(check_p059(file_trees, file_directives, root))
 
     # Pass 7 — emit P068 (SqlApp.run() replacement that never verifies)
-    findings.extend(check_p068(file_records, by_name, file_directives, root))
+    findings.extend(check_p068(file_records, file_directives, root))
 
     return findings
 

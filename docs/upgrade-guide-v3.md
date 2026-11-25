@@ -307,8 +307,10 @@ class MyIncrementalExtractor(SqlApp):
 
 `SqlApp` does not provide the v2 4-phase sequence (marker → fetch → diff →
 finalize). Write the phases the connector needs as `@task` methods and call
-them from `run()`. Build each entity's tasks on `extract_entity` /
-`transform_entity`, and end the `run()` in `finalize_extraction`, which
+them from `run()`. With SDK ≥ 3.60.0, build each entity's tasks on
+`extract_entity` / `transform_entity` (older SDKs name them
+`_extract_entity` / `_transform_entity`), and end the `run()` in
+`finalize_extraction` (SDK ≥ 3.33.2), which
 verifies the transformed tree before publish reads it (conformance rule P068
 flags a `run()` that calls neither it nor `super().run()`).
 

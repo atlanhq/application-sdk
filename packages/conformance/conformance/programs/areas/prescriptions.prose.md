@@ -1025,8 +1025,9 @@ task it calls before drafting.  For the human reading the brief (in the
 class docstring in `application_sdk/templates/sql_app.py`.
 
 - **P068 SqlAppRunOverrideUnverified** — a `run()` on an `SqlApp` subclass
-  calls neither `super().run()` (or `<Ancestor>.run(self, ...)`) nor
-  `finalize_extraction`, so the `transformed_data_prefix` it returns is never
+  awaits neither `super().run()` (or `<Ancestor>.run(self, ...)`) nor
+  `self.finalize_extraction` in its own body (an un-awaited call, or one in a
+  nested function, does not count), so the `transformed_data_prefix` it returns is never
   checked against what the transforms declared.  Do not propose
   `super().run()`: replacing `run()` is a documented path.  Draft: collect
   every `TransformOutput` the override's `transform_*` calls return, build the

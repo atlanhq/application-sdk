@@ -5086,3 +5086,65 @@ def test_p068_suppressed_by_directive(tmp_path: Path) -> None:
 
 def test_p068_is_warn_tier() -> None:
     assert get_rule("P068").tier is EnforcementTier.WARN
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Not awaited: builds a coroutine and verifies nothing.
+        "        self.finalize_extraction(base, [out])\n        return base\n",
+        "        super().run(input)\n        return None\n",
+        # In a nested scope run() never calls.
+        "        async def later():\n"
+        "            return await self.finalize_extraction(base)\n"
+        "        return None\n",
+        "        class Helper:\n"
+        "            async def run(self):\n"
+        "                return await super().run()\n"
+        "        return None\n",
+        "        f = lambda: self.finalize_extraction(base)\n        return None\n",
+        # Not the app's own finalize / run.
+        "        return await other.finalize_extraction(base)\n",
+        "        return await client.run(input)\n",
+        "        return await SqlApp.run(other, input)\n",
+    ],
+)
+def test_p068_fires_when_the_verification_is_inert(tmp_path: Path, body: str) -> None:
+    src = (
+        _SQL_IMPORT
+        + "class Connector(SqlApp):\n    async def run(self, input):\n"
+        + body
+    )
+    assert len(_p068(tmp_path, {"app/connector.py": src})) == 1
+
+
+def test_p068_resolves_a_colliding_base_name_by_import(tmp_path: Path) -> None:
+    """An unrelated ``Base`` scanned first must not hide the imported one."""
+    files = {
+        "app/aaa.py": "class Base:\n    pass\n",
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    [finding] = _p068(tmp_path, files)
+    assert finding.file == "app/connector.py"
+
+
+def test_p068_does_not_follow_a_colliding_base_it_cannot_place(
+    tmp_path: Path,
+) -> None:
+    """Two ``Base`` classes and no import naming one: a miss, not a guess."""
+    files = {
+        "app/aaa.py": "class Base:\n    pass\n",
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    assert _p068(tmp_path, files) == []

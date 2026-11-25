@@ -1073,14 +1073,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "source (FND-4686)."
         ),
         short_description=(
-            "SqlApp subclass's run() calls neither super().run() nor "
+            "SqlApp subclass's run() awaits neither super().run() nor "
             "finalize_extraction()"
         ),
         full_description=(
             "A class that subclasses ``SqlApp`` (imported from\n"
             "``application_sdk``, directly or through the app's own bases)\n"
-            "defines ``run()``, and nothing in its body calls ``super().run()``,\n"
-            "``<Ancestor>.run(self, ...)`` or ``finalize_extraction(...)``.\n"
+            "defines ``run()``, and its body never awaits ``super().run()``,\n"
+            "``<Ancestor>.run(self, ...)`` or ``self.finalize_extraction(...)``.\n"
+            "A call that is not awaited, or one inside a nested function or\n"
+            "class, does not count: it verifies nothing when ``run()`` returns.\n"
             "\n"
             "``SqlApp.run()`` ends in ``finalize_extraction``, which asserts that\n"
             "every ``transformed_file`` the transforms declared is present under\n"

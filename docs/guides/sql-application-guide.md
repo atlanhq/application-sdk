@@ -481,8 +481,9 @@ class PostgresApp(SqlMetadataExtractor):
         return result
 ```
 
-On `SqlApp`, a custom entity is an `extract_*` / `transform_*` task pair whose
-bodies call `extract_entity` and `transform_entity`. Those two own the
+On `SqlApp` (SDK ≥ 3.60.0), a custom entity is an `extract_*` /
+`transform_*` task pair whose bodies call `extract_entity` and
+`transform_entity`. Those two own the
 streaming, the event-loop offload and the canonical `FileReference` keys
 publish reads, so call them rather than writing the files yourself. A
 `run()` that drives the extra pair folds its output in with
@@ -538,7 +539,8 @@ class PostgresApp(SqlApp):
 A `run()` that replaces `SqlApp.run()` instead of calling `super().run()` must
 still end in `finalize_extraction`; conformance rule P068 flags one that does
 not. `_extract_entity`, `_transform_entity` and `_resolve_output_path` are the
-deprecated names for these methods and are removed in v4.0.0.
+names these methods had before 3.60.0; they are deprecated and removed in
+v4.0.0.
 
 ## Typed Contracts
 

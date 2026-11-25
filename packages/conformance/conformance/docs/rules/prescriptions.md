@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**59 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), `suite.checks.run_scratch` (P067, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**59 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059; P068 gated on the app's locked SDK), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), `suite.checks.run_scratch` (P067, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -3572,7 +3572,7 @@ deliberate exception and stays visible in SARIF.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.62.0
 
-> SqlApp subclass's run() calls neither super().run() nor finalize_extraction()
+> SqlApp subclass's run() awaits neither super().run() nor finalize_extraction()
 
 **Rationale:** SqlApp.run() ends in finalize_extraction, which checks that every transformed file the
 transforms declared is under the prefix handed to publish. A run() that replaces it
@@ -3590,8 +3590,10 @@ like a source with none, and publish archives those assets as removed from sourc
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A class that subclasses `SqlApp` (imported from `application_sdk`, directly or through
-the app's own bases) defines `run()`, and nothing in its body calls `super().run()`,
-`<Ancestor>.run(self, ...)` or `finalize_extraction(...)`.
+the app's own bases) defines `run()`, and its body never awaits `super().run()`,
+`<Ancestor>.run(self, ...)` or `self.finalize_extraction(...)`. A call that is not
+awaited, or one inside a nested function or class, does not count: it verifies nothing
+when `run()` returns.
 
 `SqlApp.run()` ends in `finalize_extraction`, which asserts that every
 `transformed_file` the transforms declared is present under the
