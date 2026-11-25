@@ -43,7 +43,7 @@ from typing import Callable, Optional
 # that cannot tell "this repo has no renovate.json" from "the API would not
 # answer" silently shrinks the fleet, and a roster that quietly lost repos is a
 # deletion criterion in sweep_unlisted mode.
-RunFn = Callable[[list], tuple]
+RunFn = Callable[[list[str]], tuple[int, str, str]]
 
 # Every consumer's renovate.json extends the shared preset via this path; its
 # presence is the definitive "on the fleet Renovate policy" signal.
@@ -73,7 +73,7 @@ class DiscoveryError(RuntimeError):
     """
 
 
-def _run_gh(args: list) -> tuple:
+def _run_gh(args: list[str]) -> tuple[int, str, str]:
     """Run `gh` and return (returncode, stdout, stderr) for the caller to judge.
 
     Deliberately does no interpretation: only the caller knows whether a
@@ -98,22 +98,20 @@ def _is_not_found(stderr: str) -> bool:
     return "HTTP 404" in stderr
 
 
-def parse_repos(raw_output: str) -> list:
-    """Parse a JSON array of repo names, tolerating empty/malformed output."""
-    try:
-        repos = json.loads(raw_output)
-    except json.JSONDecodeError:
-        return []
-    return repos if isinstance(repos, list) else []
-
-
-def list_candidate_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) -> list:
+def list_candidate_repos(
+    owner: str, name_pattern: str, run: RunFn = _run_gh
+) -> list[str]:
     """All non-archived `owner` repos whose bare name matches `name_pattern`, as
     'owner/name'. Uses `gh repo list` (deterministic), not code search.
 
-    Raises DiscoveryError if the listing fails. There is no such thing as a
-    partial answer here: an org with no repos is not a case that occurs, so an
-    empty or unreadable listing is always a token/network problem.
+    Raises DiscoveryError if the listing fails or its output is not a JSON
+    array. There is no such thing as a partial answer here: an org with no repos
+    is not a case that occurs, so an unreadable listing is always a
+    token/network problem, never an empty fleet.
+
+    This is the one definition of "which repos are the fleet": every fleet-wide
+    script lists through it rather than re-issuing `gh repo list`, so a change
+    to the pattern or the cap reaches all of them at once.
     """
     code, raw, stderr = run(
         [
@@ -131,7 +129,12 @@ def list_candidate_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) ->
     )
     if code != 0:
         raise DiscoveryError(f"gh repo list {owner} failed: {stderr.strip()}")
-    all_repos = parse_repos(raw)
+    try:
+        all_repos = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DiscoveryError(f"gh repo list {owner} returned non-JSON output") from exc
+    if not isinstance(all_repos, list):
+        raise DiscoveryError(f"gh repo list {owner} returned a non-list payload")
     if len(all_repos) >= REPO_LIST_LIMIT:
         print(
             f"::warning::gh repo list returned {len(all_repos)} repos, hitting the "
@@ -140,7 +143,8 @@ def list_candidate_repos(owner: str, name_pattern: str, run: RunFn = _run_gh) ->
             file=sys.stderr,
         )
     pat = re.compile(name_pattern)
-    return [r for r in all_repos if pat.match(r.split("/", 1)[-1])]
+    names = [str(r) for r in all_repos]
+    return [r for r in names if pat.match(r.split("/", 1)[-1])]
 
 
 def read_renovate_config(repo: str, run: RunFn = _run_gh) -> Optional[str]:
