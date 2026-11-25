@@ -170,13 +170,21 @@ deleted. `detect` does not scan `tests/`; search `app` and `tests` for every
 symbol in `also_clears` too. Suppression form, on the line or a comment-only
 line directly above: `# conformance: ignore[<ID>] <reason>`.
 
+The private `get_object_store_prefix` / `build_output_path` imports and
+private non-storage names such as `_HTTP_POOL_LIMITS` stay with
+`migrate-deprecated-symbols`: this skill removes such a call only when the
+shared path it builds goes. A `build_output_path` path that feeds a published
+key keeps its run id; dropping it changes the key (principle 3).
+
 ## Before you change anything
 
 1. Run the skills before this one in
    `$(atlan-application-sdk-conformance skills-dir)/order.txt` first. An app
    below SDK 3.20.0 must cross the daft cliff first (`migrate-off-daft`).
 2. Baseline outside the repo:
-   `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044,B001,B008 --exit-zero --output "$TMPDIR/before.sarif"`,
+   `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044 --exit-zero --output "$TMPDIR/before.sarif"`
+   (with B001 / B008 sites routed here, also
+   `atlan-application-sdk-conformance detect --rule B001,B008 --exit-zero --output "$TMPDIR/before-routed.sarif"`),
    and the tests (`UV_FROZEN=1 uv sync --all-groups --all-extras`, then
    `uv run --no-sync pytest tests/unit tests/integration`). Record the tests
    that already fail.

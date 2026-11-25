@@ -88,8 +88,13 @@ The rule definitions own what "correct" is: each finding carries its rule's
   formatter. Apply it only when `uv.lock` pins `requires.package` at or above
   `requires.min`. A finding without the property is never a safe swap.
 - B001 matches method calls by name only, so a call of the app's own method
-  of the same name fires it: a false positive. B008 never fires on relative
-  imports, on names the repo defines, or on dunders.
+  of the same name fires it: a false positive. Its ignore is the
+  `own-method-ignore` row's text, word for word; the lane refuses any other
+  wording. A call inside a class on the v2 SQL extractor base is not ignored
+  even when the class defines the method: the upgrade-v3 move makes that
+  class an `SqlApp`, and the same name then overrides the SDK's method
+  (`sql-app-override`). Hold it with the class (`sql-extractor`). B008 never
+  fires on relative imports, on names the repo defines, or on dunders.
 - `detect` does not scan `tests/`, but tests break on the same changes. Find
   them: `grep -rnE 'application_sdk[^ ]*\._|from application_sdk[^ ]* import .*\b_[A-Za-z]|PreflightStatus\.PARTIAL|in PreflightStatus|list\(PreflightStatus' tests/`,
   plus every symbol the app findings named and every symbol in this skill's
@@ -129,8 +134,8 @@ The rule definitions own what "correct" is: each finding carries its rule's
 
 End state per site: the replacement the notice names, where it does the same
 thing (principle 1); a flagged import with no reader in `app/`, `tests/`,
-generated manifests or `contract/app.pkl` deleted; a reasoned ignore for a
-false positive; otherwise held (principles 3 to 5). An entry whose `removal_version` is at or below the
+generated manifests or `contract/app.pkl` deleted; the `own-method-ignore`
+row's ignore for a false positive; otherwise held (principles 3 to 5). An entry whose `removal_version` is at or below the
 SDK version in `uv.lock` goes first: it can disappear in any release.
 
 ### B008 — private name the app does not own
