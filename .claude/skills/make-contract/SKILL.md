@@ -42,9 +42,9 @@ it as the source of truth; trust `README.md` + `CLAUDE.md` + `CHANGELOG.md` +
 ## Hard Rules
 
 - Treat `atlanhq/application-sdk` as the canonical source for this skill. The
-  repo-local copies live at `.agents/skills/make-contract/SKILL.md` and
-  `.claude/skills/make-contract/SKILL.md`; mirror any edit between them
-  byte-for-byte, and do not add nested `make-contract` copies under
+  repo-local copy lives at `.claude/skills/make-contract/SKILL.md`;
+  `.agents/skills/make-contract` is a symlink to it, so edit only the
+  `.claude` copy. Do not add nested `make-contract` copies under
   `contract-toolkit/` or app repos.
 - **`App.pkl` is the canonical template. `NativeApp.pkl` and
   `NativeAppBundle.pkl` are frozen legacy.** Author every new contract by

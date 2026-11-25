@@ -153,7 +153,7 @@ this as the auditable-backlog mechanism.
 self-describing without joining against the category column. When all subclasses
 share a sibling module, use that module's domain as a uniform infix in every
 subclass code (`_SQL_`, `_AWS_`, `_REDIS_`, connector name, etc.). Examples:
-every subclass in `application_sdk/clients/_sql_errors.py` uses `_SQL_` —
+every subclass in `application_sdk/clients/sql_errors.py` uses `_SQL_` —
 `INTERNAL_SQL_ENGINE_NOT_INITIALIZED`, `AUTH_SQL_CLIENT_FAILED`,
 `UNIMPLEMENTED_SQL_CURSOR_TYPE`. Same rule applies to a connector app's
 `app/failures.py` — use the source name as the infix
@@ -172,7 +172,7 @@ to one line. Raise sites pass only what is genuinely dynamic (typically
 default-less fields like `message: str` (Python 3.10+).
 
 ```python
-# Subclass — typically in a sibling module (e.g. application_sdk/clients/_sql_errors.py).
+# Subclass — typically in a sibling module (e.g. application_sdk/clients/sql_errors.py).
 @dataclass(kw_only=True)
 class EngineNotInitializedError(InternalError):
     code: ClassVar[str] = "INTERNAL_ENGINE_NOT_INITIALIZED"
@@ -193,7 +193,7 @@ covering three distinct failure modes (same pattern applies to an SDK sibling
 `_<area>_errors.py` and to a connector app's `app/failures.py`):
 
 ```python
-# application_sdk/clients/_sql_errors.py (or app/failures.py for an app)
+# application_sdk/clients/sql_errors.py (or app/failures.py for an app)
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
