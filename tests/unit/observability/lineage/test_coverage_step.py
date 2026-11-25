@@ -147,6 +147,7 @@ def rows(out: Path) -> dict[str, dict]:
 def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
     recorder = CoverageRecorder()
     recorder.missing(f"{CONN}/why", CustomSqlParserFailure, {"line": 3})
+    recorder.missing(f"{CONN}/why", UpstreamIdentityTooSparse)  # a later fallback
     recorder.missing(f"{CONN}/pending", CustomSqlParserFailure)  # another path built it
     recorder.unusable(f"{CONN}/fallback", CustomSqlParserFailure)
     recorder.partial(f"{CONN}/sparse", UpstreamIdentityTooSparse)
@@ -183,6 +184,10 @@ def test_rows_come_from_the_output_and_the_recorder(run_files, tmp_path):
         pending["fieldsPending"],
     ) == (3, 2, 1)
     assert pending["failedAttempts"] == ["CUSTOM_SQL_PARSER_FAILURE"]
+    assert got["why"]["failedAttempts"] == [
+        "CUSTOM_SQL_PARSER_FAILURE",
+        "UPSTREAM_IDENTITY_TOO_SPARSE",
+    ]
     assert pending["attributes"] == {"kind": "published"}
     assert pending["fieldReasons"] == {"FIELD_X": 2}
     assert got["why"]["reasonDetails"] == {"CUSTOM_SQL_PARSER_FAILURE": {"line": 3}}

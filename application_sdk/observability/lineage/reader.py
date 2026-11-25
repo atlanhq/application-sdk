@@ -30,6 +30,11 @@ from application_sdk.observability.lineage.identity import (
     IDENTITY_SCHEMA_VERSION,
     components_hash,
 )
+from application_sdk.observability.lineage.taxonomy import (
+    GenericConnectionType,
+    LineageReason,
+    NonSqlSource,
+)
 
 __all__ = [
     "SQL_SYSTEM_SCHEMAS",
@@ -99,6 +104,10 @@ class CoverageSpec:
     #: Connector types too generic to resolve (``odbc``, ``jdbc`` and the like).
     generic_connectors: frozenset[str] = frozenset()
     system_schemas: frozenset[str] = SQL_SYSTEM_SCHEMAS
+    #: The reason for an asset whose refs are all on sources the lookup can't
+    #: resolve, and for one on a generic connector. An app may restate either.
+    non_sql_reason: type[LineageReason] = NonSqlSource
+    generic_reason: type[LineageReason] = GenericConnectionType
     #: Recorder key for an asset: ``(typeName, qualifiedName) -> key``.
     key_for: Callable[[str, str], str] = _qualified_name_key
 
