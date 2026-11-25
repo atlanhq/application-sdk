@@ -20,12 +20,14 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from typing import cast
 
 # The gate is imported only so the drift test can hold its copy of
 # check_run_age_key against the guard's; production never imports across scripts.
 import poll_check_runs_gate as gate
 import pytest
 import yaml
+from _gh_refs import TransportError
 from e2e_dispatch_guard import (
     _CHECKS_MAX_PAGES,
     _PASSING_CONCLUSIONS,
@@ -74,13 +76,13 @@ class FakeHTTP:
     """
 
     def __init__(self) -> None:
-        self.routes: dict[tuple[str, str], list[tuple]] = {}
+        self.routes: dict[tuple[str, str], list[tuple[object, ...]]] = {}
         self.calls: list[tuple[str, str]] = []
         self.payloads: list[dict] = []
         self.cmds: list[list[str]] = []
         self.inputs: list[str | None] = []
 
-    def route(self, method: str, contains: str, *responses: tuple) -> None:
+    def route(self, method: str, contains: str, *responses: tuple[object, ...]) -> None:
         self.routes[(method, contains)] = list(responses)
 
     def __call__(self, cmd: list[str], **kwargs):
@@ -96,7 +98,7 @@ class FakeHTTP:
                 continue
             entry = responses[0] if len(responses) == 1 else responses.pop(0)
             status, body = entry[0], entry[1]
-            headers = entry[2] if len(entry) > 2 else {}
+            headers = cast(dict[str, str], entry[2]) if len(entry) > 2 else {}
             payload = "" if body is None else json.dumps(body)
             header_lines = "".join(f"\r\n{k}: {v}" for k, v in headers.items())
             return _completed(f"HTTP/2 {status}{header_lines}\r\n\r\n{payload}")
@@ -117,7 +119,7 @@ class _completed:
 def http(monkeypatch: pytest.MonkeyPatch) -> FakeHTTP:
     monkeypatch.setenv("GH_TOKEN", "x")
     fake = FakeHTTP()
-    monkeypatch.setattr("e2e_dispatch_guard.run", fake)
+    monkeypatch.setattr("_gh_refs.run", fake)
     return fake
 
 
@@ -203,7 +205,9 @@ def test_the_app_slug_cannot_produce_a_ref_git_rejects() -> None:
     assert slug("My App/Name") == "my-app-name"
     assert ".." not in slug("a..b")
     assert not slug("thing.lock").endswith(".lock")
-    assert slug("///") == "app"
+    # An app name with nothing left still names a component; the guard spells
+    # the fallback "app" rather than _gh_refs' "default".
+    assert claim_ref("///", SHA) == f"refs/e2e-dispatch/app/{SHA}"
 
 
 def test_sha_of_reads_the_last_component() -> None:
@@ -470,10 +474,11 @@ def test_an_unreadable_listing_never_reclaims(http: FakeHTTP) -> None:
 
 
 def test_the_guard_and_the_gate_order_check_runs_identically() -> None:
-    """The two copies of check_run_age_key must agree, or the guard would judge a
-    retry against a different attempt than the gate reports. Copies rather than a
-    shared import because nothing in .github/scripts imports a sibling script;
-    this is what stops them drifting."""
+    """check_run_age_key must agree between the two, or the guard would judge a
+    retry against a different attempt than the gate reports. One definition,
+    imported (FND-4925) — asserted by identity so a re-inlined copy fails here
+    rather than waiting to drift."""
+    assert check_run_age_key is gate.check_run_age_key
     table = [
         {"started_at": "2026-08-21T00:53:41Z", "id": 100},
         {"started_at": "2026-08-21T01:41:00Z", "id": 200},
@@ -798,13 +803,49 @@ def test_a_transport_failure_still_dispatches(
     monkeypatch.setenv("GH_TOKEN", "x")
     monkeypatch.setattr("time.sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(
-        "e2e_dispatch_guard.run",
+        "_gh_refs.run",
         lambda *_a, **_k: _completed("", returncode=60, stderr="SSL problem"),
     )
     out = _outputs(tmp_path, monkeypatch)
 
     assert main(_argv()) == 0
     assert _read(out)["claimed"] == "true"
+
+
+def test_an_unparseable_answer_still_dispatches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The shared transport raises ``TransportError`` — a ``SystemExit``, the
+    lease's posture — on an answer it cannot parse. Here that must still read as
+    "guard unavailable", not exit the step before the dispatch."""
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(
+        "_gh_refs.run", lambda *_a, **_k: _completed("<html>proxy error</html>")
+    )
+    out = _outputs(tmp_path, monkeypatch)
+
+    assert main(_argv()) == 0
+    assert _read(out)["claimed"] == "true"
+    assert _read(out)["state"] == "disabled"
+
+
+def test_a_transport_failure_in_the_prune_keeps_the_claim(
+    http: FakeHTTP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prune is housekeeping. A transport failure inside it must neither
+    exit the step nor undo the claim this run already holds."""
+    out = _outputs(tmp_path, monkeypatch)
+    http.route("GET", "/git/ref/", (404, {"message": "Not Found"}))
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    http.route("POST", "/git/refs", (201, {"ref": REF}))
+
+    def _unreachable(*_a, **_k):
+        raise TransportError("curl failed")
+
+    monkeypatch.setattr("e2e_dispatch_guard.list_claims", _unreachable)
+
+    assert main(_argv()) == 0
+    assert _read(out)["state"] == "claimed"
 
 
 def test_a_missing_token_still_dispatches(

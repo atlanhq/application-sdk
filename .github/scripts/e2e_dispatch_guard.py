@@ -164,10 +164,26 @@ import base64
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
+
+# Sibling .github/scripts modules — imported, not copied (FND-4925). The ref
+# transport used to be a third copy here, and it drifted: its slug kept "." after
+# ``_gh_refs`` dropped it, and its retries were silent where the shared one warns.
+# The guard runs from a full checkout (``.github/actions/e2e-apps``), so the
+# siblings are on disk; the insert makes `-m`/cwd invocations work too.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _gh_refs import (
+    TransportError,
+    _rate_limited,
+    delete_ref,
+    gh_request,
+    slug,
+)
+from poll_check_runs_gate import check_run_age_key
 
 # Outside refs/heads and refs/tags on purpose: a branch would fire `push` events
 # and show up in the branch list, a tag would pollute the release surface. A
@@ -178,12 +194,6 @@ REF_NAMESPACE = "e2e-dispatch"
 # in_progress, requested, waiting, pending — is treated as live, so an
 # unfamiliar future status errs towards leaving a peer's claim alone.
 _COMPLETED = "completed"
-
-# Transport-level retries (curl could not complete the request, or GitHub
-# answered 5xx). Few and short: this runs once per dispatch, not in a poll loop,
-# and every failure path here fails open anyway.
-_TRANSPORT_ATTEMPTS = 3
-_TRANSPORT_BACKOFF_SECONDS = 2
 
 # Pruning budget. Five pages of 100 covers ~500 claims for one app, which is far
 # past the steady state the prune itself maintains; the delete cap bounds the
@@ -205,26 +215,7 @@ _CHECKS_MAX_PAGES = 10
 # action_required, stale — is a question still worth re-asking.
 _PASSING_CONCLUSIONS = frozenset({"success", "neutral", "skipped"})
 
-_SAFE_SLUG_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._-")
 _SHA_RE = re.compile(r"\A[0-9a-f]{7,64}\Z")
-
-
-def slug(value: str, *, default: str = "app") -> str:
-    """Reduce a free-text key to one safe git ref path component.
-
-    Deliberately narrower than git's own rules: the app name comes from a
-    workflow input, and a ref name is the one place where "mostly valid" turns
-    into a 422 nobody expected — and here a 422 *means something else*.
-    """
-    cleaned = "".join(
-        char if char in _SAFE_SLUG_CHARS else "-" for char in value.strip().lower()
-    )
-    while ".." in cleaned:
-        cleaned = cleaned.replace("..", "-")
-    cleaned = cleaned.strip("-._")
-    while cleaned.endswith(".lock"):
-        cleaned = cleaned[: -len(".lock")].strip("-._")
-    return cleaned or default
 
 
 def claim_ref(app: str, sha: str) -> str:
@@ -232,8 +223,13 @@ def claim_ref(app: str, sha: str) -> str:
 
     App first, SHA second, so ``git/matching-refs/e2e-dispatch/<app>`` lists one
     app's claims and the prune never has to walk the whole namespace.
+
+    The app goes through ``_gh_refs.slug``, the one ref-component normaliser.
+    No connector repository name contains a character it rewrites;
+    ``test_e2e_dispatch_recheck`` holds that over the fleet, because the
+    connector-side recheck rebuilds this ref without the slug.
     """
-    return f"refs/{REF_NAMESPACE}/{slug(app)}/{sha}"
+    return f"refs/{REF_NAMESPACE}/{slug(app, default='app')}/{sha}"
 
 
 def sha_of(ref: str) -> str:
@@ -263,152 +259,20 @@ class Claimant:
         return self.run_id == run_id
 
 
-@dataclass(frozen=True)
-class Response:
-    """One API answer. Headers are carried because rate-limit detection needs
-    them."""
-
-    status: int
-    headers: dict[str, str]
-    body: object | None
-
-    @property
-    def message(self) -> str:
-        return self.body.get("message", "") if isinstance(self.body, dict) else ""
-
-
 class GuardUnavailable(Exception):
     """The guard could not be operated, so the dispatch proceeds unguarded.
 
     An exception rather than a return value so no call site can forget that the
     failure direction here is "dispatch anyway" — see the module docstring.
+
+    The transport's own failure (``_gh_refs.TransportError``: no token, curl
+    exhausted, an unparseable answer) is the same verdict and is caught alongside
+    this wherever this is; ``_UNAVAILABLE`` names the pair.
     """
 
 
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the HTTP client."""
-    return subprocess.run(cmd, **kwargs)
-
-
-def _parse_http(raw: str, label: str) -> Response:
-    """Split a ``curl -i`` response into status, headers and parsed body."""
-    text = raw.replace("\r\n", "\n")
-    if "\n\n" not in text:
-        raise GuardUnavailable(f"unexpected response for {label}: {text[:300]!r}")
-    header_block, _, body = text.partition("\n\n")
-    lines = header_block.splitlines()
-    try:
-        status_code = int(lines[0].split()[1])
-    except (IndexError, ValueError):
-        raise GuardUnavailable(
-            f"could not parse the HTTP status line for {label}: "
-            f"{(lines[0] if lines else '')!r}"
-        ) from None
-    headers: dict[str, str] = {}
-    for line in lines[1:]:
-        name, sep, value = line.partition(":")
-        if sep:
-            headers[name.strip().lower()] = value.strip()
-
-    if not body.strip():
-        return Response(status_code, headers, None)
-    try:
-        return Response(status_code, headers, json.loads(body))
-    except json.JSONDecodeError:
-        # A non-JSON body (an HTML error page from a proxy) must not crash the
-        # caller before it can report the status code, which is the part that
-        # decides what happens next.
-        return Response(status_code, headers, None)
-
-
-def gh_request(
-    method: str,
-    path: str,
-    payload: dict | None = None,
-    *,
-    sleep=time.sleep,
-) -> Response:
-    """Call the GitHub API, returning the status rather than raising on 4xx.
-
-    curl, not ``gh api``, for the same reason ``e2e_tenant_lease.py`` and
-    ``poll_check_runs_gate.py`` use it: ``gh api`` treats every non-2xx as a
-    command failure and prints its own diagnostic instead of the response. Here
-    the non-2xx codes are the entire mechanism — 422 on ref creation IS the slot
-    being taken.
-    """
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise GuardUnavailable("GH_TOKEN (or GITHUB_TOKEN) is not set")
-
-    cmd = [
-        "curl",
-        "-sS",
-        "-i",
-        "--max-time",
-        "30",
-        "-X",
-        method,
-        # Authorization read from stdin (-K -) rather than -H so the token never
-        # appears in curl's argv, where anything else on the runner could read it
-        # from /proc/<pid>/cmdline. Re-supplied per attempt below because stdin
-        # is consumed per process — a retry reusing only the argv would send an
-        # unauthenticated request and read the 401 as a permission denial.
-        "-K",
-        "-",
-        "-H",
-        "Accept: application/vnd.github+json",
-        "-H",
-        "X-GitHub-Api-Version: 2022-11-28",
-    ]
-    config = f'header = "Authorization: Bearer {token}"\n'
-    if payload is not None:
-        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]
-    cmd.append(f"https://api.github.com/{path}")
-
-    label = f"{method} {path}"
-    for attempt in range(1, _TRANSPORT_ATTEMPTS + 1):
-        result = run(cmd, input=config, capture_output=True, text=True, check=False)
-        last = attempt == _TRANSPORT_ATTEMPTS
-
-        if result.returncode != 0:
-            if last:
-                raise GuardUnavailable(
-                    f"curl failed for {label} after {_TRANSPORT_ATTEMPTS} "
-                    f"attempts: {result.stderr.strip()}"
-                )
-        else:
-            response = _parse_http(result.stdout, label)
-            if response.status < 500 or last:
-                return response
-
-        sleep(_TRANSPORT_BACKOFF_SECONDS * 2 ** (attempt - 1))
-
-    raise GuardUnavailable(f"exhausted transport attempts for {label}")
-
-
-def _rate_limited(response: Response) -> bool:
-    """Is this a rate limit rather than a permission problem?
-
-    Both arrive as 403. The distinction changes only the wording of the warning
-    here — both fail open — but conflating them makes a rate-limited hour look
-    like a misconfigured permission, which is a diagnosis-hostile lie.
-    """
-    if response.status == 429:
-        return True
-    if response.status != 403:
-        return False
-    if response.headers.get("x-ratelimit-remaining") == "0":
-        return True
-    if "retry-after" in response.headers:
-        return True
-    message = response.message.lower()
-    return "rate limit" in message or "abuse detection" in message
-
-
-def _denied(response: Response) -> bool:
-    """A genuine permission answer. GitHub 404s resources it will not admit
-    exist, so 404 counts, but a rate limit explicitly does not."""
-    return response.status in (401, 403, 404) and not _rate_limited(response)
+#: Everything that means "the guard cannot be operated, dispatch anyway".
+_UNAVAILABLE = (GuardUnavailable, TransportError)
 
 
 def create_claim_blob(
@@ -516,32 +380,6 @@ def read_claimant(repo: str, blob_sha: str) -> Claimant | None:
         run_id=run_id,
         attempt=attempt,
         claimed_at=float(claimed_at) if isinstance(claimed_at, (int, float)) else None,
-    )
-
-
-def delete_ref(repo: str, ref: str) -> bool:
-    """Delete a claim ref. False ⇒ already gone, which is not a fault."""
-    response = gh_request(
-        "DELETE", f"repos/{repo}/git/refs/{ref.removeprefix('refs/')}"
-    )
-    return response.status in (200, 204)
-
-
-def check_run_age_key(check_run: dict) -> tuple[str, int]:
-    """Sort key that orders same-named check runs oldest-first.
-
-    Deliberately a copy of ``poll_check_runs_gate.check_run_age_key`` rather than
-    an import: nothing in .github/scripts imports a sibling script (every one is
-    a self-contained stdlib-only entry point), and the two must agree or the
-    guard would judge a retry against a different attempt than the gate reports.
-    ``test_the_guard_and_the_gate_order_check_runs_identically`` imports both and
-    holds them to the same table.
-    """
-    started_at = check_run.get("started_at")
-    check_id = check_run.get("id")
-    return (
-        started_at if isinstance(started_at, str) else "",
-        check_id if isinstance(check_id, int) else 0,
     )
 
 
@@ -868,8 +706,8 @@ def resolve(
     """Decide whether this run should dispatch.
 
     Returns ("claimed" | "reclaimed" | "duplicate", the blocking claimant or
-    None). Raises ``GuardUnavailable`` when the guard cannot be operated, which
-    the caller turns into "dispatch anyway".
+    None). Raises ``GuardUnavailable`` (or ``TransportError``) when the guard
+    cannot be operated, which the caller turns into "dispatch anyway".
     """
     target = read_claim_target(repo, ref)
     if target is None:
@@ -1151,7 +989,7 @@ def main(argv: list[str] | None = None) -> int:
             # a queue entry's SHA is not any PR's head.
             pr_number=int(pr_number) if pr_number.isdigit() else None,
         )
-    except GuardUnavailable as unavailable:
+    except _UNAVAILABLE as unavailable:
         print(
             f"::warning::the duplicate-dispatch guard is not working ({unavailable}), "
             "so this run is dispatching unguarded. Worst case is the pre-existing "
@@ -1174,7 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
     if state != "duplicate" and not args.no_prune:
         try:
             prune(args.repo, args.app, sha, args.check_run_name)
-        except GuardUnavailable as unavailable:
+        except _UNAVAILABLE as unavailable:
             print(f"::warning::the dispatch-claim prune stopped early: {unavailable}")
 
     if state == "duplicate" and blocker is not None:
