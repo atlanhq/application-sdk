@@ -334,9 +334,12 @@ and `.github/scripts/check_complexity_baseline.py` holds the tree to it:
   improvement in with `--update`. `--update` refuses to add a function unless
   given `--allow-increase`, and the base check below still catches that.
 - **A baseline entry the base revision lacks fails.** The `CI script tests` job
-  passes `--base-sha`. The match is on (rule, qualified name) in any file, so a
-  module split that moves an over-limit function passes; renaming one counts as
-  a new function. A base with no baseline file is measured on its own tree.
+  passes `--base-sha`. An entry matches the base's in the same file. A module
+  split that moves an over-limit function passes: a base entry carries to
+  another file when its own file no longer defines a function of that name. A
+  function paid down in place still does, so it cannot hand its entry to a new
+  function of the same name elsewhere. Renaming a function counts as a new one.
+  A base with no baseline file is measured on its own tree.
 
 ```bash
 uv run --frozen python .github/scripts/check_complexity_baseline.py           # check

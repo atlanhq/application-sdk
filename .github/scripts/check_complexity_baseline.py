@@ -27,10 +27,12 @@ defaults, 10 and 50).
 
 Comparing against the PR's own baseline is not enough: a PR could add a long
 function and add it to the baseline in the same change. So, given
-``--base-sha``, every (rule, function) in the PR's baseline must also be in the
-base revision's. That match ignores the file, so a module split that moves an
-over-limit function to a new file passes, while renaming one counts as a new
-function. A base revision with no baseline (the PR that introduces it) is
+``--base-sha``, every entry in the PR's baseline must also be in the base
+revision's, in the same file. A module split that moves an over-limit function
+to a new file passes: a base entry carries to another file when its own file
+no longer defines a function of that name. One paid down in place still does,
+so its entry cannot be handed to a new function of the same name elsewhere.
+Renaming a function counts as a new one. A base revision with no baseline (the PR that introduces it) is
 measured instead: ruff runs on the base tree in a temporary ``git worktree``.
 
 A run in which ruff reports nothing is accepted only if ruff still flags a
@@ -90,6 +92,8 @@ Baseline = dict[str, dict[str, list[str]]]
 #: (file, line, rule, qualified name, ruff message) for one finding.
 Violation = tuple[str, int, str, str, str]
 Measure = Callable[[Path], tuple[Baseline, list[Violation]]]
+#: (repo-relative file, qualified name) -> whether the head tree defines it.
+Defines = Callable[[str, str], bool]
 Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
 
 
@@ -251,26 +255,66 @@ def compare(baseline: Baseline, actual: Baseline) -> tuple[list[str], list[str]]
     return sorted((got - want).elements()), sorted((want - got).elements())
 
 
-def raised_since_base(base: Baseline, head: Baseline) -> list[str]:
-    """Entries of ``head`` with no (rule, name) left in ``base``, in any file.
+def head_defines(tree: Path = REPO_ROOT) -> Defines:
+    """Whether ``tree/file`` defines a function with qualified name ``name``.
 
-    The file is ignored so a function moved by a module split carries its
-    base entry with it.
+    A file that is gone defines nothing. One that does not parse is taken to
+    define everything, so it cannot release an entry (fail closed).
     """
-    carried = Counter(
-        (rule, name)
-        for rules in base.values()
+    cache: dict[str, set[str] | None] = {}
+
+    def defines(file: str, name: str) -> bool:
+        if file not in cache:
+            path = tree / file
+            try:
+                cache[file] = set(qualnames(path.read_text(encoding="utf-8")).values())
+            except FileNotFoundError:
+                cache[file] = set()
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                cache[file] = None
+        names = cache[file]
+        return names is None or name in names
+
+    return defines
+
+
+def _triples(baseline: Baseline) -> list[tuple[str, str, str]]:
+    return [
+        (file, rule, name)
+        for file, rules in canonical(baseline).items()
         for rule, names in rules.items()
         for name in names
+    ]
+
+
+def raised_since_base(base: Baseline, head: Baseline, defines: Defines) -> list[str]:
+    """Entries of ``head`` that no entry of ``base`` accounts for.
+
+    An entry is accounted for by the same (file, rule, name) in ``base``, or,
+    for a function moved by a module split, by the same (rule, name) in another
+    file that ``defines`` says no longer has a function of that name. A
+    function paid down in place keeps its name in its file, so its entry
+    cannot be handed to a new function of the same name elsewhere.
+    """
+    left = Counter(_triples(base))
+    unmatched: list[tuple[str, str, str]] = []
+    for entry in _triples(head):
+        if left[entry] > 0:
+            left[entry] -= 1
+        else:
+            unmatched.append(entry)
+    moved = Counter(
+        (rule, name)
+        for (file, rule, name), n in left.items()
+        for _ in range(n)
+        if not defines(file, name)
     )
     raised: list[str] = []
-    for file, rules in canonical(head).items():
-        for rule, names in rules.items():
-            for name in names:
-                if carried[(rule, name)] > 0:
-                    carried[(rule, name)] -= 1
-                else:
-                    raised.append(f"{file} {rule} {name}")
+    for file, rule, name in unmatched:
+        if moved[(rule, name)] > 0:
+            moved[(rule, name)] -= 1
+        else:
+            raised.append(f"{file} {rule} {name}")
     return raised
 
 
@@ -329,6 +373,7 @@ def check_base(
     head: Baseline,
     git: Runner = _git,
     measure_tree: Measure = measure,
+    defines: Defines | None = None,
 ) -> bool:
     """Print and return whether the PR's baseline adds a function the base lacks."""
     try:
@@ -344,7 +389,7 @@ def check_base(
     except (BaseRevisionError, RuffRunError) as exc:
         print(f"::error::{exc}")
         return True
-    raised = raised_since_base(base, head)
+    raised = raised_since_base(base, head, defines or head_defines())
     if raised:
         print(
             f"::error::{len(raised)} baseline entries are not in {source}. "
