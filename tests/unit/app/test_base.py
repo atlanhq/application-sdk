@@ -697,6 +697,66 @@ class TestAppState:
         with pytest.raises(AppContextError, match="outside of task context"):
             accessor.set("k", 1)
 
+    def test_app_state_outside_activity_raises_app_context_error(self) -> None:
+        # Outside an activity temporalio raises a bare RuntimeError; the public
+        # API must surface AppContextError, never that RuntimeError.
+        app = self._app()
+        with mock.patch(
+            "application_sdk.app.base.activity.info",
+            side_effect=RuntimeError("Not in activity context"),
+        ):
+            with pytest.raises(AppContextError, match="outside of task context") as exc:
+                app.get_app_state("k")
+            assert isinstance(exc.value.__cause__, RuntimeError)
+            with pytest.raises(AppContextError, match="outside of task context"):
+                app.set_app_state("k", "v")
+
+    def test_app_state_run_id_probe_failure_raises_app_context_error(self) -> None:
+        # The workflow id is readable but the run id probe fails: still the
+        # documented AppContextError, not temporalio's RuntimeError.
+        app = self._app()
+        info = mock.MagicMock(workflow_id="wf-4")
+        type(info).workflow_run_id = mock.PropertyMock(
+            side_effect=RuntimeError("Not in activity context")
+        )
+        with mock.patch("application_sdk.app.base.activity.info", return_value=info):
+            with pytest.raises(AppContextError, match="outside of task context"):
+                app.get_app_state("k")
+            with pytest.raises(AppContextError, match="outside of task context"):
+                app.set_app_state("k", "v")
+
+    def test_app_state_with_execution_id_patched_raises_app_context_error(
+        self,
+    ) -> None:
+        # App tests patch _get_execution_id_from_task to succeed while there is
+        # no activity context; the run-id probe must still raise AppContextError.
+        app = self._app()
+        with (
+            mock.patch(
+                "application_sdk.app.base._get_execution_id_from_task",
+                return_value="wf-5",
+            ),
+            mock.patch(
+                "application_sdk.app.base.activity.info",
+                side_effect=RuntimeError("Not in activity context"),
+            ),
+        ):
+            with pytest.raises(AppContextError):
+                app.get_app_state("k")
+            with pytest.raises(AppContextError):
+                app.set_app_state("k", "v")
+
+    def test_app_state_empty_run_id_raises_app_context_error(self) -> None:
+        app = self._app()
+        with mock.patch(
+            "application_sdk.app.base.activity.info",
+            return_value=mock.MagicMock(workflow_id="wf-6", workflow_run_id=""),
+        ):
+            with pytest.raises(AppContextError, match="workflow_run_id is empty"):
+                app.get_app_state("k")
+            with pytest.raises(AppContextError, match="workflow_run_id is empty"):
+                app.set_app_state("k", "v")
+
     async def test_persistent_state_accessor_delegates_to_context(self) -> None:
         app = self._app()
         ctx = mock.MagicMock()
