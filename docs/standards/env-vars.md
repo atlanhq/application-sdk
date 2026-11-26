@@ -39,6 +39,21 @@ Two rules keep the line clear:
 To list every test-harness variable in use:
 `grep -rhoE '"E2E_[A-Z_]+' application_sdk/testing | sort -u`.
 
+## Coverage is enforced
+
+`tests/unit/test_env_var_docs_coverage.py` collects every env-var name
+`application_sdk/` reads (outside `testing/`) from the source by AST, and fails when:
+
+- a name is not mentioned in `docs/configuration.md`, is not in
+  `_REMOVED_ENV_VARS`, and is not on the test's short third-party allowlist
+  (`AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `HOSTNAME`);
+- `.env.example` sets a name the SDK does not read, or one listed as removed.
+
+A name built with an f-string (`f"ATLAN_POOL_{pool}_QUEUE"`) is documented with a
+placeholder: `ATLAN_POOL_<POOL>_QUEUE`. The test finds reads through the stdlib
+(`os.getenv`, `os.environ`) and through any helper that forwards its parameter to
+one (`env_bool`, `env_int`, a local `_bool`), so a new reader needs no change to it.
+
 ## The registry
 
 `application_sdk/common/env_warnings.py`:
@@ -185,5 +200,6 @@ env:
 3. Add the old name to `_REMOVED_ENV_VARS` in
    `application_sdk/common/env_warnings.py` with a one-line comment on why.
 4. Update any docs that reference the old name
-   (`docs/configuration.md`, `docs/guides/deployment.md`, etc.).
+   (`docs/configuration.md`, `docs/guides/deployment.md`, etc.), and drop it
+   from `.env.example`.
 5. Mention the change in the PR description so the changelog flags it.

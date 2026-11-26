@@ -2,6 +2,7 @@
 
 - When changing `application_sdk` modules, update the matching conceptual docs per `docs/standards/documentation.md`.
 - Conceptual docs live under `docs/concepts/` (see the mapping in that rule file).
+- A new or changed env var gets a row in `docs/configuration.md`; `tests/unit/test_env_var_docs_coverage.py` fails until it has one. See `docs/standards/env-vars.md`.
 
 ## Incremental state (`application_sdk/common/incremental/**`)
 

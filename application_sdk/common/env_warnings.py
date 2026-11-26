@@ -54,6 +54,18 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         # The preflight gate posture is read from App.preflight_gate_mode only,
         # so the worker and the workflow can never disagree about it.
         "ATLAN_PREFLIGHT_GATE_MODE",
+        # Dropped when env config was consolidated through AppConfig (#1544):
+        # the local dashboard / Temporal UI addresses and the SQL server version
+        # floor had no remaining reader. The activity concurrency cap is now
+        # TEMPORAL_MAX_CONCURRENT_ACTIVITIES.
+        "ATLAN_APP_DASHBOARD_HOST",
+        "ATLAN_APP_DASHBOARD_PORT",
+        "ATLAN_MAX_CONCURRENT_ACTIVITIES",
+        "ATLAN_SQL_SERVER_MIN_VERSION",
+        "ATLAN_WORKFLOW_UI_HOST",
+        "ATLAN_WORKFLOW_UI_PORT",
+        # Local development is inferred from the registered components (#641).
+        "ATLAN_LOCAL_DEVELOPMENT",
     }
 )
 

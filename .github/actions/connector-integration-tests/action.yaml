@@ -430,7 +430,6 @@ runs:
     - name: Start app server
       shell: bash
       env:
-        ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
       run: |
         uv run python main.py &
@@ -450,7 +449,6 @@ runs:
       id: tests
       shell: bash
       env:
-        ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
       # NOTE: TEST_<CONNECTOR>_* env vars are NOT declared here. They're
       # provided by the caller's job-level env block (which has access to
