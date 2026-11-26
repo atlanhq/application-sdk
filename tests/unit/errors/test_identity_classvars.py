@@ -45,7 +45,7 @@ _IDENTITY: dict[str, type] = {
 # consumer has no leaf for, so its routing has to come from the envelope it was
 # rebuilt from. That is not a precedent for a leaf the SDK raises itself.
 _RECONSTRUCTION_LEAVES: frozenset[str] = frozenset(
-    {"application_sdk.templates.sql_app._EnvelopeError"}
+    {"application_sdk.errors.wire._EnvelopeError"}
 )
 
 

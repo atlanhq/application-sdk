@@ -3164,7 +3164,7 @@ class TestPrimeFailureClassification:
             return FailureDetails(**kwargs)
 
         with patch(
-            "application_sdk.templates.sql_app.FailureDetails",
+            "application_sdk.errors.wire.FailureDetails",
             side_effect=_rejects_any_evidence,
         ):
             result = await self._probe(

@@ -122,20 +122,26 @@ from application_sdk.credentials import CredentialResolver
 from application_sdk.credentials.ref import CredentialRef, _guid_credential_ref
 from application_sdk.errors import (
     AppError,
-    FailureDetails,
     redact_secrets,
-    redact_wire_value,
     safe_traceback,
-    sanitize_cause_repr,
 )
-from application_sdk.errors.categories import Audience, FailureCategory
+
+# ``AppTimeoutError`` is re-exported: importable from here before FND-4687 moved
+# the wire-envelope rebuild into ``errors.wire`` (Symbol Removal Check).
+from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.errors.leaves import (
-    AppTimeoutError,
     AuthError,
     InternalError,
     SourceUnavailableError,
 )
-from application_sdk.errors.wire import secret_named_evidence_keys
+from application_sdk.errors.wire import (
+    FailureDetails,
+    degraded_failure_details,
+    error_from_failure_details,
+    redact_evidence_value,
+    redacted_validation_reason,
+    register_wire_leaf,
+)
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -176,24 +182,16 @@ _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 #: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
 _EXTRACT_BATCH_SIZE: int = 10_000
 
-#: Leaves ``_classify_probe_strings`` can emit, keyed by wire code. Used to
-#: rebuild the typed error on the far side of the activity boundary, where only
-#: the ``FailureDetails`` envelope survives. The base ``TIMEOUT`` code is
-#: accepted alongside the probe-specific one so a verdict from any other
-#: producer still rebuilds as a timeout rather than degrading to internal. A
-#: verdict recorded before FND-4298 carries ``TIMEOUT_SQL_PROBE``, which has no
-#: leaf any more; it rebuilds through ``_EnvelopeError`` with the category the
-#: envelope recorded.
-_PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
-    AuthError.code: AuthError,
-    SqlProbeTimeoutError.code: SqlProbeTimeoutError,
-    AppTimeoutError.code: AppTimeoutError,
-    SourceUnavailableError.code: SourceUnavailableError,
-    InternalError.code: InternalError,
-}
+# ``_classify_probe_strings`` emits this leaf; registering it lets the verdict
+# rebuild as itself on the far side of the activity boundary, where only the
+# ``FailureDetails`` envelope survives. The generic leaves it can also emit
+# (``AuthError``, ``SourceUnavailableError``, ``InternalError``) are registered
+# by ``errors.wire``. A verdict recorded before FND-4298 carries
+# ``TIMEOUT_SQL_PROBE``, which has no leaf any more; it rebuilds on the generic
+# envelope-routed leaf with the category the envelope recorded.
+register_wire_leaf(SqlProbeTimeoutError)
 
-
-# Field names every ``AppError`` declares on the base dataclass — the evidence
+# Field names every ``AppError`` declares on the base dataclass — the typed-error
 # redactor skips these (they are handled individually) and redacts only the
 # per-leaf custom fields, mirroring what ``to_failure_details()`` treats as
 # evidence.
@@ -201,248 +199,9 @@ _BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
     f.name for f in dataclasses.fields(AppError)
 )
 
-
-@dataclasses.dataclass(kw_only=True)
-class _EnvelopeError(AppError):
-    """Reconstruction leaf for a wire ``code`` this consumer has no leaf for.
-
-    Routing (``category`` / ``audience``) is taken from the envelope, not from
-    class-level constants, so a newer producer's verdict keeps its original
-    routing instead of degrading to ``INTERNAL`` / ``APP_OWNER``.
-
-    ``category`` / ``audience`` are instance values here, but the base
-    ``to_failure_details()`` reads ``audience`` class-level
-    (``type(self).audience``) — which would return the raw ``property`` object
-    on this subclass and fail validation. The serializer is therefore
-    overridden to read both instance-level, so a reconstructed unknown-code
-    error round-trips.
-
-    ``code`` / ``cause_repr`` / ``evidence`` are likewise carried as
-    passthrough instance fields so the producer's diagnostic context and
-    fine-grained code survive re-serialisation — not just the routing.
-    """
-
-    category_override: FailureCategory
-    audience_override: Audience
-    code_override: str | None = None
-    cause_repr: str | None = None
-    evidence: dict[str, Any] = dataclasses.field(default_factory=dict)
-
-    @property
-    def category(self) -> FailureCategory:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.category_override
-
-    @property
-    def audience(self) -> Audience:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.audience_override
-
-    @property
-    def code(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.code_override or super().code
-
-    def to_failure_details(self) -> FailureDetails:
-        # ``category_override`` / ``audience_override`` / ``code_override``
-        # carry routing, not evidence — exclude them alongside the base
-        # fields; the producer's evidence returns as the envelope's evidence.
-        # ``cause_repr`` serialises as its own envelope field, not evidence.
-        evidence: dict[str, Any] = {
-            f.name: getattr(self, f.name)
-            for f in dataclasses.fields(self)
-            if f.name
-            not in _BASE_ERROR_FIELD_NAMES
-            | {
-                "category_override",
-                "audience_override",
-                "code_override",
-                "cause_repr",
-                "evidence",
-            }
-        }
-        evidence.update(self.evidence)
-        return FailureDetails(
-            category=self.category,
-            code=self.code,
-            retryable=self.effective_retryable,
-            audience=self.audience,
-            message=self.message,
-            suggested_action=self.suggested_action,
-            evidence=evidence,
-            app_name=self.app_name,
-            run_id=self.run_id,
-            cause_repr=self.cause_repr,
-        )
-
-
 # Re-exported under its historical private name; the one implementation lives
 # with the shared SQL failure classifier.
 _root_cause = root_cause
-
-
-def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
-    """Redact every string reachable inside an evidence mapping's values.
-
-    Keys are left alone — a secret-*named* key is the wire denylist's job
-    (:func:`secret_named_evidence_keys`); this handles secret-*carrying*
-    values under any key.
-    """
-    return {k: redact_wire_value(v) for k, v in evidence.items()}
-
-
-def _failure_details_degraded(err: AppError) -> FailureDetails | None:
-    """Re-serialise a verdict the wire envelope rejected, keeping its routing.
-
-    Reached when ``to_failure_details()`` raises — in practice a connector leaf
-    carrying a secret-named evidence field (``api_key``, ``db_password``, …),
-    which the ``FailureDetails`` denylist refuses. Falling straight back to
-    ``error_type`` / ``error_message`` would throw away the connector's
-    explicit verdict and re-derive it from a class name no string hint matches,
-    silently inverting e.g. ``AuthError`` / ``USER`` into ``InternalError`` /
-    ``APP_OWNER`` — the exact CNCT-197 misrouting the typed path exists to fix.
-
-    So degrade the *evidence*, never the routing: drop the offending keys, and
-    if the envelope still refuses, drop evidence entirely. Only a verdict that
-    fails both attempts returns ``None`` (the caller then falls back to
-    strings). ``category`` / ``audience`` / ``code`` / ``retryable`` are read
-    instance-level so a reconstruction leaf's property overrides are honoured
-    alongside a normal leaf's class constants.
-
-    Args:
-        err: The classified verdict whose serialisation was rejected.
-
-    Returns:
-        The degraded envelope, or ``None`` if it could not be built at all.
-    """
-    evidence: dict[str, Any] = {
-        f.name: getattr(err, f.name)
-        for f in dataclasses.fields(err)
-        if f.name not in _BASE_ERROR_FIELD_NAMES
-    }
-    cause_repr = sanitize_cause_repr(err.cause) if err.cause else None
-    if isinstance(err, _EnvelopeError):
-        # Mirror its ``to_failure_details()``: routing overrides are not
-        # evidence, ``cause_repr`` is its own wire field, and the producer's
-        # evidence rides in a field rather than as per-leaf dataclass fields.
-        for name in (
-            "category_override",
-            "audience_override",
-            "code_override",
-            "cause_repr",
-            "evidence",
-        ):
-            evidence.pop(name, None)
-        evidence.update(err.evidence)
-        cause_repr = err.cause_repr or cause_repr
-
-    dropped = secret_named_evidence_keys(evidence)
-    attempts: list[dict[str, Any]] = [
-        {k: v for k, v in evidence.items() if k not in dropped}
-    ]
-    if attempts[0]:
-        # Second attempt only differs if the first still carried something.
-        attempts.append({})
-    for attempt in attempts:
-        try:
-            return FailureDetails(
-                category=err.category,
-                code=err.code,
-                retryable=err.effective_retryable,
-                audience=err.audience,
-                message=err.message,
-                suggested_action=err.suggested_action,
-                evidence=_redact_evidence(attempt),
-                app_name=err.app_name,
-                run_id=err.run_id,
-                cause_repr=cause_repr,
-            )
-        except ValidationError as degrade_error:
-            logger.warning(
-                "Degraded prime failure verdict (%s) still would not serialise "
-                "with %d evidence key(s); retrying with less. %s",
-                type(err).__name__,
-                len(attempt),
-                _redacted_validation_reason(degrade_error),
-            )
-    return None
-
-
-def _redacted_validation_reason(exc: ValidationError) -> str:
-    """Return the validator messages only, dropping the rejected input.
-
-    ``str(ValidationError)`` embeds ``input_value=…`` — for a rejected
-    ``evidence`` dict that is the secret-named payload the denylist exists to
-    keep off the wire, so neither the exception nor ``exc_info`` may be logged.
-    The ``msg`` fields name the offending keys and nothing else.
-    """
-    return "; ".join(str(err.get("msg", "")) for err in exc.errors())
-
-
-def _error_from_failure_details(details: FailureDetails) -> AppError:
-    """Rebuild a typed error from its wire envelope.
-
-    ``evidence`` keys are the producing dataclass's field names, so they map
-    straight back onto the leaf's constructor. Keys the leaf does not declare
-    are dropped rather than raising — a newer producer must not break an older
-    consumer replaying its history.
-
-    An unknown ``code`` (a newer producer than this consumer) has no registered
-    leaf. Rebuilding it as ``InternalError`` would force ``INTERNAL`` /
-    ``APP_OWNER`` routing and silently re-route a customer-owned failure to
-    Atlan, so the unknown-code path instead preserves the envelope's own
-    ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
-    leaf.
-
-    Reconstruction re-redacts the two free-text fields it copies. This is
-    defence in depth, not the policy: ``FailureDetails`` redacts ``message`` and
-    ``suggested_action`` in a ``field_validator``, and that validator runs on
-    ``model_validate`` too, so an envelope replayed off Temporal history arrives
-    already scrubbed. Kept because it costs one idempotent pass and this is an
-    unredacted trust boundary — a hand-built ``PrimeAuthOutput`` reaches here
-    without ever having been a ``FailureDetails``. What the envelope still does
-    *not* cover is ``cause_repr`` (redacted at construction by
-    :func:`sanitize_cause_repr` instead) and nested values under an
-    evidence key, where the denylist judges the key name alone.
-    """
-    message = redact_secrets(details.message)
-    suggested_action = (
-        redact_secrets(details.suggested_action)
-        if details.suggested_action is not None
-        else None
-    )
-    leaf = _PROBE_FAILURE_LEAVES.get(details.code)
-    if leaf is None:
-        return _EnvelopeError(
-            category_override=details.category,
-            audience_override=details.audience,
-            code_override=details.code,
-            cause_repr=(
-                redact_secrets(details.cause_repr)
-                if details.cause_repr is not None
-                else None
-            ),
-            evidence=_redact_evidence(dict(details.evidence)),
-            message=message,
-            retryable=details.retryable,
-            suggested_action=suggested_action,
-            app_name=details.app_name,
-            run_id=details.run_id,
-        )
-    # ``declared`` must exclude the base ``AppError`` fields: they are passed
-    # as explicit constructor arguments below, so an evidence key that shadows
-    # one (``message``, ``retryable``, …) would splat alongside the explicit
-    # arg and crash reconstruction with ``TypeError: got multiple values``.
-    # Mirrors the serializer, which never serialises base fields as evidence.
-    declared = {f.name for f in dataclasses.fields(leaf)} - _BASE_ERROR_FIELD_NAMES
-    evidence = _redact_evidence(
-        {k: v for k, v in details.evidence.items() if k in declared}
-    )
-    return leaf(
-        message=message,
-        retryable=details.retryable,
-        suggested_action=suggested_action,
-        app_name=details.app_name,
-        run_id=details.run_id,
-        **evidence,
-    )
 
 
 def _check_sql_client_class(cls: type[SqlApp]) -> None:
@@ -788,19 +547,25 @@ class SqlApp(App):
             # error_type / error_message path instead would re-derive routing
             # from a class name no string hint matches, inverting the
             # connector's explicit verdict (CNCT-197 all over again).
+            failure: FailureDetails | None
             try:
                 failure = classified.to_failure_details()
             except ValidationError as verdict_error:
-                failure = _failure_details_degraded(classified)
+                try:
+                    failure = degraded_failure_details(classified)
+                    outcome = "kept the typed verdict with degraded evidence"
+                except ValidationError as degrade_error:
+                    failure = None
+                    outcome = (
+                        "falling back to error_type/error_message classification "
+                        "(degraded verdict also refused: %s)"
+                        % redacted_validation_reason(degrade_error)
+                    )
                 logger.warning(
                     "Could not serialise the prime failure verdict (%s) as-is; %s. %s",
                     type(classified).__name__,
-                    (
-                        "kept the typed verdict with degraded evidence"
-                        if failure is not None
-                        else "falling back to error_type/error_message classification"
-                    ),
-                    _redacted_validation_reason(verdict_error),
+                    outcome,
+                    redacted_validation_reason(verdict_error),
                 )
             # We want the traceback frames in worker logs — the long-tail
             # (TLS negotiation, driver bugs, version skew) is only diagnosable
@@ -850,7 +615,7 @@ class SqlApp(App):
         ``PrimeAuthOutput`` by hand.
         """
         if prime_result.failure is not None:
-            return _error_from_failure_details(prime_result.failure)
+            return error_from_failure_details(prime_result.failure)
         # Defence-in-depth: the fallback trusts a hand-built or pre-redaction-era
         # replayed output whose producer may not have redacted. Re-redact at this
         # trust boundary so a secret in error_message never reaches the verdict.
@@ -899,7 +664,7 @@ class SqlApp(App):
         for f in dataclasses.fields(err):
             if f.name in _BASE_ERROR_FIELD_NAMES:
                 continue
-            setattr(err, f.name, redact_wire_value(getattr(err, f.name)))
+            setattr(err, f.name, redact_evidence_value(getattr(err, f.name)))
         return err
 
     @staticmethod
@@ -2265,7 +2030,38 @@ class SqlApp(App):
 #: by ``__getattr__`` below (PEP 562) so the removal waits for v4.0.0.
 #: ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` likewise, since FND-4921 composes the run
 #: prefix through ``application_sdk.constants._run_prefix``.
+#: FND-4687 moved the ``FailureDetails`` → ``AppError`` rebuild into
+#: ``application_sdk.errors.wire``; the names it imported for that, and the
+#: rebuild itself (which a connector imports), are served from there.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "_error_from_failure_details": (
+        "application_sdk.errors.wire.error_from_failure_details",
+        "the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it",
+    ),
+    "_redacted_validation_reason": (
+        "application_sdk.errors.wire.redacted_validation_reason",
+        "the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it",
+    ),
+    "Audience": (
+        "application_sdk.errors.categories.Audience",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "FailureCategory": (
+        "application_sdk.errors.categories.FailureCategory",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "redact_wire_value": (
+        "application_sdk.errors.base.redact_wire_value",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "sanitize_cause_repr": (
+        "application_sdk.errors.base.sanitize_cause_repr",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "secret_named_evidence_keys": (
+        "application_sdk.errors.wire.secret_named_evidence_keys",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
     "legacy_credential_ref": (
         "application_sdk.credentials.ref.legacy_credential_ref",
         "it was only ever re-exported here as a side effect of an import",
