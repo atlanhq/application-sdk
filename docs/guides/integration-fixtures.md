@@ -233,6 +233,7 @@ Neither path loads pandas or pandera. Memory is bounded by one record or batch, 
 
 `load_pandera_schemas` reads an existing pandera YAML directory into `OutputSchema` values, so a suite can switch without rewriting its schemas or installing pandera:
 
+<!-- legacy-example: the "before" half of a migration off validate_with_pandera -->
 ```python
 # before
 from application_sdk.testing.integration.validation import validate_with_pandera

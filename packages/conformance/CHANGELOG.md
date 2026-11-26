@@ -2,6 +2,38 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.62.0] - 2026-11-26
+
+### Features
+
+- E023 flags consumption of the deprecated AAF error_code surface [FND-389] (#5143) ([7d73cc9](https://github.com/atlanhq/application-sdk/commit/7d73cc9))
+- one byte-put primitive, CloudStore delegates to batch [FND-4684] (#5137) ([d0c2ee6](https://github.com/atlanhq/application-sdk/commit/d0c2ee6))
+- rebuild a typed AppError from FailureDetails outside SqlApp [FND-4687] (#5135) ([524129b](https://github.com/atlanhq/application-sdk/commit/524129b))
+- lift connector credential-form fields as credential keys on every surface, deprecate patching service globals, and add B010 for SDK rebinds [FND-4688] (#5132) ([da0aba3](https://github.com/atlanhq/application-sdk/commit/da0aba3))
+- one settings type per cloud for every obstore store builder [FND-4681] (#5131) ([db40405](https://github.com/atlanhq/application-sdk/commit/db40405))
+- make extract_entity, transform_entity and resolve_output_path public [FND-4686] (#5129) ([430929d](https://github.com/atlanhq/application-sdk/commit/430929d))
+- Release Gate requires the connector-reviewer verdict and runs from application-sdk [FND-5321] (#5099) ([dc44fc9](https://github.com/atlanhq/application-sdk/commit/dc44fc9))
+- add K032/K033 — check @task(pool=) against the deployed worker pools [FND-5230] (#5089) ([e46365c](https://github.com/atlanhq/application-sdk/commit/e46365c))
+- add K031 PinnedWorkerTaskQueue — flag a hard-coded ATLAN_TASK_QUEUE (#5077) ([3e23c56](https://github.com/atlanhq/application-sdk/commit/3e23c56))
+
+### Bug fixes
+
+- agents validate with unit and integration tests, never e2e [FND-5511] (#5148) ([bf6e3e6](https://github.com/atlanhq/application-sdk/commit/bf6e3e6))
+- make the package a uv workspace member and drop its second lock [FND-4671] (#5141) ([0bc743b](https://github.com/atlanhq/application-sdk/commit/0bc743b))
+- retire the marketplace Playwright e2e shims and update-deps.yml via bootstrap [FND-5500] (#5144) ([232e1fd](https://github.com/atlanhq/application-sdk/commit/232e1fd))
+- grade a slashed qualified name on its ancestors' boundaries (FND-5435) (#5122) ([76fedbb](https://github.com/atlanhq/application-sdk/commit/76fedbb))
+- one canonical type form for every backwards-compat checker [FND-4685] (#5130) ([eed35a6](https://github.com/atlanhq/application-sdk/commit/eed35a6))
+- retire the per-repo dep-cooldown workflow via bootstrap (#5114) ([5b7c244](https://github.com/atlanhq/application-sdk/commit/5b7c244))
+- delete migrate-to-native, fix a dead link, symlink duplicated skills, test skill paths [FND-4697] (#5108) ([acddc4a](https://github.com/atlanhq/application-sdk/commit/acddc4a))
+- O001 false positive on compliant code (1 repo) (#5100) ([c4f34e5](https://github.com/atlanhq/application-sdk/commit/c4f34e5))
+- L022 false positive on compliant code (1 repo) (#5080) ([8a6bb50](https://github.com/atlanhq/application-sdk/commit/8a6bb50))
+- mark K031 a migration rule, align ATLAN_TASK_QUEUE docs, share pkl/yaml helpers [FND-5403] (#5086) ([c9397a7](https://github.com/atlanhq/application-sdk/commit/c9397a7))
+
+### Other changes
+
+- refactor(release): one release train for conformance and contract-toolkit, __version__ from package metadata [FND-4672] (#5146) ([dc4c5f7](https://github.com/atlanhq/application-sdk/commit/dc4c5f7))
+- chore(tests): parametrise repeated-scaffold test clusters [FND-4943] (#5117) ([f0dffd6](https://github.com/atlanhq/application-sdk/commit/f0dffd6))
+
 ## [0.61.0] - 2026-11-24
 
 ### Features

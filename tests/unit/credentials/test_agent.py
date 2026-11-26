@@ -1536,6 +1536,58 @@ class TestCredentialRefFromWorkflowArgs:
         ref = CredentialRef.from_workflow_args({"credential_guid": "g"})
         assert ref.credential_guid == "g"
 
+    def test_warns_naming_itself(self) -> None:
+        """The runtime notice names the deprecated method and its replacement."""
+        from application_sdk.credentials.ref import CredentialRef
+
+        with pytest.warns(DeprecationWarning) as record:
+            CredentialRef.from_workflow_args({"credential_guid": "g"})
+        messages = [str(w.message) for w in record]
+        assert any(
+            m.startswith("CredentialRef.from_workflow_args is deprecated")
+            and "CredentialRef.resolve" in m
+            and "v4.0.0" in m
+            for m in messages
+        ), messages
+        # The warning points at this caller, not into the SDK.
+        assert record[0].filename == __file__
+
+    @pytest.mark.parametrize(
+        "workflow_args",
+        [
+            pytest.param({"credential_guid": "g"}, id="guid-only"),
+            pytest.param(
+                {"extraction_method": "direct", "credential_guid": "g"}, id="direct"
+            ),
+            pytest.param(
+                {
+                    "extraction_method": "agent",
+                    "agent_json": json.dumps(
+                        {
+                            "agent-name": "a",
+                            "secret-path": "p",
+                            "basic.username": "u",
+                        }
+                    ),
+                    "credential_guid": "",
+                },
+                id="agent-json-string",
+            ),
+        ],
+    )
+    def test_notice_migration_works_for_dict_callers(
+        self, workflow_args: dict[str, Any]
+    ) -> None:
+        """The conversion the notice prescribes routes a dict like the old method."""
+        from application_sdk.credentials.ref import CredentialRef
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+        with pytest.warns(DeprecationWarning):
+            old = CredentialRef.from_workflow_args(workflow_args)
+        new = CredentialRef.resolve(ExtractionInput.model_validate(workflow_args))
+        assert new.credential_guid == old.credential_guid
+        assert (new.agent_spec is None) == (old.agent_spec is None)
+
     def test_no_routable_source_raises(self) -> None:
         import pytest
 
