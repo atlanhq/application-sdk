@@ -224,9 +224,9 @@ jobs:
               # NOTE: '!**/*.md' intentionally omitted — same picomatch catch-all
               # issue as sdk above; neither **/*.py nor .github/** match .md files,
               # so the exclusion is not needed and the pattern would be harmful.
-            # The conformance PACKAGE itself (its source, pyproject.toml, uv.lock,
-            # and own pytest tests). A Renovate bump to packages/conformance/uv.lock
-            # re-runs the package's unit tests here — conformance-only, never SDK.
+            # The conformance PACKAGE itself (its source, pyproject.toml and own
+            # pytest tests) — conformance-only, never SDK. It has no lock of its
+            # own: it is a member of the root uv workspace (FND-4671).
             conformance_pkg:
               - 'packages/conformance/**'
               # Self-test the suite-test harness: editing the reusable that runs
@@ -325,7 +325,10 @@ jobs:
       # Renovate rebase. Failing here skips every area and the gate fails
       # closed on `changes`, with uv's resolver output in this step's log.
       # The script re-checks only when uv.lock or a pyproject.toml differ from
-      # the base, so a stale lock on main cannot redden unrelated PRs.
+      # the base, so a stale lock on main cannot redden unrelated PRs. The
+      # conformance package is a workspace member of that one lock (FND-4671),
+      # so this also covers a conformance or SDK change that conformance's
+      # `test` extra would see.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.9"
@@ -334,13 +337,6 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: python3 .github/scripts/check_uv_lock.py
-
-      # The conformance lock path-sources the SDK and api, so an SDK dependency
-      # change that relocks only the root leaves it stale. That used to pass
-      # here and then fail the next conformance release at its wheel gate
-      # (FND-4716). Same comparison as that gate, run before merge instead.
-      - name: Check that packages/conformance/uv.lock matches the SDK
-        run: python3 .github/scripts/check_conformance_lock.py
 
   sdk-tests:
     name: SDK Tests

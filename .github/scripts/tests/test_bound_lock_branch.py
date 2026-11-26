@@ -51,12 +51,9 @@ def uv_lock(pyatlan: str | None = "11.4.0", marker: str = "base") -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repo shaped like application-sdk: two uv projects and the relationship
-    table. Every file the refresh lane may rewrite."""
+    """A repo shaped like application-sdk: one workspace lock and the
+    relationship table. Every file the refresh lane may rewrite."""
     (tmp_path / "uv.lock").write_text(uv_lock(marker="root"))
-    sub = tmp_path / "packages" / "conformance"
-    sub.mkdir(parents=True)
-    (sub / "uv.lock").write_text(uv_lock(marker="sub"))
     table = tmp_path / orchestrator.RELATIONSHIP_DIRECTIONS
     table.parent.mkdir(parents=True, exist_ok=True)
     table.write_text('{"table": "11.4.0"}\n')
@@ -120,28 +117,22 @@ class TestWorkflowGuards:
 
 
 class TestProjects:
-    """The declared project set, guarded because both entries are load-bearing."""
+    """The declared project set, guarded because the entry is load-bearing."""
 
-    def test_both_uv_projects_are_covered(self):
-        assert [p.directory for p in orchestrator.PROJECTS] == [
-            ".",
-            "packages/conformance",
-        ]
+    def test_the_workspace_lock_is_the_only_project(self):
+        """packages/conformance is a member of the root uv workspace (FND-4671),
+        so the root lock covers it. A second entry would point the bound at a
+        lock that no longer exists and fail every refresh."""
+        assert [p.directory for p in orchestrator.PROJECTS] == ["."]
+        assert orchestrator.PYATLAN_LOCK == "uv.lock"
 
-    def test_neither_project_holds_the_sdk_and_both_exempt_pyatlan(self):
-        """packages/conformance path-sources atlan-application-sdk from this
-        checkout (FND-4256), so its lock has no registry SDK to hold. A hold
-        here would be a stale leftover of the PyPI pin that ran its tests
-        against an old release."""
-        exempt = {p.directory: set(p.exempt) for p in orchestrator.PROJECTS}
-        hold = {p.directory: set(p.hold) for p in orchestrator.PROJECTS}
-        assert hold["packages/conformance"] == set()
-        assert exempt["packages/conformance"] == {"pyatlan"}
-        # The root project consumes neither of its own packages from PyPI:
-        # atlan-application-sdk IS this project, and the conformance package is
-        # path-sourced via [tool.uv.sources].
-        assert exempt["."] == {"pyatlan"}
-        assert hold["."] == set()
+    def test_the_root_holds_nothing_and_exempts_pyatlan(self):
+        """The workspace consumes neither of its own packages from PyPI:
+        atlan-application-sdk IS the root, and the conformance package is a
+        workspace member."""
+        (root,) = orchestrator.PROJECTS
+        assert set(root.exempt) == {"pyatlan"}
+        assert set(root.hold) == set()
 
 
 class TestBoundProject:
@@ -155,7 +146,7 @@ class TestBoundProject:
         for project in orchestrator.PROJECTS:
             orchestrator.bound_project(project, "P7D", "origin/main", tmp_path)
 
-        assert len(calls) == 2
+        assert len(calls) == len(orchestrator.PROJECTS) == 1
         for argv, project in zip(calls, orchestrator.PROJECTS):
             assert argv[argv.index("--window") + 1] == "P7D"
             assert argv[argv.index("--baseline-ref") + 1] == "origin/main"
@@ -212,29 +203,23 @@ class TestMain:
             lambda root: pytest.fail("pyatlan did not move; nothing to regenerate"),
         )
 
-    def test_one_commit_carries_every_lock(self, monkeypatch, in_repo):
-        """One commit, not two: each push re-fires the PR's whole check suite."""
+    def test_the_bounded_lock_is_committed(self, monkeypatch, in_repo):
         self._stub_bound(monkeypatch)
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 0
-        assert head_files(in_repo) == {
-            "uv.lock",
-            "packages/conformance/uv.lock",
-        }
+        assert head_files(in_repo) == {"uv.lock"}
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
 
     def test_a_failed_bound_commits_nothing_at_all(self, monkeypatch, in_repo):
-        """Fail-closed, and specifically not fail-partial.
-
-        The second project failing must not leave the first one's bounded lock
-        committed on its own — a half-bounded branch still auto-merges, and it
-        would look like the control worked.
+        """Fail-closed: a bound that fails after writing must not leave its
+        partial lock committed — the branch still auto-merges, and it would
+        look like the control worked.
         """
 
         def fake_main(argv: list[str]) -> int:
             directory = Path(argv[argv.index("--project-dir") + 1])
             (directory / "uv.lock").write_text(uv_lock(marker="bounded"))
-            return 0 if directory.name != "conformance" else 1
+            return 1
 
         monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
 
@@ -416,8 +401,6 @@ class TestTwoJobHandoff:
         """
         artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
         (artifact / "uv.lock").write_text(uv_lock(marker="bounded"))
-        if missing == "uv.lock":
-            (artifact / orchestrator.PYATLAN_LOCK).write_text(uv_lock(marker="x"))
         (artifact / missing).unlink()
 
         with pytest.raises(FileNotFoundError, match=missing):

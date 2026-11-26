@@ -381,7 +381,7 @@ class TestDepFileAllowlist:
             ".github/workflows/tests.yaml",
             ".github/dependabot.yml",
             "uv.lock",
-            "packages/conformance/uv.lock",
+            "packages/sub/uv.lock",
             "package-lock.json",
             "requirements.txt",
             "pyproject.toml",

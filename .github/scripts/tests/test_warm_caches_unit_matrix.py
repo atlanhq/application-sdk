@@ -41,9 +41,11 @@ def test_saved_venv_carries_bytecode():
     assert install["env"]["UV_COMPILE_BYTECODE"] == "1"
 
 
-def test_venv_key_still_follows_the_lock_and_conformance_source():
+def test_venv_key_follows_the_lock():
+    # The conformance package is an editable workspace member (FND-4671), so
+    # .venv never holds a built copy of its source to go stale.
     key = step_named(load_workflow(SETUP_DEPS), "Cache virtual environment")["with"][
         "key"
     ]
-    assert "hashFiles('uv.lock', 'packages/conformance/conformance/**')" in key
+    assert "hashFiles('uv.lock') }}" in key
     assert "-pyc-" in key

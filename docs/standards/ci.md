@@ -1033,7 +1033,7 @@ nothing.
 ### arm64 for Python jobs: not now
 
 `ubuntu-24.04-arm` is $0.005/min, about 17% under `ubuntu-latest`. The
-SDK, conformance, mysql and metabase locks all resolve to wheels with an
+SDK (which covers conformance), mysql and metabase locks all resolve to wheels with an
 aarch64 build. openapi's does not: `scalene` (a dev dependency) ships x86_64
 wheels only, so its `uv sync` would compile it from source, which costs more
 than the 17% saves. The other cost is a second architecture to debug in every
@@ -1671,18 +1671,19 @@ and change nothing. Hence `--baseline-ref origin/<default-branch>`, which also
 makes "never roll back what main ships" structural: the driver's rollback gate
 then compares against main by construction.
 
-**Two uv projects, one exempt set.** `packages/conformance` is a separate uv
-project with its own lock. Like the root it never resolves `atlan-application-sdk`
-from PyPI: its `[tool.uv.sources]` path-sources this checkout (FND-4256), so its
-tests run against the tree they ship beside and there is no registry SDK for the
-bound to hold. Both projects exempt only pyatlan. That source is not published
-metadata: the released conformance wheel still declares a plain
-`atlan-application-sdk[sql]` test extra. A change to the SDK's own dependencies
-therefore also re-resolves `packages/conformance/uv.lock`.
+**One lock for the whole tree.** `packages/conformance` is a member of the root
+uv workspace (FND-4671), so the root `uv.lock` covers it and the bound runs once,
+exempting only pyatlan. The workspace never resolves `atlan-application-sdk`
+from PyPI: it is the workspace root, so conformance's tests run against the tree
+they ship beside (FND-4256) and there is no registry SDK for the bound to hold.
+The workspace source is not published metadata: the released conformance wheel
+still declares a plain `atlan-application-sdk[sql]` test extra. Until FND-4671
+the package carried a second lock that re-resolved the SDK through that extra,
+and every SDK dependency change had to relock it too.
 
-**One commit, not one per lock.** Every push to the branch re-fires the PR's
-entire required-check suite, so the bound rewrites both uv locks in a single
-commit.
+**One commit, not one per file.** Every push to the branch re-fires the PR's
+entire required-check suite, so the bounded lock and, when pyatlan moved, the
+regenerated relationship table land in a single commit.
 
 The workflow pushes with a minted App token, not `GITHUB_TOKEN`: a `GITHUB_TOKEN`
 push does not re-trigger the PR's required checks, which would leave the PR green
@@ -1718,7 +1719,7 @@ problem. Carry the status or accept that the PR needs a human.
 
 ### One implementation for both fix-up lanes
 
-`renovate-lock-cooldown.yaml` and `renovate-conformance-lock-sync.yaml` both
+`renovate-lock-cooldown.yaml` and `renovate-pyatlan-table-sync.yaml` both
 call `renovate-branch-fixup.yaml` (FND-4928). The caller owns the trigger, the
 concurrency group and the driver's arguments. The reusable owns the actor
 allowlist, the re-entrancy guard, the read-only `generate` job, the App-token
@@ -1836,20 +1837,22 @@ a `python3` being on the runner before `setup-python`. There is still no
 conditional shell. `test_setup_deps_python_pin_wiring.py` runs both steps, and
 also fails if `tests-reusable.yaml` ever passes a `python-version` to a tier.
 
-### The lint toolchain: three ruff pins that move as one
+### The lint toolchain: two ruff pins that move as one
 
-ruff is the exception to "declared once": it has to be pinned in three files
-that three different readers own. The `ruff-pre-commit` rev in
+ruff is the exception to "declared once": it has to be pinned in two files
+that two different readers own. The `ruff-pre-commit` rev in
 `.pre-commit-config.yaml` is what CI's `Pre-commit Checks` runs. The `ruff==`
-dev pin in `pyproject.toml` is what `uv run ruff` runs locally. The one in
-`packages/conformance/pyproject.toml` is what that package's scaffold-lint test
-runs. pre-commit cannot read a version from the lock, so the three literals
-stay, and two things keep them equal:
+dev pin in `pyproject.toml` is what `uv run ruff` runs locally.
+`packages/conformance/pyproject.toml` names ruff unpinned: the package is a
+member of the root uv workspace (FND-4671), so the one lock gives its
+scaffold-lint test the root's ruff. pre-commit cannot read a version from the
+lock, so the two literals stay, and two things keep them equal:
 
 - Renovate's `pre-commit` manager is enabled in `renovate.json`, and a `ruff`
-  group puts the hook rev and both pypi pins in one PR. The group is never
+  group puts the hook rev and the pypi pin in one PR. The group is never
   auto-merged, because a ruff release can change what CI enforces.
-- `.github/scripts/tests/test_lint_guards.py` fails if the three disagree, if
+- `.github/scripts/tests/test_lint_guards.py` fails if they or the locked ruff
+  disagree, if
   isort comes back as a second import sorter, or if either ruff config stops
   selecting `I`.
 

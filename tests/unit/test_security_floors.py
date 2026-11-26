@@ -27,13 +27,14 @@ from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# (pyproject, uv.lock) of each published package that declares constraints.
+# (pyproject, uv.lock) of each published package in the uv workspace. The
+# conformance package is a workspace member (FND-4671): it shares the root lock,
+# and the root's [tool.uv] constraint-dependencies apply to it too, so its
+# scopes are checked against those.
+WORKSPACE_PYPROJECT = ROOT / "pyproject.toml"
 PACKAGES = [
     (ROOT / "pyproject.toml", ROOT / "uv.lock"),
-    (
-        ROOT / "packages/conformance/pyproject.toml",
-        ROOT / "packages/conformance/uv.lock",
-    ),
+    (ROOT / "packages/conformance/pyproject.toml", ROOT / "uv.lock"),
 ]
 
 _LOWER_BOUND_OPS = {">=", ">", "==", "===", "~="}
@@ -166,9 +167,9 @@ def _missing_floors(
 def test_every_constraint_floor_on_a_runtime_package_is_published(
     pyproject: Path, lock_path: Path
 ) -> None:
-    config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    constraints = config["tool"]["uv"].get("constraint-dependencies", [])
-    project = config["project"]
+    workspace = tomllib.loads(WORKSPACE_PYPROJECT.read_text(encoding="utf-8"))
+    constraints = workspace["tool"]["uv"].get("constraint-dependencies", [])
+    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     scopes = [frozenset()] + [
         frozenset({e}) for e in project.get("optional-dependencies", {})

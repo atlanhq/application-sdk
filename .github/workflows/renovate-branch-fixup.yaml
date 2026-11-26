@@ -3,9 +3,9 @@ name: Fix up a Renovate branch
 # The one implementation of "rewrite files on a Renovate branch Mend pushed,
 # then push the result back onto that branch" (FND-4928). Two lanes call it:
 #
-#   - renovate-lock-cooldown.yaml        bound_lock_branch.py (FND-376)
-#   - renovate-conformance-lock-sync.yaml renovate_conformance_lock_sync.py
-#                                         (FND-4439, FND-5018)
+#   - renovate-lock-cooldown.yaml     bound_lock_branch.py (FND-376)
+#   - renovate-pyatlan-table-sync.yaml renovate_pyatlan_table_sync.py
+#                                      (FND-4439, FND-5018, FND-4671)
 #
 # Each caller owns its trigger (branches, paths) and its concurrency group. This
 # file owns everything the lanes share, so a fix lands once:

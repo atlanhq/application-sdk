@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 442,
-    "warning": 5295
+    "warning": 5291
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -783,7 +783,7 @@
     },
     ".github/scripts/tests/test_vuln_triage.py": {
       "error:reportOptionalMemberAccess": 2,
-      "warning:reportUnknownMemberType": 90
+      "warning:reportUnknownMemberType": 88
     },
     ".github/scripts/tests/test_wait_for_emulators.py": {
       "warning:reportUnknownMemberType": 28
@@ -842,7 +842,7 @@
       "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/vuln_triage/run.py": {
-      "warning:reportUnknownMemberType": 17
+      "warning:reportUnknownMemberType": 15
     },
     ".github/scripts/vuln_triage/scan.py": {
       "warning:reportUnknownMemberType": 13

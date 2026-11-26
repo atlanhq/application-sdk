@@ -2,11 +2,11 @@ repos:
   # Ruff is the only linter, formatter AND import sorter (isort was dropped in
   # FND-4247: the hook and the dev group pinned different isort versions, so
   # `uv run isort` rewrote files CI accepted). The rev must equal the
-  # `ruff==` pin in pyproject.toml's dev group and in
-  # packages/conformance/pyproject.toml, so `uv run ruff` sorts and formats
-  # exactly like this hook. Renovate bumps all three in one PR (the `ruff`
-  # group in renovate.json); .github/scripts/tests/test_lint_guards.py fails
-  # if they ever disagree.
+  # `ruff==` pin in pyproject.toml's dev group, so `uv run ruff` sorts and
+  # formats exactly like this hook. packages/conformance is a member of the
+  # root uv workspace and takes the same locked ruff (FND-4671). Renovate
+  # bumps both pins in one PR (the `ruff` group in renovate.json);
+  # .github/scripts/tests/test_lint_guards.py fails if they ever disagree.
   #
   # `--fix` keeps the auto-fix isort used to give: an unsorted import block
   # is rewritten in place (and the hook still fails, so CI stays a check).
@@ -123,7 +123,7 @@ repos:
       # C901 / PLR0915 are not in packages/conformance's ruff `select` (~190
       # existing functions exceed them); they are held to a per-file baseline
       # that only shrinks (FND-4668, docs/standards/ci.md). Needs only ruff,
-      # which the root env pins to the same version as the package.
+      # which the workspace lock holds at one version for root and package.
       - id: conformance-complexity-baseline
         name: conformance complexity baseline
         entry: uv run --frozen python packages/conformance/tests/test_complexity_baseline.py

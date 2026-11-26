@@ -95,15 +95,18 @@ jobs:
         run: python .github/scripts/conformance_release.py
 
       # The root uv.lock records this workspace member's version, so the bump
-      # above leaves it stale and the gate's `uv lock --check` fails the
-      # release PR. Relock so the bump and the lock land in one commit.
+      # above leaves it stale and the wheel gate's `uv export --locked` fails
+      # the release. Relock so the bump and the lock land in one commit.
       - name: Relock workspace
         if: steps.versions.outputs.skip != 'true'
         run: uv lock
 
+      # --out-dir: packages/conformance is a uv workspace member (FND-4671), and
+      # a member's `uv build` otherwise writes to the workspace root's dist/,
+      # where neither the wheel gate nor `uv publish` below looks.
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
-        run: cd packages/conformance && uv build
+        run: cd packages/conformance && uv build --out-dir dist
 
       # Install that wheel into a clean venv outside the checkout and import
       # every module first, run every console script and subcommand, and run

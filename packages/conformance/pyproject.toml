@@ -71,12 +71,12 @@ testpaths = ["tests"]
 # pre-commit hook: tests/test_bootstrap_scaffold_lint.py runs it over the
 # scaffolds bootstrap force-writes into consumer repos (FND-445), which
 # have to stay lint-clean under configs stricter than this repo's.
-# Pinned exactly — an unpinned linter makes that guard's verdict a
-# function of cache age rather than of the files it checks. Must equal the
-# root dev group's pin and the ruff-pre-commit rev (FND-4247, enforced by
-# .github/scripts/tests/test_lint_guards.py).
+# Unpinned here on purpose: this package shares the root uv.lock (FND-4671),
+# which holds one ruff for the whole workspace, so the root dev group's exact
+# `ruff==` pin is the version this group installs too. A second pin here could
+# only agree with it or fail to lock.
 [dependency-groups]
-dev = ["ruff==0.17.6"]
+dev = ["ruff"]
 
 [tool.ruff.lint]
 # This file is the nearest ruff config for packages/conformance/, so the root
@@ -138,35 +138,16 @@ exclude = ["conformance/bootstrap/templates/renovate.json", "*.md"]
 "conformance/tools/**" = ["T201", "PLC0415"]
 "conformance/tools/generate_rule_docs.py" = ["E402"]
 
-# Pin the resolver's default index to PyPI explicitly (FND-1928).
-#
-# This package carries its own `uv.lock`, so it needs its own pin: a project-level default
-# index is what stops the machine-wide Endor Labs package firewall in `~/.config/uv/uv.toml`
-# from rewriting every URL in that lock to `factory.endorlabs.com/...` on the next `uv`
-# command. The rewrite is silent, changes no version or hash, and makes CI fail at dependency
-# install with `401 Unauthorized` once committed. See the longer note in the repo-root
-# pyproject.toml; D012/D013 in this very suite are what enforce it fleet-wide.
 # The `test` extra's atlan-application-sdk resolves from this checkout, not
 # PyPI (FND-4256). 19 test files import application_sdk, and the parity tests
 # (tests/test_app_name_alignment.py) compare conformance's copied helpers with
-# the SDK's: against a PyPI lock they checked whichever release that lock last
-# pinned, not the code beside them. Editable so a source change is seen without
-# a rebuild. [tool.uv.sources] is never published metadata, so the released
-# wheel still declares a plain `atlan-application-sdk[sql]` requirement.
+# the SDK's: against a PyPI pin they checked whichever release was pinned, not
+# the code beside them. This package is a member of the root uv workspace
+# (FND-4671), so the SDK is the workspace root, installed editable, and the
+# root uv.lock is the only lock: the resolver index pin (FND-1928) and the
+# security constraint-dependencies live in the root pyproject.toml, which uv
+# applies to every member. [tool.uv.sources] is never published metadata, so
+# the released wheel still declares a plain `atlan-application-sdk[sql]`
+# requirement.
 [tool.uv.sources]
-atlan-application-sdk = { path = "../..", editable = true }
-
-[[tool.uv.index]]
-name = "pypi"
-url = "https://pypi.org/simple"
-default = true
-
-[tool.uv]
-# Pins this package's own lock only. certifi and authlib are not runtime
-# dependencies of conformance (they arrive via the `test` extra's
-# atlan-application-sdk), so no published floor: the SDK already publishes one
-# for its consumers (authlib through its pyatlan floor).
-constraint-dependencies = [
-    "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
-    "authlib>=1.9.1",       # CVE-2026-96760, CVE-2026-28802, GHSA-jj8c-mmj3-mmgv
-]
+atlan-application-sdk = { workspace = true }

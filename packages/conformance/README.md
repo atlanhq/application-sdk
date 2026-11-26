@@ -49,6 +49,15 @@ The `sdk_contract_fields.json` drift test does not use it yet and can still skip
 Run each as `uv run atlan-application-sdk-conformance <command>` from
 `packages/conformance/`.
 
+## Developing in this repository
+
+`packages/conformance` is a member of the repository's uv workspace, so it has
+no `uv.lock` of its own: the root `uv.lock` resolves it together with the SDK,
+and its `test` extra installs this checkout's SDK, editable. From
+`packages/conformance/`, `uv run --extra test pytest` runs the package's tests
+against the tree beside them. A dependency change here relocks with `uv lock`
+anywhere in the repository.
+
 See [preflight conformance](conformance/docs/preflight-testing.md) for static checks, opt-in behavior scenarios, and their coverage limits, and the [F-series rule catalog](conformance/docs/rules/preflight.md) for the rules themselves.
 
 ## Grading a change instead of the repository (`--since`)

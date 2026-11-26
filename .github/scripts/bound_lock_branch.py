@@ -30,15 +30,15 @@ shape:
    base branch also makes "no rollback against what main ships" structural: the
    driver's rollback gate then compares against main by construction.
 
-2. **Two uv projects, one exempt set.** ``packages/conformance`` is a separate
-   uv project with its own lock. Like the root project it never resolves
-   ``atlan-application-sdk`` from PyPI: it path-sources this checkout through
-   ``[tool.uv.sources]`` (FND-4256), so there is no registry version for the
-   bound to hold or move.
+2. **One uv project.** ``packages/conformance`` is a member of the root uv
+   workspace (FND-4671), so the root ``uv.lock`` covers it and the bound runs
+   once. The workspace never resolves ``atlan-application-sdk`` from PyPI (it is
+   the workspace root), so there is no registry version for the bound to hold or
+   move. Before FND-4671 the package carried a second lock, bounded separately.
 
 3. **One commit, not two.** Each push to the branch re-fires the PR's entire
-   required-check suite. Bounding every lock in a single commit costs one CI wave
-   instead of one per file.
+   required-check suite. The bounded lock and the regenerated table ride in a
+   single commit, one CI wave instead of one per file.
 
 4. **A pyatlan move regenerates the table derived from it.** The conformance
    package commits ``relationship_directions.json``, built from the installed
@@ -97,24 +97,19 @@ class Project:
 # should be choosing — and keeping them here keeps each exemption next to the
 # reason it exists.
 PROJECTS: tuple[Project, ...] = (
-    # Root. The SDK does not consume itself, and atlan-application-sdk-conformance
-    # is path-sourced from packages/conformance via [tool.uv.sources], so it never
-    # resolves from PyPI and the bound never sees it. pyatlan is exempt because it
-    # is Atlan-published: a week's hold on pyatlan is a week's hold on the SDK,
-    # whose own `pyatlan>=N,<N+1` cap is what gates a pyatlan major reaching the
-    # fleet at all.
+    # The workspace root, whose lock also covers packages/conformance
+    # (FND-4671). The SDK does not consume itself, and
+    # atlan-application-sdk-conformance is a workspace member, so neither
+    # resolves from PyPI and the bound never sees them. pyatlan is exempt
+    # because it is Atlan-published: a week's hold on pyatlan is a week's hold
+    # on the SDK, whose own `pyatlan>=N,<N+1` cap is what gates a pyatlan major
+    # reaching the fleet at all.
     Project(directory=".", exempt=("pyatlan",)),
-    # The conformance package's `test` extra takes atlan-application-sdk from this
-    # checkout (path-sourced via its [tool.uv.sources], FND-4256), so like the
-    # root it has no registry SDK to hold. It used to hold one from PyPI, which
-    # left its tests running against an old release instead of this tree.
-    Project(directory="packages/conformance", exempt=("pyatlan",)),
 )
 
-# The lock the relationship table is generated from. packages/conformance is the
-# project whose environment `gen-relationship-directions` runs in, so its lock —
-# not the root's — decides which pyatlan the table describes.
-PYATLAN_LOCK = "packages/conformance/uv.lock"
+# The lock the relationship table is generated from: the workspace lock, which
+# `gen-relationship-directions` runs against from packages/conformance.
+PYATLAN_LOCK = "uv.lock"
 RELATIONSHIP_DIRECTIONS = (
     "packages/conformance/conformance/data/relationship_directions.json"
 )
@@ -180,6 +175,8 @@ def regenerate_relationship_directions(root: Path) -> int:
 
     `--frozen` installs exactly what the bound left behind and never re-locks:
     without it uv is free to rewrite the lock this script has just bounded.
+    `--directory packages/conformance` selects that workspace member, whose
+    `test` extra brings in the SDK and so pyatlan, from the root lock.
     """
     return subprocess.run(
         [
@@ -201,7 +198,7 @@ def apply_outputs(
     source: Path, root: Path, paths: tuple[str, ...] = OUTPUT_PATHS
 ) -> None:
     """Copy ``paths`` (default OUTPUT_PATHS) from an artifact directory into the
-    checkout. renovate_conformance_lock_sync.py reuses this with its own output list.
+    checkout. renovate_pyatlan_table_sync.py reuses this with its own output list.
 
     Only the declared paths are read, so nothing else in the artifact can reach
     a branch that auto-merges. Every one must be present: `bound` uploads all of
@@ -230,10 +227,10 @@ def stage_outputs(
     """Copy ``paths`` from the checkout into ``dest`` at their repo paths.
 
     renovate-branch-fixup.yaml uploads ``dest`` as the artifact's one folder,
-    so the artifact holds ``packages/conformance/uv.lock`` and not just
-    ``uv.lock``. renovate_conformance_lock_sync.py reuses this with its own
-    output list. Given
-    several file paths, upload-artifact roots the artifact at their least
+    so the artifact holds every output at its repo path, e.g.
+    ``packages/conformance/conformance/data/relationship_directions.json`` and
+    not just ``relationship_directions.json``. renovate_pyatlan_table_sync.py
+    reuses this with its own output list. Given several file paths, upload-artifact roots the artifact at their least
     common ancestor and drops that prefix, which ``apply_outputs`` (correctly)
     reads as a missing output (FND-5015). One folder has no such rule to trip.
 
