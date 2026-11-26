@@ -320,6 +320,43 @@ that stopped reporting the rule fails instead of matching an emptied baseline.
 The `ann401-baseline` pre-commit hook runs the check on every change under
 `application_sdk/`.
 
+## SDK function size: a C901 / PLR0915 baseline that only shrinks
+
+ruff's C901 (McCabe complexity above 10) and PLR0915 (more than 50 statements)
+are not in the root ruff `select`: `application_sdk/` had 126 over-limit
+functions when they were enabled (FND-4266). Each is named, by file, rule and
+qualified name (`Class.method`), in `.github/scripts/complexity_baseline.json`,
+and `.github/scripts/check_complexity_baseline.py` holds the tree to it:
+
+- **A function not in the baseline fails.** It is new, or grew past a limit.
+  Split it. The failure prints the ruff finding for each one.
+- **A baseline function no longer over a limit also fails.** Lock the
+  improvement in with `--update`. `--update` refuses to add a function unless
+  given `--allow-increase`, and the base check below still catches that.
+- **A baseline entry the base revision lacks fails.** The `CI script tests` job
+  passes `--base-sha`. The match is on (rule, qualified name) in any file, so a
+  module split that moves an over-limit function passes; renaming one counts as
+  a new function. A base with no baseline file is measured on its own tree.
+
+```bash
+uv run --frozen python .github/scripts/check_complexity_baseline.py           # check
+uv run --frozen python .github/scripts/check_complexity_baseline.py --update  # lock in a reduction
+```
+
+Naming functions rather than counting them per file means paying one function
+down cannot buy room for a new one in the same file.
+
+The baseline is the only suppression. As with ANN401, ruff runs with
+`--isolated` and `--ignore-noqa`, so no `select`, `ignore`, `per-file-ignores`,
+`exclude`, nested `ruff.toml`, raised `max-complexity` / `max-statements` or
+`# noqa: C901` can hide a function. The thresholds (ruff's defaults) and the
+target version are passed on the command line. A tree with nothing left passes
+when ruff still flags a canary over both limits.
+
+The `complexity-baseline` pre-commit hook runs the check on every change under
+`application_sdk/`. `packages/conformance` has its own count-based baseline for
+the same rules (above).
+
 ## Artifacts move through the retry composites
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403

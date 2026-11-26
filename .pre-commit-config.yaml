@@ -175,3 +175,15 @@ repos:
         language: system
         files: ^(application_sdk/.*\.py|\.github/scripts/(ann401_baseline\.json|check_ann401_baseline\.py)|pyproject\.toml)$
         pass_filenames: false
+      # ruff C901 (complexity > 10) and PLR0915 (> 50 statements) are not in
+      # ruff's `select`: application_sdk/ had 126 over-limit functions when they
+      # were enabled. Those functions are named in
+      # .github/scripts/complexity_baseline.json, which only shrinks (FND-4266,
+      # docs/standards/ci.md). Locally without a base SHA; CI's `CI script
+      # tests` job also holds the baseline to the base revision's.
+      - id: complexity-baseline
+        name: C901 / PLR0915 (function size) baseline
+        entry: uv run --frozen python .github/scripts/check_complexity_baseline.py
+        language: system
+        files: ^(application_sdk/.*\.py|\.github/scripts/(complexity_baseline\.json|check_complexity_baseline\.py))$
+        pass_filenames: false
