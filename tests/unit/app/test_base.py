@@ -728,8 +728,8 @@ class TestAppState:
     def test_app_state_with_execution_id_patched_raises_app_context_error(
         self,
     ) -> None:
-        # App tests patch _get_execution_id_from_task to succeed while there is
-        # no activity context; the run-id probe must still raise AppContextError.
+        # Patching _get_execution_id_from_task does not supply an activity
+        # context; app_state must still raise AppContextError, not RuntimeError.
         app = self._app()
         with (
             mock.patch(
