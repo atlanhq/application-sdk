@@ -29,11 +29,7 @@ Install the SDK:
 uv add atlan-application-sdk
 ```
 
-Start local infrastructure (Temporal + Dapr sidecars):
-
-```bash
-uv run poe start-deps
-```
+You do not need to start any infrastructure: `run_dev_combined()` starts an embedded Dapr runtime and an in-process Temporal server (see [Getting Started](./getting-started.md)). To run against a standalone Temporal server and Dapr sidecar instead, see the [Setup Overview](../standards/setup.md#optional-external-temporal-and-dapr).
 
 ## Project Structure
 

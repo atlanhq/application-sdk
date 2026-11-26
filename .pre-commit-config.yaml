@@ -120,6 +120,17 @@ repos:
         language: system
         files: (\.md|^packages/conformance/conformance/data/deprecated_symbols\.json|^\.github/scripts/check_docs_deprecated_imports\.py)$
         pass_filenames: false
+      # AGENTS.md (read by Codex, Cursor and other agents) is a generated
+      # pointer at the CLAUDE.md beside it; when both held content they drifted
+      # and non-Claude agents missed rules (FND-4273). Fails on any AGENTS.md
+      # that is not the pointer, and on a CLAUDE.md without one. Fix with
+      # `python .github/scripts/check_agents_md_sync.py --fix`. Stdlib only.
+      - id: check-agents-md-sync
+        name: check AGENTS.md is the generated pointer to CLAUDE.md
+        entry: python .github/scripts/check_agents_md_sync.py
+        language: python
+        files: (^|/)(AGENTS|CLAUDE)\.md$|^\.github/scripts/check_agents_md_sync\.py$
+        pass_filenames: false
       # Nothing executes the ```python blocks under docs/, so they drift: every
       # block must parse, and its application_sdk imports must resolve against
       # the source tree (FND-4272). Runs on SDK changes too, since renaming a

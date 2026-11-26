@@ -30,10 +30,13 @@ infrastructure, configures `.env`, and launches the app.
 
 ### 1. Verify prerequisites
 
-Check that each tool is installed:
+The prerequisites are listed once, in the SDK's
+[Setup Overview](../../../docs/standards/setup.md). This skill runs the app against
+a standalone Temporal server and Dapr sidecar (its optional external path), so it
+needs the Temporal CLI as well as Python and uv. Check each is installed:
 
 ```bash
-python --version          # must be 3.11+
+python --version          # 3.11 to 3.14
 uv --version
 temporal --version        # temporal CLI
 ```
@@ -42,9 +45,9 @@ temporal --version        # temporal CLI
 > (`application_sdk.dev._dapr`) and invoked directly — see step 5.
 
 If any are missing, point the user to the platform setup guide:
-- [macOS](../../docs/setup/MAC.md)
-- [Linux](../../docs/setup/LINUX.md)
-- [Windows](../../docs/setup/WINDOWS.md)
+- [macOS](../../../docs/setup/MAC.md)
+- [Linux](../../../docs/setup/LINUX.md)
+- [Windows](../../../docs/setup/WINDOWS.md)
 
 ### 2. Install Python dependencies
 

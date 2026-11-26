@@ -281,11 +281,14 @@ docs = [
 
 [tool.poe.tasks]
 download-components.shell = "ls -l components/*.yaml"
-# Dapr and Temporal service tasks
-start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
+# Dapr and Temporal service tasks. start-dapr runs the daprd the SDK pins
+# (application_sdk.dev._dapr downloads it on first use), as production does, so
+# no Dapr CLI or `dapr init` is needed; start-deps needs only the Temporal CLI.
+# Prerequisites are listed once, in docs/standards/setup.md.
+start-dapr.shell = '''"$(python -c 'from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())')" --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components'''
 
-# if you need to test dapr with environment values for an app
-#start-dapr.shell = "set -a && source .env && set +a && dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
+# To give daprd an app's environment, prefix the command above with
+# `set -a && source .env && set +a && `.
 
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 # Export Dapr ports before backgrounding so `uv run main.py` (run separately)
