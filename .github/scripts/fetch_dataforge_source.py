@@ -374,7 +374,7 @@ def _swap_hostname(host: str, dns_host: str) -> str:
     return dns_host
 
 
-def prefer_dns_host(raw: dict) -> dict:
+def prefer_dns_host(raw: dict[str, Any]) -> dict[str, Any]:
     """Return *raw* with ``host`` pointed at ``dns_host`` when one is published.
 
     See the module docstring: Twingate tunnels ``*.dataforge.atlan.dev``, not
@@ -396,7 +396,7 @@ def prefer_dns_host(raw: dict) -> dict:
             file=sys.stderr,
         )
         return raw
-    out = dict(raw)
+    out: dict[str, Any] = dict(raw)
     out.setdefault("original_host", host)
     out["host"] = _swap_hostname(host.strip(), dns_host)
     return out

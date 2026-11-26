@@ -379,7 +379,9 @@ def test_absent_dns_host_leaves_fields_untouched(dns_host):
         "nodots",
     ],
 )
-def test_malformed_dns_host_is_ignored(dns_host, capsys):
+def test_malformed_dns_host_is_ignored(
+    dns_host: str, capsys: pytest.CaptureFixture[str]
+) -> None:
     raw = {"host": "h.example.com", "dns_host": dns_host}
     assert fds.prefer_dns_host(raw) == raw
     assert "not a hostname" in capsys.readouterr().err
@@ -404,7 +406,9 @@ def test_dns_host_does_not_mutate_input():
     assert raw == {"host": "h.example.com", "dns_host": _DNS}
 
 
-def test_main_exports_dns_host_as_host(monkeypatch, capsys):
+def test_main_exports_dns_host_as_host(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
     )
