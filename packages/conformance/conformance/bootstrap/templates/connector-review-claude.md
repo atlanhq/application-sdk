@@ -61,8 +61,13 @@ be validated:
 - **Unit** tests run on every commit pushed to the pull request.
 - **Integration** tests run when the pull request goes through the merge
   queue.
-- **e2e** runs only as part of a release: on the version-bump pull request,
+- **e2e** is part of a release: it runs on the version-bump pull request,
   through `/gate-check`.
+
+These tiers are policy for agents, not a workflow restriction: the `/e2e`
+command still starts a live-tenant run on any pull request for the people
+who need it. An agent never uses it; the only e2e run an agent may start is
+`/gate-check` on a release (version-bump) pull request.
 
 An agent validates a change with unit and integration tests only: run them
 locally before pushing, then rely on the pull request's `tests` checks and
