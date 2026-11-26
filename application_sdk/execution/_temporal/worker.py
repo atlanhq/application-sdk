@@ -19,6 +19,7 @@ from temporalio.runtime import Runtime
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
+from temporalio.workflow import NondeterminismError
 from typing_extensions import deprecated
 
 from application_sdk._runtime.cgroup import available_cpus
@@ -59,6 +60,14 @@ logger = get_logger(__name__)
 # Fails the workflow RUN rather than the retryable workflow TASK. Matched by
 # type, so only never-retryable types belong here.
 _WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (ValidationError,)
+
+# Added only when ``create_worker(fail_run_on_nondeterminism=True)``: a test
+# worker. ``RestrictedWorkflowAccessError`` (a sandbox refusal such as
+# ``date.today()`` in workflow code) subclasses ``NondeterminismError``, as does
+# a replay history mismatch. In production both fail the workflow TASK, which
+# Temporal retries until a fixed build is deployed; a test waiting on that run
+# would instead wait out its job timeout with no failure ever reported.
+_NONDETERMINISM_FAILURE_TYPES: tuple[type[BaseException], ...] = (NondeterminismError,)
 
 # Depth cap for rendering an exception's cause chain. temporalio's poll fatal is
 # two links deep; anything much longer is a runaway chain, not diagnostics.
@@ -767,6 +776,7 @@ def create_worker(
     on_fatal_error: Callable[[BaseException], None] | None = None,
     shutdown_drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
     on_drained: Callable[[], None] | None = None,
+    fail_run_on_nondeterminism: bool = False,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -833,6 +843,14 @@ def create_worker(
             including a restart after a fatal error; the callback decides
             whether that stop is a shutdown. The main entry point arms its
             post-drain exit deadline from it.
+        fail_run_on_nondeterminism: Fail the workflow run, not just its
+            workflow task, when workflow code is non-deterministic: a sandbox
+            refusal (``RestrictedWorkflowAccessError``, e.g. ``date.today()``
+            in ``run()``) or a replay mismatch. Leave ``False`` in production,
+            where a failed workflow task waits for a fixed build and the run
+            then continues. Test workers set it so the caller gets the error
+            instead of a run that never finishes; the integration fixture kit's
+            ``worker`` fixture does.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -1276,7 +1294,11 @@ def create_worker(
         # at the configured interval (~10s) rather than at 80% of timeout.
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
-        workflow_failure_exception_types=_WORKFLOW_FAILURE_EXCEPTION_TYPES,
+        workflow_failure_exception_types=(
+            _WORKFLOW_FAILURE_EXCEPTION_TYPES + _NONDETERMINISM_FAILURE_TYPES
+            if fail_run_on_nondeterminism
+            else _WORKFLOW_FAILURE_EXCEPTION_TYPES
+        ),
     )
     # Only forward max_concurrent_workflow_tasks when explicitly set; passing
     # None would override Temporal's default with None and crash the worker.

@@ -912,7 +912,15 @@ async def worker(
     del infrastructure
     verify_registration(integration_app_cls)
     with artifact_preservation(integration_options):
-        async with create_worker(temporal_client, task_queue=integration_task_queue):
+        # fail_run_on_nondeterminism: a sandbox refusal in workflow code
+        # (date.today(), os.getenv, ...) fails the run, so execute_app raises
+        # it at once. Production retries the workflow task until a fixed build
+        # is deployed; here that would hang the test until the job timeout.
+        async with create_worker(
+            temporal_client,
+            task_queue=integration_task_queue,
+            fail_run_on_nondeterminism=True,
+        ):
             yield
 
 

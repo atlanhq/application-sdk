@@ -33,6 +33,7 @@ _APP_MODULE = '''
 """A minimal registered App, at module level so Temporal's sandbox can import it."""
 
 import tempfile
+from datetime import date
 from pathlib import Path
 
 from application_sdk.app.base import App
@@ -86,6 +87,15 @@ class PublishApp(App):
 
     async def run(self, input: EchoInput) -> PublishOutput:
         return await self.write(input)
+
+
+class WallClockApp(App):
+    """Reads the wall clock in workflow code, which the sandbox refuses."""
+
+    name = "kitwallclock"
+
+    async def run(self, input: EchoInput) -> EchoOutput:
+        return EchoOutput(result=date.today().day)
 '''
 
 # Verbatim the shape documented in docs/guides/integration-fixtures.md.
@@ -335,6 +345,51 @@ def test_preserve_artifacts_opt_in_keeps_intermediates(adopting_suite: Path) -> 
     conftest = suite / "conftest.py"
     conftest.write_text(conftest.read_text() + _PRESERVE_CONFTEST_TAIL)
     (suite / "test_kit.py").write_text(_PRESERVE_TEST)
+    result = _run_pytest(adopting_suite, "-q")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
+
+
+# The bound the child puts on the run. A run that fails fast finishes in a few
+# seconds; without the bound, a regression would hang this suite until the CI
+# job timeout instead of failing it.
+_NONDETERMINISM_TEST = """
+import asyncio
+
+import pytest
+from temporalio.client import WorkflowFailureError
+
+from kit_smoke_app import EchoInput, WallClockApp
+
+
+async def test_a_sandbox_refusal_fails_the_run(executor):
+    with pytest.raises(WorkflowFailureError) as info:
+        await asyncio.wait_for(
+            executor.execute_app(WallClockApp, EchoInput()), timeout=120
+        )
+    chain = []
+    exc = info.value
+    while exc is not None:
+        chain.append(str(exc))
+        exc = exc.__cause__
+    assert any("datetime.date.today" in message for message in chain), chain
+"""
+
+
+def test_a_sandbox_refusal_in_workflow_code_fails_the_run(
+    adopting_suite: Path,
+) -> None:
+    """``date.today()`` in ``run()`` must fail ``execute_app``, not hang it.
+
+    The sandbox refuses the call and fails the workflow TASK. A production
+    worker retries that task until a fixed build is deployed, so a kit worker
+    built the same way left ``execute_app`` waiting on a run that never
+    finished: connector suites hung until their 60-minute job timeout with no
+    failure reported (FND-5513). The kit's worker fails the run instead, so the
+    suite gets the sandbox's own message within seconds.
+    """
+    suite = adopting_suite / "tests" / "integration"
+    (suite / "test_kit.py").write_text(_NONDETERMINISM_TEST)
     result = _run_pytest(adopting_suite, "-q")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 passed" in result.stdout
