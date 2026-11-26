@@ -353,6 +353,10 @@ _DNS = "matillion-shared-a1b2c3.src.dataforge.atlan.dev"
             f"http://{_DNS}:9300",
         ),
         ("https://u@db.example.com/p?q=1", f"https://u@{_DNS}/p?q=1"),
+        ("[2001:db8::1]:5432", f"{_DNS}:5432"),
+        ("[2001:db8::1]", _DNS),
+        ("2001:db8::1", _DNS),
+        ("http://[2001:db8::1]:9300/x", f"http://{_DNS}:9300/x"),
     ],
 )
 def test_dns_host_replaces_host_keeping_scheme_and_port(host, expected):
@@ -392,12 +396,39 @@ def test_dns_host_without_host_is_not_invented():
     assert fds.prefer_dns_host(raw) == raw
 
 
-def test_existing_original_host_field_is_not_overwritten():
+def test_conflicting_original_host_field_blocks_the_swap(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # E2E_<DS>_ORIGINAL_HOST must be the displaced AWS name or nothing: with a
+    # different original_host already in the payload, host is left as is.
+    raw = {"host": "h.example.com", "dns_host": _DNS, "original_host": "keep"}
+    assert fds.prefer_dns_host(raw) == raw
+    assert "original_host" in capsys.readouterr().err
+
+
+def test_matching_original_host_field_still_swaps():
     out = fds.prefer_dns_host(
-        {"host": "h.example.com", "dns_host": _DNS, "original_host": "keep"}
+        {"host": "h.example.com", "dns_host": _DNS, "original_host": "h.example.com"}
     )
-    assert out["original_host"] == "keep"
     assert out["host"] == _DNS
+    assert out["original_host"] == "h.example.com"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "https://db.example.com:abc",
+        "https://db.example.com:70000",
+        "db.example.com:70000",
+        "[2001:db8::1]junk",
+    ],
+)
+def test_unparseable_port_keeps_host(
+    host: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw = {"host": host, "dns_host": _DNS}
+    assert fds.prefer_dns_host(raw) == raw
+    assert "can't be parsed" in capsys.readouterr().err
 
 
 def test_dns_host_does_not_mutate_input():
