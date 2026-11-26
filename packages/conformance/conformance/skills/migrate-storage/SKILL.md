@@ -297,7 +297,8 @@ each use to the inventory.
   **owner decisions**.
 - **outbound** — an `upload_to_atlan` call, a hand-rolled copy between the
   deployment and upstream stores (`create_store_from_binding*`), an
-  `application_sdk.storage` upload (`upload_file`, `upload_file_from_bytes`),
+  `application_sdk.storage` upload (`upload_file`, `upload_bytes`, or the
+  deprecated `upload_file_from_bytes`),
   or an upload of a whole local directory to a prefix. Becomes `App.upload` /
   `upload_refs` in `run()`, delivering **the same keys** as today. An
   existing `self.upload(UploadInput(local_path=<dir>))` in `run()` that only
@@ -348,7 +349,8 @@ each use to the inventory.
   stamps file names, writes a manifest and prunes. Owner decision 7.
 - **move** — a transfer call inside a `@task`: `self.upload` /
   `self.download` / `self.upload_refs` (P008) and the `application_sdk.storage`
-  helpers `upload_file` / `upload_file_from_bytes`, which P008 does not see.
+  helpers `upload_file` / `upload_bytes` / `upload_file_from_bytes`, which
+  P008 does not see.
   The task returns a FileReference; the transfer moves to `run()`. A
   helper write that lands in the **deployment** store today lands in the
   **upstream** store once it goes through `App.upload` / `upload_refs`: that

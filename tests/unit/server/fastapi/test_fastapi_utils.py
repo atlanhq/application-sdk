@@ -120,7 +120,7 @@ class TestBuildObjectStoreKey:
 class TestUploadFileToObjectStore:
     """Test cases for upload_file_to_object_store utility function."""
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_success(self, mock_objectstore):
         """Test successful file upload."""
 
@@ -143,7 +143,7 @@ class TestUploadFileToObjectStore:
 
         mock_objectstore.assert_called_once()
         call_args = mock_objectstore.call_args
-        assert call_args[1]["content"] == file_content
+        assert call_args[1]["data"] == file_content
         assert call_args[1]["key"].endswith(".csv")
         assert "workflow_file_upload" in call_args[1]["key"]
 
@@ -165,7 +165,7 @@ class TestUploadFileToObjectStore:
         assert result.uploadedAt is not None
         assert result.isArchived is False
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_with_explicit_filename(self, mock_objectstore):
         """Test that explicit filename parameter takes precedence over file.filename."""
 
@@ -190,7 +190,7 @@ class TestUploadFileToObjectStore:
         assert result.rawName == explicit_filename
         assert result.rawName != file_filename
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_filename_fallback(self, mock_objectstore):
         """Test filename fallback: explicit -> file.filename -> 'uploaded_file'."""
 
@@ -236,7 +236,7 @@ class TestUploadFileToObjectStore:
         )
         assert result3.rawName == "explicit_name.csv"
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_raw_name_preserved(self, mock_objectstore):
         """Test that rawName preserves original filename (force=false behavior)."""
 
@@ -259,7 +259,7 @@ class TestUploadFileToObjectStore:
         assert result.rawName == filename
         assert result.rawName != result.fileName  # fileName is UUID-based
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_extension_from_content_type(self, mock_objectstore):
         """Test extension determination from content type when filename has no extension."""
 
@@ -282,7 +282,7 @@ class TestUploadFileToObjectStore:
         assert result.extension == ".csv"
         assert result.fileName.endswith(".csv")
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_key_generation(self, mock_objectstore):
         """Test that key includes prefix when provided."""
 
@@ -312,7 +312,7 @@ class TestUploadFileToObjectStore:
         assert call_args[1]["key"] == result.key
         assert call_args[1]["key"].startswith("some-prefix/")
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_key_without_prefix(self, mock_objectstore):
         """Test that key is just fileName when no prefix is provided."""
 
@@ -336,7 +336,7 @@ class TestUploadFileToObjectStore:
         assert "/" not in result.key
         assert result.key.endswith(".csv")
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_default_prefix(self, mock_objectstore):
         """Test that default prefix is used when prefix is None."""
 
@@ -359,7 +359,7 @@ class TestUploadFileToObjectStore:
         assert result.key.startswith("workflow_file_upload/")
         assert result.key.endswith(".csv")
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_upload_error(self, mock_objectstore):
         """Test file upload error handling."""
         mock_objectstore.side_effect = Exception("Upload failed")
@@ -380,7 +380,7 @@ class TestUploadFileToObjectStore:
                 prefix="workflow_file_upload",
             )
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_uuid_generation(self, mock_objectstore):
         """Test that each upload generates a unique UUID."""
 
@@ -415,7 +415,7 @@ class TestUploadFileToObjectStore:
         assert result1.key != result2.key
         assert result1.fileName != result2.fileName
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_version_generation(self, mock_objectstore):
         """Test that version is generated from first 8 chars of UUID."""
 
@@ -438,7 +438,7 @@ class TestUploadFileToObjectStore:
         assert result.version == result.id[:8]
         assert len(result.version) == 8
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_timestamp_generation(self, mock_objectstore):
         """Test that timestamps are generated correctly."""
 
@@ -469,7 +469,7 @@ class TestUploadFileToObjectStore:
         assert result.uploadedAt.endswith("Z")
         assert "T" in result.uploadedAt
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_explicit_content_type(self, mock_objectstore):
         """Test that explicit content type parameter is used when provided."""
 
@@ -494,7 +494,7 @@ class TestUploadFileToObjectStore:
         assert result.contentType == explicit_content_type
         assert result.contentType != file_content_type
 
-    @patch("application_sdk.server.fastapi.utils.upload_file_from_bytes")
+    @patch("application_sdk.server.fastapi.utils.upload_bytes")
     async def test_upload_file_content_type_fallback_chain(self, mock_objectstore):
         """Test content type fallback chain: explicit → file.content_type → default."""
 
@@ -583,7 +583,7 @@ class TestDeprecationNotices:
         mock_file.content_type = "text/csv"
         mock_file.read = AsyncMock(return_value=b"x")
         with (
-            patch("application_sdk.server.fastapi.utils.upload_file_from_bytes"),
+            patch("application_sdk.server.fastapi.utils.upload_bytes"),
             warnings.catch_warnings(record=True) as caught,
         ):
             warnings.simplefilter("always")

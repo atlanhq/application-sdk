@@ -1401,7 +1401,7 @@ The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE
 | `server.fastapi.models.Subscription` | `handler.contracts.SubscriptionConfig` |
 | `server.fastapi.models.EventWorkflowRequest` | `handler.contracts.CloudEventEnvelope` |
 | `server.fastapi.models.WorkflowRequest`, `WorkflowConfigRequest`, `WorkflowResponse`, `WorkflowData`, `EventWorkflowResponse`, `WorkflowConfigResponse`, `ConfigMapResponse` | none; the handler's `/workflows/v1` and `/events/v1` routes own these shapes, and the App's typed `Input` contract replaces the request dicts |
-| `server.fastapi.utils.upload_file_to_object_store` | the handler's `POST /workflows/v1/file`, or `application_sdk.storage.batch.upload_file_from_bytes` |
+| `server.fastapi.utils.upload_file_to_object_store` | the handler's `POST /workflows/v1/file`, or `application_sdk.storage.upload_bytes` |
 | `server.fastapi.utils.internal_server_error_handler` | none; the handler service installs its own sanitised 500 handling |
 | `testing.hypothesis.strategies.server.fastapi.*` | none; build strategies from your app's own models in its tests |
 

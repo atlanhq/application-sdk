@@ -551,7 +551,7 @@ class TestUpdateIncrementalMarkerInlineImport:
                 new=AsyncMock(return_value="2025-01-01T00:00:00Z"),
             ),
             patch(
-                "application_sdk.common.incremental.marker.upload_file_from_bytes",
+                "application_sdk.common.incremental.marker.upload_bytes",
                 new=AsyncMock(),
             ),
             warnings.catch_warnings(),

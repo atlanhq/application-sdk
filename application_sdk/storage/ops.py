@@ -17,12 +17,15 @@ avoid the constant import overhead, or for tests that need exact key control).
 
 Public helpers (small payloads)
 --------------------------------
+* ``upload_bytes(key, data)`` — the byte-put primitive: write bytes with the
+  same integrity checks and ``.sha256`` sidecar as ``upload_file``
 * ``put_json(key, obj)`` — serialise to JSON and write (configs, metadata)
 * ``_get_bytes(key)``    — read bytes (sidecars, metadata, JSON configs)
 
 Internal helpers
 ----------------
-* ``_put(key, data)``    — write raw bytes (use ``put_json`` for JSON)
+* ``_put(key, data)``    — the raw PUT under ``put_json`` and the sidecar
+  writes: no readback, no sidecar
 
 Streaming API (large files)
 ----------------------------
@@ -45,7 +48,7 @@ import os
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, TypedDict, TypeVar
 
@@ -1010,7 +1013,7 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 
 async def _finalize_upload_integrity(
     key: str,
-    path: Path,
+    path: Path | None,
     store: BoundStore | ObjectStore | None,
     resolved: ObjectStore,
     *,
@@ -1035,7 +1038,8 @@ async def _finalize_upload_integrity(
 
     Args:
         key: Normalised destination key, as written.
-        path: Local source file.
+        path: Local source file, or ``None`` for an in-memory payload
+            (:func:`upload_bytes`), which has no file to shrink under it.
         store: Caller's store argument — passed to the sidecar write so a
             ``BoundStore``'s put attributes still apply.
         resolved: Underlying store, for the readback HEAD.
@@ -1051,9 +1055,10 @@ async def _finalize_upload_integrity(
             that was sent.
     """
     if integrity.verification_enabled(verify):
-        integrity.check_local_file_stable(
-            key, path, declared_size=declared_size, bytes_read=bytes_sent
-        )
+        if path is not None:
+            integrity.check_local_file_stable(
+                key, path, declared_size=declared_size, bytes_read=bytes_sent
+            )
         # Confirmed: a gateway instance without routes answers this HEAD with
         # a bodiless 404, which would fail an upload that landed.
         remote_meta = await _get_file_meta_confirmed(key, resolved, normalize=False)
@@ -1064,10 +1069,11 @@ async def _finalize_upload_integrity(
             # 0 found — so absence is checked separately from length.
             from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
+            source = path if path is not None else "memory"
             raise StorageError(
                 f"Upload of '{key}' reported success but the object is absent "
                 f"from the store afterwards ({bytes_sent} bytes sent from "
-                f"{path}). Some S3-style backends silently drop empty objects; "
+                f"{source}). Some S3-style backends silently drop empty objects; "
                 f"others need read-your-writes consistency that this store "
                 f"does not offer.",
                 key=key,
@@ -1084,10 +1090,27 @@ async def _finalize_upload_integrity(
         await integrity.write_digest_sidecar(store, key, digest)
 
 
+@contextlib.contextmanager
+def _open_chunks(
+    source: Path | bytes, size: int
+) -> Iterator[Iterator[bytes | memoryview]]:
+    """Yield an iterator over *source* in *size*-byte chunks.
+
+    A file is read a chunk at a time; an in-memory payload is sliced through a
+    ``memoryview``, so no chunk is copied.
+    """
+    if isinstance(source, Path):
+        with source.open("rb") as fh:
+            yield iter(lambda: fh.read(size), b"")
+    else:
+        view = memoryview(source)
+        yield (view[i : i + size] for i in range(0, len(view), size))
+
+
 async def _upload_once(
     resolved: ObjectStore,
     key: str,
-    path: Path,
+    source: Path | bytes,
     *,
     effective_chunk: int,
     put_attributes: dict[str, str] | None,
@@ -1097,8 +1120,8 @@ async def _upload_once(
 ) -> tuple[hashlib._Hash | None, int]:
     """Run one upload attempt; return ``(hasher, bytes_sent)``.
 
-    The file is read from the start every call, so the hash and byte count
-    belong to this attempt alone.
+    *source* (a file, or bytes held in memory) is read from the start every
+    call, so the hash and byte count belong to this attempt alone.
     """
     h = hashlib.sha256() if compute_hash else None
     from application_sdk.constants import (  # noqa: PLC0415
@@ -1125,11 +1148,8 @@ async def _upload_once(
             max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
             attributes=put_attributes,
         ) as writer:
-            with path.open("rb") as fh:
-                while True:
-                    chunk = fh.read(effective_chunk)
-                    if not chunk:
-                        break
+            with _open_chunks(source, effective_chunk) as chunks:
+                for chunk in chunks:
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
@@ -1155,6 +1175,121 @@ async def _upload_once(
                             )
                             last_progress = now
     return h, bytes_sent
+
+
+async def _stream_upload(
+    key: str,
+    source: Path | bytes,
+    resolved: ObjectStore,
+    put_attributes: dict[str, str] | None,
+    *,
+    file_size: int,
+    chunk_size: int | None,
+    compute_hash: bool,
+) -> tuple[str | None, int]:
+    """Stream *source* to *key*; return ``(digest, bytes_sent)``.
+
+    The transport shared by :func:`upload_file` (a file) and
+    :func:`upload_bytes` (bytes in memory): part sizing and the deployment
+    override, the transfer-budget reservation, per-part progress marks, the
+    gateway no-route retry, storage telemetry and error translation. The
+    integrity checks after it are the caller's.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_UPLOAD_PART_SIZE_BYTES,
+        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
+    )
+
+    # A deployment that sets the part size overrides the caller. The size that
+    # keeps a completion inside the destination's idle timeout depends on where
+    # the deployment writes; an app cannot know which tenant it lands on, so it
+    # must not be able to pin a value the operator then cannot correct.
+    if (
+        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN
+        and chunk_size is not None
+        and chunk_size != STORAGE_UPLOAD_PART_SIZE_BYTES
+    ):
+        logger.debug(
+            "Using deployment part size %d instead of the requested %d for key '%s'",
+            STORAGE_UPLOAD_PART_SIZE_BYTES,
+            chunk_size,
+            key,
+        )
+    requested_chunk = (
+        STORAGE_UPLOAD_PART_SIZE_BYTES
+        if (STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN or chunk_size is None)
+        else chunk_size
+    )
+
+    effective_chunk = _compute_part_size(file_size, requested_chunk)
+
+    if file_size == 0:
+        logger.warning(
+            "Uploading zero-byte object to key '%s' — "
+            "some S3-style backends silently drop empty objects; "
+            "verify the object exists after upload if your store requires it.",
+            key,
+        )
+
+    # Each attempt re-reads the file from the start, so the hash, byte count and
+    # clock restart with it; only the gateway's transient no-route 404 retries.
+    started = time.monotonic()
+
+    async def _attempt() -> tuple[hashlib._Hash | None, int]:
+        nonlocal started
+        started = time.monotonic()
+        return await _upload_once(
+            resolved,
+            key,
+            source,
+            effective_chunk=effective_chunk,
+            put_attributes=put_attributes,
+            compute_hash=compute_hash,
+            started=started,
+            file_size=file_size,
+        )
+
+    try:
+        h, bytes_sent = await _past_gateway_no_route("upload", key, _attempt)
+    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+    except BaseException as exc:
+        # BaseException is the umbrella for Exception and its siblings
+        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+        # ensures cancellation mid-writer-close is logged rather than silently
+        # discarding the buffer and leaving no object in the store. A retried
+        # gateway 404 never reaches here: the upload has not failed yet.
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
+            redact_secrets,
+        )
+
+        _log_storage_event(
+            logging.WARNING,
+            "upload",
+            key,
+            outcome="failure",
+            elapsed_ms=elapsed_ms,
+            size_bytes=file_size,
+            error_class=_exc_class_name(exc),
+            error_message=redact_secrets(str(exc)),
+        )
+        if isinstance(exc, Exception):
+            raise _storage_error_for(
+                exc, key, f"Failed to upload file to key '{key}'", resolved
+            ) from exc
+        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
+
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    _log_storage_event(
+        logging.DEBUG,
+        "upload",
+        key,
+        outcome="success",
+        elapsed_ms=elapsed_ms,
+        size_bytes=bytes_sent,
+    )
+    digest = h.hexdigest() if h is not None else None
+    return digest, bytes_sent
 
 
 async def upload_file(
@@ -1253,102 +1388,17 @@ async def upload_file(
     if normalize:
         key = normalize_key(key)
 
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_PART_SIZE_BYTES,
-        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
-    )
-
-    # A deployment that sets the part size overrides the caller. The size that
-    # keeps a completion inside the destination's idle timeout depends on where
-    # the deployment writes; an app cannot know which tenant it lands on, so it
-    # must not be able to pin a value the operator then cannot correct.
-    if (
-        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN
-        and chunk_size is not None
-        and chunk_size != STORAGE_UPLOAD_PART_SIZE_BYTES
-    ):
-        logger.debug(
-            "Using deployment part size %d instead of the requested %d for key '%s'",
-            STORAGE_UPLOAD_PART_SIZE_BYTES,
-            chunk_size,
-            key,
-        )
-    requested_chunk = (
-        STORAGE_UPLOAD_PART_SIZE_BYTES
-        if (STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN or chunk_size is None)
-        else chunk_size
-    )
-
     path = Path(local_path)
     file_size = path.stat().st_size
-    effective_chunk = _compute_part_size(file_size, requested_chunk)
-
-    if file_size == 0:
-        logger.warning(
-            "Uploading zero-byte file to key '%s' — "
-            "some S3-style backends silently drop empty objects; "
-            "verify the object exists after upload if your store requires it.",
-            key,
-        )
-
-    # Each attempt re-reads the file from the start, so the hash, byte count and
-    # clock restart with it; only the gateway's transient no-route 404 retries.
-    started = time.monotonic()
-
-    async def _attempt() -> tuple[hashlib._Hash | None, int]:
-        nonlocal started
-        started = time.monotonic()
-        return await _upload_once(
-            resolved,
-            key,
-            path,
-            effective_chunk=effective_chunk,
-            put_attributes=put_attributes,
-            compute_hash=compute_hash,
-            started=started,
-            file_size=file_size,
-        )
-
-    try:
-        h, bytes_sent = await _past_gateway_no_route("upload", key, _attempt)
-    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-    except BaseException as exc:
-        # BaseException is the umbrella for Exception and its siblings
-        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
-        # ensures cancellation mid-writer-close is logged rather than silently
-        # discarding the buffer and leaving no object in the store. A retried
-        # gateway 404 never reaches here: the upload has not failed yet.
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
-            redact_secrets,
-        )
-
-        _log_storage_event(
-            logging.WARNING,
-            "upload",
-            key,
-            outcome="failure",
-            elapsed_ms=elapsed_ms,
-            size_bytes=file_size,
-            error_class=_exc_class_name(exc),
-            error_message=redact_secrets(str(exc)),
-        )
-        if isinstance(exc, Exception):
-            raise _storage_error_for(
-                exc, key, f"Failed to upload file to key '{key}'", resolved
-            ) from exc
-        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
-
-    elapsed_ms = (time.monotonic() - started) * 1000.0
-    _log_storage_event(
-        logging.DEBUG,
-        "upload",
+    digest, bytes_sent = await _stream_upload(
         key,
-        outcome="success",
-        elapsed_ms=elapsed_ms,
-        size_bytes=bytes_sent,
+        path,
+        resolved,
+        put_attributes,
+        file_size=file_size,
+        chunk_size=chunk_size,
+        compute_hash=compute_hash,
     )
-    digest = h.hexdigest() if h is not None else None
 
     await _finalize_upload_integrity(
         key,
@@ -1811,6 +1861,81 @@ async def _put(
         raise _storage_error_for(
             exc, key, f"Failed to put key '{key}'", resolved
         ) from exc
+
+
+async def upload_bytes(
+    key: str,
+    data: bytes,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+    compute_hash: bool = True,
+    verify: bool | None = None,
+    write_sidecar: bool | None = None,
+) -> str | None:
+    """Write *data* to *key* — the SDK's one byte-put primitive.
+
+    The in-memory counterpart of :func:`upload_file`, on the same transport
+    (:func:`_stream_upload`): the deployment part size, the transfer-budget
+    reservation, per-part progress marks, the gateway retry and the storage
+    telemetry all apply, and a small payload is still one PUT. It has the same
+    write-side integrity (FND-306): a HEAD confirms the store holds exactly
+    ``len(data)`` bytes, and the SHA-256 of *data* is recorded in a
+    ``{key}.sha256`` sidecar. Nothing is staged on local disk.
+
+    ``batch.upload_file_from_bytes`` (deprecated) and ``CloudStore.upload_bytes``
+    both delegate here. *data* is held in memory for the whole call, so use
+    :func:`upload_file` for anything already on disk or too large to buffer.
+
+    Args:
+        key: Destination object key.  Normalised by default.
+        data: Bytes to write.
+        store: Target store, or ``None`` to use the infrastructure store.  A
+            ``BoundStore``'s put attributes apply to the write.
+        normalize: When ``True`` (default), normalise *key* before use.
+        compute_hash: When ``True`` (default), hash *data* and return the
+            digest.  Pass ``False`` for external stores (e.g. ``CloudStore``)
+            that do not take part in the sidecar protocol.  Implies
+            ``write_sidecar=False``.
+        verify: Run the post-write size check.  ``None`` (default) follows
+            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.
+        write_sidecar: Write the ``{key}.sha256`` sidecar.  ``None`` (default)
+            follows ``ATLAN_STORAGE_WRITE_SIDECARS``.
+
+    Returns:
+        Hex-encoded SHA-256 digest of *data* if *compute_hash* is ``True``,
+        else ``None``.
+
+    Raises:
+        StorageError: If the write fails, or the object the store reports
+            afterwards is absent or not ``len(data)`` bytes.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
+    if normalize:
+        key = normalize_key(key)
+    digest, _ = await _stream_upload(
+        key,
+        data,
+        resolved,
+        put_attributes,
+        file_size=len(data),
+        chunk_size=None,
+        compute_hash=compute_hash,
+    )
+    await _finalize_upload_integrity(
+        key,
+        None,
+        store,
+        resolved,
+        declared_size=len(data),
+        bytes_sent=len(data),
+        digest=digest,
+        verify=verify,
+        write_sidecar=write_sidecar,
+    )
+    return digest
 
 
 async def put_json(

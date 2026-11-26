@@ -37,6 +37,7 @@ from typing import IO, TYPE_CHECKING, Any
 
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.common.atomic import atomic_write as _atomic_write
 from application_sdk.common.atomic import disk_full_guard as _disk_full_guard
 from application_sdk.common.incremental.helpers import (
@@ -50,7 +51,7 @@ from application_sdk.common.incremental.helpers import (
 )
 from application_sdk.constants import MARKER_FILENAME, MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.batch import upload_file_from_bytes
+from application_sdk.storage.ops import upload_bytes
 from application_sdk.storage.ops import upload_file as _upload_file
 
 if TYPE_CHECKING:
@@ -59,6 +60,20 @@ if TYPE_CHECKING:
     from application_sdk.storage.ops import BoundStore
 
 logger = get_logger(__name__)
+
+
+#: name -> (replacement, why). Importable from here only as a side effect of
+#: an import that is gone; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "upload_file_from_bytes": (
+        "application_sdk.storage.batch.upload_file_from_bytes",
+        "it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 @dataclass(frozen=True)
@@ -345,12 +360,12 @@ async def persist_marker(
     marker_s3_key = f"{s3_prefix}/{MARKER_FILENAME}"
 
     # Straight from memory: no per-connection local marker.txt for two runs
-    # on one worker to share. upload_file_from_bytes stages through a private
-    # temp file and writes the integrity sidecar, as the file upload did, so
-    # a reader verifying against the sidecar never sees a stale digest.
+    # on one worker to share. upload_bytes writes the integrity sidecar, as
+    # the file upload did, so a reader verifying against the sidecar never
+    # sees a stale digest.
     logger.info("Uploading marker to S3: %s", marker_s3_key)
     try:
-        await upload_file_from_bytes(marker_s3_key, marker_value.encode("utf-8"))
+        await upload_bytes(marker_s3_key, marker_value.encode("utf-8"))
         logger.info(
             "Marker uploaded to S3: key=%s value=%s", marker_s3_key, marker_value
         )

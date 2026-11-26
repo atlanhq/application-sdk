@@ -71,6 +71,23 @@ await download_file(
 
 `key` is the object-store path. Leading slashes and `./local/tmp/...` workflow prefixes are stripped automatically by `normalize_key`. `local_path` is the local filesystem path.
 
+Bytes already in memory go through `upload_bytes(key, data)`, the one byte-put primitive. It runs on the same streaming transport as `upload_file` (part size, transfer budget, progress marks, telemetry), with the same post-write size check and `.sha256` sidecar, without staging the bytes on disk. A small payload is still a single PUT. `upload_file_from_bytes` is a deprecated alias for it, to be removed in v4.0.0.
+
+### Which entry point to use
+
+| You have / want | Use |
+|---|---|
+| Bytes in memory → one key | `upload_bytes(key, data)` |
+| A JSON value → one key | `put_json(key, obj)`: a plain PUT, with no post-write size check and no sidecar |
+| A local file → one key | `upload_file(key, local_path)` |
+| One key → a local file | `download_file(key, local_path)`; `download_file_chunked` for GB-class objects |
+| A directory, from a `@task` or `run()` | `App.upload` / `App.download` (adds validation and `FileReference` tagging) |
+| A `FileReference`, outside `App` | `transfer.upload` / `transfer.download` |
+| A state directory mirrored as-is (RocksDB, DuckDB, a parquet dataset) | `upload_prefix` / `download_prefix` (no local markers, no manifest) |
+| A customer's own bucket | `CloudStore` |
+
+Every row except `put_json` ends in the same primitives: `upload_file` / `upload_bytes` for writes and `download_file` / `download_file_chunked` for reads, so transfer integrity is the same whichever of those you call. `put_json` writes small configs with a plain PUT and skips both the readback and the sidecar; use `upload_bytes(key, orjson.dumps(obj))` when a JSON object needs them. The same table is in the `application_sdk.storage` module docstring.
+
 ### Additional operations
 
 ```python
@@ -139,9 +156,11 @@ GETs in a file. Their product is what a worker holds in memory, so one byte
 budget bounds it. Every range GET, streaming download and multipart upload
 behind the file transfers (`download_file`, `upload_file`, the prefix
 operations, FileReference hand-offs) reserves the buffer bytes it will hold
-before it holds them. Whole-object byte reads and writes are outside it:
-`CloudStore`, including `CloudStore.get_bytes()`, holds each object it moves
-in memory without reserving. A transfer that does not
+before it holds them, `CloudStore`'s file and prefix transfers included.
+`upload_bytes` (and so `CloudStore.upload_bytes()`) streams through the same
+writer and reserves its part buffers too; the payload itself is the caller's
+memory. Whole-object reads and small writes are outside it: `put_json` and
+`CloudStore.get_bytes()` hold each object in memory without reserving. A transfer that does not
 fit waits, and keeps marking progress while it waits, so the stall watchdog
 does not kill it. A single transfer larger than the whole budget runs on its
 own. The budget defaults to a quarter of the container memory limit; set
@@ -283,7 +302,7 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 | `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
-| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `CloudStore` byte APIs are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
+| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `put_json` and `CloudStore.get_bytes` are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
 
@@ -485,6 +504,8 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 | `extra.force_path_style`, `extra.disable_tagging` | Path-style requests; explicit tagging override (wins over the non-AWS auto-detect) |
 | `extra.conditional_put`, `extra.copy_if_not_exists`, `extra.checksum_algorithm` | obstore's `aws_conditional_put`, `aws_copy_if_not_exists`, `aws_checksum_algorithm` |
 | `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
+
+`CloudStore` has no transfer code of its own. `upload` and `upload_bytes` call `upload_file` and `upload_bytes`, `upload_dir` runs on the same tree upload as `upload_prefix`, and `download` runs on the same engine as `download_prefix`. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no `.sha256` is written, and a `.sha256` file in the bucket or the local directory is moved as ordinary data. Every `CloudStore` write runs the post-write size check, so the credential must be allowed to HEAD the object it just wrote (`s3:GetObject`, `storage.objects.get`, or Blob read). `upload` and `upload_dir` have done this since FND-306; `upload_bytes` now does too. For a bucket whose policy grants PUT only, pass `upload_bytes(..., verify=False)`, or set `ATLAN_STORAGE_VERIFY_TRANSFERS=false` to turn the check off for the whole process.
 
 ADLS also accepts `extra.endpoint` (`https://` only). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
 

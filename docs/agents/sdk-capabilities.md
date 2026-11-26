@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    c63db83d3600704d23cf61f3227ad1d679054c89
-source-date:   2026-11-25T20:31:19Z
+source-sha:    c29554f764d866e3a9dc49ad0c16e6743f64ebe4
+source-date:   2026-11-25T22:44:57Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 15 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 49 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 465 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 87 |
@@ -3606,6 +3606,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `set_fetched_binding_secrets(name: str, secrets: SecretMap)`
 - **Summary:** Publish the secrets startup fetched for *name* to later sync callers.
 - **Defined in:** `application_sdk/storage/binding.py`
+
+#### `upload_bytes`
+
+- **Import:** `from application_sdk.storage import upload_bytes`
+- **Signature:** `upload_bytes(key: str, *, ...)`
+- **Summary:** Write *data* to *key* — the SDK's one byte-put primitive.
+- **Defined in:** `application_sdk/storage/ops.py`
 
 #### `upload_file`
 

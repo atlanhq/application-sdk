@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import os
 import ssl
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,6 +12,7 @@ import pytest
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import GCSStore, LocalStore, MemoryStore
 
+from application_sdk.storage import batch as _batch_module
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -22,6 +24,7 @@ from application_sdk.storage.errors import (
     StoragePermissionError,
 )
 from tests.unit._doubles import SiblingProbe
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _async_return(value):
@@ -1059,14 +1062,35 @@ class TestCloudStorePutAttributes:
     async def test_from_credentials_s3_storage_class_passed_to_upload_bytes(
         self,
     ) -> None:
-        """from_credentials with storageClass → upload_bytes() calls put_async with attributes."""
+        """from_credentials with storageClass → upload_bytes() writes with the attributes."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.storage.cloud import CloudStore
 
+        seen: list[dict[str, object]] = []
+
+        class _Writer:
+            def __init__(self, *_a, **kwargs):
+                seen.append(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_e):
+                return None
+
+            async def write(self, buffer):
+                return len(buffer)
+
         with (
             patch("application_sdk.storage.cloud._create_s3_store") as mock_create,
-            patch("obstore.put_async", new_callable=AsyncMock) as mock_put,
+            patch("obstore.open_writer_async", _Writer),
+            # The post-write readback HEAD the shared primitive runs.
+            patch(
+                "obstore.head_async",
+                new_callable=AsyncMock,
+                return_value={"size": 5, "e_tag": None},
+            ),
         ):
             mock_store = MagicMock()
             put_attrs = {"Storage-Class": "STANDARD_IA"}
@@ -1082,9 +1106,8 @@ class TestCloudStorePutAttributes:
             )
             await cs.upload_bytes("out/f.bin", b"hello")
 
-        mock_put.assert_awaited_once()
-        _, call_kwargs = mock_put.call_args[0], mock_put.call_args
-        assert call_kwargs.kwargs.get("attributes") == put_attrs
+        assert len(seen) == 1
+        assert seen[0].get("attributes") == put_attrs
 
     def test_from_credentials_s3_no_storage_class_gives_none_put_attrs(self) -> None:
         """When storageClass is absent, _put_attributes is None."""
@@ -1627,10 +1650,10 @@ class TestReadWritePermissionDenied:
         assert ei.value.effective_retryable is False
 
     async def test_upload_bytes_403(self, monkeypatch):
-        async def _boom(*_a, **_k):
+        def _boom_open(*_a, **_k):
             raise RuntimeError(_S3_ACCESS_DENIED_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "put_async", _boom)
+        monkeypatch.setattr(_cloud_module.obs, "open_writer_async", _boom_open)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().upload_bytes("out/a.json", b"x")
         assert ei.value.provider_code == "AccessDenied"
@@ -1775,13 +1798,14 @@ class TestFirstFailureStopsSiblings:
         probe = SiblingProbe(siblings=2)
         order = {"p/a.txt": 0, "p/c.txt": 1}
 
-        async def _download(key, local_path, **kwargs):
+        async def _download(key, local_path, *args, **kwargs):
             if key == "p/bad.txt":
                 await probe.fail(StorageError("bad object"))
             await probe.sibling(order[key])
 
+        # CloudStore's prefix download runs on batch's engine.
         with (
-            patch.object(_cloud_module, "download_file_chunked", _download),
+            patch.object(_batch_module, "download_file_chunked", _download),
             pytest.raises(StorageError, match="bad object"),
         ):
             await store.download(prefix="p", output_dir=tmp_path / "out")
@@ -1811,3 +1835,162 @@ class TestFirstFailureStopsSiblings:
         # A lone failure keeps the bare shape asyncio.gather gave callers.
         assert not isinstance(exc_info.value, BaseExceptionGroup)
         await probe.assert_no_sibling_outlived_the_raise()
+
+
+# ---------------------------------------------------------------------------
+# CloudStore runs on the shared primitives and engines (FND-4684)
+# ---------------------------------------------------------------------------
+
+
+class TestCloudStoreDelegatesToBatch:
+    async def test_upload_dir_ships_local_sha256_files_and_writes_no_sidecars(
+        self, tmp_path
+    ):
+        """A customer's ``.sha256`` file is data, and no SDK sidecar is added."""
+        mem = MemoryStore()
+        store = CloudStore(mem, provider="memory")
+        src = tmp_path / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "a.json").write_bytes(b"{}")
+        (src / "sub" / "release.tar.gz.sha256").write_bytes(b"abc")
+
+        keys = await store.upload_dir(src, "out")
+
+        assert sorted(keys) == ["out/a.json", "out/sub/release.tar.gz.sha256"]
+        assert await store.list("out") == sorted(keys)
+
+    async def test_prefix_download_keeps_sha256_keys(self, tmp_path):
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/data.bin", b"d")
+        await store.upload_bytes("p/data.bin.sha256", b"customer digest")
+
+        paths = await store.download(prefix="p", output_dir=tmp_path)
+
+        assert sorted(p.name for p in paths) == ["data.bin", "data.bin.sha256"]
+        assert (tmp_path / "data.bin.sha256").read_bytes() == b"customer digest"
+
+    async def test_prefix_download_403_names_the_failing_key(
+        self, monkeypatch, tmp_path
+    ):
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/a.json", b"{}")
+
+        async def _denied(key, *_a, **_k):
+            raise StorageError(
+                "denied", key=key, cause=PermissionDeniedError(_GCS_VPC_SC_403)
+            )
+
+        monkeypatch.setattr(batch_module, "download_file_chunked", _denied)
+        with pytest.raises(StoragePermissionError) as ei:
+            await store.download(prefix="p", output_dir=tmp_path)
+        assert ei.value.key == "p/a.json"
+
+    async def test_upload_bytes_readback_catches_a_dropped_object(self):
+
+        class _Discarding:
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_e):
+                return None
+
+            async def write(self, buffer):
+                return len(buffer)
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with (
+            patch("obstore.open_writer_async", _Discarding),
+            pytest.raises(StorageError, match="absent from the store"),
+        ):
+            await store.upload_bytes("out/x.bin", b"data")
+
+    async def test_upload_bytes_reads_back_by_default(self):
+        """Same protection as upload: one HEAD confirms the write landed."""
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with patch(
+            "obstore.head_async",
+            AsyncMock(return_value={"size": 4, "e_tag": None}),
+        ) as head:
+            await store.upload_bytes("out/x.bin", b"data")
+        head.assert_awaited_once()
+
+    async def test_upload_bytes_verify_false_sends_only_the_write(self):
+        """A PUT-only bucket policy can opt out per call."""
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with (
+            patch(
+                "obstore.head_async",
+                AsyncMock(side_effect=AssertionError("HEAD sent")),
+            ) as head,
+            patch("obstore.list", side_effect=AssertionError("LIST sent")),
+        ):
+            assert await store.upload_bytes("out/x.bin", b"data", verify=False) == 4
+        head.assert_not_called()
+        assert await store.get_bytes("out/x.bin") == b"data"
+
+    async def test_upload_dir_file_vanishing_after_walk_is_a_keyed_storage_error(
+        self, tmp_path
+    ):
+        """A source file gone before its upload surfaces typed, not as OSError."""
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "gone.txt").write_bytes(b"x")
+        real_walk = os.walk
+
+        def _walk_then_delete(*args, **kwargs):
+            entries = list(real_walk(*args, **kwargs))
+            (src / "gone.txt").unlink()
+            return iter(entries)
+
+        with (
+            private_stdlib(batch_module, "os") as local_os,
+            patch.object(local_os, "walk", _walk_then_delete),
+            pytest.raises(StorageError) as ei,
+        ):
+            await store.upload_dir(src, "out")
+        assert "gone.txt" in str(ei.value)
+        assert isinstance(ei.value.__cause__, FileNotFoundError)
+
+    async def test_mixed_prefix_download_failure_still_types_the_403(
+        self, monkeypatch, tmp_path
+    ):
+        """A 403 grouped with a non-storage failure is still a USER error."""
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/a.json", b"{}")
+        await store.upload_bytes("p/b.json", b"{}")
+        both_started = asyncio.Event()
+        started: list[str] = []
+
+        async def _fail(key, *_a, **_k):
+            started.append(key)
+            if len(started) == 2:
+                both_started.set()
+            await both_started.wait()
+            if key == "p/a.json":
+                raise StorageError(
+                    "denied", key=key, cause=PermissionDeniedError(_GCS_VPC_SC_403)
+                )
+            raise RuntimeError("local failure")
+
+        monkeypatch.setattr(batch_module, "download_file_chunked", _fail)
+        with pytest.raises(BaseExceptionGroup) as ei:
+            await store.download(prefix="p", output_dir=tmp_path, max_concurrency=2)
+        denied, rest = ei.value.split(StoragePermissionError)
+        assert denied is not None and rest is not None
+        (leaf,) = denied.exceptions
+        assert leaf.key == "p/a.json"
+        assert leaf.audience.name == "USER"
