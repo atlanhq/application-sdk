@@ -745,9 +745,10 @@ aggregation.
 
 A typed `AppError` raise whose `message=` keyword value embeds the caught exception via
 an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string concatenation (`'…: ' +
-str(exc)`) — see `.claude/skills/typed-failures/references/typed-error-prescription.md`
-§6.  This leaks unsanitised, potentially user-facing text from an upstream library into
-a field that is displayed to operators and indexed in dashboards.  It also breaks
+str(exc)`) — see §6 of
+https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md.
+This leaks unsanitised, potentially user-facing text from an upstream library into a
+field that is displayed to operators and indexed in dashboards.  It also breaks
 aggregation by collapsing distinct failure modes into one variable-text bucket.  Place
 the exception context in a typed evidence field (`cause=exc`, `network_error=str(exc)`)
 and keep `message=` a stable human summary.
@@ -854,9 +855,9 @@ right rotation, or alert on per failure mode.
 Raising a parent leaf directly (`InternalError(...)`, `InvalidInputError(...)`) without
 a domain-specific subclass that overrides `code` collapses all failure modes for a given
 category into one dashboard bucket — impossible to route, alert on, or triage
-individually.  See
-`.claude/skills/typed-failures/references/typed-error-prescription.md` §4.  Only
-sanctioned bare-parent form: `InternalError(classification_pending=True)` — used
+individually.  See §4 of
+https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md.
+Only sanctioned bare-parent form: `InternalError(classification_pending=True)` — used
 exclusively as a temporary placeholder during migration, never in production-stable
 code.  For all other sites: define a domain subclass that overrides `code` with a
 specific constant (e.g. `ENGINE_NOT_INITIALIZED`). Note: this rule is WARN tier because

@@ -2,7 +2,7 @@
 
 Authoritative reference for "which `AppError` should I raise here?" — used when
 fixing conformance E-series findings (untyped raises E012, legacy `AtlanError`
-raises E013, silent swallows E001–E010) and by `/typed-failures`.
+raises E013, silent swallows E001–E003, E007–E010, E014 and E020) and by `/typed-failures`.
 
 Source of truth: `application_sdk/errors/{base,categories,leaves,wire}.py`.
 Companion for connector apps (not the SDK itself): `.claude/skills/typed-failures/SKILL.md`.
@@ -773,7 +773,7 @@ detection — not a model to follow; see §2.)
 
 ## §8 — Surface or swallow? Decision tree
 
-When a silent-swallow finding (E001–E010) could be fixed either by logging and
+When a silent-swallow finding (E001–E003, E007–E010, E014, E020) could be fixed either by logging and
 continuing or by re-raising as a typed `AppError`, use this decision tree:
 
 ```

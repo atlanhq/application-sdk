@@ -725,7 +725,7 @@ def emit_p003(
             f"'code: ClassVar[str]'.  Without an override, every raise of this class "
             f"collapses to the bare leaf code '{leaf_prefix}', making the failure "
             f"impossible to triage from dashboards.  "
-            f"Add a code that starts with '{leaf_prefix}_' (.claude/skills/typed-failures/references/typed-error-prescription.md §4).  "
+            f"Add a code that starts with '{leaf_prefix}_' (§4 of https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md).  "
             f"See https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003"
         )
     else:
@@ -735,7 +735,7 @@ def emit_p003(
             f"parent leaf's category prefix '{leaf_prefix}_' (subclass of "
             f"'{leaf_class}').  The category prefix lets dashboards and on-call routing "
             f"group by failure category without joining on the category column "
-            f"(.claude/skills/typed-failures/references/typed-error-prescription.md §4).  "
+            f"(§4 of https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md).  "
             f"See https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003"
         )
     return make_finding(
