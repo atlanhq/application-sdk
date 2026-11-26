@@ -21,7 +21,6 @@
 .github/actions/twingate-connect/action.yml::runs.connect
 .github/workflows/build-and-scan.yaml::jobs.build.meta
 .github/workflows/capability-manifest-check.yaml::jobs.drift-check.ctx
-.github/workflows/capability-manifest-check.yaml::jobs.drift-check.drift
 .github/workflows/capability-manifest-regen.yaml::jobs.commit.Refuse a branch that moved since regeneration
 .github/workflows/capability-manifest-regen.yaml::jobs.regen.handover
 .github/workflows/codeql.yaml::jobs.analyze.Generate summary

@@ -18,9 +18,12 @@ validation:
   unrecognized_links: warn
   anchors: warn
 
-# Working design notes, not site pages.
+# Working design notes, not site pages. changelog/v*.md are the per-major
+# changelog archives update_changelog.py writes on a major bump: generated,
+# never in nav, and read on GitHub (see changelog/index.md).
 exclude_docs: |
   superpowers/
+  changelog/v*.md
 
 theme:
   name: material
@@ -184,10 +187,12 @@ nav:
       - adr/0020-artifact-validation.md
       - adr/0021-source-validation.md
       - adr/0022-skipped-record-capture.md
+      - adr/0023-consolidated-api-host.md
   - Reference:
       - CLI: reference/cli.md
       - HTTP API: reference/http-api.md
       - Configuration: configuration.md
+      - Changelog: changelog/index.md
   - Runbooks:
       - Stalled Task: runbooks/stalled-task.md
       - Long-Running Run: runbooks/long-running-run.md

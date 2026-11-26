@@ -403,14 +403,15 @@ The following Architecture Decision Records document the key choices made in the
 
 | ADR | Decision |
 |-----|----------|
-| [ADR-0001](../adr/0001-per-app-handlers.md) | Per-app handler deployments (not an uber-handler) |
+| [ADR-0001](../adr/0001-per-app-handlers.md) | Per-app handler deployments (not an uber-handler). Superseded in part by ADR-0023 for hosted apps on the consolidated API host |
 | [ADR-0002](../adr/0002-per-app-workers.md) | Per-app workers with dedicated task queues (not an uber-worker) |
 | [ADR-0003](../adr/0003-per-app-observability.md) | Per-app observability with correlation-based tracing |
 | [ADR-0004](../adr/0004-build-time-type-safety.md) | Build-time type safety with Pydantic models |
 | [ADR-0005](../adr/0005-infrastructure-abstraction.md) | Complete abstraction of Temporal and Dapr behind Protocols |
 | [ADR-0006](../adr/0006-schema-driven-contracts.md) | Single-model contracts with additive evolution rules |
-| [ADR-0007](../adr/0007-apps-as-coordination-unit.md) | Apps coordinate via child workflows (not shared activities) |
+| [ADR-0007](../adr/0007-apps-as-coordination-unit.md) | Apps coordinate via child workflows (not shared activities). Superseded: direct inter-app calls were removed, with no successor ADR |
 | [ADR-0008](../adr/0008-payload-safe-bounded-types.md) | Import-time payload safety validation (prevents 2MB Temporal limit failures) |
 | [ADR-0009](../adr/0009-separate-handler-worker-deployments.md) | Separate handler and worker Kubernetes deployments |
 | [ADR-0010](../adr/0010-async-first-blocking-code.md) | Async-first design; `run_in_thread()` for blocking code |
 | [ADR-0011](../adr/0011-logging-level-guidelines.md) | Structured logging level conventions |
+| [ADR-0023](../adr/0023-consolidated-api-host.md) | One consolidated API host serves opted-in hosted apps' handler routes |

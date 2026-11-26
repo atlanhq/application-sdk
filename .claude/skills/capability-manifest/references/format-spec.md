@@ -8,30 +8,30 @@ on this structure being stable.
 
 ## File Header
 
-An HTML comment block immediately at the top of the file (lines 1–7), followed by a blank line:
+An HTML comment block immediately at the top of the file (lines 1–4), followed by a blank line:
 
 ```
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   <version>          # from application_sdk.__version__
-source-sha:    <40-char hex>      # git log -1 --format=%H -- application_sdk/
-source-date:   <ISO-8601>         # commit date of source-sha (NOT wall-clock time)
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 ```
 
-- `sdk-version` — from `pyproject.toml` (`project.version`).
-- `source-sha` — deterministic: same source state → same SHA → byte-identical output.
-- `source-date` — `git log -1 --format=%cI <source-sha>`. Tied to the SHA, not skill invocation time.
-- **No wall-clock timestamps or random IDs anywhere in the file.**
+- **No SDK version, commit SHA, date, wall-clock timestamp or random ID anywhere in the file.**
+  The manifest is a pure function of the source under `application_sdk/` (plus the pinned
+  griffe and `subpackage-purposes.yaml`), so any checkout regenerates it byte for byte.
+  The header used to carry `sdk-version`, `source-sha` and `source-date`; they changed on
+  commits that never touched the public surface, so the drift check had to ignore them and a
+  SHA comparison reported "stale" on almost every commit (FND-4274).
 
-**Staleness one-liner** (printed by the skill on completion; usable by any agent):
+**Staleness one-liner** (printed in the manifest's intro; usable by any agent):
 
 ```bash
-[ "$(awk '/^source-sha:/{print $2}' docs/agents/sdk-capabilities.md)" \
-  = "$(git log -1 --format=%H -- application_sdk/)" ] \
-  && echo "manifest current" || echo "manifest stale — run /capability-manifest"
+uv run poe regen-capabilities && git diff --exit-code -- docs/agents/sdk-capabilities.md \
+  && echo "manifest current" || echo "manifest stale — commit the regenerated file"
 ```
+
+This is the same comparison `capability-manifest-check.yaml` runs on every PR.
 
 ---
 
@@ -179,8 +179,7 @@ The render is fully deterministic given the same source state:
 | Subpackage ordering | Alphabetical by canonical import path |
 | Symbol ordering | Fixed group order; alphabetical within group |
 | Field ordering | Source definition order (Pydantic stable) |
-| Wall-clock timestamps | None — `source-date` is commit date of `source-sha` |
-| `source-sha` | From `git log -1 -- application_sdk/`; dirty trees rejected |
+| Wall-clock timestamps, SHAs, versions | None in the file |
 | Signature truncation | Deterministic rule: ≤120 chars full, else `(first arg, ...)` |
 | Docstring summary | First line of docstring or `_(no docstring)_` |
 | Whitespace | Single template function; pre-commit normalises trailing spaces/EOF |

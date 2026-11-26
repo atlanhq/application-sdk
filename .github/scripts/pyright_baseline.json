@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 442,
-    "warning": 5114
+    "warning": 5113
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -735,7 +735,7 @@
     },
     ".github/scripts/tests/test_update_changelog.py": {
       "error:reportArgumentType": 2,
-      "warning:reportUnknownMemberType": 13
+      "warning:reportUnknownMemberType": 12
     },
     ".github/scripts/tests/test_update_check_run_details_url.py": {
       "warning:reportUnknownMemberType": 5

@@ -14,5 +14,6 @@ This package documents itself beside the code rather than under `docs/concepts/`
 - The skills under `application_sdk/common/incremental/skills/` that describe the changed behaviour: `implement-incremental-extraction/` (notably `references/state-management.md`), `incremental-migrate/` (notably `references/guardrails.md`), and `incremental-extraction.mdc`. Every symbol they name must exist; mark deprecated ones as such.
 - `docs/standards/cross-repo-contracts.md` — the persistent-artifacts and current-state/incremental-diff entries, whenever the object-store layout, `.sdk-manifest`, run-stamped file names or `metadata.json` change. Other repos read these.
 - `docs/agents/sdk-capabilities.md` — regenerate with `/capability-manifest` when a public symbol changes.
+- `CHANGELOG.md` and the generated `docs/changelog/v*.md` archives — never: the release workflow writes them (see `docs/changelog/index.md`, which is maintained by hand).
 
 The same applies to the template that drives the package, `application_sdk/templates/incremental_sql_metadata_extractor.py`, in addition to its `docs/concepts/tasks.md` mapping.
