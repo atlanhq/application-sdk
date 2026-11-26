@@ -52,7 +52,7 @@ still holds for everything outside that scope.
 
 | ADR-0001 objection | Position on the host |
 | --- | --- |
-| **Security: all credentials in one process** | Accepted as a trade-off, bounded by a rule: only **trusted first-party** apps are hosted. There is no secret isolation between hosted apps: every app's environment shares one `os.environ`. The host does not authenticate callers; a NetworkPolicy (owned by App Runtime) limits who can reach the pod to Heracles and the ingress. Response bodies pass through `redact_secrets`, so a credential in exception text is not echoed back. Config keys use the mounted app's name, never request input. |
+| **Security: all credentials in one process** | Accepted as a trade-off, bounded by a rule: only **trusted first-party** apps are hosted. There is no secret isolation between hosted apps: every app's environment shares one `os.environ`. The host does not authenticate callers; a NetworkPolicy (owned by App Runtime) limits who can reach the pod to Heracles and the ingress. The SDK's own routes pass response-body text through `redact_secrets`, so a credential in exception text is not echoed back; an app's own routers (`Handler.routers()`) are mounted as written and get no such pass (see below). Config keys use the mounted app's name, never request input. |
 | **Blast radius: one app's bug affects all** | Reduced, not removed. Each app gets its own `run_in_thread` / `submit_in_thread` pool (`api-<app>-`), so one app's hung blocking calls cannot take another app's thread slots ([ADR-0010](0010-async-first-blocking-code.md), FND-2973 addendum). Uploads land only under the app's own `persistent-artifacts/apps/<app>/uploads/`. The event loop, FastAPI's thread pool and the host's request concurrency limit stay shared: an app that blocks the event loop or leaks memory still affects every hosted app. |
 | **Dependency conflicts** | One resolved environment, checked before it ships. All hosted apps share one `atlan-application-sdk-api` version and one version of every third-party package. Each app declares only its handler's own dependencies and api extras. The host pins each app by release tag plus commit SHA. Its lock fails in CI when the apps cannot be resolved together, and every staged app is probed in the locked environment before a pin moves. An app whose dependencies conflict cannot move to the new pin until the conflict is fixed. |
 | **Coupled deployments** | Accepted. An app's handler change reaches the host only through a host pin bump (Renovate opens the PR), which rebuilds and redeploys the one host that serves every app. The SDK's release workflow does not push to the host. |
@@ -66,6 +66,11 @@ still holds for everything outside that scope.
   the shared routes log each outcome with the request id (conformance P060).
 - A handler reads its app's name from `self.context.app_name`, never from
   `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME`. On the host those name the host itself.
+- An app's own routers (`Handler.routers()`) are served on the host too, mounted with
+  `include_router` after the SDK's routes. The SDK does not redact their responses, so
+  an app route sanitizes its own output: it never returns exception text, a DSN or a
+  credential verbatim, and answers a failure with a fixed
+  message.
 
 ## Options Considered
 
