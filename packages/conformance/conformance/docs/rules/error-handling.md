@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**22 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**23 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -46,6 +46,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 | [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | yes | 0.9.0 |
 | [E021](#e021) | `DependencyUnavailableOverriddenToUser` | `warn` | `both` | `failure-category` | yes | 0.47.0 |
 | [E022](#e022) | `LegacyDefaultErrorCode` | `warn` | `both` | `legacy-error-code` | yes | 0.60.0 |
+| [E023](#e023) | `LegacyErrorCodeAccess` | `warn` | `both` | `legacy-error-code` | yes | 0.62.0 |
 
 ---
 
@@ -1094,5 +1095,49 @@ not flagged: it is not the SDK's legacy vocabulary.
 Fix: delete the `DEFAULT_ERROR_CODE` line and give the class its own `code:
 ClassVar[str]` (prefixed with its category, see P003).  The class keeps its `[AAF-…]`
 `str()` prefix from the SDK base until v4.0.0, so log text does not change.
+
+---
+
+## E023 — `LegacyErrorCodeAccess` {#e023}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `legacy-error-code` · **Autofixable:** yes · **Since:** 0.62.0
+
+> Passes error_code= to, or reads error_code / DEFAULT_ERROR_CODE from, an SDK error in the deprecated AAF-* vocabulary
+
+**Rationale:** B001 flags importing the SDK's AAF-* names and E022 flags binding DEFAULT_ERROR_CODE,
+but the legacy vocabulary is also reached without either: the error_code= constructor
+keyword, a read of err.error_code, or a read of Cls.DEFAULT_ERROR_CODE on an SDK error.
+All three only warn at runtime and are removed in v4.0.0 (ADR-0013 §5, FND-389), when
+the keyword raises TypeError and the reads raise AttributeError. The v4.0.0 removal is
+gated on a clean fleet census, which needs every consumption surface visible. Customer
+impact: a connector that still reads the code fails at the first error it handles after
+the SDK bump — the failure path itself crashes, so the real cause is lost.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/failures.py — each error class names its failure with its own `code`
+  ClassVar; no caller passes error_code= or reads error_code / DEFAULT_ERROR_CODE off an
+  SDK error.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+
+Flags three uses of the SDK's legacy AAF-* vocabulary that B001 and E022 do not see,
+each on a class that resolves to an SDK class carrying an AAF-* code (`StorageError`,
+`CredentialError`, …), directly or through app subclasses in the scanned repo:
+
+* the `error_code=` keyword in a call to such a class, or in `super().__init__(...)`
+  inside one;
+* `<Cls>.DEFAULT_ERROR_CODE`, or `self` / `cls` `.DEFAULT_ERROR_CODE` inside such a
+  class;
+* `<name>.error_code` where `<name>` is bound by `except <such class> as <name>`, or
+  `self.error_code` inside one.
+
+An app's own `error_code` attribute or keyword on its own error classes is not flagged:
+it is not the SDK's legacy vocabulary.  Values the rule cannot see the class of
+(narrowed by `isinstance`, returned from a call) are not tracked — a known false
+negative at WARN.
+
+Fix: drop `error_code=` and raise a subclass that sets its own `code: ClassVar[str]`;
+read `.code` instead of `.error_code` (`.error_code.code` becomes `.code`) and
+`Cls.code` instead of `Cls.DEFAULT_ERROR_CODE`.
 
 ---

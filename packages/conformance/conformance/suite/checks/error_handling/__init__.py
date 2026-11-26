@@ -25,7 +25,8 @@ Rule implementations are split by category:
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
 * ``dependency_audience`` — E021 (DEPENDENCY_UNAVAILABLE overridden to USER)
-* ``legacy_error_code``   — E022 (DEFAULT_ERROR_CODE in the SDK's legacy AAF-* vocabulary)
+* ``legacy_error_code``   — E022 (DEFAULT_ERROR_CODE in the SDK's legacy AAF-* vocabulary),
+  E023 (``error_code=`` / ``.error_code`` / ``.DEFAULT_ERROR_CODE`` on an SDK legacy-coded error)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.
 ``__init__.py`` (this file) exposes the public scan + CLI API.
@@ -72,7 +73,7 @@ from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
 from .exception_chaining import exception_helpers
-from .legacy_error_code import legacy_coded_bases
+from .legacy_error_code import legacy_coded_bases, legacy_coded_names
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -188,6 +189,7 @@ def scan_text(
         raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
         legacy_coded_bases=legacy_coded_bases(tree, path=path, root=root),
+        legacy_coded_names=legacy_coded_names(tree, path=path, root=root),
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
         e012_in_scope=not _is_build_tooling(file),
         script_file=is_script_file(text, tree),

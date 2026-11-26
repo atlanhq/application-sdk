@@ -87,6 +87,7 @@ class Checker(
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
         legacy_coded_bases: dict[str, str] | None = None,
+        legacy_coded_names: dict[str, str] | None = None,
         deprecated_module: bool = False,
         e012_in_scope: bool = True,
         script_file: bool = False,
@@ -103,6 +104,10 @@ class Checker(
         self._dependency_classes = dependency_classes
         # E022: class name -> the SDK legacy-coded class it reaches.
         self._legacy_coded_bases = legacy_coded_bases or {}
+        # E023: module-level name -> the SDK legacy-coded class it names.
+        self._legacy_coded_names = legacy_coded_names or {}
+        self._e023_scope_cache: dict[int, dict[str, str | None]] = {}
+        self._e023_module_rebound: frozenset[str] | None = None
         self._deprecated_module = deprecated_module
         # False for build / dev tooling outside the app runtime (see
         # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
@@ -264,4 +269,9 @@ class Checker(
         self._check_p003(node)
         self._check_p017_call(node)
         self._check_e019(node)
+        self._check_e023_call(node)
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        self._check_e023_attribute(node)
         self.generic_visit(node)
