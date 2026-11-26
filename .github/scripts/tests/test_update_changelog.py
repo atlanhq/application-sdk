@@ -8,6 +8,9 @@ Coverage:
   2. Untagged failure modes fail loudly — a first release must never ship an
      empty changelog with a green workflow.
   3. _format_commits — author fallbacks and API-shape tolerance.
+  4. update_changelog_file / archive_older_majors — the new section lands
+     below the title and any preamble; on a major bump every older-major
+     section moves, byte for byte, to <archive-dir>/v<major>.md (FND-4274).
 """
 
 from __future__ import annotations
@@ -522,3 +525,140 @@ class TestSectionsWiring:
         monkeypatch.setattr(update_changelog, "categorize_commits", capture)
         update_changelog.main(["1.0.0", "1.0.1", "--sections", flag])
         assert seen["sections"] is getattr(update_changelog, expected)
+
+
+# ---------------------------------------------------------------------------
+# update_changelog_file and archive_older_majors (FND-4274)
+# ---------------------------------------------------------------------------
+
+
+def _section(version: str, bullet: str) -> str:
+    return f"## v{version} (January 01, 2026)\n\n- {bullet} (#1)\n\n"
+
+
+class TestUpdateChangelogFile:
+    def test_inserts_below_title(self, tmp_path: Path) -> None:
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text("# Changelog\n\n" + _section("1.0.0", "old"), "utf-8")
+        update_changelog.update_changelog_file(_section("1.1.0", "new"), str(path))
+        assert path.read_text("utf-8") == (
+            "# Changelog\n\n"
+            + _section("1.1.0", "new")
+            + "\n"
+            + _section("1.0.0", "old")
+        )
+
+    def test_keeps_preamble_above_the_new_section(self, tmp_path: Path) -> None:
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(
+            "# Changelog\n\nArchive pointer.\n\n" + _section("1.0.0", "old"), "utf-8"
+        )
+        update_changelog.update_changelog_file(_section("1.1.0", "new"), str(path))
+        text = path.read_text("utf-8")
+        assert text.startswith("# Changelog\n\nArchive pointer.\n\n## v1.1.0")
+
+    def test_creates_missing_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "CHANGELOG.md"
+        update_changelog.update_changelog_file(_section("0.1.0", "first"), str(path))
+        assert path.read_text("utf-8") == "# Changelog\n\n" + _section("0.1.0", "first")
+
+
+class TestArchiveOlderMajors:
+    SECTIONS = [
+        _section("4.0.0", "four"),
+        _section("3.1.0", "three-one"),
+        _section("3.0.0", "three-dup"),
+        _section("3.0.0", "three"),
+        _section("2.8.1", "two"),
+        _section("0.1.1rc2", "zero"),
+    ]
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+        (tmp_path / "CHANGELOG.md").write_text(
+            "# Changelog\n\n" + "".join(self.SECTIONS), "utf-8"
+        )
+        return tmp_path
+
+    def _archive(self, repo: Path, version: str) -> list[Path]:
+        return update_changelog.archive_older_majors(
+            version, repo / "docs/changelog", repo / "CHANGELOG.md"
+        )
+
+    def test_moves_every_older_major_byte_for_byte(self, repo: Path) -> None:
+        written = self._archive(repo, "4.0.0")
+        assert [p.name for p in written] == ["v3.md", "v2.md", "v0.md"]
+
+        changelog = (repo / "CHANGELOG.md").read_text("utf-8")
+        assert "## v4.0.0" in changelog
+        assert "## v3." not in changelog and "## v2." not in changelog
+        assert (
+            "archived in [docs/changelog/](https://github.com/o/r/tree/main/docs/changelog)"
+            in changelog
+        )
+
+        v3 = (repo / "docs/changelog/v3.md").read_text("utf-8")
+        assert (
+            v3
+            == "# Changelog — v3.x (archived)\n\n"
+            + "".join(self.SECTIONS[1:4]).rstrip("\n")
+            + "\n"
+        )
+        # Nothing lost: every heading is in exactly one file.
+        everything = changelog + "".join(
+            p.read_text("utf-8") for p in (repo / "docs/changelog").iterdir()
+        )
+        for section in self.SECTIONS:
+            assert everything.count(section.strip()) == self.SECTIONS.count(section)
+
+    def test_is_idempotent(self, repo: Path) -> None:
+        self._archive(repo, "4.0.0")
+        before = {p: p.read_text("utf-8") for p in repo.rglob("*.md")}
+        assert self._archive(repo, "4.0.1") == []
+        assert {p: p.read_text("utf-8") for p in repo.rglob("*.md")} == before
+
+    def test_noop_within_the_oldest_major(self, repo: Path) -> None:
+        before = (repo / "CHANGELOG.md").read_text("utf-8")
+        assert self._archive(repo, "0.2.0") == []
+        assert (repo / "CHANGELOG.md").read_text("utf-8") == before
+        assert not (repo / "docs/changelog").exists()
+
+    def test_next_major_prepends_and_new_section_lands_below_pointer(
+        self, repo: Path
+    ) -> None:
+        self._archive(repo, "4.0.0")
+        update_changelog.update_changelog_file(
+            _section("5.0.0", "five"), str(repo / "CHANGELOG.md")
+        )
+        assert [p.name for p in self._archive(repo, "5.0.0")] == ["v4.md"]
+        changelog = (repo / "CHANGELOG.md").read_text("utf-8")
+        assert changelog.count("archived in") == 1
+        pointer_end = changelog.index("one file per major.")
+        assert pointer_end < changelog.index("## v5.0.0")
+        assert "## v4.0.0" not in changelog
+
+    def test_main_archives_only_with_the_flag(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr(
+            update_changelog,
+            "get_commits_since_last_tag",
+            lambda v: ["abc1234|dev|feat!: big (#9)"],
+        )
+        update_changelog.main(["4.0.0", "5.0.0"])
+        assert not (repo / "docs/changelog").exists()
+        update_changelog.main(["4.0.0", "5.0.0", "--archive-dir", "docs/changelog"])
+        assert (repo / "docs/changelog/v4.md").exists()
+
+    def test_sdk_release_passes_archive_dir_and_commits_it(self) -> None:
+        text = (_REPO_ROOT / ".github/workflows/release.yaml").read_text()
+        assert "--archive-dir docs/changelog" in text
+        assert "CHANGELOG.md docs/changelog" in text
+        assert (_REPO_ROOT / "docs/changelog/index.md").is_file()
+
+    def test_app_bump_workflow_does_not_archive(self) -> None:
+        """The fleet hand-over copies CHANGELOG.md alone; archives would be lost."""
+        text = (_REPO_ROOT / ".github/workflows/release-version-bump.yaml").read_text()
+        assert "--archive-dir" not in text

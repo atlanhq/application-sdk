@@ -50,7 +50,7 @@ git status --porcelain application_sdk/
 
 If output is non-empty: **stop**. Report:
 > Working tree has uncommitted changes under `application_sdk/`. Commit or stash them, then re-run.
-> Reason: the embedded `source-sha` must faithfully identify the extracted code.
+> Reason: a manifest rendered from uncommitted source describes code no commit contains.
 
 ---
 
@@ -152,14 +152,15 @@ the drift check for anyone who ran `uv sync --all-extras`.
 When asked "is the SDK manifest stale?" without running a full refresh:
 
 ```bash
-MANIFEST_SHA=$(awk '/^source-sha:/{print $2}' docs/agents/sdk-capabilities.md)
-CURRENT_SHA=$(git log -1 --format=%H -- application_sdk/)
-echo "Manifest SHA: $MANIFEST_SHA"
-echo "Current SHA:  $CURRENT_SHA"
-[ "$MANIFEST_SHA" = "$CURRENT_SHA" ] \
+uv run poe regen-capabilities
+git diff --exit-code -- docs/agents/sdk-capabilities.md \
   && echo "STATUS: manifest is current" \
-  || echo "STATUS: manifest is stale — run /capability-manifest to refresh"
+  || echo "STATUS: manifest is stale — review and commit the regenerated file"
 ```
+
+The manifest holds no SHA, date or version, so this diff is the whole check. It reports current
+on a fresh checkout, and it is exactly what `capability-manifest-check.yaml` runs on every PR.
+If you only wanted to look, `git checkout -- docs/agents/sdk-capabilities.md` afterwards.
 
 ---
 
@@ -238,9 +239,6 @@ The YAML key is the short name (e.g., `app`), not the full import path.
   it proves one machine agrees with itself, not that two machines agree with each other. Bump the pin
   deliberately, in all three files at once, and regenerate in the same commit — and observe the org §5
   release-age cooldown when choosing the version, exactly as for any other dependency.
-- **`source-date` flips between `Z` and `+00:00`** — expected and harmless. It comes from
-  `git log --format=%cI`, whose UTC rendering changed across git versions. The drift check excludes
-  `source-date` (along with `source-sha` and `sdk-version`), so this never fails CI.
 - **Missing symbols** — symbol not in `__all__`? Not exposed at subpackage level? Check the `__init__.py`.
 - **Dirty-tree refusal** — stash or commit changes under `application_sdk/` before running.
 - **"No drift" when CI says stale** — most likely the committed snapshot was not saved before running poe (Step A). The `poe regen-capabilities` task overwrites `docs/agents/sdk-capabilities.md` in place; if you diff the file against itself it always looks clean. Verify with `git diff HEAD docs/agents/sdk-capabilities.md` — if that shows drift, commit the file.
