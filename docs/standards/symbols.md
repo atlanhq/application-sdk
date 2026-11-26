@@ -116,6 +116,13 @@ Keep the body working by delegating to the replacement. An alias that raises is
 not an alias — it is the same break with a better error message, and it belongs
 in a `feat!:` commit (see [Deliberate breaks](#deliberate-breaks)).
 
+Use the decorator rather than a `warnings.warn` in the body: type checkers only
+see the decorator. The manifest still records a public def whose *first*
+statement (after the docstring and any local imports) is an unconditional
+`DeprecationWarning`, so a hand-written one is not lost to B001. A warn behind
+an `if`, or later in the body, deprecates a parameter or a mode and is not
+recorded as the def itself — see the parameter section below.
+
 ### An enum member → `__deprecated_members__`
 
 A decorator cannot reach a member: it is an assignment in a class body.

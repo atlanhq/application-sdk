@@ -355,8 +355,8 @@ human audit):
 
 - **B004 UnmarkedDeprecationClaim** (SDK source) — a docstring claims deprecation
   with no marker.  Which marker to add (`@deprecated` decorator vs a
-  `DeprecationWarning` in `__init__`/`__init_subclass__`) is a small design
-  choice for the symbol's owner; record in residue with the suggestion the
+  `DeprecationWarning` in `__init__`/`__init_subclass__`, or as a function's
+  opening statement) is a small design choice for the symbol's owner; record in residue with the suggestion the
   finding message already carries.
 
 - **B008 PrivateModuleImport** (app source and tests) — a migration rule
