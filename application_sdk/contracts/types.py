@@ -31,16 +31,37 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeAliasType
 
+from application_sdk import _deprecation
 from application_sdk._install import worker_only_missing
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.base import (  # re-exported; defined with the contract base
     MaxItems,
 )
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
-from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.ref import CredentialRef as _CredentialRef
 
 if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Connection
+
+__all__ = [
+    "asset_artifact_fields",
+    "asset_artifact_marker",
+    "AssetArtifact",
+    "BoundedDict",
+    "BoundedList",
+    "CONNECTION_QN_MIN_SEGMENTS",
+    "connection_qualified_name_defect",
+    "ConnectionAttributes",
+    "ConnectionRef",
+    "FileReference",
+    "GitReference",
+    "Lazy",
+    "MaxItems",
+    "StorageTier",
+    "StoreTarget",
+    "TreeSelection",
+]
+
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -561,7 +582,7 @@ class GitReference(BaseModel, frozen=True):
     path: str = ""
     tag: str = ""
     commit: str = ""
-    credential: CredentialRef | None = None
+    credential: _CredentialRef | None = None
 
 
 CONNECTION_QN_MIN_SEGMENTS = 3
@@ -805,3 +826,17 @@ class ConnectionRef(BaseModel, frozen=True):
         )
 
         return Connection.from_json(self.model_dump_json(by_alias=True))
+
+
+#: name -> (replacement, why). Importable from here only as a side effect
+#: of an import; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "CredentialRef": (
+        "application_sdk.credentials.ref.CredentialRef",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

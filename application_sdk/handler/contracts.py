@@ -31,13 +31,51 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.credentials.extra import parse_credentials_extra
-from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.spec import AgentCredentialSpec as _AgentCredentialSpec
 from application_sdk.errors.base import AppError, sanitize_cause_repr
 from application_sdk.errors.leaves import InternalError
 from application_sdk.errors.wire import FailureDetails
+
+__all__ = [
+    "ALL_CHECK_TIERS",
+    "ApiMetadataObject",
+    "ApiMetadataOutput",
+    "AUTH_STATUS_HTTP_CODES",
+    "AuthInput",
+    "AuthOutput",
+    "AuthStatus",
+    "BaseConnectionConfig",
+    "BaseMetadataConfig",
+    "CheckTier",
+    "CloudEventEnvelope",
+    "EventFilterRule",
+    "EventTriggerConfig",
+    "FileUploadResponse",
+    "flatten_credentials_to_pairs",
+    "HandlerCredential",
+    "ManifestInput",
+    "MetadataInput",
+    "MetadataOutput",
+    "normalize_credentials",
+    "PreflightCheck",
+    "PreflightGateMode",
+    "PreflightInput",
+    "PreflightOutput",
+    "PreflightStatus",
+    "SqlMetadataObject",
+    "SqlMetadataOutput",
+    "SubscriptionConfig",
+    "UNVERIFIABLE_CHECK_NAME",
+    "unverifiable_preflight_result",
+    "WarmupInput",
+    "WarmupObservation",
+    "WarmupState",
+]
+
 
 # Named for application_sdk.handler.service, not this module: the only lines
 # logged here are normalize_credentials' "Converting v2 ..." lines, which moved
@@ -388,7 +426,7 @@ class _HandlerRequestInput(BaseModel):
     :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
     for back-compat and for handlers that still read it."""
 
-    agent_json: AgentCredentialSpec | None = Field(
+    agent_json: _AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
     )
@@ -1133,3 +1171,17 @@ class FileUploadResponse(BaseModel):
     file_size: int = 0
     is_uploaded: bool = False
     uploaded_at: str = ""
+
+
+#: name -> (replacement, why). Importable from here only as a side effect
+#: of an import; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "AgentCredentialSpec": (
+        "application_sdk.credentials.spec.AgentCredentialSpec",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

@@ -31,6 +31,29 @@ from application_sdk.errors.leaves import (
     SdrDiskFullError,
 )
 
+__all__ = [
+    "DeploymentObjectStoreMissingError",
+    "ObjectStoreNotProvidedError",
+    "ObjectStorePreflightError",
+    "SdrStorageDiskFullError",
+    "StorageAuthError",
+    "StorageBindingBrokenError",
+    "StorageBindingNotFoundError",
+    "StorageBucketRelocationError",
+    "StorageConfigError",
+    "StorageDiskFullError",
+    "StorageEmptyUploadError",
+    "StorageError",
+    "StorageGatewayAuthUnavailableError",
+    "StorageGatewayNoRouteError",
+    "StorageHandoffIncompleteError",
+    "StorageIntegrityError",
+    "StorageNotFoundError",
+    "StoragePermissionError",
+    "UnplaceableDeclaredFileError",
+    "UnsafeUploadPathError",
+]
+
 
 def _init_storage_evidence(
     err: StorageError,

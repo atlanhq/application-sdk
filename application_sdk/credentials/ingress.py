@@ -47,6 +47,14 @@ from application_sdk._logging import get_logger
 from application_sdk.credentials.errors import CredentialError, CredentialParseError
 from application_sdk.credentials.spec import DECLARED_SOURCE_KEYS, AgentCredentialSpec
 
+__all__ = [
+    "AGENT_JSON_ALIASES",
+    "declared_agent_spec_type",
+    "lift_agent_json",
+    "normalize_agent_json",
+]
+
+
 logger = get_logger(__name__)
 
 AGENT_JSON_ALIASES: Final[tuple[str, ...]] = ("agent_json", "agentJson", "agent-json")

@@ -86,6 +86,23 @@ from application_sdk.handler.routes import (
     entrypoint_module_segment,
 )
 
+__all__ = [
+    "ComputeManifest",
+    "credential_gaps",
+    "decode_fe_inputs",
+    "entrypoint_form",
+    "generated_dir_of",
+    "handler_compute_manifest",
+    "MAX_FE_INPUTS_BYTES",
+    "MetadataSource",
+    "missing_fields_error",
+    "register_metadata_routes",
+    "tree_default_entrypoint",
+    "tree_entrypoints",
+    "tree_input_contract",
+]
+
+
 # Named for application_sdk.handler.service, not this module: these routes moved
 # from there and keep its logger name (the worker also passes that module's
 # logger as ``MetadataSource.log``), so their log lines are unchanged.

@@ -64,6 +64,21 @@ from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 
+__all__ = [
+    "build_workflow_type_index",
+    "canonical_workflow_type",
+    "entrypoint",
+    "entrypoint_module_segment",
+    "EntryPointContractError",
+    "EntryPointDeclarationError",
+    "EntryPointMetadata",
+    "get_entrypoint_metadata",
+    "is_entrypoint",
+    "UnresolvableEntrypointAnnotationsError",
+    "workflow_type_class_segment",
+]
+
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 

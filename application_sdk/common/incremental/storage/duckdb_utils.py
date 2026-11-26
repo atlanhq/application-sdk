@@ -31,6 +31,22 @@ from application_sdk.observability.logger_adaptor import get_logger
 if TYPE_CHECKING:
     from duckdb import DuckDBPyConnection
 
+__all__ = [
+    "default_duckdb_memory_limit",
+    "DuckDBConnection",
+    "DuckDBConnectionLike",
+    "DuckDBConnectionManager",
+    "DuckDBResult",
+    "escape_sql_string",
+    "fetch_count",
+    "fetch_str_set",
+    "get_parent_table_qn_expr",
+    "interrupt_on_cancel",
+    "json_scan",
+    "managed_duckdb_connection",
+]
+
+
 logger = get_logger(__name__)
 
 try:

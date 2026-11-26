@@ -10,6 +10,23 @@ from typing_extensions import deprecated
 from application_sdk._logging import get_logger
 from application_sdk.credentials.spec import AgentCredentialSpec
 
+__all__ = [
+    "GUID_ROUTED_EXTRACTION_METHODS",
+    "AgentCredentialSpec",
+    "CredentialRef",
+    "CredentialResolvable",
+    "api_key_ref",
+    "atlan_api_token_ref",
+    "atlan_oauth_client_ref",
+    "basic_ref",
+    "bearer_token_ref",
+    "certificate_ref",
+    "git_ssh_ref",
+    "git_token_ref",
+    "legacy_credential_ref",
+    "oauth_client_ref",
+]
+
 
 @runtime_checkable
 class CredentialResolvable(Protocol):

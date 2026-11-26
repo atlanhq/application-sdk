@@ -84,6 +84,14 @@ if TYPE_CHECKING:
     from application_sdk.credentials.spec import AgentCredentialSpec
     from application_sdk.infrastructure.secrets import SecretStore
 
+__all__ = [
+    "check_secret_store_access",
+    "resolve_agent_credential",
+    "resolve_agent_json",
+    "SecretStoreCheckResult",
+]
+
+
 logger = get_logger(__name__)
 
 #: Root-level keys whose values are always literals, never ref-keys

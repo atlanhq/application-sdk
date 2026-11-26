@@ -76,6 +76,11 @@ if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
     from application_sdk.credentials.ref import CredentialRef
 
+__all__ = [
+    "SqlMetadataExtractor",
+]
+
+
 logger = get_logger(__name__)
 
 _ET = TypeVar("_ET", bound=ExtractionTaskInput)

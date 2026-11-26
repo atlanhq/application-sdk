@@ -12,6 +12,16 @@ from application_sdk.errors.leaves import (
     InvalidInputError,
 )
 
+__all__ = [
+    "AwsAssumeRoleError",
+    "AwsClientCreationError",
+    "AwsCredentialSourceConflictError",
+    "AwsCredentialSourceMissingError",
+    "AwsPartialCredentialsError",
+    "AwsRdsTokenError",
+    "AwsRegionNotFoundError",
+]
+
 
 @dataclass(kw_only=True)
 class AwsAssumeRoleError(AppPermissionDeniedError):

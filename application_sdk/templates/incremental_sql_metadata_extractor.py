@@ -108,6 +108,12 @@ from application_sdk.templates.sql_metadata_extractor import SqlMetadataExtracto
 if TYPE_CHECKING:
     from application_sdk.common.incremental.state.store import CurrentStateSnapshot
 
+__all__ = [
+    "IncrementalSqlMetadataExtractor",
+    "MAX_CONCURRENT_COLUMN_BATCHES",
+]
+
+
 logger = get_logger(__name__)
 
 # Read at import, not in run(): run() is workflow code, where the sandbox

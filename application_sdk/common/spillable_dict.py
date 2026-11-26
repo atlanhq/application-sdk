@@ -30,6 +30,13 @@ from typing import TYPE_CHECKING, Any, Self, TypeAlias
 
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "ROCKSDB_KEY_TYPES",
+    "SpillableDict",
+    "SpillableKey",
+]
+
+
 logger = get_logger(__name__)
 
 # Optional dependency. For static type checking we always reference the real

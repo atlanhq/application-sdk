@@ -15,6 +15,19 @@ from application_sdk.contracts.types import (
     StoreTarget,
 )
 
+__all__ = [
+    "DeclaredFile",
+    "DownloadInput",
+    "DownloadOutput",
+    "FileReference",
+    "UploadInput",
+    "UploadOutput",
+    "UploadRefsInput",
+    "UploadRefsOutput",
+    "VerifyRefsInput",
+    "VerifyRefsOutput",
+]
+
 
 class UploadInput(Input):
     """Input for ``App.upload``.

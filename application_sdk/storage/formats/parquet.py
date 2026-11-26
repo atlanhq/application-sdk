@@ -17,7 +17,8 @@ from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.contracts.types import FileReference
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.models import MetricType
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
 from application_sdk.storage.errors import ObjectStoreNotProvidedError
 from application_sdk.storage.formats import (
@@ -34,6 +35,12 @@ from application_sdk.storage.formats.utils import (
 )
 from application_sdk.storage.ops import normalize_key
 from application_sdk.storage.ops import upload_file as _upload_file
+
+__all__ = [
+    "ParquetFileReader",
+    "ParquetFileWriter",
+]
+
 
 logger = get_logger(__name__)
 

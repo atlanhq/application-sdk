@@ -36,6 +36,10 @@ Every entry point that accepts a ``DataframeType`` already emits a
 
 from enum import Enum
 
+__all__ = [
+    "DataframeType",
+]
+
 
 class DataframeType(Enum):
     """Enumeration of dataframe types."""

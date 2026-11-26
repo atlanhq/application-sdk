@@ -28,6 +28,14 @@ from pydantic import (
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
+__all__ = [
+    "AgentCredentialSpec",
+    "DECLARED_SOURCE_KEYS",
+    "DECLARED_SOURCES_FORMAT",
+    "VALUE_SOURCES_KEY",
+]
+
+
 #: ``agent_json`` wire format in which every field declares its own source
 #: (FND-4361). Without it, ``key-type: single-key`` has to look every value up
 #: as a secret name and guess from the store's answer.

@@ -48,6 +48,12 @@ these four names is a *consumer-side* defect, and conformance rule B008
 ``PrivateSdkModuleImport`` is the fix for it — not a permanent freeze on the
 SDK's internals.
 
+Also ``advisory`` — the name was an import of a module with no ``__all__``
+(so the gate counted it), and HEAD gives that module an ``__all__`` that
+leaves the name out while still importing it.  The name still imports; it
+just stops being surface from the next release on.  Narrowing an ``__all__``
+the base already declared gets no such pass (FND-4259).
+
 A blocking removal has exactly two ways through: deprecate it first (the
 supported path, see ``docs/standards/symbols.md``), or declare the break
 in the commit subject (``feat!:`` / ``fix!:`` / a ``BREAKING CHANGE:`` trailer),
@@ -215,11 +221,18 @@ class Snapshot:
 
     package: str
     symbols: dict[str, Symbol] = field(default_factory=dict)
+    declared_modules: set[str] = field(default_factory=set)
+    """Modules that declare ``__all__``; their surface is what it lists."""
+    undeclared: set[str] = field(default_factory=set)
+    """``module:name`` keys for intra-package imports a module still binds at
+    module scope but leaves out of its ``__all__``. Importable, but not surface."""
 
     def to_json(self) -> str:
         payload = {
             "package": self.package,
             "symbols": {k: asdict(v) for k, v in sorted(self.symbols.items())},
+            "declared_modules": sorted(self.declared_modules),
+            "undeclared": sorted(self.undeclared),
         }
         return json.dumps(payload, indent=2, sort_keys=True)
 
@@ -238,7 +251,12 @@ class Snapshot:
             )
             for key, rec in raw["symbols"].items()
         }
-        return cls(package=raw["package"], symbols=symbols)
+        return cls(
+            package=raw["package"],
+            symbols=symbols,
+            declared_modules=set(raw.get("declared_modules", ())),
+            undeclared=set(raw.get("undeclared", ())),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +779,39 @@ def extract_module(
     return symbols
 
 
+def _undeclared_imports(
+    tree: ast.Module, declared_all: frozenset[str] | None, package: str
+) -> set[str]:
+    """Intra-package imports bound at module scope but left out of ``__all__``.
+
+    Empty for a module without ``__all__``: there every such import is
+    surface (see :func:`_reexported_names`), so none is undeclared.
+    """
+    if declared_all is None:
+        return set()
+    return {
+        name
+        for node in _module_scope(tree.body)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for name in _reexported_names(node, None, package)
+        if name not in declared_all
+    }
+
+
+def record_module(
+    snapshot: Snapshot, tree: ast.Module, module: str, package: str = DEFAULT_PACKAGE
+) -> None:
+    """Add *module*'s symbols and its ``__all__`` facts to *snapshot*."""
+    for symbol in extract_module(tree, module, package):
+        snapshot.symbols[symbol.key] = symbol
+    declared_all = _declared_all(tree)
+    if declared_all is not None:
+        snapshot.declared_modules.add(module)
+    snapshot.undeclared.update(
+        f"{module}:{name}" for name in _undeclared_imports(tree, declared_all, package)
+    )
+
+
 def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
     """Parse every module of *package* under *root* into a :class:`Snapshot`.
 
@@ -784,8 +835,7 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         except SyntaxError as exc:
             raise ValueError(f"cannot parse {file}: {exc}") from exc
         module = module_path(file, package_root, package)
-        for symbol in extract_module(tree, module, package):
-            snapshot.symbols[symbol.key] = symbol
+        record_module(snapshot, tree, module, package)
         is_init = file.name == "__init__.py"
         module_sources = reexport_sources(
             tree, f"{module}.__init__" if is_init else module, package
@@ -989,7 +1039,7 @@ class Finding:
 
     key: str
     kind: str
-    """``removed`` | ``narrowed``."""
+    """``removed`` | ``narrowed`` | ``undeclared``."""
     blocking: bool
     detail: str
 
@@ -1069,6 +1119,30 @@ def _narrowing(base: Symbol, head: Symbol) -> str | None:
     return None
 
 
+def _owner_key(symbol: Symbol) -> str:
+    """``module:Name`` for the top-level name *symbol* hangs off (itself if top-level)."""
+    return f"{symbol.module}:{symbol.qualname.split('.')[0]}"
+
+
+def _newly_undeclared(base_symbol: Symbol, base: Snapshot, head: Snapshot) -> bool:
+    """True when HEAD's new ``__all__`` leaves out a name the module still binds.
+
+    Only for a module that had **no** ``__all__`` at the base, where the name
+    was surface solely because the gate counts every intra-package import of
+    such a module. Declaring ``__all__`` there is how a module says what it
+    offers; the name still imports, so nothing breaks, and it stops being
+    surface from the next release on. A module that already declared
+    ``__all__`` gets no such pass: narrowing a declared ``__all__`` is a
+    removal like any other, or the two-step "unlist, then delete" would skip
+    the deprecation cycle.
+    """
+    return (
+        base_symbol.module not in base.declared_modules
+        and base_symbol.module in head.declared_modules
+        and _owner_key(base_symbol) in head.undeclared
+    )
+
+
 def compare(
     base: Snapshot, head: Snapshot, *, commit_subject: str | None = None
 ) -> list[Finding]:
@@ -1076,7 +1150,9 @@ def compare(
 
     A removal is excused when the base already marked the name deprecated —
     that is the whole policy: what you deprecated, you may later delete.
-    Everything else is a finding, blocking unless the leaf name is private.
+    Everything else is a finding, blocking unless the leaf name is private, or
+    unless a newly declared ``__all__`` left out a name the module still binds
+    (advisory: it still imports).
     """
     break_declared = declares_break(commit_subject)
     findings: list[Finding] = []
@@ -1085,6 +1161,27 @@ def compare(
         if head_symbol is None:
             if base_symbol.deprecated:
                 continue  # shipped deprecated in the base release — deletion is earned
+            owner = head.symbols.get(_owner_key(base_symbol))
+            if (
+                owner is not None
+                and owner.kind == SymbolKind.ALIAS
+                and owner.deprecated
+            ):
+                continue  # the deprecated alias serves the whole object, members too
+            if _newly_undeclared(base_symbol, base, head):
+                findings.append(
+                    Finding(
+                        key=key,
+                        kind="undeclared",
+                        blocking=False,
+                        detail=(
+                            "still importable at HEAD, but the module's new "
+                            "__all__ leaves it out; it is not surface from the "
+                            "next release on"
+                        ),
+                    )
+                )
+                continue
             blocking = not base_symbol.is_private_name and not break_declared
             findings.append(
                 Finding(
@@ -1124,7 +1221,8 @@ def render_report(
     """A human report for the job log and the step summary."""
     findings = list(findings)
     blocking = [f for f in findings if f.blocking]
-    advisory = [f for f in findings if not f.blocking]
+    undeclared = [f for f in findings if not f.blocking and f.kind == "undeclared"]
+    advisory = [f for f in findings if not f.blocking and f.kind != "undeclared"]
     lines = [f"## Importable-surface check: {base_label} → {head_label}", ""]
     if not findings:
         lines.append("No names were removed or narrowed. :white_check_mark:")
@@ -1157,6 +1255,19 @@ def render_report(
             "they do not fail the gate. They are listed because the fleet has",
             "imported SDK privates from its test suites before (FND-2388);",
             "conformance rule B008 is the consumer-side fix.",
+        ]
+    if undeclared:
+        lines += [
+            "",
+            f"### {len(undeclared)} advisory removal(s) — left out of a new `__all__`",
+        ]
+        lines.append("")
+        lines.extend(f.render() for f in undeclared)
+        lines += [
+            "",
+            "These modules declared `__all__` for the first time and left these",
+            "imports out. Each still imports, so nothing breaks; from the next",
+            "release on they are not surface (`docs/standards/symbols.md`).",
         ]
     return "\n".join(lines) + "\n"
 

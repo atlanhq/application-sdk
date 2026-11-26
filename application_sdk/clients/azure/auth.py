@@ -74,6 +74,12 @@ from application_sdk.clients.azure.azure_errors import (
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "AzureAuthProvider",
+    "ServicePrincipalCredentials",
+]
+
+
 logger = get_logger(__name__)
 
 

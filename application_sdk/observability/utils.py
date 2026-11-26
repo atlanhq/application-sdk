@@ -27,6 +27,20 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.context import correlation_context
 
+__all__ = [
+    "build_otel_resource",
+    "get_metric_enrichment_labels",
+    "get_metric_labels",
+    "get_observability_dir",
+    "get_workflow_context",
+    "in_temporal_workflow",
+    "METRIC_ENRICHMENT_KEYS",
+    "parse_otel_resource_attributes",
+    "SELF_FAILURE_LOG_INTERVAL_SECONDS",
+    "self_failure_logger",
+]
+
+
 #: Minimum seconds between two records of the same observability self-failure.
 SELF_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 

@@ -29,6 +29,16 @@ import time
 from collections import deque
 from typing import Callable, TextIO
 
+__all__ = [
+    "console_log_drop_count",
+    "CONSOLE_QUEUE_MAX_RECORDS",
+    "console_writer",
+    "ConsoleWriter",
+    "DROP_WARNING_INTERVAL_SECONDS",
+    "flush_console_logs",
+]
+
+
 # The most records allowed to wait for the writer thread. At a typical
 # 200-byte line this caps the queue at about 2 MB.
 CONSOLE_QUEUE_MAX_RECORDS = 10_000

@@ -43,6 +43,12 @@ from application_sdk.observability.utils import (
     self_failure_logger,
 )
 
+__all__ = [
+    "AtlanObservability",
+    "LOCAL_OBS_SUBDIR_MAP",
+    "OBSERVABILITY_S3_PREFIX_MAP",
+]
+
 
 def _has_running_loop() -> bool:
     """Whether the calling thread is running an asyncio event loop."""

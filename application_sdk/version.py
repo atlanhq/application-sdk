@@ -43,6 +43,8 @@ releases drop off the CDN.
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _distribution_version
 
+__all__: list[str] = []
+
 
 def _installed_version() -> str:
     for distribution in ("atlan-application-sdk", "atlan-application-sdk-api"):

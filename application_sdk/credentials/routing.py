@@ -41,6 +41,19 @@ from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "CredentialMap",
+    "CredentialValue",
+    "find_prebuilt_credential_ref",
+    "flatten_dotted_keys",
+    "InlineCredentials",
+    "normalize_inline_credentials",
+    "ResolvedCredentials",
+    "route_credentials",
+    "RUN_CREDENTIAL_FIELD_ATTR",
+]
+
+
 logger = get_logger(__name__)
 
 CredentialValue = str | int | float | bool | None

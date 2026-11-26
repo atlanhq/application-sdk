@@ -37,8 +37,7 @@ def snap(source: str, module: str = "application_sdk.thing") -> mod.Snapshot:
     """Build a one-module snapshot from *source*."""
     tree = ast.parse(source)
     snapshot = mod.Snapshot(package="application_sdk")
-    for symbol in mod.extract_module(tree, module):
-        snapshot.symbols[symbol.key] = symbol
+    mod.record_module(snapshot, tree, module)
     return snapshot
 
 
@@ -631,6 +630,27 @@ def test_a_snapshot_with_an_unknown_kind_does_not_load():
         mod.Snapshot.from_json(text)
 
 
+def test_snapshot_roundtrips_its_all_facts_through_json():
+    original = snap(
+        "from application_sdk.other import Moved, Kept\n__all__ = ['Kept', 'f']\n"
+        "def f(): ...\n"
+    )
+    assert original.declared_modules == {"application_sdk.thing"}
+    assert original.undeclared == {"application_sdk.thing:Moved"}
+    restored = mod.Snapshot.from_json(original.to_json())
+    assert restored.declared_modules == original.declared_modules
+    assert restored.undeclared == original.undeclared
+
+
+def test_a_snapshot_from_before_the_all_facts_still_loads():
+    """A base snapshot written before these fields existed reads as "no module
+    declared ``__all__``", which is what it recorded."""
+    text = '{"package": "application_sdk", "symbols": {}}'
+    restored = mod.Snapshot.from_json(text)
+    assert restored.declared_modules == set()
+    assert restored.undeclared == set()
+
+
 def test_build_snapshot_walks_the_package(tmp_path: Path):
     pkg = tmp_path / "application_sdk" / "sub"
     pkg.mkdir(parents=True)
@@ -1066,3 +1086,103 @@ def test_linearize_follows_c3_for_a_diamond():
 def test_linearize_survives_a_cycle():
     parents = {"A": ["B"], "B": ["A"]}
     assert mod._linearize("A", parents, {})[0] == "A"
+
+
+# ---------------------------------------------------------------------------
+# Declaring ``__all__`` on a leaf module (FND-4259)
+# ---------------------------------------------------------------------------
+
+_LEAF_BASE = (
+    "from application_sdk.constants import DEPLOYMENT_NAME\n"
+    "from decimal import Decimal\n"
+    "def handler(): ...\n"
+)
+
+
+def test_a_new_all_that_leaves_out_a_bound_import_is_advisory():
+    """Without ``__all__`` every intra-package import was surface. Declaring one
+    that leaves an import out does not unbind it, so the name still imports:
+    report it, never block on it."""
+    base = snap(_LEAF_BASE)
+    head = snap(_LEAF_BASE + "__all__ = ['handler']\n")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == set()
+    assert advisory(findings) == {"application_sdk.thing:DEPLOYMENT_NAME"}
+    assert {f.kind for f in findings} == {"undeclared"}
+
+
+def test_a_new_all_that_also_drops_the_import_is_blocking():
+    """Unbound means gone: the advisory pass covers a name that still imports."""
+    base = snap(_LEAF_BASE)
+    head = snap("def handler(): ...\n__all__ = ['handler']\n")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.thing:DEPLOYMENT_NAME"}
+
+
+def test_narrowing_an_existing_all_is_still_blocking():
+    """A module that already declared ``__all__`` declared the name on purpose.
+    Unlisting it, then deleting the import a release later, would remove it with
+    no deprecation cycle; so unlisting is the removal."""
+    base = snap(_LEAF_BASE + "__all__ = ['handler', 'DEPLOYMENT_NAME']\n")
+    head = snap(_LEAF_BASE + "__all__ = ['handler']\n")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.thing:DEPLOYMENT_NAME"}
+
+
+def test_an_unlisted_import_is_not_surface_once_all_is_declared():
+    """After the release that declares ``__all__``, deleting the import is
+    clean: the base no longer counts it."""
+    base = snap(_LEAF_BASE + "__all__ = ['handler']\n")
+    head = snap("def handler(): ...\n__all__ = ['handler']\n")
+    assert mod.compare(base, head) == []
+
+
+def _class_tree(root: Path, consumer: str) -> mod.Snapshot:
+    pkg = root / "application_sdk"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "home.py").write_text("class Thing:\n    def go(self, x): ...\n")
+    (pkg / "user.py").write_text(consumer)
+    return mod.build_snapshot(root)
+
+
+def test_an_undeclared_class_import_takes_its_members_with_it(tmp_path: Path):
+    """A re-exported class carries its methods on the re-exporting module. When
+    a new ``__all__`` leaves the class out, its members are advisory too."""
+    base = _class_tree(tmp_path / "base", "from application_sdk.home import Thing\n")
+    head = _class_tree(
+        tmp_path / "head",
+        "from application_sdk.home import Thing\n__all__: list[str] = []\n",
+    )
+    findings = mod.compare(base, head)
+    assert blocking(findings) == set()
+    assert advisory(findings) == {
+        "application_sdk.user:Thing",
+        "application_sdk.user:Thing.go",
+    }
+
+
+def test_a_deprecated_alias_of_a_class_covers_its_members(tmp_path: Path):
+    """Replacing a re-exported class with a ``_DEPRECATED_CONSTANTS`` alias
+    serves the class object itself, methods included."""
+    base = _class_tree(tmp_path / "base", "from application_sdk.home import Thing\n")
+    head = _class_tree(
+        tmp_path / "head",
+        "from application_sdk import _deprecation\n"
+        "__all__: list[str] = []\n"
+        "_DEPRECATED_CONSTANTS = {'Thing': ('application_sdk.home.Thing', 'moved')}\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+        "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0'\n)\n",
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_the_report_lists_undeclared_names_in_their_own_section():
+    base = snap(_LEAF_BASE)
+    head = snap(_LEAF_BASE + "__all__ = ['handler']\n")
+    report = mod.render_report(
+        mod.compare(base, head), base_label="v1.0.0", head_label="HEAD"
+    )
+    assert "left out of a new `__all__`" in report
+    assert "private names" not in report
+    assert "DEPLOYMENT_NAME" in report

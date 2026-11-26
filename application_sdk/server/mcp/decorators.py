@@ -11,6 +11,10 @@ from typing import Any
 from application_sdk.constants import MCP_METADATA_KEY
 from application_sdk.server.mcp.models import MCPMetadata
 
+__all__ = [
+    "mcp_tool",
+]
+
 
 def mcp_tool(
     name: str | None = None,

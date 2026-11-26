@@ -61,6 +61,11 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "create_incremental_diff",
+]
+
+
 logger = get_logger(__name__)
 
 

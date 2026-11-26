@@ -24,6 +24,13 @@ from __future__ import annotations
 
 import threading
 
+__all__ = [
+    "is_worker_shutting_down",
+    "mark_worker_shutting_down",
+    "reset_worker_shutting_down",
+]
+
+
 _shutdown_event = threading.Event()
 
 

@@ -114,7 +114,8 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
     strip_sql_block_comments,
 )
-from application_sdk.constants import TEMPORARY_PATH, _run_prefix
+from application_sdk.constants import TEMPORARY_PATH as _TEMPORARY_PATH
+from application_sdk.constants import _run_prefix
 from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -150,13 +151,15 @@ from application_sdk.templates._template_errors import (
 )
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
-    ExtractionOutput,
     ExtractionTaskInput,
     ExtractionTaskOutput,
     PrimeAuthOutput,
     TransformInput,
     TransformOutput,
     TreeSelectionExtractionInput,
+)
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionOutput as _ExtractionOutput,
 )
 from application_sdk.templates.sql_app_errors import (
     SqlProbeTimeoutError,
@@ -167,6 +170,11 @@ if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Asset
 
     from application_sdk.clients.sql import BaseSQLClient
+
+__all__ = [
+    "SqlApp",
+]
+
 
 logger = get_logger(__name__)
 
@@ -1027,7 +1035,7 @@ class SqlApp(App):
 
     async def run(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: ExtractionInput
-    ) -> ExtractionOutput:
+    ) -> _ExtractionOutput:
         """Default extraction orchestration.
 
         1. Resolve credentials
@@ -1147,7 +1155,7 @@ class SqlApp(App):
         else:
             info = _temporal_workflow.info()
             resolved_base = os.path.join(
-                TEMPORARY_PATH,
+                _TEMPORARY_PATH,
                 _run_prefix(
                     AppRegistry.resolve_running_app_name(prefer=self._app_name),
                     info.workflow_id,
@@ -1177,7 +1185,7 @@ class SqlApp(App):
         # calls, deliberately: the two cannot drift, and an override adding a
         # fifth entity gets the identical assertion rather than a recipe it has
         # to reproduce correctly.
-        base = ExtractionOutput(
+        base = _ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
@@ -1200,9 +1208,9 @@ class SqlApp(App):
 
     async def finalize_extraction(
         self,
-        base: ExtractionOutput,
+        base: _ExtractionOutput,
         extra: Sequence[TransformOutput] = (),
-    ) -> ExtractionOutput:
+    ) -> _ExtractionOutput:
         """Fold extra transforms into ``base``'s declaration and verify it all.
 
         Call this from a ``run()`` override that adds entities the default
@@ -1422,7 +1430,7 @@ class SqlApp(App):
         if not input.output_path:
             resolved = build_output_path()
             logger.info("Auto-resolved output_path: %s", resolved)
-            return os.path.join(TEMPORARY_PATH, resolved)
+            return os.path.join(_TEMPORARY_PATH, resolved)
         return input.output_path
 
     async def _init_sql_client(self, input: ExtractionTaskInput) -> BaseSQLClient:
@@ -2034,6 +2042,14 @@ class SqlApp(App):
 #: ``application_sdk.errors.wire``; the names it imported for that, and the
 #: rebuild itself (which a connector imports), are served from there.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "ExtractionOutput": (
+        "application_sdk.templates.contracts.sql_metadata.ExtractionOutput",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "TEMPORARY_PATH": (
+        "application_sdk.constants.TEMPORARY_PATH",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
     "_error_from_failure_details": (
         "application_sdk.errors.wire.error_from_failure_details",
         "the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it",

@@ -26,6 +26,13 @@ from application_sdk.observability.models import MetricRecord
 from application_sdk.observability.utils import in_temporal_workflow
 from application_sdk.version import __version__
 
+__all__ = [
+    "SegmentBatchPayload",
+    "SegmentClient",
+    "SegmentTrackEvent",
+]
+
+
 # Default cap on queued events. Without one, a Segment outage grows the queue
 # for as long as metrics are emitted; at the cap new events are dropped and
 # counted (``SegmentClient.dropped_count``).

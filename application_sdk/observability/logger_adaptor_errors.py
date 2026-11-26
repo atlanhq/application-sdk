@@ -7,6 +7,10 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import InternalError
 
+__all__ = [
+    "UnsupportedLogRecordError",
+]
+
 
 @dataclass(kw_only=True)
 class UnsupportedLogRecordError(InternalError):

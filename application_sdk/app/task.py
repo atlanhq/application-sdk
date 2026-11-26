@@ -45,6 +45,19 @@ if TYPE_CHECKING:
     from application_sdk.execution.progress import ProgressWatchdogMode
     from application_sdk.execution.retry import RetryPolicy
 
+__all__ = [
+    "get_task_metadata",
+    "HEARTBEAT_TIMEOUT_ENV",
+    "is_task",
+    "task",
+    "TaskContractError",
+    "TaskDeclarationError",
+    "TaskMetadata",
+    "TaskMethod",
+    "UnresolvableTaskAnnotationsError",
+]
+
+
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])

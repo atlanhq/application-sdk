@@ -7,6 +7,13 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import DependencyUnavailableError, InvalidInputError
 
+__all__ = [
+    "DaprNotDetectedError",
+    "MissingAppModuleError",
+    "MultiAppModuleError",
+    "UnknownModeError",
+]
+
 
 @dataclass(kw_only=True)
 class MissingAppModuleError(InvalidInputError):

@@ -106,9 +106,25 @@ from application_sdk.storage._telemetry import (
 # storage/chunked.py (BLDX-1513 follow-up split); existing
 # `from application_sdk.storage.ops import download_file_chunked` callers
 # keep working. chunked.py imports ops only lazily, so this is cycle-free.
-from application_sdk.storage.chunked import (  # noqa: F401 — re-export
+from application_sdk.storage.chunked import (  # re-export
     download_file_chunked,
 )
+
+__all__ = [
+    "BoundStore",
+    "delete",
+    "download_file",
+    "download_file_chunked",
+    "exists",
+    "GATEWAY_INVALID_CLIENT_CODE",
+    "get_file_meta",
+    "get_file_size",
+    "normalize_key",
+    "put_json",
+    "upload_bytes",
+    "upload_file",
+]
+
 
 logger = get_logger(__name__)
 

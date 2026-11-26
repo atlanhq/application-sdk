@@ -48,6 +48,13 @@ from application_sdk._runtime.progress import (
 from application_sdk.execution.progress import ProgressWatchdogMode
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "closed_hold_observer",
+    "record_closed_hold",
+    "record_no_progress_gap",
+]
+
+
 logger = get_logger(__name__)
 
 #: Meter for the signals this module owns. Deliberately not the Temporal meter:

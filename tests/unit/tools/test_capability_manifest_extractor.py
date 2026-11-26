@@ -478,11 +478,24 @@ def test_discover_public_modules_groups_every_module_under_its_subpackage() -> N
         )
 
 
-def test_discover_public_modules_ignores_modules_without_all() -> None:
+def test_discover_public_modules_ignores_modules_without_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Declaring __all__ is how a module opts into the manifest. Every public SDK
+    # module declares one now (tests/unit/test_module_all_declared.py), so the
+    # rule is pinned on a tree built here.
+    root = tmp_path / "application_sdk"
+    (root / "sub").mkdir(parents=True)
+    (root / "__init__.py").write_text("")
+    (root / "sub" / "__init__.py").write_text(
+        "__all__ = ['go']\nfrom .declared import go\n"
+    )
+    (root / "sub" / "declared.py").write_text("__all__ = ['go']\ndef go(): ...\n")
+    (root / "sub" / "bare.py").write_text("def stay(): ...\n")
+    monkeypatch.setattr(extractor, "PKG_ROOT", root)
     found = {dotted for _, dotted, _ in extractor.discover_public_modules()}
-    # transformers/ declares no __all__ anywhere: declaring one is how a module
-    # opts into the manifest.
-    assert not any(d.startswith("application_sdk.transformers") for d in found)
+    assert "application_sdk.sub.declared" in found
+    assert "application_sdk.sub.bare" not in found
 
 
 # ---------------------------------------------------------------------------

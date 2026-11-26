@@ -14,6 +14,15 @@ from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionRef, MaxItems
 from application_sdk.credentials.ref import CredentialRef
 
+__all__ = [
+    "QueryBatchInput",
+    "QueryBatchOutput",
+    "QueryExtractionInput",
+    "QueryExtractionOutput",
+    "QueryFetchInput",
+    "QueryFetchOutput",
+]
+
 
 class QueryExtractionInput(Input):
     """Top-level input for a SQL query extraction run."""

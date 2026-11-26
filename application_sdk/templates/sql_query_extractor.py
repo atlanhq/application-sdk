@@ -40,6 +40,11 @@ from application_sdk.templates.contracts.sql_query import (
     QueryFetchOutput,
 )
 
+__all__ = [
+    "SqlQueryExtractor",
+]
+
+
 logger = get_logger(__name__)
 
 

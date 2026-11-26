@@ -51,6 +51,14 @@ from application_sdk.storage._classify import (
 if TYPE_CHECKING:
     from application_sdk.infrastructure.context import InfrastructureContext
 
+__all__ = [
+    "check_object_store_access",
+    "check_run_storage_access",
+    "ObjectStoreCheckResult",
+    "verify_object_store_access",
+]
+
+
 logger = get_logger(__name__)
 
 _PREFLIGHT_PREFIX = "artifacts/apps/.atlan-sdk-preflight"

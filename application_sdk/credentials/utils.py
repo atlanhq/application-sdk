@@ -17,9 +17,18 @@ from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PATH
-from application_sdk.credentials.extra import (  # noqa: F401 — re-exported; ships in the api distribution
+from application_sdk.credentials.extra import (  # re-exported; ships in the api distribution
     parse_credentials_extra,
 )
+
+__all__ = [
+    "credential_dir",
+    "CredentialDir",
+    "OBJECT_STORE_PREFIX",
+    "parse_credentials_extra",
+    "resolve_credential_file",
+]
+
 
 logger = get_logger(__name__)
 

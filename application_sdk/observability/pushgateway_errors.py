@@ -7,6 +7,11 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import InvalidInputError
 
+__all__ = [
+    "PushGatewayJobRequiredError",
+    "PushGatewayUrlRequiredError",
+]
+
 
 @dataclass(kw_only=True)
 class PushGatewayUrlRequiredError(InvalidInputError):

@@ -25,6 +25,14 @@ from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION
 from application_sdk.observability.utils import get_observability_dir
 
+__all__ = [
+    "drain",
+    "get_sink",
+    "persist",
+    "SizingObservabilitySink",
+]
+
+
 logger = get_logger(__name__)
 
 

@@ -22,7 +22,8 @@ from application_sdk.observability.background_loop import (  # noqa: F401 — re
     BackgroundTask,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.models import MetricRecord, MetricType
+from application_sdk.observability.models import MetricRecord
+from application_sdk.observability.models import MetricType as _MetricType
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.segment_client import SegmentClient
 from application_sdk.observability.utils import (
@@ -31,6 +32,12 @@ from application_sdk.observability.utils import (
     get_observability_dir,
     self_failure_logger,
 )
+
+__all__ = [
+    "AtlanMetricsAdapter",
+    "get_metrics",
+]
+
 
 # MetricRecord and MetricType are imported from models.py to avoid circular dependencies
 logger = get_logger(__name__)
@@ -227,21 +234,21 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                     metric_record.name,
                     dropped,
                 )
-            if metric_record.type == MetricType.COUNTER:
+            if metric_record.type == _MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
                     description=metric_record.otel_description,
                     unit=metric_record.otel_unit,
                 )
                 counter.add(metric_record.value, otel_attrs)
-            elif metric_record.type == MetricType.GAUGE:
+            elif metric_record.type == _MetricType.GAUGE:
                 gauge = self.meter.create_gauge(
                     name=metric_record.name,
                     description=metric_record.otel_description,
                     unit=metric_record.otel_unit,
                 )
                 gauge.set(metric_record.value, otel_attrs)
-            elif metric_record.type == MetricType.HISTOGRAM:
+            elif metric_record.type == _MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
                     description=metric_record.otel_description,
@@ -290,7 +297,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         self,
         name: str,
         value: float,
-        metric_type: MetricType,
+        metric_type: _MetricType,
         labels: dict[str, str | int | float | bool],
         description: str | None = None,
         unit: str | None = None,
@@ -358,9 +365,14 @@ def get_metrics() -> AtlanMetricsAdapter:
     return _metrics_instance
 
 
-#: Retention-sweep constants this module used to re-export from
-#: ``application_sdk.constants``; served once more by ``__getattr__`` (PEP 562).
+#: Names this module used to re-export (the retention-sweep constants from
+#: ``application_sdk.constants``, and ``MetricType`` from its import); served
+#: once more by ``__getattr__`` (PEP 562).
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "MetricType": (
+        "application_sdk.observability.models.MetricType",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
     "METRICS_RETENTION_DAYS": (
         "an object-store bucket lifecycle rule",
         "the SDK retention sweep never deleted exported metric files",
@@ -373,6 +385,8 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 
 
 def _former_default(name: str) -> object:
+    if name == "MetricType":
+        return _MetricType
     from application_sdk.constants import (  # noqa: PLC0415 — only reached on a deprecated access
         _DEPRECATED_CONSTANT_VALUES,
     )

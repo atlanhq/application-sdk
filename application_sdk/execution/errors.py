@@ -6,6 +6,10 @@ Use these types in application code instead of importing directly from
 
 from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 
+__all__ = [
+    "ApplicationError",
+]
+
 
 class ApplicationError(_TemporalApplicationError):
     """Framework application error.

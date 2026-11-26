@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from application_sdk.contracts.base import Input, Output
 
+__all__ = [
+    "UploadInput",
+    "UploadOutput",
+]
+
 
 class UploadInput(Input):
     """Input for the deprecated ``upload_to_atlan`` task.

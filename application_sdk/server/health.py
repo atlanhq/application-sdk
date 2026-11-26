@@ -42,6 +42,15 @@ from typing_extensions import deprecated
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server._import_wait import ImportWaitWatch
 
+__all__ = [
+    "build_worker_health_server",
+    "HealthStatus",
+    "run_health_server",
+    "TemporalClientProtocol",
+    "WorkerHealthServer",
+]
+
+
 logger = get_logger("health")
 
 

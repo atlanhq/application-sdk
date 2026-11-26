@@ -95,6 +95,15 @@ from application_sdk.handler.request_contract import (
     validate_request,
 )
 
+__all__ = [
+    "has_warmup",
+    "include_app_routers_on",
+    "LoggingPreflightObserver",
+    "PreflightObserver",
+    "register_handler_routes",
+]
+
+
 # Named for application_sdk.handler.service, not this module: this code moved
 # from there and keeps its logger name, so every log line (and any query or
 # alert on it) is unchanged.

@@ -7,6 +7,14 @@ from typing import Any
 
 from application_sdk.credentials.types import Credential
 
+__all__ = [
+    "CredentialParser",
+    "CredentialTypeRegistry",
+    "get_registry",
+    "register_credential_type",
+]
+
+
 # Type alias for a parser function
 CredentialParser = Callable[[dict[str, Any]], Credential]
 

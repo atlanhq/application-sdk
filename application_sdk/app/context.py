@@ -13,6 +13,7 @@ from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk._runtime.offload import is_cancelled as _is_cancelled
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import holding_progress
@@ -25,7 +26,9 @@ from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
-from application_sdk.observability.correlation import get_correlation_context
+from application_sdk.observability.correlation import (
+    get_correlation_context as _get_correlation_context,
+)
 from application_sdk.observability.utils import in_temporal_workflow
 
 if TYPE_CHECKING:
@@ -37,6 +40,14 @@ if TYPE_CHECKING:
     from application_sdk.execution.heartbeat import HeartbeatController
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.infrastructure.state import StateStore
+
+__all__ = [
+    "AppContext",
+    "AppMetadata",
+    "ChildAppContext",
+    "TaskExecutionContext",
+]
+
 
 T = TypeVar("T")
 _P = ParamSpec("_P")
@@ -145,7 +156,7 @@ class _WorkflowSafeLogger:
             # CorrelationContextInterceptor ran) or empty.
             if "correlation_id" not in kwargs:
                 try:
-                    v3_ctx = get_correlation_context()
+                    v3_ctx = _get_correlation_context()
                     if v3_ctx and v3_ctx.correlation_id:
                         kwargs = {**kwargs, "correlation_id": v3_ctx.correlation_id}
                 except Exception:  # noqa: BLE001 — probe for optional correlation context; logged at debug with exc_info by structlog logger
@@ -821,3 +832,17 @@ class TaskExecutionContext:
             *Choosing the allowance*.
         """
         return holding_progress(label, timeout=timeout)
+
+
+#: name -> (replacement, why). Importable from here only as a side effect
+#: of an import; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "get_correlation_context": (
+        "application_sdk.observability.correlation.get_correlation_context",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

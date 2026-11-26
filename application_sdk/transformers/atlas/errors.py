@@ -7,6 +7,16 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import DataIntegrityError
 
+__all__ = [
+    "TransformColumnError",
+    "TransformDatabaseError",
+    "TransformFunctionError",
+    "TransformProcedureError",
+    "TransformSchemaError",
+    "TransformTableError",
+    "TransformTagAttachmentError",
+]
+
 
 @dataclass(kw_only=True)
 class TransformProcedureError(DataIntegrityError):

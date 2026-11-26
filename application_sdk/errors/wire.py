@@ -31,6 +31,18 @@ from application_sdk.errors.leaves import (
     SourceUnavailableError,
 )
 
+__all__ = [
+    "Audience",
+    "FailureDetails",
+    "degraded_failure_details",
+    "error_from_failure_details",
+    "redact_evidence_value",
+    "redacted_validation_reason",
+    "register_wire_leaf",
+    "secret_named_evidence_keys",
+]
+
+
 # Keys that may carry secrets — rejected at envelope construction.
 _EVIDENCE_KEY_DENYLIST: frozenset[str] = frozenset(
     {

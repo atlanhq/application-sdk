@@ -14,6 +14,12 @@ if TYPE_CHECKING:
     from application_sdk.credentials.ref import CredentialRef
     from application_sdk.credentials.types import Credential
 
+__all__ = [
+    "AtlanClientMixin",
+    "create_async_atlan_client",
+]
+
+
 logger = get_logger(__name__)
 
 # Well-known state key for handing off a validated AsyncAtlanClient from
