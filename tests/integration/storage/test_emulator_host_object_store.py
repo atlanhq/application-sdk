@@ -123,6 +123,12 @@ _STORES: dict[str, tuple[Callable[[str], HostObjectStore], str]] = {
 }
 
 
+_MISSING_STORE_DETAIL = {
+    "s3": "Object store unavailable",
+    "azure": "Object store container does not exist",
+}
+
+
 def _host(store: HostObjectStore) -> TestClient:
     return TestClient(
         build_asgi_app(_Handler(), app_name="mysql", object_store=store),
@@ -158,7 +164,10 @@ def test_a_missing_bucket_or_container_is_503_not_404(cloud: str) -> None:
     host = _host(make("host-emulator-no-such-bucket"))
     response = host.get("/workflows/v1/config/g1?type=credentials")
     assert response.status_code == 503
-    assert response.json()["detail"] == "Object store unavailable"
+    # Azure names the container in its 404 (ContainerNotFound), which the
+    # shared failure table reads as such; S3's NoSuchBucket is a plain 404,
+    # told apart from a missing object only by the listing.
+    assert response.json()["detail"] == _MISSING_STORE_DETAIL[cloud]
 
 
 @pytest.mark.parametrize("cloud", sorted(_STORES))
