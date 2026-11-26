@@ -103,8 +103,8 @@ class SourceProbe(Protocol):              # proposed
     name: str                             # from the canonical vocabulary
     tier: CheckTier                       # WARMUP when it needs source compute
     requires: tuple[str, ...]             # canonical names that must pass first
-    def applies(self, target: ProbeTarget) -> bool          # False -> "unsupported"
-    async def run(self, target: ProbeTarget, state: ProbeState) -> PreflightCheck
+    def applies(self, target: ProbeTarget) -> bool: ...     # False -> "unsupported"
+    async def run(self, target: ProbeTarget, state: ProbeState) -> PreflightCheck: ...
 ```
 
 **What the app declares.** The app declares *what* to reach and *what it needs*. It never declares

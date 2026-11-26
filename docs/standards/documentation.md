@@ -53,3 +53,11 @@ build an app carries no marker: if it needs one, the page needs rewriting.
 The check sees only Python blocks; a deprecated name in prose or in a table is
 on the author. Run it on its own with
 `uv run --frozen python .github/scripts/check_docs_deprecated_imports.py [FILE.md ...]`.
+
+## Python examples parse and import real symbols
+
+Every `python` code block under `docs/` must parse, and its `application_sdk` imports must name modules and symbols that exist in the source tree. The `check-doc-examples` pre-commit hook (`.github/scripts/check_doc_examples.py`) enforces both. It runs on docs changes and on SDK changes, since renaming a symbol breaks the docs that import it.
+
+*   Write fragments so they parse: put `...` in a comment rather than an argument list, give a signature a `: ...` body, and wrap a bare `except` or `finally` in a `try`.
+*   A block with a `legacy-example` marker (see above) must still parse, but its imports are not resolved, so a v2 "before" snippet may import paths v3 removed.
+*   In a block showing v2 and v3 side by side, end the first line of each v2 import statement with a `# v2` comment instead.

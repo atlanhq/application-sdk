@@ -62,14 +62,14 @@ threshold — and keeps churn flat across releases.
 self.metrics.record_metric(
     name="write_errors",
     labels={"type": "pandas", "error": str(e)},  # explodes
-    ...
+    # ...
 )
 
 # RIGHT
 self.metrics.record_metric(
     name="write_errors",
     labels={"type": "pandas", "error_type": type(e).__name__},
-    ...
+    # ...
 )
 ```
 

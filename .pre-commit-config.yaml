@@ -120,6 +120,16 @@ repos:
         language: system
         files: (\.md|^packages/conformance/conformance/data/deprecated_symbols\.json|^\.github/scripts/check_docs_deprecated_imports\.py)$
         pass_filenames: false
+      # Nothing executes the ```python blocks under docs/, so they drift: every
+      # block must parse, and its application_sdk imports must resolve against
+      # the source tree (FND-4272). Runs on SDK changes too, since renaming a
+      # symbol breaks the docs that import it. Stdlib only.
+      - id: check-doc-examples
+        name: check docs python examples
+        entry: python .github/scripts/check_doc_examples.py
+        language: python
+        files: ^(docs/.*\.md|application_sdk/.*\.py|\.github/scripts/check_doc_examples\.py)$
+        pass_filenames: false
       # The pyright hook above never sees .github/scripts ([tool.pyright]
       # excludes .github/**); CI's `pyright .github/scripts` job holds them to
       # .github/scripts/pyright_baseline.json instead. Run the same ratchet here

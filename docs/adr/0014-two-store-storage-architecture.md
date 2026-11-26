@@ -245,7 +245,10 @@ async def run(self, input: ExtractionInput) -> ExtractionOutput:
             raise_on_empty=True,
         )
     )
-    return ExtractionOutput(transformed_data_prefix=base.transformed_data_prefix, ...)
+    return ExtractionOutput(
+        transformed_data_prefix=base.transformed_data_prefix,
+        # ... the rest of base's fields
+    )
 ```
 
 ## Consequences
