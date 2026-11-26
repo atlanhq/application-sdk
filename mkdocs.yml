@@ -184,6 +184,7 @@ nav:
       - adr/0020-artifact-validation.md
       - adr/0021-source-validation.md
       - adr/0022-skipped-record-capture.md
+      - adr/0023-consolidated-api-host.md
   - Reference:
       - CLI: reference/cli.md
       - HTTP API: reference/http-api.md
