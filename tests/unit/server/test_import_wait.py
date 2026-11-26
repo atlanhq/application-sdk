@@ -140,6 +140,17 @@ class TestImportSite:
 
         assert _import_site(stack) == "/app/workflows/extract.py:10 in run"
 
+    def test_windows_paths_are_recognised(self):
+        stack = traceback.StackSummary.from_list(
+            [
+                _frame(r"C:\app\workflows\extract.py", "run"),
+                _frame(r"C:\Python\Lib\importlib\__init__.py", "import_module"),
+                _frame("<frozen importlib._bootstrap>", "_find_and_load"),
+            ]
+        )
+
+        assert _import_site(stack) == r"C:\app\workflows\extract.py:10 in run"
+
     def test_stack_without_import_machinery_has_no_site(self):
         stack = traceback.StackSummary.from_list([_frame("/app/a.py", "f")])
 

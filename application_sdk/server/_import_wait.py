@@ -79,11 +79,17 @@ class StuckImport:
     import_site: str | None = None
 
 
+def _is_import_machinery(filename: str) -> bool:
+    # Windows paths use backslashes; the markers are written with ``/``.
+    normalized = filename.replace("\\", "/")
+    return any(m in normalized for m in _IMPORT_MACHINERY_MARKERS)
+
+
 def _import_site(stack: traceback.StackSummary) -> str | None:
     """Return the outermost frame that called into the import machinery."""
     for caller, callee in zip(stack, stack[1:]):
-        if any(m in callee.filename for m in _IMPORT_MACHINERY_MARKERS) and not any(
-            m in caller.filename for m in _IMPORT_MACHINERY_MARKERS
+        if _is_import_machinery(callee.filename) and not _is_import_machinery(
+            caller.filename
         ):
             return f"{caller.filename}:{caller.lineno} in {caller.name}"
     return None
