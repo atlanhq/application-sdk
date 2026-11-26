@@ -26,8 +26,6 @@ optional_triggers:
   - "run_dev_combined migration"
   - "move I/O out of run()"
 owner: connector-platform-team
-last_updated: "2026-10-19"
-staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:

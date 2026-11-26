@@ -43,8 +43,6 @@ optional_triggers:
   - "duckdb pyarrow migration"
   - "SDK bump broke transformers"
 owner: connector-platform-team
-last_updated: "2026-07-30"
-staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:

@@ -13,8 +13,6 @@ optional_triggers:
   - "mcp integration"
   - "enable mcp"
 owner: connector-platform-team
-last_updated: "2026-04-30"
-staleness_days: 90
 inputs:
   - task_methods: list[str] — which @task methods to expose (or "all")
 outputs:
@@ -90,11 +88,27 @@ Start the app and check the MCP endpoint:
 # Start the app
 ENABLE_MCP=true uv run application-sdk --mode combined --app app.connector:MyApp
 
-# List registered tools
-curl http://localhost:8000/mcp
+# List registered tools (in a second terminal)
+uv run python - <<'PY'
+import asyncio
+
+from fastmcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        for tool in await client.list_tools():
+            print(tool.name)
+
+
+asyncio.run(main())
+PY
 ```
 
-The response should list all `@mcp_tool`-decorated tasks.
+This prints one line per `@mcp_tool`-decorated task. A bare `curl http://localhost:8000/mcp`
+does not list tools: `/mcp` speaks streamable-HTTP MCP, so a plain `GET` returns 406 and a
+lone tools/list JSON-RPC POST returns 400 until a session is initialized. fastmcp's `Client` does
+the `initialize` handshake for you.
 
 ### 5. Connect an AI client
 
@@ -144,5 +158,5 @@ Do not expose MCP to the public internet without authentication.
 
 - [ ] `uv run python -c "from application_sdk.server.mcp.decorators import mcp_tool"` — no import error
 - [ ] `ENABLE_MCP=true` in environment
-- [ ] `curl http://localhost:8000/mcp` returns tool list
+- [ ] The fastmcp `Client` snippet in step 4 prints each `@mcp_tool` name
 - [ ] AI client can discover and call the tool

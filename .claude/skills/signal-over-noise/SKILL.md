@@ -23,8 +23,6 @@ optional_triggers:
   - "improve signal to noise"
   - "remove logging anti-patterns"
 owner: connector-platform-team
-last_updated: "2026-05-12"
-staleness_days: 90
 inputs:
   - target_path: "first positional arg — directory to audit (default: current working directory)"
   - mode: "surface | tune (default: surface)"

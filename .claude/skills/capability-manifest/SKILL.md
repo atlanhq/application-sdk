@@ -15,8 +15,6 @@ optional_triggers:
   - "what does the SDK expose"
   - "list public methods of the SDK"
 owner: connector-platform-team
-last_updated: "2026-11-12"
-staleness_days: 30
 inputs:
   - mode: "create | refresh | verify (auto-detected from existing state)"
 outputs:
@@ -163,8 +161,6 @@ echo "Current SHA:  $CURRENT_SHA"
   || echo "STATUS: manifest is stale — run /capability-manifest to refresh"
 ```
 
-The `staleness_days: 30` frontmatter is a secondary cadence reminder; prefer the SHA check.
-
 ---
 
 ## Audit-and-refresh flow (manifest already exists)
@@ -221,10 +217,6 @@ Capability manifest refresh
   Idempotence:     re-render matches; safe to commit
   Next:            review `git diff docs/agents/sdk-capabilities.md` and commit
 ```
-
-### Step F — Staleness update
-
-Update `last_updated` in this SKILL.md's frontmatter to today's date after a successful refresh.
 
 ---
 

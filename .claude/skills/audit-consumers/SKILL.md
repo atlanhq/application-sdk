@@ -21,8 +21,6 @@ optional_triggers:
   - "raise migration PRs"
   - "auto-fix consumers"
 owner: connector-platform-team
-last_updated: "2026-05-15"
-staleness_days: 90
 inputs:
   - spec: "path to a check-spec markdown file, OR inline natural-language description from the invoker"
   - report: "output path for the report markdown (default: <repo-root>/<slug>-consumer-audit.md)"
