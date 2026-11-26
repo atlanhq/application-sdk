@@ -39,6 +39,12 @@ def src(tmp_path: Path) -> Path:
         "    raise AttributeError(name)\n"
     )
     (pkg / "lazy" / "sub.py").write_text("")
+    # A PEP 562 getter bound by assignment, as file_converter.py does.
+    (pkg / "assigned.py").write_text(
+        "__all__ = ['served']\n"
+        "_DEPRECATED = {'Deprecated': 1}\n"
+        "__getattr__ = make_getattr(__name__, _DEPRECATED)\n"
+    )
     return pkg
 
 
@@ -77,6 +83,7 @@ def test_unparseable_block_reports_the_file_line(tmp_path: Path, src: Path) -> N
         "from application_sdk.lazy import Eager, Listed, Compared, sub",
         "from application_sdk import plain, lazy",
         "from application_sdk.plain import *",
+        "from application_sdk.assigned import served, Deprecated",
         "from os.path import join",
         "from .relative import anything",
     ],
@@ -183,3 +190,18 @@ def test_main_exit_codes(
     out = capsys.readouterr()
     assert out.out == f"{docs / 'bad.md'}:2: application_sdk.plain has no name Nope\n"
     assert check.LEGACY_MARKER in out.err
+
+
+def test_missing_or_empty_inputs_fail_closed(
+    tmp_path: Path, src: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    docs = tmp_path / "docs"
+    assert check.main(["--docs", str(docs), "--src", str(src)]) == 2  # no such dir
+    docs.mkdir()
+    assert check.main(["--docs", str(docs), "--src", str(src)]) == 2  # no pages
+    (docs / "prose.md").write_text("# Title\n\n```bash\nls\n```\n")
+    assert check.main(["--docs", str(docs), "--src", str(src)]) == 2  # no examples
+    (docs / "ok.md").write_text("```python\nx = 1\n```\n")
+    assert check.main(["--docs", str(docs), "--src", str(tmp_path / "nope")]) == 2
+    assert check.main(["--docs", str(docs), "--src", str(src)]) == 0
+    assert "no Python examples found" in capsys.readouterr().err

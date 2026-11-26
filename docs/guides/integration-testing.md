@@ -939,15 +939,33 @@ args=lazy(lambda: {"credentials": load_credentials()})
 
 Don't just test the happy path:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
-scenarios = [
-    # Happy path
-    Scenario(name="auth_valid", api="auth"),  # ... credentials, assert_that
+from application_sdk.testing.integration import Scenario, equals
 
-    # Negative cases
-    Scenario(name="auth_invalid_password", api="auth"),
-    Scenario(name="auth_empty_credentials", api="auth"),
-    Scenario(name="auth_missing_username", api="auth"),
+scenarios = [
+    # Happy path: credentials auto-loaded from E2E_{APP_NAME}_* env vars
+    Scenario(name="auth_valid", api="auth", assert_that={"success": equals(True)}),
+
+    # Negative cases: override credentials
+    Scenario(
+        name="auth_invalid_password",
+        api="auth",
+        credentials={"username": "user", "password": "wrong"},
+        assert_that={"success": equals(False)},
+    ),
+    Scenario(
+        name="auth_empty_credentials",
+        api="auth",
+        credentials={},
+        assert_that={"success": equals(False)},
+    ),
+    Scenario(
+        name="auth_missing_username",
+        api="auth",
+        credentials={"password": "secret"},
+        assert_that={"success": equals(False)},
+    ),
 ]
 ```
 
