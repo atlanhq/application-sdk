@@ -39,13 +39,13 @@ Exits 1 and prints `path:line: message` per finding.
 from __future__ import annotations
 
 import ast
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
 
+from _doc_blocks import CodeBlock, bare_markers, iter_code_blocks
 from conformance.suite.checks.deprecation import scan_consumer
 from conformance.suite.checks.deprecation._manifest import Manifest, load_manifest
 
@@ -60,21 +60,6 @@ _SDK_ROOT = "application_sdk"
 
 _PYTHON_TAGS = frozenset({"", "python", "py", "python3", "pycon"})
 
-_FENCE_OPEN = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})\s*\{?\.?(?P<tag>[\w+-]*)"
-)
-_MARKER = re.compile(r"^\s*<!--\s*legacy-example:\s*(?P<reason>\S.*?)\s*-->\s*$")
-_BARE_MARKER = re.compile(r"^\s*<!--\s*legacy-example\b")
-
-
-@dataclass(frozen=True)
-class CodeBlock:
-    """One fenced code block: its body and the file line of its first body line."""
-
-    first_line: int
-    body: str
-    marked: bool
-
 
 @dataclass(frozen=True)
 class Violation:
@@ -86,46 +71,9 @@ class Violation:
         return f"{self.path}:{self.line}: {self.message}"
 
 
-def _dedent(line: str, indent: str) -> str:
-    return line[len(indent) :] if line.startswith(indent) else line.lstrip()
-
-
 def iter_python_blocks(text: str) -> Iterator[CodeBlock]:
     """Yield every fenced block tagged as Python (or untagged) in *text*."""
-    lines = text.splitlines()
-    index = 0
-    while index < len(lines):
-        opened = _FENCE_OPEN.match(lines[index])
-        if opened is None:
-            index += 1
-            continue
-        indent, fence, tag = opened["indent"], opened["fence"], opened["tag"]
-        # CommonMark: the closing fence is the opener's character, at least as
-        # long, with nothing but whitespace after it. A ```python line inside
-        # a string in the example does not close it.
-        closing = re.compile(rf"[ \t]*{re.escape(fence[0])}{{{len(fence)},}}[ \t]*")
-        end = index + 1
-        while end < len(lines) and not closing.fullmatch(lines[end]):
-            end += 1
-        if tag.lower() in _PYTHON_TAGS:
-            above = lines[index - 1] if index > 0 else ""
-            yield CodeBlock(
-                first_line=index + 2,
-                body="\n".join(
-                    _dedent(line, indent) for line in lines[index + 1 : end]
-                ),
-                marked=_MARKER.match(above) is not None,
-            )
-        index = end + 1
-
-
-def bare_markers(text: str) -> list[int]:
-    """Line numbers of `legacy-example` markers that give no reason."""
-    return [
-        number
-        for number, line in enumerate(text.splitlines(), start=1)
-        if _BARE_MARKER.match(line) and not _MARKER.match(line)
-    ]
+    return iter_code_blocks(text, _PYTHON_TAGS)
 
 
 def parse_leniently(body: str) -> ast.Module | None:

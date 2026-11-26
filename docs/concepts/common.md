@@ -355,6 +355,8 @@ and `InternalError` files them against the app rather than the customer.
 from application_sdk.errors import NotFoundError, AppError
 from application_sdk.storage.errors import StorageError
 
+try:
+    ...
 # Catch any not-found regardless of domain:
 except NotFoundError as e:
     ...

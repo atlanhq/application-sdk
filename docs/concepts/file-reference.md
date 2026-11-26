@@ -467,7 +467,7 @@ deployment object store and returns a `FileReference` pointing at it. Use it whe
 ### Signature
 
 ```python
-await self.upload(input: UploadInput) -> UploadOutput
+async def upload(self, input: UploadInput) -> UploadOutput: ...
 ```
 
 ### UploadInput Fields

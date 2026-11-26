@@ -130,8 +130,8 @@ from app.connector import PostgresApp
 asyncio.run(
     run_dev_combined(
         PostgresApp,
-        credentials={"host": "localhost", "port": "5432", ...},
-        example_input={"connection": {"connection_name": "test", ...}},
+        credentials={"host": "localhost", "port": "5432"},  # ...
+        example_input={"connection": {"connection_name": "test"}},  # ...
         temporal_ui=True,
         temporal_ui_port=8233,
     )

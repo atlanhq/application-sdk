@@ -95,6 +95,7 @@ so there are no gRPC size limits and no sidecar dependency for storage.
 
 #### v2 — two classes, Temporal decorators, manual wiring
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from temporalio import workflow, activity
 from application_sdk.workflows import WorkflowInterface
@@ -307,6 +308,7 @@ class FetchInput(Input):
 
 #### v2 — direct Dapr calls
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.services.statestore import StateStore
 from application_sdk.services.secretstore import SecretStore
@@ -378,6 +380,7 @@ asyncio.run(run_dev_combined(
 
 #### v2 — untyped, manual load()
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.handlers import HandlerInterface
 
@@ -438,6 +441,7 @@ class MyHandler(Handler):
 
 #### v2 — BaseApplication + explicit Worker
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
@@ -512,6 +516,7 @@ await worker.run()
 
 #### v2 — credential_guid + raw dict
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
@@ -593,6 +598,7 @@ from `AtlanClientMixin` (shown above) as a full-fledged SDK client instead.
 
 #### v2 — @auto_heartbeater decorator
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.activities.common.utils import auto_heartbeater
 
@@ -692,7 +698,7 @@ intermediate step.
 
 ```python
 # v2
-from application_sdk.test_utils.credentials import MockCredentialStore
+from application_sdk.test_utils.credentials import MockCredentialStore  # v2
 
 # v3
 from application_sdk.testing import (
