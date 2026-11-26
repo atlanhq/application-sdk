@@ -122,6 +122,10 @@ and optionally `audience` (when the locus differs from the SDK base default).
   of system state) → INVALID_INPUT. Payload syntactically valid but state
   blocks → PRECONDITION.
 
+For the per-trigger leaf cookbook (401/403/404/429/5xx, timeouts, cancellation),
+the legacy `AtlanError` → `AppError` migration table and the mandatory
+raise-site rules, see `.claude/skills/typed-failures/references/typed-error-prescription.md`.
+
 ---
 
 ## Code naming convention — `<CATEGORY>_<SPECIFIC>`

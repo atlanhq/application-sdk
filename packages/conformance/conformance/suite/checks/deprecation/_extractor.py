@@ -24,7 +24,11 @@ What counts as a machine-readable marker (derived empirically from the SDK):
    in a module that also defines ``__getattr__`` (PEP 562) — one site per entry,
    attributed to the bare constant name. ``__getattr__`` is either a ``def`` or
    ``__getattr__ = deprecated_module_getattr(..., remove_in="X.Y.Z")``, the
-   SDK's shared factory (``application_sdk._deprecation``).
+   SDK's shared factory (``application_sdk._deprecation``);
+5. a public function / method / property whose body *opens* with an
+   unconditional ``warnings.warn(<msg>, DeprecationWarning, …)`` — the first
+   statement after the docstring and any local imports. Every call warns, so
+   the def itself is deprecated, exactly as if it carried ``@deprecated``.
 
 A call to the SDK's ``warn_deprecated(name, replacement, remove_in)`` helper
 counts as a ``warnings.warn(..., DeprecationWarning)`` call everywhere above;
@@ -46,10 +50,21 @@ name is prescribed by ``docs/standards/symbols.md``. See
 ``application_sdk/common/types.py`` for the authoring-side statement of the enum
 convention.
 
-Everything else (a bare ``warnings.warn(DeprecationWarning)`` in some other
-method, deprecated *parameters*, deprecated *modes*) is an intentional,
-documented coverage limit: a warn call-site is not itself a symbol, and scraping
-it would mis-attribute the deprecation to ``__init__`` / a parameter name.
+Marker 5 was added by FND-4269: ``CredentialRef.from_workflow_args`` warned on
+every call but was absent from the manifest, so B001 never nudged an app off
+it. Only the *opening* statement counts. A warn behind an ``if`` deprecates a
+parameter or a mode, and a warn later in the body is a forwarding helper
+(``warn_config_problem`` builds and emits someone else's notice); recording
+either would flag every caller of a def that is not itself deprecated. A
+private (``_``-prefixed) def is skipped for the same reason: in the SDK those
+are the helpers a deprecated path calls to emit its notice
+(``_warn_retention_params_deprecated``), and no app should import them anyway.
+
+Everything else (a warn inside a branch, deprecated *parameters*, deprecated
+*modes*) is an intentional, documented coverage limit: a warn call-site is not
+itself a symbol, and scraping it would mis-attribute the deprecation to the
+def that merely accepts the parameter. B002/B003 still grade those notices
+through :func:`extract_notices`.
 
 Symbol extraction (``extract_sites`` — the manifest and B004) walks only the
 module top level and one class level deep, so a ``@deprecated`` symbol *guarded*
@@ -447,6 +462,34 @@ def _docstring_claims(node: ast.AST) -> bool:
     return any(_DOCSTRING_CLAIM_RE.match(line) for line in doc.splitlines())
 
 
+def _opening_warn_message(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    constants: dict[str, str],
+    bindings: dict[tuple[str, int], str],
+) -> str | None:
+    """Marker 5: the notice a public def emits as its first statement, else ``None``.
+
+    The docstring and local imports (``import warnings``) are skipped; the next
+    statement must be a bare ``DeprecationWarning`` emission. See the module
+    docstring for why a later or conditional warn does not count.
+    """
+    if node.name.startswith("_"):
+        return None
+    body = list(node.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
+        body = body[1:]
+    while body and isinstance(body[0], ast.Import | ast.ImportFrom):
+        body = body[1:]
+    if not body or not isinstance(body[0], ast.Expr):
+        return None
+    notice = _warn_notice(body[0].value, constants, bindings)
+    return None if notice is None else notice.message
+
+
 def _emits_deprecation_warning(node: ast.AST) -> bool:
     """True if *node*'s subtree emits a ``DeprecationWarning`` anywhere."""
     return any(_is_deprecation_warn_call(sub) is not None for sub in ast.walk(node))
@@ -678,6 +721,8 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
     docstring claim (the marker wins; ``docstring_claim`` is still recorded).
     """
     sites: list[DeprecationSite] = []
+    constants = _module_string_constants(tree)
+    bindings = _local_string_bindings(tree, constants)
 
     def _is_property(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         """Whether *node* is decorated ``@property`` / ``@cached_property``.
@@ -699,6 +744,11 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
 
     def _visit_def(node: ast.FunctionDef | ast.AsyncFunctionDef, kind: str) -> None:
         dec_message = _deprecated_decorator_message(node)
+        warn_message = (
+            _opening_warn_message(node, constants, bindings)
+            if dec_message is None
+            else None
+        )
         if dec_message is not None:
             sites.append(
                 _build_site(
@@ -707,6 +757,16 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
                     node=node,
                     marker_via="decorator",
                     message=dec_message,
+                )
+            )
+        elif warn_message is not None:
+            sites.append(
+                _build_site(
+                    symbol=node.name,
+                    kind=kind,
+                    node=node,
+                    marker_via="warn",
+                    message=warn_message,
                 )
             )
         elif _docstring_claims(node):

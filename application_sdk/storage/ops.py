@@ -45,7 +45,6 @@ import hashlib
 import logging
 import math
 import os
-import re
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -60,11 +59,9 @@ import orjson
 # error path.  Falls back to substring matching for older obstore versions
 # that lack typed exceptions.
 try:  # pragma: no cover — defensive import
-    from obstore.exceptions import BaseError as _ObstoreBaseError
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
     from obstore.exceptions import PreconditionError as _ObstorePreconditionError
 except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
-    _ObstoreBaseError = None
     _ObstoreNotFoundError = None
     _ObstorePreconditionError = None
 
@@ -76,11 +73,19 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
+from application_sdk import _storage_classify
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.atomic import disk_full_guard, ensure_free_space
-from application_sdk.common.backoff import Backoff, Jitter, retry_async
+
+# Unused here since the gateway retry moved to ``_storage_classify``, but
+# importable from this module in past releases (docs/standards/symbols.md).
+from application_sdk.common.backoff import (  # noqa: F401
+    Backoff,
+    Jitter,
+    retry_async,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -298,19 +303,11 @@ def _is_azure_container_not_found(exc: BaseException) -> bool:
     when a write targets a container that has never been created.  This is
     distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
     actionable error message so operators know to pre-create the container.
-
-    Class-based detection runs first (obstore >=0.9 ``GenericError``); the
-    substring fallback catches older obstore versions and future wording drift
-    is caught by the recorded-error regression tests.
+    The rule is the shared table's
+    (:func:`application_sdk._storage_classify.is_azure_container_missing`), so
+    the API host reads the same failure the same way.
     """
-    if _ObstoreBaseError is not None and isinstance(exc, _ObstoreBaseError):
-        msg = str(exc).lower()
-        return (
-            "containernotfound" in msg
-            or "the specified container does not exist" in msg
-        )
-    msg = str(exc).lower()
-    return "containernotfound" in msg or "the specified container does not exist" in msg
+    return _storage_classify.is_azure_container_missing(exc)
 
 
 def _azure_container_not_found_message(key: str) -> str:
@@ -325,19 +322,12 @@ def _azure_container_not_found_message(key: str) -> str:
 def _is_not_found(exc: BaseException) -> bool:
     """Return True if the exception indicates a missing key.
 
-    Recognises:
-
-    * Built-in :class:`FileNotFoundError` — what current obstore (>=0.9) raises
-      for missing keys after the deprecation of
-      ``obstore.exceptions.NotFoundError``.
-    * :class:`obstore.exceptions.NotFoundError` — still emitted by older
-      obstore versions and present in the type stubs for forward-compat.
-    * Substring fallback (``"not found"``, ``"404"``, …) for generic obstore
-      errors that surface only as ``GenericError`` with the underlying HTTP
-      status in the message.
-
-    Class-based detection runs first so we don't misclassify a generic
-    ``GenericError("HTTP 503: 404 not in title")`` style flake.
+    The shared table's rule
+    (:func:`application_sdk._storage_classify.is_not_found`), which the API
+    host uses too: the built-in :class:`FileNotFoundError` (current obstore),
+    ``obstore.exceptions.NotFoundError`` (older obstore), and a substring
+    fallback for a generic error that carries only the status in its text.
+    Class-based detection runs first.
 
     The gateway's transient ``404 "no Route matched"`` is excluded before the
     substring fallback: the key is not missing, the gateway instance has not
@@ -345,20 +335,7 @@ def _is_not_found(exc: BaseException) -> bool:
     raise the retryable ``StorageGatewayNoRouteError`` instead of reporting
     the key absent.
     """
-    if _is_gateway_no_route(exc):
-        return False
-    if isinstance(exc, FileNotFoundError):
-        return True
-    if _ObstoreNotFoundError is not None and isinstance(exc, _ObstoreNotFoundError):
-        return True
-    msg = str(exc).lower()
-    return (
-        "not found" in msg
-        or "no such file" in msg
-        or "does not exist" in msg
-        or "404" in msg
-        or "key not found" in msg
-    )
+    return _storage_classify.is_not_found(exc)
 
 
 def _is_local_dir_collision(exc: BaseException, store: ObjectStore, key: str) -> bool:
@@ -444,25 +421,11 @@ def _is_precondition(exc: BaseException) -> bool:
 # attribute. Matches ``safe_traceback``'s ceiling.
 _LOG_CAUSE_MAX_LEN = 8000
 
-# Two shapes reach here: the backend-response form above ("non-2xx status
-# code: 403 ...") and the retry layer's "Client error with status 403
-# Forbidden: ...", which is how GCS client errors arrive. Matching only the
-# first left ``http_status`` empty on every GCS 4xx.
-_OBSTORE_HTTP_STATUS_RE = re.compile(r"status(?: code:)?\s*(\d{3})\b")
-_PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
-# Not every store behind an S3 API answers in S3's XML dialect. Atlan's
-# ``/api/blobstorage`` proxy is a Kong plugin that rejects before the request
-# ever reaches a bucket, and it answers in its own JSON shape
-# ``{"code": 1005, "error": "...", "message": "..."}``. Parsed into the same
-# ``provider_code`` field as ``<Code>`` so a consumer branches on one field
-# regardless of which dialect the failing hop speaks. (FND-2076)
-_JSON_PROVIDER_CODE_RE = re.compile(r'"code"\s*:\s*"?(\d{1,10})"?')
-
 #: The blobstorage proxy's "I could not look your signing key up in Keycloak"
 #: verdict. See :class:`~application_sdk.storage.errors.
 #: StorageGatewayAuthUnavailableError` for why this is a gateway-availability
-#: signal rather than a credential one.
-GATEWAY_INVALID_CLIENT_CODE = "1005"
+#: signal rather than a credential one. Defined in the shared table.
+GATEWAY_INVALID_CLIENT_CODE = _storage_classify.GATEWAY_INVALID_CLIENT_CODE
 
 
 class _StorageEvidence(TypedDict):
@@ -486,18 +449,11 @@ class _StorageEvidence(TypedDict):
 def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
     """Return ``(http_status, provider_code)`` parsed from *exc*, best-effort.
 
-    Both are ``None`` when *exc* is not a backend HTTP failure -- a local store,
-    a request timeout, a credential decode error. Never raises: a parse miss
-    degrades the evidence attached to the failure, it must never replace the
-    failure itself.
+    The shared table's parser
+    (:func:`application_sdk._storage_classify.http_evidence`). Both are
+    ``None`` when *exc* is not a backend HTTP failure. Never raises.
     """
-    text = str(exc)
-    status = _OBSTORE_HTTP_STATUS_RE.search(text)
-    provider = _PROVIDER_CODE_RE.search(text) or _JSON_PROVIDER_CODE_RE.search(text)
-    return (
-        int(status.group(1)) if status else None,
-        provider.group(1) if provider else None,
-    )
+    return _storage_classify.http_evidence(exc)
 
 
 # Scheme per obstore store class, for the ``target`` evidence field.
@@ -581,7 +537,12 @@ def _storage_error_for(
         StorageGatewayNoRouteError,
     )
 
-    http_status, provider_code = _obstore_http_evidence(exc)
+    # The shared table names the failure; the API host routes the same verdict
+    # onto an HTTP answer (handler/object_routes.py), so the two stacks cannot
+    # drift on what a gateway or container failure is.
+    failure = _storage_classify.classify_storage_failure(exc)
+    kind = failure.kind
+    http_status, provider_code = failure.http_status, failure.provider_code
     evidence: _StorageEvidence = {
         "key": key,
         "cause": exc,
@@ -596,7 +557,7 @@ def _storage_error_for(
     # same evidence as every other branch: the container name is in ``target``
     # and the 404/ContainerNotFound pair is what tells an operator the
     # container, not the object, is what is absent.
-    if _is_azure_container_not_found(exc):
+    if kind is _storage_classify.StorageFailureKind.AZURE_CONTAINER_MISSING:
         return StorageConfigError(_azure_container_not_found_message(key), **evidence)
 
     # Checked before the relocation branch and the generic fallthrough for the
@@ -613,7 +574,7 @@ def _storage_error_for(
     # preflight already proved good against this same store at startup. The
     # actual condition is the proxy's Keycloak lookup failing, and no
     # credential change fixes it. (FND-2076)
-    if http_status == 401 and provider_code == GATEWAY_INVALID_CLIENT_CODE:
+    if kind is _storage_classify.StorageFailureKind.GATEWAY_AUTH_UNAVAILABLE:
         return StorageGatewayAuthUnavailableError(
             f"{message}: the object-store gateway could not verify the request "
             "signature because its own identity-provider lookup failed — this "
@@ -636,7 +597,7 @@ def _storage_error_for(
     # missing bucket or container out of this leaf. Retryable either way; what
     # changes is the code and the hint, so an operator is not sent looking for a
     # missing key or bucket when the gateway merely has not loaded its routes.
-    if _is_gateway_no_route(exc):
+    if kind is _storage_classify.StorageFailureKind.GATEWAY_NO_ROUTE:
         return StorageGatewayNoRouteError(
             f"{message}: the object-store gateway answered 404 because the "
             "serving instance has not loaded its routes yet — the object and "
@@ -696,18 +657,10 @@ def _storage_error_for(
 
 # A Kong gateway instance that joins the load balancer before its route table
 # has synced answers every request with ``404 {"message":"no Route matched with
-# those values"}`` for a few seconds. object_store's Rust client retries only
-# 5xx/429/408, so without this the first such answer fails the request even
-# though the next gateway instance would have accepted it. Matched on the 404
-# *and* the gateway's own text so a real missing bucket, container or key
-# still fails (or reads as absent) on the first attempt. This is a status the
-# Rust layer never retries, so the retry adds one where there was none rather
-# than multiplying an existing one.
-_GATEWAY_NO_ROUTE_TEXT = "no route matched"
-# Worst case total sleep is 1.5 x (5 + 10 + 20) = 52.5s: each delay is scaled by
-# a jitter factor in [0.5, 1.5] (Jitter.SPREAD) so a burst of requests that all
-# hit a scaling-up gateway does not retry in lockstep.
-_GATEWAY_NO_ROUTE_RETRY_DELAYS: tuple[float, ...] = (5.0, 10.0, 20.0)
+# those values"}`` for a few seconds. The rule and the backoff are the shared
+# table's (:mod:`application_sdk._storage_classify`), so the API host rides the
+# same answer out the same way.
+_GATEWAY_NO_ROUTE_RETRY_DELAYS = _storage_classify.GATEWAY_NO_ROUTE_RETRY_DELAYS
 # Indirection so tests can record the backoff without sleeping through it.
 _retry_sleep = asyncio.sleep
 
@@ -725,30 +678,14 @@ async def _past_gateway_no_route(
     must start over cleanly. Every other failure propagates on the first
     attempt, unchanged.
     """
-
-    def _log_retry(_attempt: int, _exc: Exception, delay: float) -> None:
-        logger.warning(
-            "Gateway answered 'no Route matched' on %s of key '%s'; retrying in %.1fs",
-            op,
-            key,
-            delay,
-        )
-
-    return await retry_async(
-        call,
-        backoff=Backoff(steps=_GATEWAY_NO_ROUTE_RETRY_DELAYS, jitter=Jitter.SPREAD),
-        retry_if=_is_gateway_no_route,
-        on_retry=_log_retry,
-        sleep=_retry_sleep,
+    return await _storage_classify.past_gateway_no_route(
+        op, key, call, sleep=_retry_sleep
     )
 
 
 def _is_gateway_no_route(exc: BaseException) -> bool:
     """True for the gateway's transient "no Route matched" 404, and only that."""
-    if not isinstance(exc, Exception):
-        return False
-    http_status, _ = _obstore_http_evidence(exc)
-    return http_status == 404 and _GATEWAY_NO_ROUTE_TEXT in str(exc).lower()
+    return _storage_classify.is_gateway_no_route(exc)
 
 
 def _log_storage_event(

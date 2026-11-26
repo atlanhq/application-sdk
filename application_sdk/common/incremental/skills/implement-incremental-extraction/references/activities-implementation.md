@@ -23,6 +23,7 @@ links still resolve.)
 
 ## Class Structure
 
+<!-- legacy-example: IncrementalSqlMetadataExtractor is deprecated but still the SDK's only built-in incremental orchestration -->
 ```python
 from application_sdk.app import task
 from application_sdk.templates import IncrementalSqlMetadataExtractor

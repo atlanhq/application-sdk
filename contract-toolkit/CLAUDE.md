@@ -192,9 +192,9 @@ Automated; no manual version input.
 
 1. Merging a PR that touches `contract-toolkit/**` to `main` fires
    `Release Contract Toolkit` (`.github/workflows/contract-toolkit-release.yml`).
-   It runs `.github/scripts/contract_toolkit_release.py`, which reads the
-   conventional commits touching `contract-toolkit/**` since the last
-   `contract-toolkit-v*` tag: `!:` or a `BREAKING CHANGE:` trailer bumps major
+   It runs `.github/scripts/release_train.py bump contract-toolkit`, which reads
+   the conventional commits touching `contract-toolkit/**` since the last
+   `contract-toolkit-vX.Y.Z` tag: `!:` or a `BREAKING CHANGE:` trailer bumps major
    (minor while on `0.x`), `feat:` bumps minor, anything else patch. It bumps
    `src/PklProject` and prepends `CHANGELOG.md`; the workflow then regenerates
    the conformance toolkit baseline, sanity-builds the package, and pushes the

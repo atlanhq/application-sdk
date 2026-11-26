@@ -1,12 +1,12 @@
 name: Release Conformance Package
 
 # Fired automatically when a non-release PR that touches packages/conformance/**
-# is merged to main. Runs .github/scripts/conformance_release.py to compute the
-# next semver (from conventional commits touching packages/conformance/** since
-# the last conformance-v* tag), bumps pyproject.toml + __init__.py, prepends a
+# is merged to main. Runs `.github/scripts/release_train.py bump conformance` to
+# compute the next semver (from conventional commits touching packages/conformance/**
+# since the last conformance-v* tag), bumps pyproject.toml, prepends a
 # new entry to packages/conformance/CHANGELOG.md, and creates or updates the
 # bump-version-conformance PR labeled release:conformance.
-# The script excludes lock files from that walk (see PATHSPEC), so a Renovate
+# The script excludes lock files from that walk (see its CONFORMANCE pathspec), so a Renovate
 # lockFileMaintenance merge still fires this workflow — the paths filter below
 # can't express the exclusion — but the script no-ops with skip=true instead of
 # minting a release whose only content is lock churn.
@@ -82,7 +82,7 @@ jobs:
         with:
           version: "0.13.9"
 
-      - name: Compute version, bump pyproject + __init__, update CHANGELOG
+      - name: Compute version, bump pyproject, update CHANGELOG
         id: versions
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -92,7 +92,7 @@ jobs:
           # on origin/main — a stacked PR merging into its parent feature branch
           # fires this workflow exactly like a merge into main (#3794).
           PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: python .github/scripts/conformance_release.py
+        run: python .github/scripts/release_train.py bump conformance
 
       # The root uv.lock records this workspace member's version, so the bump
       # above leaves it stale and the wheel gate's `uv export --locked` fails
@@ -135,7 +135,6 @@ jobs:
 
           git checkout -b "${BUMP_BRANCH}"
           git add packages/conformance/pyproject.toml \
-                  packages/conformance/conformance/__init__.py \
                   packages/conformance/CHANGELOG.md \
                   uv.lock
           git commit -m "chore(conformance): release v${new_version}"

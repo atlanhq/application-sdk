@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import os
 import sys
 from collections.abc import Callable, Iterator
@@ -38,6 +39,12 @@ def _stored(store: MemoryStore) -> dict[str, bytes]:
     """Every object in *store*, by key."""
     keys = [meta["path"] for batch in obstore.list(store) for meta in batch]
     return {key: bytes(obstore.get(store, key).bytes()) for key in keys}
+
+
+@pytest.fixture(autouse=True)
+def _sidecars_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sidecar emission at its default, whatever the runner's env says."""
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
 
 
 @pytest.fixture
@@ -151,13 +158,21 @@ def test_a_file_upload_is_stored_under_its_key(
     )
     assert data["key"].endswith(".csv")
     assert data["fileSize"] == 8
-    assert _stored(memory) == {data["key"]: b"a,b\n1,2\n"}
+    # Beside it, the worker's integrity sidecar: the digest of what was stored.
+    assert _stored(memory) == {
+        data["key"]: b"a,b\n1,2\n",
+        data["key"] + ".sha256": hashlib.sha256(b"a,b\n1,2\n").hexdigest().encode(),
+    }
 
 
 def test_an_empty_upload_is_stored(host: TestClient, memory: MemoryStore) -> None:
     response = host.post("/workflows/v1/file", files={"file": ("e.csv", b"")})
     assert response.status_code == 200
-    assert _stored(memory) == {response.json()["data"]["key"]: b""}
+    key = response.json()["data"]["key"]
+    assert _stored(memory) == {
+        key: b"",
+        key + ".sha256": hashlib.sha256(b"").hexdigest().encode(),
+    }
 
 
 @pytest.mark.parametrize(
@@ -197,8 +212,11 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
         data={"prefix": "persistent-artifacts/apps/redshift/credentials"},
     )
     assert response.status_code == 200
-    (key,) = _stored(memory)
-    assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
+    stored = _stored(memory)
+    assert len(stored) == 2  # the object and its sidecar
+    assert all(
+        key.startswith("persistent-artifacts/apps/mysql/uploads/") for key in stored
+    )
 
 
 def _worker(
@@ -704,3 +722,276 @@ def test_building_the_store_loads_no_sql_client() -> None:
         timeout=60,
     )
     assert out.stdout.strip() == "[]"
+
+
+# --- the shared storage seam: sidecar, gateway retry, classified failures ----
+
+# The shapes object_store renders a backend HTTP failure in. Hosts synthetic.
+_GATEWAY_NO_ROUTE = (
+    "Generic S3 error: Error performing GET "
+    "https://gateway.example.invalid/api/blobstorage/k in 8ms - "
+    "Server returned non-2xx status code: 404 Not Found: "
+    '{"message":"no Route matched with those values"}'
+)
+_GATEWAY_AUTH_UNAVAILABLE = (
+    "Generic S3 error: Error performing PUT "
+    "https://gateway.example.invalid/api/blobstorage/k in 8ms - "
+    "Server returned non-2xx status code: 401 Unauthorized: "
+    '{"code": 1005, "error": "invalid_client", "message": "x"}'
+)
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record the gateway retry's backoff instead of sleeping through it."""
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    monkeypatch.setattr(object_routes, "_retry_sleep", _sleep)
+    return slept
+
+
+def test_an_uploaded_file_verifies_through_the_workers_download(
+    host: TestClient, memory: MemoryStore, tmp_path: Path
+) -> None:
+    """The host's sidecar is the one the worker's download checks."""
+    from application_sdk.storage import ops
+
+    payload = b"id,name\n1,a\n"
+    key = host.post(
+        "/workflows/v1/file", files={"file": ("rows.csv", payload, "text/csv")}
+    ).json()["data"]["key"]
+    target = tmp_path / "rows.csv"
+    digest = asyncio.run(ops.download_file(key, target, memory, compute_hash=True))
+    assert digest == hashlib.sha256(payload).hexdigest()
+    # A corrupted object now fails the worker's check against the host's sidecar.
+    obstore.put(memory, key, b"id,name\n1,b\n")
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    with pytest.raises(StorageIntegrityError):
+        asyncio.run(ops.download_file(key, tmp_path / "again.csv", memory))
+
+
+def test_sidecars_off_writes_only_the_object(
+    host: TestClient, memory: MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "false")
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    assert response.status_code == 200
+    assert list(_stored(memory)) == [response.json()["data"]["key"]]
+
+
+def test_a_failed_sidecar_write_still_stores_the_upload(
+    host: TestClient, memory: MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_put = obstore.put_async
+
+    async def _put(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if key.endswith(".sha256"):
+            raise RuntimeError("sidecar refused")
+        return await real_put(store, key, *args, **kwargs)
+
+    monkeypatch.setattr(obstore, "put_async", _put)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    assert response.status_code == 200
+    assert _stored(memory) == {response.json()["data"]["key"]: b"x\n"}
+
+
+def test_a_gateway_no_route_read_is_retried(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    """The gateway's not-yet-routed 404 is retried, as on the worker, and is
+    never read as a missing config."""
+    body = {"host": "db.example"}
+    assert host.post("/workflows/v1/config/g?type=credentials", json=body).is_success
+    real_get = obstore.get_async
+    failures = iter([RuntimeError(_GATEWAY_NO_ROUTE)] * 2)
+
+    async def _get(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        failure = next(failures, None)
+        if failure is not None:
+            raise failure
+        return await real_get(store, key, *args, **kwargs)
+
+    monkeypatch.setattr(obstore, "get_async", _get)
+    fetched = host.get("/workflows/v1/config/g?type=credentials")
+    assert fetched.status_code == 200
+    assert fetched.json()["data"] == body
+    assert len(no_sleep) == 2
+
+
+def test_a_gateway_that_stays_unrouted_is_503_not_404(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    async def _get(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(_GATEWAY_NO_ROUTE)
+
+    monkeypatch.setattr(obstore, "get_async", _get)
+    response = host.get("/workflows/v1/config/g?type=credentials")
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Object store gateway is not ready; retry shortly"
+    )
+    assert len(no_sleep) == 3
+
+
+def test_a_missing_bucket_read_is_503_not_404(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 the listing cannot confirm is the bucket, not the config."""
+
+    async def _get(*_: Any, **__: Any) -> Any:
+        raise FileNotFoundError("object missing")
+
+    async def _list(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("Server returned non-2xx status code: 404 NoSuchBucket")
+
+    monkeypatch.setattr(obstore, "get_async", _get)
+    monkeypatch.setattr(obstore, "list_with_delimiter_async", _list)
+    response = host.get("/workflows/v1/config/g?type=credentials")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Object store unavailable"
+
+
+@pytest.mark.parametrize(
+    ("message", "detail"),
+    [
+        (
+            _GATEWAY_AUTH_UNAVAILABLE,
+            "Object store gateway could not verify the request; retry shortly",
+        ),
+        (
+            "Server returned non-2xx status code: 404 Not Found: "
+            "<Error><Code>ContainerNotFound</Code></Error>",
+            "Object store container does not exist",
+        ),
+        ("connection reset by peer", "Object store unavailable"),
+    ],
+)
+def test_a_failed_write_is_a_classified_503(
+    host: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    detail: str,
+) -> None:
+    """Config writes and uploads answer the shared table's verdict, not a 500."""
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(obstore, "put_async", _put)
+    config = host.post("/workflows/v1/config/g?type=credentials", json={"a": 1})
+    upload = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    for response in (config, upload):
+        assert response.status_code == 503
+        assert response.json()["detail"] == detail
+
+
+def test_an_upload_named_like_a_sidecar_is_stored_as_data(
+    host: TestClient, memory: MemoryStore, tmp_path: Path
+) -> None:
+    """An ``x.sha256`` upload must not take a bookkeeping key: the worker would
+    neither verify it nor list it as data."""
+    from application_sdk.storage import ops
+
+    payload = b"not a digest\n"
+    response = host.post("/workflows/v1/file", files={"file": ("x.sha256", payload)})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["extension"] == "sha256"
+    key = data["key"]
+    assert not key.endswith(".sha256")
+    assert _stored(memory)[key + ".sha256"] == (
+        hashlib.sha256(payload).hexdigest().encode()
+    )
+    obstore.put(memory, key, b"tampered\n")
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    with pytest.raises(StorageIntegrityError):
+        asyncio.run(ops.download_file(key, tmp_path / "x", memory))
+
+
+def test_with_sidecars_off_the_upload_is_not_hashed(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "false")
+
+    def _no_hash(_path: str) -> str:
+        raise AssertionError("hashed although no sidecar is written")
+
+    monkeypatch.setattr(object_routes, "_sha256_file", _no_hash)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    assert response.status_code == 200
+
+
+def test_the_hash_stops_once_its_request_is_abandoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = tmp_path / "big"
+    big.write_bytes(b"x" * (3 << 20))
+    checks: list[int] = []
+
+    def _abandoned() -> None:
+        checks.append(1)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(object_routes, "raise_if_offload_abandoned", _abandoned)
+    with pytest.raises(asyncio.CancelledError):
+        object_routes._sha256_file(str(big))
+    assert checks == [1]
+
+
+def test_a_store_failure_logs_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """obstore's message can quote a signed URL or the store's credential: the
+    host logs the classified evidence and the type, never the text or traceback."""
+    from unittest.mock import MagicMock
+
+    secret = "https://b.example.invalid/k?X-Amz-Signature=deadbeef"
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(f"Server returned non-2xx status code: 403 {secret}")
+
+    log = MagicMock()
+    monkeypatch.setattr(object_routes, "logger", log)
+    monkeypatch.setattr(obstore, "put_async", _put)
+    assert (
+        host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
+        == 503
+    )
+    assert (
+        host.post("/workflows/v1/config/g?type=credentials", json={}).status_code == 503
+    )
+    assert log.warning.call_count == 2
+    for call in log.warning.call_args_list:
+        assert "exc_info" not in call.kwargs
+        assert all(secret not in str(arg) for arg in call.args)
+        assert 403 in call.args
+
+
+def test_a_failed_sidecar_write_logs_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    secret = "account_key=c2VjcmV0"
+    real_put = obstore.put_async
+
+    async def _put(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if key.endswith(".sha256"):
+            raise RuntimeError(secret)
+        return await real_put(store, key, *args, **kwargs)
+
+    log = MagicMock()
+    monkeypatch.setattr(object_routes, "logger", log)
+    monkeypatch.setattr(obstore, "put_async", _put)
+    assert (
+        host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
+        == 200
+    )
+    (call,) = log.warning.call_args_list
+    assert "exc_info" not in call.kwargs
+    assert all(secret not in str(arg) for arg in call.args)

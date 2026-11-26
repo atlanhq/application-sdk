@@ -87,7 +87,7 @@ class StorageError(_LegacyErrorCodeMixin, DependencyUnavailableError):
 
     key: str | None = None
     # The backend's own verdict, parsed from the driver error by
-    # ``storage.ops._obstore_http_evidence``. Before FND-957 the status existed
+    # ``_storage_classify.http_evidence``. Before FND-957 the status existed
     # only inside the free-text cause, so no consumer could branch on it —
     # and the cause was usually truncated before it arrived.
     http_status: int | None = None
@@ -235,7 +235,7 @@ class StorageGatewayNoRouteError(StorageError):
     is retryable like every other ``StorageError``.
 
     It exists so an operator is not told a key or bucket is absent, which is
-    what a bare 404 reads as. ``ops._is_not_found`` excludes this answer, so
+    what a bare 404 reads as. ``_storage_classify.is_not_found`` excludes this answer, so
     the read path (``download_file``, ``exists``, ``get_file_meta``,
     ``_get_bytes``, ``delete``) raises it rather than reporting the key
     missing, and ``upload_file`` raises it once its own retries are spent.

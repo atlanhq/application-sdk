@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.59.0"
+version = "3.60.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -21,7 +21,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "atlan-application-sdk-api==3.59.0",
+    "atlan-application-sdk-api==3.60.0",
     # The OTLP gRPC exporters only, not the opentelemetry-exporter-otlp meta
     # package: that also pulls the HTTP exporter, which nothing imports.
     "opentelemetry-exporter-otlp-proto-grpc>=1.45.0,<2.0.0",
@@ -379,6 +379,7 @@ exclude = [
     "application_sdk/_runtime/cgroup.py",
     "application_sdk/_runtime/offload.py",
     "application_sdk/_runtime/progress.py",
+    "application_sdk/_storage_classify.py",
     "application_sdk/clients/__init__.py",
     "application_sdk/clients/_interface.py",
     "application_sdk/clients/_sql_failure_classifier.py",
@@ -727,7 +728,6 @@ extend-select = [
 ".github/scripts/tests/test_check_test_write_hygiene.py" = ["RUF100"]
 ".github/scripts/tests/test_check_uv_lock.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_apt_packages.py" = ["RUF100"]
-".github/scripts/tests/test_conformance_release.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_resync.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_series_globs.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_single_job.py" = ["RUF100"]

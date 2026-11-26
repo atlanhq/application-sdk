@@ -853,9 +853,9 @@ Docs live in two places — both must be updated together when changing PKL modu
 
 Releases are **automatic** — no manual trigger required.
 
-1. Merge any PR that touches `contract-toolkit/` files. The Release Contract Toolkit workflow fires automatically, computes the next semver from unreleased conventional commits via `git-cliff`, and opens (or updates) a `bump-version-contract-toolkit` PR.
+1. Merge any PR that touches `contract-toolkit/` files. The Release Contract Toolkit workflow fires automatically, computes the next semver from unreleased conventional commits with `.github/scripts/release_train.py`, bumps `src/PklProject`, prepends `CHANGELOG.md`, and opens (or updates) a `bump-version-contract-toolkit` PR.
 2. Review and merge the release PR.
-3. The Publish Contract Toolkit workflow fires on merge: bumps `PklProject`, publishes the package, and tags `contract-toolkit-v<version>`.
+3. The Publish Contract Toolkit workflow fires on merge: publishes the package and tags `contract-toolkit-v<version>`.
 
 ## Requirements
 

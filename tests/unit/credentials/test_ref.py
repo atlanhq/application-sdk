@@ -108,7 +108,10 @@ class TestFactoryFunctions:
         assert ref.credential_guid == "abc-123"
 
     def test_legacy_credential_ref_is_deprecated(self):
-        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+        with pytest.warns(
+            DeprecationWarning,
+            match=r"^legacy_credential_ref is deprecated; .* removed in v4\.0\.0\.$",
+        ):
             ref = legacy_credential_ref("abc-123", credential_type="api_key")
         assert ref == _guid_credential_ref("abc-123", credential_type="api_key")
 
