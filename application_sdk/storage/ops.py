@@ -66,9 +66,13 @@ if TYPE_CHECKING:
 
     from obstore.store import ObjectStore
 
+    from application_sdk.infrastructure.context import InfrastructureContext
+
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
-from application_sdk import _storage_classify
+from application_sdk import _env, _storage_classify
+from application_sdk._install import api_only_install, worker_only_missing
+from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
@@ -81,12 +85,11 @@ from application_sdk.common.backoff import (  # noqa: F401
     Jitter,
     retry_async,
 )
-from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
 # storage-sibling imports — it reaches back into ``ops`` lazily — so this
 # top-level import is acyclic regardless of module load order.
-from application_sdk.storage import integrity
+from application_sdk.storage import _settings, integrity
 from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._classify import (
     RELOCATION_BUCKET,
@@ -175,10 +178,8 @@ def normalize_key(key: str) -> str:
     if not key:
         return ""
 
-    from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
-
     abs_path = os.path.abspath(key)
-    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+    abs_temp_path = os.path.abspath(_env.temporary_path())
     try:
         common_path = os.path.commonpath([abs_path, abs_temp_path])
         if common_path == abs_temp_path:
@@ -239,6 +240,24 @@ def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
     return prefix
 
 
+def _infrastructure() -> InfrastructureContext | None:
+    """The worker's infrastructure context, or ``None`` when none is set.
+
+    Also ``None`` on an api-only install (the API host), which ships this
+    module without the worker's infrastructure: the host always passes its
+    store explicitly.
+    """
+    try:
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415 — worker-only; absent on the API host
+            get_infrastructure,
+        )
+    except ModuleNotFoundError as exc:
+        if not worker_only_missing(exc):
+            raise
+        return None
+    return get_infrastructure()
+
+
 def _resolve_store(store: BoundStore | ObjectStore | None) -> ObjectStore:
     """Return the underlying ObjectStore, resolving from infrastructure when None.
 
@@ -250,11 +269,7 @@ def _resolve_store(store: BoundStore | ObjectStore | None) -> ObjectStore:
     """
     if store is not None:
         return store.store if isinstance(store, BoundStore) else store
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415
-        get_infrastructure,
-    )
-
-    infra = get_infrastructure()
+    infra = _infrastructure()
     if infra is None or infra.storage is None:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             ObjectStoreNotProvidedError,
@@ -282,11 +297,7 @@ def _resolve_put_attributes(
     """
     if isinstance(store, BoundStore):
         return store.put_attributes
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415
-        get_infrastructure,
-    )
-
-    infra = get_infrastructure()
+    infra = _infrastructure()
     if infra is None:
         return None
     if store is None or store is infra.storage:
@@ -709,7 +720,11 @@ def _log_storage_event(
                 extra["throughput_mibps"] = tput
     if error_class is not None:
         extra["error_class"] = error_class
-    if error_message is not None:
+    if error_message is not None and not api_only_install():
+        # Not on the API host: its failure logs carry only the classified
+        # evidence (handler/object_routes.py), and it has no OTLP pipeline for
+        # this copy to outlive the envelope's truncation in.
+        #
         # The wire envelope length-caps ``cause_repr``, so without this the
         # provider's own explanation had nowhere to live: this event previously
         # recorded only ``error_class`` ("GenericError"), with no ``str(exc)``,
@@ -721,9 +736,11 @@ def _log_storage_event(
         # (FND-957)
         extra["error_message"] = error_message[:_LOG_CAUSE_MAX_LEN]
     msg = f"storage.{op} {outcome} path={store_path}"
-    # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
-    # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
-    logger.log(level, msg, **extra)
+    # The SDK logger spreads ``extra`` into loguru's record["extra"], and
+    # _build_extra_dict in logger_adaptor promotes the keys to OTLP indexed
+    # attributes (all are in _KNOWN_EXTRA_KEYS). On the API host it is a
+    # stdlib logger, which sets them as record attributes.
+    logger.log(level, msg, extra=extra)
 
     # Mirror the terminal event to metrics so throughput / failure rate are
     # dashboardable + alertable across the fleet (only for actual transfers).
@@ -830,10 +847,9 @@ async def _childless_marker_paths(
     )
     if not candidates:
         return set()
-    from application_sdk.constants import (  # noqa: PLC0415
-        MAX_CONCURRENT_STORAGE_TRANSFERS,
-    )
     from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
+
+    max_concurrent_transfers = _settings.max_concurrent_storage_transfers()
 
     markers: set[str] = set()
     pending = iter(candidates)
@@ -846,7 +862,7 @@ async def _childless_marker_paths(
             ):
                 markers.add(path)
 
-    workers = min(max(MAX_CONCURRENT_STORAGE_TRANSFERS, 1), len(candidates))
+    workers = min(max(max_concurrent_transfers, 1), len(candidates))
     await _run_bounded([_worker() for _ in range(workers)], None)
     return markers
 
@@ -1047,12 +1063,8 @@ async def _upload_once(
     call, so the hash and byte count belong to this attempt alone.
     """
     h = hashlib.sha256() if compute_hash else None
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-    )
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_MAX_CONCURRENCY,
-    )
+    _progress_interval = _settings.progress_log_interval_seconds()
+    upload_max_concurrency = _settings.upload_max_concurrency()
 
     last_progress = started
     bytes_sent = 0
@@ -1060,15 +1072,13 @@ async def _upload_once(
     # observable, so the reservation covers the writer's whole life: up to
     # max_concurrency parts in flight, the part being filled, and the chunk
     # read here — or twice the file, when it fits in one buffer (FND-4082).
-    buffered_bytes = min(
-        2 * file_size, effective_chunk * (STORAGE_UPLOAD_MAX_CONCURRENCY + 2)
-    )
+    buffered_bytes = min(2 * file_size, effective_chunk * (upload_max_concurrency + 2))
     async with transfer_budget().reserve(buffered_bytes):
         async with obstore.open_writer_async(
             resolved,
             key,
             buffer_size=effective_chunk,
-            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            max_concurrency=upload_max_concurrency,
             attributes=put_attributes,
         ) as writer:
             with _open_chunks(source, effective_chunk) as chunks:
@@ -1118,30 +1128,26 @@ async def _stream_upload(
     gateway no-route retry, storage telemetry and error translation. The
     integrity checks after it are the caller's.
     """
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_PART_SIZE_BYTES,
-        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
-    )
+    part_size_bytes = _settings.upload_part_size_bytes()
+    part_size_overridden = _settings.upload_part_size_overridden()
 
     # A deployment that sets the part size overrides the caller. The size that
     # keeps a completion inside the destination's idle timeout depends on where
     # the deployment writes; an app cannot know which tenant it lands on, so it
     # must not be able to pin a value the operator then cannot correct.
     if (
-        STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN
+        part_size_overridden
         and chunk_size is not None
-        and chunk_size != STORAGE_UPLOAD_PART_SIZE_BYTES
+        and chunk_size != part_size_bytes
     ):
         logger.debug(
             "Using deployment part size %d instead of the requested %d for key '%s'",
-            STORAGE_UPLOAD_PART_SIZE_BYTES,
+            part_size_bytes,
             chunk_size,
             key,
         )
     requested_chunk = (
-        STORAGE_UPLOAD_PART_SIZE_BYTES
-        if (STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN or chunk_size is None)
-        else chunk_size
+        part_size_bytes if (part_size_overridden or chunk_size is None) else chunk_size
     )
 
     effective_chunk = _compute_part_size(file_size, requested_chunk)
@@ -1336,10 +1342,8 @@ async def upload_file(
     )
 
     if not retain_local_copy:
-        from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
-
         resolved_path = path.resolve()
-        staging_root = Path(TEMPORARY_PATH).resolve()
+        staging_root = Path(_env.temporary_path()).resolve()
         # Only delete files within the staging directory to prevent path traversal
         if resolved_path.is_relative_to(staging_root):
             try:
@@ -1503,9 +1507,7 @@ async def download_file(
                 fd, tmp_name = tempfile.mkstemp(
                     dir=str(staging_dir), prefix=path.name + "."
                 )
-                from application_sdk.constants import (  # noqa: PLC0415
-                    STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-                )
+                _progress_interval = _settings.progress_log_interval_seconds()
 
                 last_progress = started
                 # The stream holds up to one min_chunk_size buffer on the Rust
@@ -1741,6 +1743,54 @@ async def _get_bytes(
         raise _storage_error_for(
             exc, key, f"Failed to get key '{key}'", resolved
         ) from exc
+
+
+async def _get_bytes_confirmed(
+    key: str,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> bytes | None:
+    """Like :func:`_get_bytes`, but confirm a not-found with a listing.
+
+    S3, GCS and Azure answer a missing bucket or container with the same 404
+    as a missing object, which :func:`_get_bytes` reads as ``None``. Where
+    reporting a store that cannot answer as "missing" would be wrong (the
+    config route: a 404 tells Heracles the config does not exist, a 503 that
+    the store is down), this lists under the key: the listing succeeds, empty,
+    when only the object is missing, and fails when the bucket or container
+    is. Only a miss pays the listing.
+
+    Returns:
+        Raw bytes, or ``None`` when the object is missing and its bucket or
+        container is not.
+
+    Raises:
+        StorageError: For non-404 errors, and for a listing that fails (a
+            missing bucket or container).
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+    """
+    resolved = _resolve_store(store)
+    if normalize:
+        key = normalize_key(key)
+    raw = await _get_bytes(key, resolved, normalize=False)
+    if raw is not None:
+        return raw
+    try:
+        await _past_gateway_no_route(
+            "list",
+            key,
+            lambda: obstore.list_with_delimiter_async(resolved, prefix=key),
+        )
+    # conformance: ignore[E004] always re-raises as StorageError; a listing that fails is not evidence the key is absent
+    except Exception as exc:
+        raise _storage_error_for(
+            exc,
+            key,
+            f"Failed to list under key '{key}' to confirm it is missing",
+            resolved,
+        ) from exc
+    return None
 
 
 async def _put(

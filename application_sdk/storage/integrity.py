@@ -83,8 +83,8 @@ import hashlib
 from typing import TYPE_CHECKING
 
 from application_sdk import _storage_classify
+from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
-from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -136,18 +136,22 @@ def verification_enabled(verify: bool | None) -> bool:
     """
     if verify is not None:
         return verify
-    from application_sdk.constants import STORAGE_VERIFY_TRANSFERS  # noqa: PLC0415
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _settings,
+    )
 
-    return STORAGE_VERIFY_TRANSFERS
+    return _settings.verify_transfers()
 
 
 def sidecar_writes_enabled(write_sidecar: bool | None) -> bool:
     """Resolve a per-call ``write_sidecar`` flag against the kill-switch."""
     if write_sidecar is not None:
         return write_sidecar
-    from application_sdk.constants import STORAGE_WRITE_SIDECARS  # noqa: PLC0415
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _settings,
+    )
 
-    return STORAGE_WRITE_SIDECARS
+    return _settings.write_sidecars()
 
 
 def _sha256_file_sync(path: Path) -> str:
@@ -278,13 +282,27 @@ async def write_digest_sidecar(
 
     try:
         await _put(sidecar_key(key), digest.encode(), store, normalize=False)
-    # conformance: ignore[E002] best-effort sidecar; the object itself uploaded fine and the failure is logged with its cause
-    except Exception:
+    # conformance: ignore[E002] best-effort sidecar; the object itself uploaded fine and the failure is logged with its classified cause
+    except Exception as exc:  # noqa: BLE001 — best-effort sidecar; logged at WARNING with the classified cause
+        # ``_put`` raises a StorageError chained to the store's own exception;
+        # the shared table reads that one.
+        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+        failure = _storage_classify.classify_storage_failure(cause)
+        # Only the classified evidence and the exception types: the store's
+        # message and traceback can quote a signed URL or the store's
+        # credential, and the API host, which runs this same write, logs only
+        # what it classified.
+        # conformance: ignore[L004] exc_info would log that message, and the credential with it.
         logger.warning(
-            "Integrity sidecar write failed for key '%s' — the object uploaded "
-            "successfully but downstream readers will not be able to verify it",
+            "Integrity sidecar write failed for key '%s' (%s from %s: %s, "
+            "http_status=%s, provider_code=%s): the object was stored, but "
+            "downstream readers cannot verify it",
             key,
-            exc_info=True,
+            type(exc).__name__,
+            type(cause).__name__,
+            failure.kind.value,
+            failure.http_status,
+            failure.provider_code,
         )
 
 

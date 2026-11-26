@@ -19,12 +19,15 @@ clean venvs, because an editable or path install exposes the whole
      ``pip install --force-reinstall atlan-application-sdk-api``.
 3. **Api alone.** Install only the api wheel (core dependencies), import every
    core module, and fail if any unlisted ``application_sdk`` module loads or the
-   process exceeds ``--max-rss-mb``. Again with every extra installed, importing
-   every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
+   process exceeds ``--max-rss-mb``. Again with only the ``obstore`` extra,
+   importing the core and object-store modules (the host's store calls the
+   worker's ``storage.ops``, which must not need python-dotenv, which the
+   ``sql`` and ``aws`` extras bring). Again with every extra installed,
+   importing every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
    ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is a 422,
    auth / check / metadata answer, and an ``AuthError`` carrying a DSN answers
    with the password redacted from the body.
-   The object store, in both api venvs: with ``[obstore]``, the config and
+   The object store, in every api venv: with ``[obstore]``, the config and
    file routes round-trip through a ``HostObjectStore`` over obstore's
    ``MemoryStore``, with a missing config answering 404, and
    ``HostObjectStore.from_env()`` builds the S3, GCS and Azure store from the
@@ -32,7 +35,7 @@ clean venvs, because an editable or path install exposes the whole
    gives no store and the config route answers 503, so it never crashes.
 4. **Each module alone.** Step 3 imports the modules in one process, in sorted
    order, so a module that only imports because an earlier one already loaded
-   its dependency would pass. In both api venvs, ``python -I`` imports each
+   its dependency would pass. In every api venv, ``python -I`` imports each
    listed module in a fresh process and names every one that fails.
 
 The wheels are built the way ``tag-and-publish.yaml`` publishes them: plain
@@ -381,11 +384,26 @@ def main(argv: list[str] | None = None) -> int:
         extras = ",".join(
             sorted(g for g in gen_api_files.seed_groups(args.root) if g != "core")
         )
+        store_modules = ",".join(
+            check_api_surface.module_of(f)
+            for f in listed
+            if groups.get(f, {"core"}) & {"core", "obstore"}
+        )
         # cwd outside the repo: ``python -c`` puts the cwd on sys.path, and the
         # source tree there would hide what the wheel is missing.
         for leg, requirement, modules, budget, store_mode in (
             # The core install is what every hosted app pays: held to the budget.
             ("api core", str(api), core, args.max_rss_mb, "core"),
+            # Only the obstore extra: the host's store calls the worker's
+            # storage.ops, whose closure must import without what the other
+            # extras bring (python-dotenv, which constants needs).
+            (
+                "api [obstore]",
+                f"atlan-application-sdk-api[obstore] @ {api.resolve().as_uri()}",
+                store_modules,
+                10_000,
+                "full",
+            ),
             # Every extra installed: every listed module must import and serve.
             (
                 f"api [{extras}]",

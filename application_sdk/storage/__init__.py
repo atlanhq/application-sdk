@@ -73,30 +73,15 @@ All I/O functions normalise keys by default (see normalize_key).  Pass
 
 from __future__ import annotations
 
-from application_sdk.storage.batch import (
-    SIDECAR_SUFFIX,
-    DataObject,
-    delete_prefix,
-    download_prefix,
-    is_sidecar_key,
-    list_data_keys,
-    list_data_keys_with_meta,
-    list_data_objects,
-    list_keys,
-    list_keys_with_meta,
-    upload_file_from_bytes,
-    upload_prefix,
-)
-from application_sdk.storage.binding import (
-    BindingSecretRefs,
-    SecretMap,
-    create_store_from_binding,
-    create_store_from_binding_optional,
-    create_store_from_binding_with_put_attrs,
-    read_binding_secret_refs,
-    set_fetched_binding_secrets,
-)
-from application_sdk.storage.cloud import CloudStore
+from typing import TYPE_CHECKING
+
+from application_sdk._install import lazy_getattr
+
+# Eager: the read and write path. These ship in the api distribution's
+# ``obstore`` extra, so the API host's config and file routes call the worker's
+# own primitives. Everything else here (Dapr binding parsing, ``CloudStore``,
+# the SDR preflight, the batch helpers) is worker code the host does not ship:
+# it loads on first use, through ``_LAZY`` below.
 from application_sdk.storage.errors import (
     ObjectStorePreflightError,
     StorageAuthError,
@@ -125,12 +110,103 @@ from application_sdk.storage.ops import (
     upload_bytes,
     upload_file,
 )
-from application_sdk.storage.preflight import (
-    ObjectStoreCheckResult,
-    check_object_store_access,
-    check_run_storage_access,
-    verify_object_store_access,
-)
+
+if TYPE_CHECKING:
+    from application_sdk.storage.batch import (
+        SIDECAR_SUFFIX,
+        DataObject,
+        delete_prefix,
+        download_prefix,
+        is_sidecar_key,
+        list_data_keys,
+        list_data_keys_with_meta,
+        list_data_objects,
+        list_keys,
+        list_keys_with_meta,
+        upload_file_from_bytes,
+        upload_prefix,
+    )
+    from application_sdk.storage.binding import (
+        BindingSecretRefs,
+        SecretMap,
+        create_store_from_binding,
+        create_store_from_binding_optional,
+        create_store_from_binding_with_put_attrs,
+        read_binding_secret_refs,
+        set_fetched_binding_secrets,
+    )
+    from application_sdk.storage.cloud import CloudStore
+    from application_sdk.storage.preflight import (
+        ObjectStoreCheckResult,
+        check_object_store_access,
+        check_run_storage_access,
+        verify_object_store_access,
+    )
+
+#: Names served on first access: ``name -> (module, attribute)``.
+_LAZY: dict[str, tuple[str, str]] = {
+    "SIDECAR_SUFFIX": ("application_sdk.storage.batch", "SIDECAR_SUFFIX"),
+    "DataObject": ("application_sdk.storage.batch", "DataObject"),
+    "delete_prefix": ("application_sdk.storage.batch", "delete_prefix"),
+    "download_prefix": ("application_sdk.storage.batch", "download_prefix"),
+    "is_sidecar_key": ("application_sdk.storage.batch", "is_sidecar_key"),
+    "list_data_keys": ("application_sdk.storage.batch", "list_data_keys"),
+    "list_data_keys_with_meta": (
+        "application_sdk.storage.batch",
+        "list_data_keys_with_meta",
+    ),
+    "list_data_objects": ("application_sdk.storage.batch", "list_data_objects"),
+    "list_keys": ("application_sdk.storage.batch", "list_keys"),
+    "list_keys_with_meta": ("application_sdk.storage.batch", "list_keys_with_meta"),
+    "upload_file_from_bytes": (
+        "application_sdk.storage.batch",
+        "upload_file_from_bytes",
+    ),
+    "upload_prefix": ("application_sdk.storage.batch", "upload_prefix"),
+    "BindingSecretRefs": ("application_sdk.storage.binding", "BindingSecretRefs"),
+    "SecretMap": ("application_sdk.storage.binding", "SecretMap"),
+    "create_store_from_binding": (
+        "application_sdk.storage.binding",
+        "create_store_from_binding",
+    ),
+    "create_store_from_binding_optional": (
+        "application_sdk.storage.binding",
+        "create_store_from_binding_optional",
+    ),
+    "create_store_from_binding_with_put_attrs": (
+        "application_sdk.storage.binding",
+        "create_store_from_binding_with_put_attrs",
+    ),
+    "read_binding_secret_refs": (
+        "application_sdk.storage.binding",
+        "read_binding_secret_refs",
+    ),
+    "set_fetched_binding_secrets": (
+        "application_sdk.storage.binding",
+        "set_fetched_binding_secrets",
+    ),
+    "CloudStore": ("application_sdk.storage.cloud", "CloudStore"),
+    "ObjectStoreCheckResult": (
+        "application_sdk.storage.preflight",
+        "ObjectStoreCheckResult",
+    ),
+    "check_object_store_access": (
+        "application_sdk.storage.preflight",
+        "check_object_store_access",
+    ),
+    "check_run_storage_access": (
+        "application_sdk.storage.preflight",
+        "check_run_storage_access",
+    ),
+    "verify_object_store_access": (
+        "application_sdk.storage.preflight",
+        "verify_object_store_access",
+    ),
+}
+
+#: Submodules this package imported eagerly before it went lazy: still
+#: attributes of the package on first access (``storage.binding``).
+_EAGER_SUBMODULES = frozenset({"batch", "binding", "cloud", "preflight"})
 
 __all__ = [
     # Cloud store (external customer buckets)
@@ -190,3 +266,11 @@ __all__ = [
     "check_run_storage_access",
     "ObjectStoreCheckResult",
 ]
+
+
+def __getattr__(name: str) -> object:
+    return lazy_getattr(__name__, name, _LAZY, globals(), _EAGER_SUBMODULES)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY) | _EAGER_SUBMODULES)

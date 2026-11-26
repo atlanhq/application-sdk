@@ -36,13 +36,16 @@ from __future__ import annotations
 import math
 import os
 import re
+import sys
 import threading
 import warnings
 from collections.abc import Callable, Collection
-from typing import overload
+from typing import TypeVar, cast, overload
 
 #: Receives the message for a rejected value. ``None`` means ``warnings.warn``.
 Reporter = Callable[[str], None]
+
+_T = TypeVar("_T")
 
 #: Words that switch a boolean env var on.
 TRUE_VALUES: frozenset[str] = frozenset({"true", "1", "yes", "on"})
@@ -326,3 +329,39 @@ __all__ = [
     "env_str",
     "is_duration",
 ]
+
+
+#: The module whose import-time settings :func:`sdk_constant` defers to.
+_CONSTANTS_MODULE = "application_sdk.constants"
+
+
+def sdk_constant(name: str, read: Callable[[], _T]) -> _T:
+    """``application_sdk.constants.<name>`` once that module is loaded, else ``read()``.
+
+    ``constants`` reads every setting once, at import, and imports
+    python-dotenv to load ``./.env`` first. The worker always has it loaded,
+    and tests and the SDK's testing fixtures patch its attributes
+    (``TEMPORARY_PATH`` above all), so on the worker its value is the one in
+    force. The API host ships the object store's read and write path
+    (``application_sdk.storage.ops`` and what it needs) without python-dotenv,
+    so those modules must not import ``constants``. They read a setting
+    through here instead: the worker's value whenever ``constants`` is
+    loaded, else *read*, which reads the same variable with the same default.
+    ``tests/unit/test_api_distribution.py`` pins that each reader agrees with
+    ``constants``.
+    """
+    module = sys.modules.get(_CONSTANTS_MODULE)
+    if module is not None:
+        return cast("_T", getattr(module, name))
+    return read()
+
+
+def temporary_path() -> str:
+    """The SDK's local staging root (``ATLAN_TEMPORARY_PATH``, default ``./local/tmp/``).
+
+    ``application_sdk.constants.TEMPORARY_PATH`` when that module is loaded
+    (see :func:`sdk_constant`).
+    """
+    return sdk_constant(
+        "TEMPORARY_PATH", lambda: env_str("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+    )
