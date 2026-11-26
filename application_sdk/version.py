@@ -2,7 +2,12 @@
 
 Holds two kinds of versions:
 
-* ``__version__`` — the SDK's own package version.
+* ``__version__`` — the SDK's own package version, read from the installed
+  distribution so ``pyproject.toml`` is the one place it is declared and the
+  release job no longer rewrites this file (FND-4672). This file ships in two
+  wheels released in lockstep at one version — ``atlan-application-sdk`` and
+  the api-only ``atlan-application-sdk-api`` — so whichever is installed
+  answers.
 * ``__dapr_version`` — the pinned Dapr runtime the SDK auto-downloads on
   first local-dev run (see ``application_sdk.dev._dapr``). Leading double
   underscore signals it is **SDK-internal**; consumer apps should rely on
@@ -35,5 +40,20 @@ only to reconcile ahead of a release — and deliberately, since older Dapr
 releases drop off the CDN.
 """
 
-__version__ = "3.59.0"
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+
+
+def _installed_version() -> str:
+    for distribution in ("atlan-application-sdk", "atlan-application-sdk-api"):
+        try:
+            return _distribution_version(distribution)
+        except PackageNotFoundError:
+            continue
+    raise PackageNotFoundError(
+        "neither atlan-application-sdk nor atlan-application-sdk-api is installed"
+    )
+
+
+__version__: str = _installed_version()
 __dapr_version: str = "1.19.2"

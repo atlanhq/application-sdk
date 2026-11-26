@@ -56,7 +56,13 @@ The body is optional and should provide additional context about the change:
 
 The footer is optional and is used for:
 
-- **Breaking Changes**: Must begin with `BREAKING CHANGE:` followed by a description
+- **Breaking Changes**: Must begin with `BREAKING CHANGE:` followed by a description.
+  Only this spelling counts: `BREAKING-CHANGE:` and `BREAKING_CHANGE:` do not.
+  This repo squash-merges with the PR title as the commit and a blank body, so a
+  footer never reaches `main`: put the `!` in the PR title (`feat(x)!: ...`) to
+  release a break. Every release path (the SDK's `release.py`, the conformance
+  and contract-toolkit `release_train.py`, the changelog) and the symbol-removal
+  gate read the same predicate, `.github/scripts/conventional_breaking.py`.
 - **Issue References**: Reference GitHub issues, e.g., `Closes #123`, `Fixes #456`
 
 ## Examples

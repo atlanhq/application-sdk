@@ -402,3 +402,32 @@ version it deployed — which is the case this change exists to correct. A
 deployment that needs the deployer's value to win should stop baking the file
 (`ATLAN_BUILD_INFO_PATH` pointed at a path that does not exist), not reorder the
 precedence: the file is the only source a single-app SDR customer has.
+
+## Package release trains in this repo (conformance, contract-toolkit)
+
+`atlan-application-sdk-conformance` and `app-contract-toolkit` are released from
+this repository independently of the SDK, by one script:
+`.github/scripts/release_train.py`. Each package is a `Train` in that file — a
+pathspec, a tag prefix, one version file and a changelog:
+
+| Train | Version file | Tag | Changelog |
+|---|---|---|---|
+| `conformance` | `packages/conformance/pyproject.toml` | `conformance-vX.Y.Z` | `packages/conformance/CHANGELOG.md` |
+| `contract-toolkit` | `contract-toolkit/src/PklProject` | `contract-toolkit-vX.Y.Z` | `contract-toolkit/CHANGELOG.md` |
+
+- `release_train.py bump <train>` (in `conformance-release.yml` /
+  `contract-toolkit-release.yml`) bumps from the conventional commits since the
+  last release tag and opens the `bump-version-<train>` PR. "Breaking" is
+  `conventional_breaking.declares_breaking_change`, the predicate the SDK's
+  `release.py` uses; on `0.x` a break bumps the minor.
+- `release_train.py publish-meta <train>` (in the `*-publish` workflows) reads
+  the version and refuses a tag that is not `<prefix>X.Y.Z`. Only tags of that
+  shape count as releases: a hand-pushed tag such as
+  `contract-toolkit-v0.11.0-name.1` is ignored by the train. Do not push such
+  tags to `origin`; publish a pre-release from a fork or a local tag instead.
+- Each package's version is written in one file. `conformance.__version__` and
+  `application_sdk.__version__` are read from installed package metadata, so
+  no release job rewrites a Python file. `release.py` still moves the SDK's
+  three lockstep sites (`pyproject.toml`, its `atlan-application-sdk-api==` pin,
+  `packages/api/pyproject.toml`), and `tests/unit/test_api_distribution.py`
+  asserts they agree.

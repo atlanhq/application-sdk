@@ -22,6 +22,7 @@ import linecache
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -83,12 +84,13 @@ def get_source_date(sha: str) -> str:
 
 
 def get_sdk_version() -> str:
-    """Read __version__ from application_sdk/version.py (no import needed)."""
-    version_file = PKG_ROOT / "version.py"
-    for line in version_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith("__version__"):
-            return line.split("=")[1].strip().strip('"').strip("'")
-    return "unknown"
+    """Read the SDK version from pyproject.toml (no import needed).
+
+    ``application_sdk.__version__`` is read from installed metadata, so
+    pyproject.toml is the one place the version is written down.
+    """
+    pyproject = REPO_ROOT / "pyproject.toml"
+    return tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
 
 
 def extract_all_from_init(pkg_path: Path) -> list[str]:

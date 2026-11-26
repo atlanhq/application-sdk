@@ -46,20 +46,11 @@ jobs:
         with:
           version: "0.13.9"
 
+      # Outputs version, tag and merge_sha; refuses a tag that is not
+      # conformance-vX.Y.Z (FND-4672).
       - name: Read release version
         id: meta
-        run: |
-          set -euo pipefail
-          version="$(uvx --from=toml-cli toml get --toml-path=packages/conformance/pyproject.toml project.version)"
-          if [ -z "$version" ]; then
-            echo "::error::could not parse version from packages/conformance/pyproject.toml"
-            exit 1
-          fi
-          tag="conformance-v${version}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
+        run: python3 .github/scripts/release_train.py publish-meta conformance
 
       # --out-dir: packages/conformance is a uv workspace member (FND-4671), and
       # a member's `uv build` otherwise writes to the workspace root's dist/,
