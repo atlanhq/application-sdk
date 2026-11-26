@@ -71,7 +71,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.routing import (
-        _connection_default_credential_guid,
+        _connection_credential_fallback_guid,
         find_prebuilt_credential_ref,
     )
     from application_sdk.credentials.spec import AgentCredentialSpec
@@ -817,14 +817,10 @@ class PreflightGateInput(BaseModel):
         # resolution silently instead of just having no agent reference.
         agent_json = normalize_agent_json(getattr(input_data, "agent_json", None))
         credential_ref = _prebuilt_credential_ref(input_data)
-        if (
-            not credential_guid
-            and credential_ref is None
-            and agent_json is None
-            and not credential_ref_fields
-            and extraction_method.strip().lower() != "agent"
-        ):
-            credential_guid = _connection_default_credential_guid(input_data)
+        if not credential_guid:
+            # The rule is shared with SqlApp.resolve_credential_ref, so the gate
+            # checks the credential the tasks will use.
+            credential_guid = _connection_credential_fallback_guid(input_data, snapshot)
         base_kw: dict[str, Any] = dict(
             extraction_method=extraction_method,
             credential_guid=credential_guid,

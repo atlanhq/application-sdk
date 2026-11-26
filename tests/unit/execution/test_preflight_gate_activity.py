@@ -3270,6 +3270,39 @@ class TestGateFallsBackToConnectionCredentialGuid:
         gate_input = PreflightGateInput.from_extraction_input(_MultiInp(), "mine")
         assert gate_input.credential_guid == ""
 
+    @pytest.mark.parametrize("key", ["agent_name", "agent-name"])
+    def test_agent_name_hint_skips_the_fallback(self, key: str) -> None:
+        inp = self._plain(
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}}
+        )
+        inp.model_dump = lambda mode="json": {key: "acme"}
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == ""
+
+    def test_placeholder_agent_json_still_falls_back(self) -> None:
+        # AE replays the marketplace placeholder onto direct runs; it is not an
+        # agent reference, so it must not switch the fallback off.
+        inp = self._plain(
+            agent_json={
+                "agent-name": "agent-name",
+                "host": "host",
+                "port": "port",
+                "secret-manager": "secret-manager",
+            },
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == "conn-guid"
+
+    def test_non_string_extraction_method_does_not_break_the_gate(self) -> None:
+        inp = self._plain(
+            extraction_method=42,
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.entrypoint == "mine"  # built, did not raise
+        assert gate_input.credential_guid == "conn-guid"
+
     def test_snake_case_attribute_is_read(self) -> None:
         inp = self._plain(
             connection=SimpleNamespace(

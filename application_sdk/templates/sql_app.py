@@ -1542,25 +1542,24 @@ class SqlApp(App):
         (agent_json) modes, and degrades to a GUID ref or ``None`` on a
         routing edge case.
 
-        When the input names no credential and is not in agent mode, falls
-        back to the connection's ``defaultCredentialGuid`` — the same fallback
-        the gate applies, so a miner input that reuses a crawler's connection
-        resolves identically in both places.
+        When the input names no credential at all (no GUID, pre-built ref,
+        declared named refs or agent signal), falls back to the connection's
+        ``defaultCredentialGuid``. The eligibility rule is the one the injected
+        gate uses, so a miner input that reuses a crawler's connection resolves
+        the same credential in both places. Before this fallback such an input
+        returned ``None`` here.
         """
         ref = CredentialRef.resolve_or_none(input)
         if ref is not None:
             return ref
-        method = (getattr(input, "extraction_method", "") or "").strip().lower()
-        if method == "agent":
-            return None
         from application_sdk.credentials.ref import (  # noqa: PLC0415
             _guid_credential_ref,
         )
         from application_sdk.credentials.routing import (  # noqa: PLC0415
-            _connection_default_credential_guid,
+            _connection_credential_fallback_guid,
         )
 
-        guid = _connection_default_credential_guid(input)
+        guid = _connection_credential_fallback_guid(input)
         return _guid_credential_ref(guid) if guid else None
 
     # =====================================================================
