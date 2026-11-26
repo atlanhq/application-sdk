@@ -121,7 +121,7 @@ print(f"{sys.argv[4]}: {len(to_import)} modules, {rss_mb:.0f} MB, auth/check/met
 """
 
 _STORE = r"""
-import base64, os, sys
+import base64, hashlib, os, sys
 leg, listed = sys.argv[1], sys.argv[2].split(",")
 from fastapi.testclient import TestClient
 from application_sdk.handler import DefaultHandler
@@ -133,6 +133,8 @@ def _env(**values):
         del os.environ[name]
     os.environ.update(values)
 
+# The sidecar check below expects the default; the caller's env may say otherwise.
+os.environ["ATLAN_STORAGE_WRITE_SIDECARS"] = "true"
 if sys.argv[3] == "core":
     # No obstore: a configured bucket must degrade to 503, never crash.
     _env(ATLAN_S3_BUCKET="probe-bucket", ATLAN_S3_REGION="us-east-1")
@@ -154,6 +156,11 @@ else:
     assert r.status_code == 404, f"missing config answered {r.status_code}"
     r = client.post("/workflows/v1/file", files={"file": ("rows.csv", b"a,b\n1,2\n", "text/csv")})
     assert r.status_code == 200 and r.json()["data"]["fileSize"] == 8, f"upload: {r.status_code} {r.text[:200]}"
+    # The worker's integrity sidecar, written by the host's upload too.
+    import obstore
+    uploaded = r.json()["data"]["key"]
+    sidecar = bytes(obstore.get(store._store, uploaded + ".sha256").bytes())
+    assert sidecar == hashlib.sha256(b"a,b\n1,2\n").hexdigest().encode(), f"upload sidecar: {sidecar!r}"
     # Dummy, non-secret values: building a store makes no request.
     key = base64.b64encode(b"probe-key-not-real-0000000000000").decode()
     for kind, values in (
@@ -164,7 +171,7 @@ else:
         _env(**values)
         built = HostObjectStore.from_env()
         assert repr(built) == f"HostObjectStore({kind})", f"from_env for {kind} built {built!r}"
-    summary = "config/file round trip + 404 + S3/GCS/Azure from_env"
+    summary = "config/file round trip + sidecar + 404 + S3/GCS/Azure from_env"
 extra = sorted(
     m for m in sys.modules
     if (m == "application_sdk" or m.startswith("application_sdk."))

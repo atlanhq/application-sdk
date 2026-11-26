@@ -82,6 +82,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+from application_sdk import _storage_classify
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -94,23 +95,19 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: Suffix of the SHA-256 sidecar written alongside every uploaded object.
-SIDECAR_SUFFIX = ".sha256"
+# The sidecar key convention is defined once, in the obstore-free module the
+# API host shares (its file upload route writes the same sidecar), and
+# re-exported here, where every worker caller already imports it from.
+SIDECAR_SUFFIX = _storage_classify.SIDECAR_SUFFIX
 
 #: Suffix of the resumable-download checkpoint written by ``storage.chunked``.
 #: Listed here so the sidecar lookup can skip keys that are themselves
 #: SDK-internal bookkeeping rather than user artifacts.
-_TRANSFER_STATE_SUFFIX = ".transfer-state"
+_TRANSFER_STATE_SUFFIX = _storage_classify.TRANSFER_STATE_SUFFIX
 
 
-def sidecar_key(key: str) -> str:
-    """Object-store key of the SHA-256 sidecar written alongside *key*."""
-    return key + SIDECAR_SUFFIX
-
-
-def is_sidecar_key(key: str) -> bool:
-    """Return ``True`` when *key* is a SHA-256 sidecar rather than a data object."""
-    return key.endswith(SIDECAR_SUFFIX)
+sidecar_key = _storage_classify.sidecar_key
+is_sidecar_key = _storage_classify.is_sidecar_key
 
 
 def _is_sha256_hex(value: str) -> bool:
@@ -123,9 +120,10 @@ def _is_internal_key(key: str) -> bool:
 
     Looking up ``{key}.sha256.sha256`` would be a guaranteed-miss round trip on
     every sidecar write, and the transfer-state checkpoint is local-only
-    bookkeeping whose content is rewritten in place.
+    bookkeeping whose content is rewritten in place. The rule is the shared
+    one (:func:`application_sdk._storage_classify.is_internal_key`).
     """
-    return key.endswith((SIDECAR_SUFFIX, _TRANSFER_STATE_SUFFIX))
+    return _storage_classify.is_internal_key(key)
 
 
 def verification_enabled(verify: bool | None) -> bool:

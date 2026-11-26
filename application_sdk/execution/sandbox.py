@@ -38,6 +38,7 @@ _SDK_PASSTHROUGH_PACKAGES: frozenset[str] = frozenset(
         "_proxy",
         "_runtime",
         "_shutdown_policy",
+        "_storage_classify",
         "app",
         "clients",
         "common",

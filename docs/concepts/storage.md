@@ -352,6 +352,13 @@ it never contains files the producer did not write.
 Objects written before this protocol existed, or by a non-SDK producer, simply
 have no sidecar; those downloads keep the size check and skip the digest check.
 
+The consolidated API host's file upload route (`POST /workflows/v1/file`) is a
+producer too: it writes the same `{key}.sha256` sidecar beside every upload, so
+a worker that downloads a setup-form file verifies it against the digest the
+host recorded. The host cannot import `application_sdk.storage`, so the sidecar
+key convention, the failure table and the gateway no-route retry both stacks
+use live in the obstore-free `application_sdk/_storage_classify.py`.
+
 ### What this does not prove
 
 The sidecar attests to **the bytes the SDK read at upload time**, not to the
