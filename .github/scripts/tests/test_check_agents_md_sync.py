@@ -112,6 +112,35 @@ def test_fix_rewrites_and_creates_pointers(tmp_path: Path) -> None:
     assert _run(root) == []
 
 
+def test_fix_never_writes_through_a_symlinked_pointer(tmp_path: Path) -> None:
+    """A tracked AGENTS.md symlink must not let --fix overwrite its target."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not ours\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root = _repo(repo, {"CLAUDE.md": "# guide\n"})
+    (root / "AGENTS.md").symlink_to(outside)
+    subprocess.run(["git", "add", "AGENTS.md"], cwd=root, check=True)
+
+    problems = _run(root, fix=True)
+
+    assert outside.read_text() == "not ours\n"
+    assert problems == [
+        "AGENTS.md: is a symlink or resolves outside the repository; replace it "
+        "with a regular file (--fix will not write through it)"
+    ]
+
+
+def test_a_symlink_inside_the_repository_is_refused_too(tmp_path: Path) -> None:
+    """Even pointing at its own CLAUDE.md: a write would clobber the guide."""
+    root = _repo(tmp_path, {"CLAUDE.md": "# guide\n"})
+    (root / "AGENTS.md").symlink_to("CLAUDE.md")
+    subprocess.run(["git", "add", "AGENTS.md"], cwd=root, check=True)
+
+    assert len(_run(root, fix=True)) == 1
+    assert (root / "CLAUDE.md").read_text() == "# guide\n"
+
+
 @pytest.mark.parametrize(("argv", "code"), [([], 1), (["--fix"], 0)])
 def test_main_exit_codes(
     tmp_path: Path, argv: list[str], code: int, capsys: pytest.CaptureFixture[str]

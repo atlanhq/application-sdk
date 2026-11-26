@@ -65,6 +65,11 @@ def tracked_guides(root: Path) -> list[PurePosixPath]:
     return sorted(PurePosixPath(p) for p in out.split("\0") if p)
 
 
+def _within(path: Path, root: Path) -> bool:
+    """Return whether *path*, with every symlink resolved, is under *root*."""
+    return path.resolve().is_relative_to(root.resolve())
+
+
 def check(root: Path, paths: Sequence[PurePosixPath], *, fix: bool) -> list[str]:
     """Return one message per problem among *paths*; with *fix*, repair them."""
     present = set(paths)
@@ -80,6 +85,15 @@ def check(root: Path, paths: Sequence[PurePosixPath], *, fix: bool) -> list[str]
             )
             continue
         target = root / pointer
+        # A tracked symlink could point outside the checkout, and --fix would
+        # then overwrite whatever it points at. Refuse it, and anything else
+        # that resolves out of root, instead of following it.
+        if target.is_symlink() or not _within(target, root):
+            problems.append(
+                f"{pointer}: is a symlink or resolves outside the repository; "
+                "replace it with a regular file (--fix will not write through it)"
+            )
+            continue
         actual = target.read_text(encoding="utf-8") if target.is_file() else None
         if actual == expected:
             continue
