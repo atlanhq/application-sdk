@@ -859,6 +859,8 @@ def test_catalog_p_series_present() -> None:
     mkstemp with no dir=) in app code instead of App.run_scratch_dir.
     P068 is SqlAppRunOverrideUnverified — a SqlApp subclass's run() that calls
     neither super().run() nor finalize_extraction (FND-4686).
+    P069 is ImportInWorkflow — an import inside a workflow-context method, run
+    under Temporal's deadlock timer, whose interrupt can freeze the worker.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -924,6 +926,7 @@ def test_catalog_p_series_present() -> None:
         "P066",
         "P067",
         "P068",
+        "P069",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

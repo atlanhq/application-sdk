@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**59 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059; P068 gated on the app's locked SDK), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), `suite.checks.run_scratch` (P067, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**60 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059; P068 gated on the app's locked SDK), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.httpx_proxy` (P066), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054, P069), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.retry_ladder` (P060), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), `suite.checks.offload_cancel` (P064/P065, gated on the app's locked SDK), `suite.checks.run_scratch` (P067, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -82,6 +82,7 @@ reassigned.
 | [P066](#p066) | `HttpxTransportWithoutProxy` | `warn` | `app` | `client-seam` | — | 0.59.0 |
 | [P067](#p067) | `TempDirOutsideRunScratch` | `warn` | `app` | `workflow-sandbox` | — | 0.61.0 |
 | [P068](#p068) | `SqlAppRunOverrideUnverified` | `warn` | `app` | `orchestration-seam` | — | 0.62.0 |
+| [P069](#p069) | `ImportInWorkflow` | `warn` | `both` | `determinism` | — | 0.63.0 |
 
 ---
 
@@ -3619,5 +3620,57 @@ Silent unless the app's `uv.lock` resolves an `atlan-application-sdk` that ships
 
 Land as `WARN`: a justified inline `# conformance: ignore[P068] <reason>` on the `def
 run` line records an override that verifies its output another way.
+
+---
+
+## P069 — `ImportInWorkflow` {#p069}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.63.0
+
+> Import that runs in workflow-context code
+
+**Rationale:** Temporal creates a workflow instance on the worker's event-loop thread, with no deadlock
+timer, so module-level imports are free at run time. Every later activation runs on a
+workflow thread that Temporal interrupts after 2 seconds (TMPRL1101). An import inside
+workflow code runs there, and the sandbox re-executes any module it has not loaded yet;
+the app's own package is never passed through. On a cold, busy worker the import
+overruns the timer, and the interrupt can land while the thread waits on that module's
+import lock. It leaves the lock held: every later import of that module, and of the
+module that was importing it, hangs. Every workflow run imports the same modules, so the
+whole worker stops making progress while its pod stays up: every activity on it then
+fails by heartbeat timeout. The global import lock is not involved, so imports of
+unrelated modules still work.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/connector.py — every `app.*` module the `extract_metadata` and
+  `extract_lineage` entrypoints use is imported at the top of the file, so neither
+  entrypoint, nor any helper they call, imports anything while the workflow runs.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
+`@signal` / `@query` / `@update` handler, including functions nested in one) an `import`
+or `from ... import` statement runs while the workflow executes.  Move it to module
+level.  If the import was local to break a cycle, break the cycle instead: import under
+`if TYPE_CHECKING:` for annotations, or move the shared name to a module both sides can
+import.
+
+The rule also follows calls from workflow code into functions this repo defines,
+transitively, sync and async alike: a top-level function of the same module, a function
+imported from a module under the scanned root (by name, or through a module alias such
+as `flows.run_flow()`), and a method of the same class called through `self`.  An import
+such a helper runs is reported at the call site in the workflow method, naming the chain
+and the import's `path:line`. Calls into third-party code, inherited methods and local
+variables are not resolved, and a name bound in the calling function (a parameter, an
+assignment, a local import or `def`) shadows the module-level function or import of the
+same name, so a call through it is not followed.
+
+Imports under `if TYPE_CHECKING:` never run and are not flagged; the guard's `else`
+branch runs and is scanned. `@task` activity bodies are exempt, and a call to a `@task`
+method is not followed: it schedules an activity, which runs outside the sandbox and the
+deadlock timer.
+
+Land as `WARN`.  Suppress a reviewed exception with `# conformance: ignore[P069]
+<reason>` on the import (which waives it for every caller) or on the call site.
 
 ---

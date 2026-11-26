@@ -166,7 +166,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.httpx_proxy` (P066), "
             "`suite.checks.error_seam` (P043/P045, scans test files too), "
-            "`suite.checks.determinism` (P020–P024, P031, P036, P054), "
+            "`suite.checks.determinism` (P020–P024, P031, P036, P054, P069), "
             "`suite.checks.app_name_alignment` (P025), "
             "`suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), "
             "`suite.checks.transform_templates` (P040, scans template YAML), "

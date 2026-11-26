@@ -1590,3 +1590,60 @@ def test_new_rules_present_and_scoped_both() -> None:
         assert rid in CATALOG, f"{rid} missing from catalog"
         assert CATALOG[rid].scope is RuleScope.BOTH
         assert CATALOG[rid].rationale.strip(), f"{rid} needs a non-empty rationale"
+
+
+# ── P069 ImportInWorkflow ────────────────────────────────────────────────────
+
+
+def test_p069_flags_import_in_run() -> None:
+    src = _wrap_run("from app.extract.marker import build_prefix\nimport json")
+    findings = _rule(src, "P069")
+    assert [f.line for f in findings] == [4, 5]
+    assert "app.extract.marker" in findings[0].message
+
+
+def test_p069_flags_import_in_entrypoint_and_nested_function() -> None:
+    body = (
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def crawl(self, input):\n"
+        "        def helper():\n"
+        "            from .marker import build_prefix\n"
+        "            return build_prefix\n"
+        "        return helper()\n"
+    )
+    findings = _rule(body, "P069")
+    assert len(findings) == 1
+    assert "'.marker'" in findings[0].message
+
+
+def test_p069_silent_under_type_checking() -> None:
+    src = _wrap_run(
+        "if TYPE_CHECKING:\n    from app.models import Meta\nif typing.TYPE_CHECKING:\n    import os"
+    )
+    assert _rule(src, "P069") == []
+
+
+def test_p069_silent_at_module_level_and_in_task() -> None:
+    body = (
+        "import json\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        import pyarrow\n"
+        "        return pyarrow\n"
+        "    async def run(self, input):\n"
+        "        return json.dumps(input)\n"
+    )
+    assert _rule(body, "P069") == []
+
+
+def test_p069_silent_outside_app_subclass() -> None:
+    body = "class Plain:\n    async def run(self, input):\n        import json\n"
+    assert _rule(body, "P069") == []
+
+
+def test_p069_suppression() -> None:
+    src = _wrap_run("import json  # conformance: ignore[P069] reviewed")
+    findings = _rule(src, "P069")
+    assert len(findings) == 1 and findings[0].suppressed

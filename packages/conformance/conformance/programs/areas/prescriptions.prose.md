@@ -1125,7 +1125,7 @@ function and every reader of the path it builds before drafting.
   `# conformance: ignore[P067]` and confirm the code removes what it makes.
   Cite as evidence `application_sdk/app/base.py` `App.run_scratch_dir`.
 
-**Determinism / async-correctness rules (P020–P024)** — all suggest-only,
+**Determinism / async-correctness rules (P020–P024, P069)** — all suggest-only,
 scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing
 method around `finding.line` first, and confirm it is workflow context (`run` /
 `@entrypoint` / `@signal` / `@query` / `@update`) versus a `@task` activity before
@@ -1151,6 +1151,18 @@ drafting.
   activity and have the workflow `await` it.  No local edit can perform this
   safely (it changes the workflow/activity topology) — draft the refactored shape
   (which call becomes a task, what the task returns) and route to residue.
+
+- **P069 ImportInWorkflow** — an `import` statement runs inside a
+  workflow-context method, on the workflow thread under Temporal's 2s deadlock
+  timer.  Draft the import moved to module level.  Before proposing, check why it
+  was local: if hoisting creates an import cycle, draft the cycle break instead
+  (`if TYPE_CHECKING:` for annotation-only names, or move the shared name to a
+  module both sides import) and say which you chose.  A local import under
+  `if TYPE_CHECKING:` is never flagged and must not be moved.  When the finding
+  is on a call ("Call to a() -> b() reaches an import of …"), the import lives
+  in the helper at the `path:line` the message names, not on `finding.line`:
+  open that file and draft the hoist there.  One hoist clears the finding for
+  every workflow that reaches the helper.
 
 - **P022 UnawaitedCoroutine** — a bare `self.<async-method>(...)` statement drops a
   coroutine.  Propose adding `await` (or wrapping in `asyncio.create_task`/`gather`

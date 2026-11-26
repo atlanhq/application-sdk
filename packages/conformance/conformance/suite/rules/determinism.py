@@ -1,4 +1,4 @@
-"""Determinism / async-correctness rule definitions (P020–P024, P031, P036).
+"""Determinism / async-correctness rule definitions (P020–P024, P031, P036, P054, P069).
 
 App and SDK code must respect the SDK's async and determinism expectations in the
 execution path.  Temporal **workflow** code (an ``App`` subclass's ``run`` /
@@ -625,6 +625,74 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="P069",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — every `app.*` module the "
+            "`extract_metadata` and `extract_lineage` entrypoints use is imported at "
+            "the top of the file, so neither entrypoint, nor any helper they call, "
+            "imports anything while the workflow runs."
+        ),
+        scope=RuleScope.BOTH,
+        name="ImportInWorkflow",
+        tier=EnforcementTier.WARN,
+        category="determinism",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.63.0",
+        rationale=(
+            "Temporal creates a workflow instance on the worker's event-loop thread, "
+            "with no deadlock timer, so module-level imports are free at run time. "
+            "Every later activation runs on a workflow thread that Temporal "
+            "interrupts after 2 seconds (TMPRL1101). An import inside workflow code "
+            "runs there, and the sandbox re-executes any module it has not loaded "
+            "yet; the app's own package is never passed through. On a cold, busy "
+            "worker the import overruns the timer, and the interrupt can land while "
+            "the thread waits on that module's import lock. It leaves the lock held: "
+            "every later import of that module, and of the module that was importing "
+            "it, hangs. Every workflow run imports the same modules, so the whole "
+            "worker stops making progress while its pod stays up: every activity "
+            "on it then fails by heartbeat timeout. The global import lock is not "
+            "involved, so imports of unrelated modules still work."
+        ),
+        short_description="Import that runs in workflow-context code",
+        full_description=(
+            "Inside an ``App`` subclass's workflow-context method (``run``, an\n"
+            "``@entrypoint`` method, or a ``@signal`` / ``@query`` / ``@update``\n"
+            "handler, including functions nested in one) an ``import`` or\n"
+            "``from ... import`` statement runs while the workflow executes.  Move it\n"
+            "to module level.  If the import was local to break a cycle, break the\n"
+            "cycle instead: import under ``if TYPE_CHECKING:`` for annotations, or\n"
+            "move the shared name to a module both sides can import.\n"
+            "\n"
+            "The rule also follows calls from workflow code into functions this\n"
+            "repo defines, transitively, sync and async alike: a top-level function\n"
+            "of the same module, a function imported from a module under the\n"
+            "scanned root (by name, or through a module alias such as\n"
+            "``flows.run_flow()``), and a method of the same class called through\n"
+            "``self``.  An import such a helper runs is reported at the call site in\n"
+            "the workflow method, naming the chain and the import's ``path:line``.\n"
+            "Calls into third-party code, inherited methods and local variables are\n"
+            "not resolved, and a name bound in the calling function (a parameter,\n"
+            "an assignment, a local import or ``def``) shadows the module-level\n"
+            "function or import of the same name, so a call through it is not\n"
+            "followed.\n"
+            "\n"
+            "Imports under ``if TYPE_CHECKING:`` never run and are not flagged; the\n"
+            "guard's ``else`` branch runs and is scanned.\n"
+            "``@task`` activity bodies are exempt, and a call to a ``@task`` method\n"
+            "is not followed: it schedules an activity, which runs outside the\n"
+            "sandbox and the deadlock timer.\n"
+            "\n"
+            "Land as ``WARN``.  Suppress a reviewed exception with\n"
+            "``# conformance: ignore[P069] <reason>`` on the import (which waives it\n"
+            "for every caller) or on the call site.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),

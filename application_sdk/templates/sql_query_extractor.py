@@ -27,6 +27,7 @@ from application_sdk.app.task import task
 from application_sdk.credentials.ref import _guid_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
+    SqlQueryExtractionError,
     SqlQueryExtractorNotImplementedError,
 )
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
@@ -159,10 +160,6 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         # conformance: ignore[E004] top-level run() handler; re-raises as typed SqlQueryExtractionError, exception context preserved via from e
         except Exception as e:
-            from application_sdk.templates._template_errors import (  # noqa: PLC0415
-                SqlQueryExtractionError,
-            )
-
             raise SqlQueryExtractionError(workflow_id=str(workflow_id), cause=e) from e
 
 
