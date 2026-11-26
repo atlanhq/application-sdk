@@ -164,6 +164,42 @@ class TestReadiness:
         assert clock[0] == 10.0
         assert not suite_cls._route_ready
 
+    def test_after_a_readiness_failure_the_class_fails_at_once(
+        self, clock: list[float]
+    ) -> None:
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            return httpx.Response(503)
+
+        suite_cls = _suite(
+            handler,
+            readiness_path="/v1/state",
+            readiness_timeout_seconds=12.0,
+            readiness_interval_seconds=5.0,
+        )
+        with pytest.raises(RouteNotReadyError):
+            suite_cls().setup_method(None)
+        waited, asked = clock[0], len(seen)
+        with pytest.raises(RouteNotReadyError) as again:
+            suite_cls().setup_method(None)
+        assert (clock[0], len(seen)) == (waited, asked)
+        assert again.value.last_error == "HTTP 503"
+
+    def test_a_readiness_failure_closes_the_clients(self, clock: list[float]) -> None:
+        del clock
+        suite = _suite(
+            lambda request: httpx.Response(503),
+            readiness_path="/v1/state",
+            readiness_timeout_seconds=6.0,
+            readiness_interval_seconds=5.0,
+        )()
+        with pytest.raises(RouteNotReadyError):
+            suite.setup_method(None)
+        assert suite.api.is_closed
+        assert suite.anonymous.is_closed
+
     def test_transport_errors_count_as_not_ready(self, clock: list[float]) -> None:
         del clock
 

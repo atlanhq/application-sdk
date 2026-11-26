@@ -19,6 +19,8 @@ What a suite declares:
 * ``readiness_path`` — optional. A route, relative to ``ingress_path``, that
   answers 2xx once the app serves. The first test of the class waits for it,
   so a pod still reconciling or waking from zero is not read as a failure.
+  If it never answers, the rest of the class fails at once instead of waiting
+  again.
 
 What a suite gets:
 
@@ -70,6 +72,7 @@ class RouteE2ETest:
     readiness_interval_seconds: ClassVar[float] = 5.0
     request_timeout_seconds: ClassVar[float] = 30.0
     _route_ready: ClassVar[bool] = False
+    _route_not_ready: ClassVar[RouteNotReadyError | None] = None
 
     base_url: str
     api: httpx.Client
@@ -83,7 +86,8 @@ class RouteE2ETest:
                 absent or blank.
             MissingHarnessClassAttrError: ``ingress_path`` is not set.
             RouteNotReadyError: ``readiness_path`` never answered 2xx within
-                ``readiness_timeout_seconds``.
+                ``readiness_timeout_seconds``, in this test or an earlier one of
+                the same class.
         """
         del method
         self._cleanups: list[Callable[[], object]] = []
@@ -114,11 +118,18 @@ class RouteE2ETest:
             timeout=timeout,
         )
         self.anonymous = self._client(base_url=auth.base_url, timeout=timeout)
-        if type(self).readiness_path and not type(self).__dict__.get(
-            "_route_ready", False
-        ):
-            self._wait_until_ready(prefix)
-            type(self)._route_ready = True
+        cls = type(self)
+        if cls.readiness_path and not cls.__dict__.get("_route_ready", False):
+            failed = cls.__dict__.get("_route_not_ready")
+            try:
+                if failed is not None:
+                    raise failed.with_traceback(None)
+                self._wait_until_ready(prefix)
+            except RouteNotReadyError as exc:
+                cls._route_not_ready = exc
+                self._close_clients()
+                raise
+            cls._route_ready = True
 
     def teardown_method(self, method: object) -> None:
         """Run the cleanups, last added first, then close the clients.
@@ -136,10 +147,7 @@ class RouteE2ETest:
                 logger.warning("Route e2e cleanup failed: %s", exc, exc_info=True)
                 failures.append(exc)
         self._cleanups = []
-        for name in ("api", "anonymous"):
-            client = getattr(self, name, None)
-            if client is not None:
-                client.close()
+        self._close_clients()
         if len(failures) == 1:
             raise failures[0]
         if failures:
@@ -180,6 +188,12 @@ class RouteE2ETest:
         headers: dict[str, str] | None = None,
     ) -> httpx.Client:
         return httpx.Client(base_url=base_url, timeout=timeout, headers=headers)
+
+    def _close_clients(self) -> None:
+        for name in ("api", "anonymous"):
+            client = getattr(self, name, None)
+            if client is not None:
+                client.close()
 
     def _wait_until_ready(self, prefix: str) -> None:
         cls = type(self)
