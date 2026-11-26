@@ -856,8 +856,8 @@ surface.
 
 application-sdk follows the connector split. In `sdk-tests-reusable.yaml`,
 Integration Tests and Storage Emulator Tests run on `merge_group` and on `v*`
-tag pushes, and on a PR only when someone asks for the full suite. Unit legs,
-Unit Perf Tests and the script tests still run on every PR push.
+tag pushes, and on a PR only when someone asks for the full suite. Unit legs
+and Unit Perf Tests still run on every PR push.
 
 **On demand.** A `/e2e` or `/gate-check` comment runs the integration tier on
 that PR commit too. The reusable's `Decide integration request` job reads the
@@ -881,6 +881,31 @@ averaged 5.8 pushes, and integration ran 8.9 minutes p50 on each, about 50
 runner-minutes per PR. Over the same window, three PR-side integration failures
 came from one PR, and no queue failure was an integration break the PR run had
 missed. The cost of the move is about one extra queue ejection in that window.
+
+### The SDK's unit grid is reduced on PR pushes (FND-4673)
+
+The `unit` job in `sdk-tests-reusable.yaml` is an OS × Python grid: 3.11–3.14
+on `ubuntu-22.04`, `macOS-latest` and `windows-latest`, 12 legs. An ordinary PR
+push runs 6 of them: all four Pythons on Linux, and only the container's
+Python (the Dockerfile's golden tag) on macOS and Windows. The merge queue,
+`v*` tags, and `release/*` and `bump-version-main` PRs (`force_sdk`) run all
+12. `sdk-gate.yaml` decides this and passes it as the reusable's
+`full-unit-grid` input, which defaults to `true` so a caller that omits it keeps
+the full grid.
+
+The trade: a break that shows only on macOS or Windows *and* only on
+3.11/3.12/3.14 fails in the queue, not on the PR, and costs one ejection.
+Before the change every PR push ran 12 unit legs, with Windows the critical
+path at p50 447 s, and PRs averaged 5.8 pushes.
+
+`test_container_python_version.py` expands the `exclude:` expression the way
+GitHub does and fails if the PR grid stops being "all of Linux plus the
+container's Python elsewhere", or drops the coverage leg. Bumping the
+Dockerfile's Python therefore fails that test until the exclude list moves
+with it.
+
+`with-retry.sh`'s tests are pytest (`test_with_retry.py`) and run in
+`pytest .github/scripts/tests`; there is no bats job or bats-core checkout.
 
 ### The vulnerability scan gates the bump PR, not every PR (FND-3328)
 

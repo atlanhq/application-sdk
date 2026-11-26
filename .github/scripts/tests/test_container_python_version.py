@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import container_python_version as cpv
 import pytest
+from _workflows import job, load_workflow, triggers
 
 
 def _dockerfile(tmp_path: Path, contents: str) -> Path:
@@ -154,3 +156,98 @@ def test_action_python_default_matches_dockerfile(action: str) -> None:
     )
     assert match, f"expected-python-version default not found in {action}/action.yaml"
     assert match.group(1) == dockerfile_version
+
+
+# ---------------------------------------------------------------------------
+# The unit matrix's PR-push split (FND-4673)
+# ---------------------------------------------------------------------------
+#
+# A PR push runs the full Python range on Linux and only the container's Python
+# on macOS and Windows; the merge queue runs the full grid. The reduced set is
+# an `exclude:` list inside a `fromJSON(...)` expression, which no YAML parser
+# expands, so these tests expand it the way GitHub does and assert on the legs.
+
+_LINUX = "ubuntu-22.04"
+_SPLIT_RE = re.compile(
+    r"^\$\{\{ fromJSON\(inputs\.full-unit-grid && '(?P<full>[^']*)' "
+    r"\|\| '(?P<reduced>[^']*)'\) \}\}$"
+)
+
+
+def _unit_job() -> dict:
+    return job(load_workflow("sdk-tests-reusable.yaml"), "unit")
+
+
+def _expand(matrix: dict, exclude: list[dict[str, str]]) -> set[tuple[str, str]]:
+    """GitHub's expansion: the axes' product minus every fully matching exclude."""
+    legs = {(os, py) for os in matrix["os"] for py in matrix["python-version"]}
+    return {
+        (os, py)
+        for os, py in legs
+        if not any(
+            e.get("os", os) == os and e.get("python-version", py) == py for e in exclude
+        )
+    }
+
+
+def _grids() -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    matrix = _unit_job()["strategy"]["matrix"]
+    match = _SPLIT_RE.match(matrix["exclude"])
+    assert match, f"unexpected exclude expression: {matrix['exclude']!r}"
+    full = _expand(matrix, json.loads(match["full"]))
+    reduced = _expand(matrix, json.loads(match["reduced"]))
+    return full, reduced
+
+
+def test_full_unit_grid_runs_every_os_python_pair() -> None:
+    matrix = _unit_job()["strategy"]["matrix"]
+    full, _ = _grids()
+    assert len(full) == len(matrix["os"]) * len(matrix["python-version"]) == 12
+
+
+def test_pr_unit_grid_is_linux_range_plus_container_python_elsewhere() -> None:
+    matrix = _unit_job()["strategy"]["matrix"]
+    container = cpv.parse_dockerfile_version(cpv._repo_root() / "Dockerfile")
+    _, reduced = _grids()
+
+    by_os: dict[str, set[str]] = {}
+    for os, py in reduced:
+        by_os.setdefault(os, set()).add(py)
+
+    assert by_os[_LINUX] == set(matrix["python-version"])
+    for os in matrix["os"]:
+        if os != _LINUX:
+            # Bumping the image's Python without moving this list would leave
+            # macOS and Windows testing an interpreter nothing ships.
+            assert by_os.get(os) == {container}, (
+                f"{os} PR legs {sorted(by_os.get(os, ()))} must be exactly the "
+                f"container's Python {container}"
+            )
+    assert len(reduced) == 6
+
+
+def test_pr_unit_grid_keeps_the_coverage_leg() -> None:
+    # Coverage (comment, fail-under, per-package floors) is measured on one leg;
+    # if the PR grid dropped it, PRs would merge with no coverage check at all.
+    expr = _unit_job()["env"]["UNIT_COVERAGE_LEG"]
+    leg = re.search(
+        r"matrix\.os == '([^']+)' && matrix\.python-version == '([^']+)'", expr
+    )
+    assert leg, expr
+    _, reduced = _grids()
+    assert (leg[1], leg[2]) in reduced
+
+
+def test_full_unit_grid_defaults_on() -> None:
+    inputs = triggers(load_workflow("sdk-tests-reusable.yaml"))["workflow_call"][
+        "inputs"
+    ]
+    assert inputs["full-unit-grid"]["default"] is True
+
+
+def test_sdk_gate_reduces_the_grid_only_on_ordinary_pr_pushes() -> None:
+    call = job(load_workflow("sdk-gate.yaml"), "sdk-tests")
+    assert call["with"]["full-unit-grid"] == (
+        "${{ github.event_name != 'pull_request' "
+        "|| needs.changes.outputs.force_sdk == 'true' }}"
+    )

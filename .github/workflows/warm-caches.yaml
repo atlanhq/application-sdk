@@ -1,7 +1,7 @@
 name: Warm CI caches
 
-# Seeds main's cache scope with what the SDK Gate's unit, integration,
-# storage-emulator and bats jobs restore. A PR can only restore a cache saved on its own ref or on
+# Seeds main's cache scope with what the SDK Gate's unit, integration and
+# storage-emulator jobs restore. A PR can only restore a cache saved on its own ref or on
 # the base branch, and the SDK Gate never runs on `push: main` — so before this
 # workflow existed nothing was ever saved where a fresh PR could see it, and
 # most PRs re-downloaded the Temporal CLI and daprd and ran a full `uv sync`
@@ -31,12 +31,14 @@ jobs:
   # other unit legs never restored a venv and every one spent 40-68s compiling
   # imports before its first test (FND-4309). Each OS warms on its own runner:
   # Windows checks uv.lock out with CRLF, so its key hash differs from Linux's.
-  # The Linux 3.11 leg also covers the storage-emulator and bats jobs, which
-  # use the setup-deps default on ubuntu-latest (the key has no image version).
+  # The Linux 3.11 leg also covers the storage-emulator job, which uses the
+  # setup-deps default on ubuntu-latest (the key has no image version).
   #
   # lookup-only: an exact hit, the usual case, ends without downloading the
   # venv; this matrix runs on every push to main and macOS bills 10x.
-  # test_warm_caches_unit_matrix.py keeps this matrix equal to the unit job's.
+  # test_warm_caches_unit_matrix.py keeps this matrix equal to the unit job's
+  # full grid. A PR push runs only 6 of these legs (FND-4673); the merge queue
+  # runs all 12, so every venv here is still restored.
   unit-venvs:
     name: Warm unit venv (${{ matrix.os }}, ${{ matrix.python-version }})
     if: github.ref == 'refs/heads/main'
