@@ -633,8 +633,8 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-metabase-app app/connector.py — every `app.*` module the "
             "`extract_metadata` and `extract_lineage` entrypoints use is imported at "
-            "the top of the file, so neither entrypoint imports anything while the "
-            "workflow runs."
+            "the top of the file, so neither entrypoint, nor any helper they call, "
+            "imports anything while the workflow runs."
         ),
         scope=RuleScope.BOTH,
         name="ImportInWorkflow",
@@ -656,7 +656,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "progress while its pod stays up: every activity on it then fails by "
             "heartbeat timeout."
         ),
-        short_description="Function-local import in workflow-context code",
+        short_description="Import that runs in workflow-context code",
         full_description=(
             "Inside an ``App`` subclass's workflow-context method (``run``, an\n"
             "``@entrypoint`` method, or a ``@signal`` / ``@query`` / ``@update``\n"
@@ -666,16 +666,24 @@ RULES: tuple[RuleDefinition, ...] = (
             "cycle instead: import under ``if TYPE_CHECKING:`` for annotations, or\n"
             "move the shared name to a module both sides can import.\n"
             "\n"
+            "The rule also follows calls from workflow code into functions this\n"
+            "repo defines, transitively, sync and async alike: a top-level function\n"
+            "of the same module, a function imported from a module under the\n"
+            "scanned root (by name, or through a module alias such as\n"
+            "``flows.run_flow()``), and a method of the same class called through\n"
+            "``self``.  An import such a helper runs is reported at the call site in\n"
+            "the workflow method, naming the chain and the import's ``path:line``.\n"
+            "Calls into third-party code, inherited methods and local variables are\n"
+            "not resolved.\n"
+            "\n"
             "Imports under ``if TYPE_CHECKING:`` never run and are not flagged.\n"
-            "``@task`` activity bodies are exempt: activities run outside the\n"
+            "``@task`` activity bodies are exempt, and a call to a ``@task`` method\n"
+            "is not followed: it schedules an activity, which runs outside the\n"
             "sandbox and the deadlock timer.\n"
             "\n"
-            "Undecorated helpers that workflow code calls, in this module or\n"
-            "another, are a documented false negative, as for P020 and P021: the\n"
-            "rule cannot see the call graph.  An app that keeps workflow logic in\n"
-            "such helpers should add its own tripwire over those modules.  Land as\n"
-            "``WARN``; suppress a reviewed exception with\n"
-            "``# conformance: ignore[P069] <reason>``.\n"
+            "Land as ``WARN``.  Suppress a reviewed exception with\n"
+            "``# conformance: ignore[P069] <reason>`` on the import (which waives it\n"
+            "for every caller) or on the call site.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

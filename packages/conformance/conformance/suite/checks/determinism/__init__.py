@@ -26,8 +26,9 @@ bugs are caught at CI time rather than under production orchestration.
 * ``P054`` ScopedExecutorJoinedOnCancel — a ``with``-scoped
   ``ThreadPoolExecutor`` whose ``.run_in_executor(...)`` joins on cancel and
   freezes the event loop (FND-2873).
-* ``P069`` ImportInWorkflow — an ``import`` inside a workflow-context method,
-  which runs under Temporal's deadlock timer and can freeze the worker.
+* ``P069`` ImportInWorkflow — an ``import`` that runs in workflow context,
+  directly or in a repo helper workflow code calls, under Temporal's deadlock
+  timer, where an interrupt can freeze the worker.
 
 Discovery
 ---------
@@ -82,7 +83,8 @@ def scan_text(
     """Scan a single Python source *text* for all determinism findings (P020–P024, P031, P036, P054, P069).
 
     *path* and *root* let P023 follow a sync helper imported from the scanned
-    repo and see a deprecation marker on an enclosing package.
+    repo and see a deprecation marker on an enclosing package, and let P069
+    follow workflow code into helpers imported from the scanned repo.
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -98,7 +100,7 @@ def scan_text(
         *check_p031(tree, file, directives),
         *check_p036(tree, file, directives),
         *check_p054(tree, file, directives),
-        *check_p069(tree, file, directives),
+        *check_p069(tree, file, directives, path=path, root=root),
     ]
 
 

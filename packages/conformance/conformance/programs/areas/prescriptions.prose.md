@@ -1158,7 +1158,11 @@ drafting.
   was local: if hoisting creates an import cycle, draft the cycle break instead
   (`if TYPE_CHECKING:` for annotation-only names, or move the shared name to a
   module both sides import) and say which you chose.  A local import under
-  `if TYPE_CHECKING:` is never flagged and must not be moved.
+  `if TYPE_CHECKING:` is never flagged and must not be moved.  When the finding
+  is on a call ("Call to a() -> b() reaches an import of …"), the import lives
+  in the helper at the `path:line` the message names, not on `finding.line`:
+  open that file and draft the hoist there.  One hoist clears the finding for
+  every workflow that reaches the helper.
 
 - **P022 UnawaitedCoroutine** — a bare `self.<async-method>(...)` statement drops a
   coroutine.  Propose adding `await` (or wrapping in `asyncio.create_task`/`gather`
