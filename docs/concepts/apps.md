@@ -150,7 +150,7 @@ The SDK provides pre-built `App` subclasses for common patterns. Override only t
 
 ### SqlApp
 
-Extracts metadata (databases, schemas, tables, columns, and optionally views and procedures) from SQL sources. Set the client and the SQL templates, and write one `map_*` function per entity; the default `run()` extracts every entity in parallel, transforms each through its mapper, and verifies the output before publish (reference: atlan-mysql-app):
+Extracts metadata (databases, schemas, tables and columns) from SQL sources. Set the client and the SQL templates, and write one `map_*` function per entity; the default `run()` extracts those four entities in parallel, transforms each through its mapper, and verifies the output before publish (reference: atlan-mysql-app):
 
 ```python
 from application_sdk.templates import SqlApp
@@ -174,7 +174,7 @@ class MyExtractor(SqlApp):
     # the default run(): the base ones raise Map*UnimplementedError.
 ```
 
-A connector whose fetches must run in sequence, or that adds an entity the default `run()` does not drive, overrides `run()` and calls the `extract_*` / `transform_*` tasks itself, ending in `finalize_extraction`. The `SqlApp` class docstring lists that override surface.
+The default `run()` never calls the view and procedure tasks: setting `fetch_view_sql` or `fetch_procedure_sql` alone extracts nothing. A connector that needs them, whose fetches must run in sequence, or that adds another entity overrides `run()` and calls the `extract_*` / `transform_*` tasks itself, ending in `finalize_extraction`. Views go through `map_table` (a View is a Table specialisation); procedures through `map_procedure`. The `SqlApp` class docstring lists that override surface, and the [SQL application guide](../guides/sql-application-guide.md) shows the hand-off to publish in an SDR deployment.
 
 ### Deprecated SQL templates
 

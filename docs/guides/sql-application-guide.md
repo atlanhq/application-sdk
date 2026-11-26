@@ -207,7 +207,7 @@ class PostgresHandler(Handler):
 The core of your connector is a `SqlApp` subclass. You declare three things and the template does the rest:
 
 - `sql_client_class` --- the client from [Client](#client).
-- `fetch_database_sql`, `fetch_schema_sql`, `fetch_table_sql`, `fetch_column_sql` --- one query per entity. Each must stand alone: the default `run()` issues all four at once.
+- `fetch_database_sql`, `fetch_schema_sql`, `fetch_table_sql`, `fetch_column_sql` --- one query per entity. Each must stand alone: the default `run()` issues all four at once, so each query applies its own filters (here, the same system-schema exclusions in all three).
 - `map_database`, `map_schema`, `map_table`, `map_column` --- one asset mapper per entity. Each takes one raw row and the connection's qualified name and returns a `pyatlan_v9` asset. All four are required for the default `run()`: the base ones raise `Map*UnimplementedError`.
 
 ```python
@@ -237,11 +237,15 @@ class PostgresApp(SqlApp):
                t.table_name
         FROM information_schema.tables t
         WHERE t.table_type = 'BASE TABLE'
+          AND t.table_schema NOT LIKE 'pg_%'
+          AND t.table_schema != 'information_schema'
     """
     fetch_column_sql = """
         SELECT c.table_catalog AS database_name, c.table_schema AS schema_name,
                c.table_name, c.column_name, c.data_type, c.ordinal_position
         FROM information_schema.columns c
+        WHERE c.table_schema NOT LIKE 'pg_%'
+          AND c.table_schema != 'information_schema'
     """
 
     def map_database(self, record, connection_qn):
@@ -293,7 +297,44 @@ Each `@task` method on `SqlApp` becomes a Temporal activity. The default `run()`
 3. **Transform** --- the matching `transform_*` tasks run in parallel, each reading its raw file and running every row through its `map_*` method into `transformed/<entity>/entities.json`.
 4. **Finalize** --- `finalize_extraction` verifies the transformed tree is whole and returns the `ExtractionOutput` publish reads.
 
-Every extract and transform task returns a `FileReference` with a canonical `storage_path`, which the task's persist step uploads. Do not add `self.upload()` calls or an upload task.
+Every non-empty extract and transform task output is a `FileReference` with a canonical `storage_path`, which the task's persist step uploads to the **deployment store**. Do not add `self.upload()` calls or an upload task for that.
+
+Publish reads Atlan's store, which in an SDR deployment is a different store from the deployment store ([ADR-0014](../adr/0014-two-store-storage-architecture.md)). So hand the transformed tree on with `upload_refs()`, by reference, and return the prefix it delivered to. atlan-mysql-app does this on every run; in a single-store deployment the same call writes to the one store:
+
+```python
+from application_sdk.contracts.base import Output
+from application_sdk.contracts.storage import DeclaredFile, UploadRefsInput
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+
+class PostgresExtractionOutput(Output):
+    connection_qualified_name: str = ""
+    transformed_data_prefix: str = ""
+    publish_state_prefix: str = ""
+    current_state_prefix: str = ""
+
+
+class PostgresApp(SqlApp):
+    ...  # SQL templates and map_* methods as above
+
+    async def run(self, input: ExtractionInput) -> PostgresExtractionOutput:
+        out = await super().run(input)
+        delivered = await self.upload_refs(
+            UploadRefsInput(
+                files=[DeclaredFile(ref=ref) for ref in out.transformed_files],
+                source_prefix=out.transformed_data_prefix,
+                prefix=out.transformed_data_prefix,
+            )
+        )
+        return PostgresExtractionOutput(
+            connection_qualified_name=out.connection_qualified_name,
+            transformed_data_prefix=delivered.prefix,
+            publish_state_prefix=out.publish_state_prefix,
+            current_state_prefix=out.current_state_prefix,
+        )
+```
+
+`delivered.prefix` is `""` when there was nothing to deliver, which tells publish not to diff the tenant against an empty tree. Return your own output model, not `ExtractionOutput`: its validator back-fills an empty `transformed_data_prefix` from `output_path`, which undoes that signal.
 
 ### Available task methods
 
@@ -411,8 +452,8 @@ ExtractionInput          -- top-level input to run()
 ExtractionOutput         -- top-level output from run(); what publish reads
 ExtractionTaskInput      -- shared fields for every extract_* task; build it with build_task_input()
   TransformInput         -- passed to every transform_* task; build it with build_transform_input()
-ExtractionTaskOutput     -- raw_file: FileReference, total_record_count
-TransformOutput          -- transformed_file: FileReference, total_record_count
+ExtractionTaskOutput     -- raw_file: FileReference | None (None for no SQL or zero rows), total_record_count
+TransformOutput          -- transformed_file: FileReference | None (None for an empty input), total_record_count
 ```
 
 ### Bounded collections

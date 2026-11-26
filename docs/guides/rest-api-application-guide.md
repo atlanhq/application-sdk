@@ -337,17 +337,19 @@ Never import from `temporalio` directly — use `self.task_context.heartbeat()` 
 
 ## Error Handling
 
-Raise a typed `AppError` leaf from `application_sdk.errors`. Whether Temporal retries the task follows from the leaf: `AuthError`, `AppPermissionDeniedError` and `NotFoundError` fail it permanently, while `SourceUnavailableError` and `RateLimitedError` are retried. `classify_http_exception` picks the leaf for an httpx failure, so the connector keeps no status table of its own:
+Raise a typed `AppError` leaf from `application_sdk.errors`. Whether Temporal retries the task follows from the leaf: `AuthError`, `AppPermissionDeniedError`, `NotFoundError` and `InternalError` fail it permanently, while `SourceUnavailableError` and `RateLimitedError` are retried. `classify_http_exception` picks the leaf for an httpx failure, so the connector keeps no status table of its own:
 
 ```python
-from application_sdk.errors import classify_http_exception
+from application_sdk.errors import InternalError, classify_http_exception
 
 @task(timeout_seconds=3600)
 async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput:
     try:
         ...
     except httpx.HTTPError as e:
-        leaf = classify_http_exception(e)
+        # A 400 is unmapped by default; for this API it means the connector
+        # built a bad request, so fail fast instead of retrying it.
+        leaf = classify_http_exception(e, overrides={400: InternalError})
         if leaf is None:
             raise  # unmapped: Temporal retries it as an untyped failure
         raise leaf(message="API request failed", cause=e) from e

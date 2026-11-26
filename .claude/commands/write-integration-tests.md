@@ -591,6 +591,7 @@ database itself in the next step, over TCP on its own port.
 
 For connectors with camelCase credential fields, put them in `default_credentials` on the test class (env var auto-discovery lowercases everything):
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestTableauIntegration(BaseIntegrationTest):
     # CamelCase fields must be here, not in env vars

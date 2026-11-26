@@ -398,7 +398,7 @@ class MyHandler(Handler):
 
 ## Error Handling
 
-Raise a typed `AppError` leaf from `application_sdk.errors` to return a structured HTTP error response. The server picks the status from the leaf's category: `InvalidInputError` answers 400, `AuthError` 401, `AppPermissionDeniedError` 403, `NotFoundError` 404, `PreconditionError` 412, `SourceUnavailableError` 503, and anything untyped 500.
+Raise a typed `AppError` leaf from `application_sdk.errors` to return a structured HTTP error response. The server picks the status from the leaf's category: `InvalidInputError` answers 400, `AuthError` 401, `AppPermissionDeniedError` 403, `NotFoundError` 404, `PreconditionError` 412, `SourceUnavailableError` 503. A FastAPI `HTTPException` you raise deliberately passes through with its own status and detail; any other exception answers 500.
 
 ```python
 from application_sdk.errors import InvalidInputError
@@ -415,7 +415,7 @@ class MyHandler(Handler):
         ...
 ```
 
-The response `detail` is the error's redacted message; an exception that is not an `AppError` answers with a fixed `Internal server error` instead, so its text never reaches the caller. `HandlerError` is deprecated (removal in v4.0); see [ADR-0013](../adr/0013-error-hierarchy-and-failure-taxonomy.md) for choosing a leaf.
+The response `detail` is the error's redacted message; any other exception (except a deliberate `HTTPException`) answers with a fixed `Internal server error` instead, so its text never reaches the caller. `HandlerError` is deprecated (removal in v4.0); see [ADR-0013](../adr/0013-error-hierarchy-and-failure-taxonomy.md) for choosing a leaf.
 
 ## SQL Handler Pattern
 

@@ -160,6 +160,7 @@ scenarios = [
 
 Edit `test_integration.py`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class MyConnectorIntegrationTest(BaseIntegrationTest):
     scenarios = scenarios
@@ -225,6 +226,7 @@ It is **warn-first**: failures are logged, not raised, so a connector with
 pre-existing invalid output does not immediately go red. Once a connector is
 clean, opt into hard-fail:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class MyConnectorTest(BaseIntegrationTest):
     extracted_output_base_path = "./local/tmp/artifacts/apps/myapp/workflows"
@@ -297,6 +299,7 @@ pytest tests/integration/_example/ -v --log-cli-level=DEBUG
 
 Increase the timeout in test class:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class MyTest(BaseIntegrationTest):
     timeout = 60  # Increase from default 30

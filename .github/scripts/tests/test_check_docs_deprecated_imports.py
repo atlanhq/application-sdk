@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import check_docs_deprecated_imports as check
@@ -25,7 +26,7 @@ def _record(symbol: str, module: str, kind: str = "class") -> DeprecatedSymbol:
     )
 
 
-MANIFEST = check.module_aware(
+MANIFEST = check.matchable(
     Manifest(
         symbols=(
             _record(
@@ -137,9 +138,61 @@ class MyHandler(Handler):
     assert _lines(page) == [2]
 
 
-def test_method_records_are_not_matched() -> None:
-    page = "```python\nfrom application_sdk.observability import get_logger\n\nlogger.activity()\n```\n"
+def test_deprecated_method_is_flagged() -> None:
+    page = (
+        "```python\nfrom application_sdk.observability import get_logger\n\n"
+        'get_logger("docs").activity("running")\n```\n'
+    )
+    assert _lines(page) == [4]
+
+
+def test_property_records_are_not_matched() -> None:
+    manifest = check.matchable(
+        Manifest(
+            symbols=(_record("client", "application_sdk.testing.e2e.base", "property"),)
+        )
+    )
+    page = "```python\nfrom application_sdk.testing.e2e import base\n\nx = self.client\n```\n"
+    assert check.find_violations("page.md", page, manifest) == []
+
+
+def test_imports_carry_to_a_later_use_only_block() -> None:
+    page = """\
+<!-- legacy-example: kept for old apps -->
+```python
+from application_sdk.templates import SqlMetadataExtractor
+```
+
+Then:
+
+```python
+class MyExtractor(SqlMetadataExtractor):
+    ...
+```
+"""
+    # The marked import is excused; the unmarked subclass is not.
+    assert _lines(page) == [9]
+    marked = page.replace(
+        "Then:\n\n", "Then:\n\n<!-- legacy-example: same example -->\n"
+    )
+    assert _lines(marked) == []
+
+
+def test_imports_do_not_carry_across_files() -> None:
+    page = "```python\nclass MyExtractor(SqlMetadataExtractor):\n    ...\n```\n"
     assert _lines(page) == []
+
+
+def test_fence_text_inside_the_example_does_not_close_it() -> None:
+    page = """\
+```python
+DOC = \"\"\"
+```python
+\"\"\"
+from application_sdk.handler import HandlerError
+```
+"""
+    assert _lines(page) == [5]
 
 
 @pytest.mark.parametrize("tag", ["bash", "text", "toml", "json"])
@@ -202,7 +255,7 @@ def test_committed_manifest_covers_the_symbols_the_docs_taught(
     snippet: str, symbol: str
 ) -> None:
     """The issue's symbols, through the import paths the docs used."""
-    manifest = check.module_aware(load_manifest())
+    manifest = check.matchable(load_manifest())
     violations = check.find_violations(
         "page.md", f"```python\n{snippet}\n```\n", manifest
     )
@@ -242,3 +295,47 @@ def test_main_fails_closed_on_an_empty_manifest(
 def test_changelog_is_excluded() -> None:
     assert "CHANGELOG.md" in check.EXCLUDED
     assert check.main(["CHANGELOG.md"]) == 0
+
+
+def _stub_git(monkeypatch: pytest.MonkeyPatch, stdout: str) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(check.subprocess, "run", fake_run)
+    return calls
+
+
+def test_no_arguments_checks_tracked_markdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The hook passes no filenames; this is the path CI runs."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(check, "load_manifest", lambda: MANIFEST)
+    (tmp_path / "bad.md").write_text(PRE_FIX_APPS_PAGE, encoding="utf-8")
+    calls = _stub_git(monkeypatch, "bad.md\0CHANGELOG.md\0")
+
+    assert check.main([]) == 1
+    assert calls == [["git", "ls-files", "-z", "--", "*.md"]]
+    assert "bad.md:6: Imports deprecated SDK symbol" in capsys.readouterr().out
+
+
+def test_no_arguments_and_no_tracked_markdown_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(check, "load_manifest", lambda: MANIFEST)
+    _stub_git(monkeypatch, "CHANGELOG.md\0")
+    assert check.main([]) == 1
+
+
+def test_git_failure_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(128, cmd)
+
+    monkeypatch.setattr(check.subprocess, "run", fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        check.main([])

@@ -761,6 +761,7 @@ workflow_scenarios = [
 
 ### Basic Configuration
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
@@ -774,6 +775,7 @@ class TestMyConnector(BaseIntegrationTest):
 
 If your workflow endpoint is different from `/start`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
@@ -814,6 +816,7 @@ Scenario(
 
 Or suite-wide, when every scenario in the class targets one entrypoint:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMinerIntegration(BaseIntegrationTest):
     entrypoint = "miner"         # applies to every workflow scenario
@@ -850,6 +853,7 @@ await executor.execute(MyApp, input_data, entry_point="extract-metadata")
 
 ### Setup and Teardown Hooks
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
@@ -1008,6 +1012,7 @@ pytest -v --log-cli-level=DEBUG
 ### "Timeout"
 
 Increase timeout:
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     timeout = 60  # Increase from default 30

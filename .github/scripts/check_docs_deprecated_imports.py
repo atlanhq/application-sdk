@@ -10,8 +10,13 @@ conformance package's own B001 matcher (`scan_consumer`) against the committed
 an import resolves through re-exports (`from application_sdk.templates import
 SqlMetadataExtractor`) exactly as it does in an app, and an enum member
 (`PreflightStatus.PARTIAL`) is matched through the enum it was imported with.
-Method and property records are left out: those match by bare attribute name,
-which in prose examples hits unrelated receivers.
+Deprecated methods match by name, as in B001, on any receiver not proven a
+module. Deprecated properties are never matched: B001 does not match them
+either, since a read cannot be told from an unrelated attribute of that name.
+
+A page's examples are read in order, so SDK imports carry from one block to the
+next: a block holding only `class MyTest(BaseIntegrationTest):` is checked
+against the import an earlier block made.
 
 A block that teaches a deprecated symbol on purpose (a v2 "before" snippet, a
 section about a deprecated framework) opts out with a marker on the line
@@ -47,9 +52,11 @@ from conformance.suite.checks.deprecation._manifest import Manifest, load_manife
 #: Generated or historical files: they record what was, not what to write.
 EXCLUDED = frozenset({"CHANGELOG.md", "packages/conformance/CHANGELOG.md"})
 
-#: Record kinds matched by where they were imported from. Methods and
-#: properties match by attribute name alone, so they are left out.
-_MODULE_AWARE_KINDS = frozenset({"class", "function", "constant", "enum_member"})
+#: Record kinds B001 matches. ``property`` is not one of them: B001 never
+#: matches a read of a deprecated property (see _consumer.py).
+_MATCHED_KINDS = frozenset({"class", "function", "constant", "enum_member", "method"})
+
+_SDK_ROOT = "application_sdk"
 
 _PYTHON_TAGS = frozenset({"", "python", "py", "python3", "pycon"})
 
@@ -93,8 +100,12 @@ def iter_python_blocks(text: str) -> Iterator[CodeBlock]:
             index += 1
             continue
         indent, fence, tag = opened["indent"], opened["fence"], opened["tag"]
+        # CommonMark: the closing fence is the opener's character, at least as
+        # long, with nothing but whitespace after it. A ```python line inside
+        # a string in the example does not close it.
+        closing = re.compile(rf"[ \t]*{re.escape(fence[0])}{{{len(fence)},}}[ \t]*")
         end = index + 1
-        while end < len(lines) and not lines[end].strip().startswith(fence):
+        while end < len(lines) and not closing.fullmatch(lines[end]):
             end += 1
         if tag.lower() in _PYTHON_TAGS:
             above = lines[index - 1] if index > 0 else ""
@@ -148,10 +159,38 @@ def _last_nonblank(lines: list[str]) -> int | None:
     return None
 
 
-def module_aware(manifest: Manifest) -> Manifest:
+def matchable(manifest: Manifest) -> Manifest:
+    """The records B001 can match: every kind but ``property``."""
     return Manifest(
-        symbols=tuple(s for s in manifest.symbols if s.kind in _MODULE_AWARE_KINDS)
+        symbols=tuple(s for s in manifest.symbols if s.kind in _MATCHED_KINDS)
     )
+
+
+def _is_sdk(module: str | None) -> bool:
+    return module is not None and (
+        module == _SDK_ROOT or module.startswith(_SDK_ROOT + ".")
+    )
+
+
+def sdk_imports(tree: ast.Module) -> list[str]:
+    """Each SDK import statement in *tree*, as one line of source."""
+    lines: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and _is_sdk(node.module)
+        ):
+            lines.append(
+                ast.unparse(
+                    ast.ImportFrom(module=node.module, names=node.names, level=0)
+                )
+            )
+        elif isinstance(node, ast.Import):
+            names = [a for a in node.names if _is_sdk(a.name)]
+            if names:
+                lines.append(ast.unparse(ast.Import(names=names)))
+    return lines
 
 
 def find_violations(path: str, text: str, manifest: Manifest) -> list[Violation]:
@@ -164,16 +203,25 @@ def find_violations(path: str, text: str, manifest: Manifest) -> list[Violation]
         )
         for line in bare_markers(text)
     ]
+    # SDK imports seen so far on this page, marked blocks included: a use-only
+    # block after a marked import block still uses the deprecated name.
+    carried: list[str] = []
     for block in iter_python_blocks(text):
-        if block.marked or "application_sdk" not in block.body:
-            continue
         tree = parse_leniently(block.body)
         if tree is None:
             continue
-        for finding in scan_consumer(tree, path, manifest, {}):
-            violations.append(
-                Violation(path, block.first_line + finding.line - 1, finding.message)
-            )
+        if not block.marked and (carried or _SDK_ROOT in block.body):
+            # The carried imports sit on lines 1..k ahead of the block; only
+            # findings inside the block itself are reported, at its file line.
+            prefix = len(carried)
+            combined = parse_leniently("\n".join([*carried, block.body]))
+            for finding in scan_consumer(combined or tree, path, manifest, {}):
+                line = finding.line - prefix if combined is not None else finding.line
+                if line >= 1:
+                    violations.append(
+                        Violation(path, block.first_line + line - 1, finding.message)
+                    )
+        carried.extend(sdk_imports(tree))
     return sorted(set(violations), key=lambda v: (v.path, v.line, v.message))
 
 
@@ -190,7 +238,10 @@ def tracked_markdown() -> list[str]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     paths = [a for a in args if a not in EXCLUDED] if args else tracked_markdown()
-    manifest = module_aware(load_manifest())
+    if not args and not paths:
+        print("git ls-files listed no Markdown files; run from the repository root")
+        return 1
+    manifest = matchable(load_manifest())
     if not manifest.symbols:
         print("deprecated_symbols.json is missing or empty; nothing to check against")
         return 1

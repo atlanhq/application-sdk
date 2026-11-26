@@ -26,11 +26,14 @@ on a deprecated symbol lands every app that copies it on a base it must migrate
 off again. `.github/scripts/check_docs_deprecated_imports.py` (pre-commit hook
 `check-docs-deprecated-imports`, run on every PR by the required `Pre-commit`
 check) parses each Python block in every tracked Markdown file and fails on a
-use of any symbol in `packages/conformance/conformance/data/deprecated_symbols.json`.
-It uses conformance's own B001 matcher, so an import resolves through
-re-exports (`from application_sdk.templates import SqlMetadataExtractor`) and
-an enum member (`PreflightStatus.PARTIAL`) through its enum, exactly as in an
-app.
+use of a symbol in `packages/conformance/conformance/data/deprecated_symbols.json`.
+It uses conformance's own B001 matcher, so it matches what B001 matches in an
+app: an import resolves through re-exports (`from application_sdk.templates
+import SqlMetadataExtractor`), an enum member (`PreflightStatus.PARTIAL`)
+through its enum, and a deprecated method by name. Deprecated properties are
+not matched, in docs or in apps. SDK imports carry from one block to the next
+on a page, so a block that only subclasses a deprecated base is still checked
+against the earlier block's import.
 
 When the check fails, rewrite the example onto the replacement the message
 names. A block that shows a deprecated API on purpose (a v2 "before" snippet, a
