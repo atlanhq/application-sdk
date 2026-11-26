@@ -21,8 +21,6 @@ optional_triggers:
   - "blast radius of this SDK PR"
   - "is this safe to ship to all tenants"
 owner: connector-platform-team
-last_updated: "2026-08-24"
-staleness_days: 120
 inputs:
   - name: pr
     description: "PR URL or number (e.g. `atlanhq/application-sdk#1234`). If given, fetch via `gh pr diff <n>` / `gh pr view <n>`. Mutually exclusive with --diff."

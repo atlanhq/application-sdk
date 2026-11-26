@@ -13,8 +13,6 @@ optional_triggers:
   - "add mine queries"
   - "add query history"
 owner: connector-platform-team
-last_updated: "2026-04-30"
-staleness_days: 90
 inputs:
   - entrypoint_name: string (snake_case Python method name, e.g. "mine_queries"; the SDK converts it to kebab-case for dispatch, e.g. "mine-queries")
   - description: string (human description of what this entrypoint does)

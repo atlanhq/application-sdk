@@ -13,8 +13,6 @@ optional_triggers:
   - "get running locally"
   - "run the app locally"
 owner: connector-platform-team
-last_updated: "2026-04-30"
-staleness_days: 60
 inputs:
   - app_class_path: string — optional, e.g. "app.connector:MyApp" (auto-detected if absent)
 outputs:

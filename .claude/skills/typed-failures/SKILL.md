@@ -19,8 +19,6 @@ optional_triggers:
   - "add typed exceptions"
   - "make my errors typed"
 owner: connector-platform-team
-last_updated: "2026-05-11"
-staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
