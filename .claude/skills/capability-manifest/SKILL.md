@@ -152,14 +152,14 @@ the drift check for anyone who ran `uv sync --all-extras`.
 When asked "is the SDK manifest stale?" without running a full refresh:
 
 ```bash
-uv run poe regen-capabilities
-git diff --exit-code -- docs/agents/sdk-capabilities.md \
+uv run poe regen-capabilities \
+  && git diff --exit-code -- docs/agents/sdk-capabilities.md \
   && echo "STATUS: manifest is current" \
   || echo "STATUS: manifest is stale — review and commit the regenerated file"
 ```
 
 The manifest holds no SHA, date or version, so this diff is the whole check. It reports current
-on a fresh checkout, and it is exactly what `capability-manifest-check.yaml` runs on every PR.
+on a fresh checkout, a failed regeneration reports stale rather than current, and it is exactly what `capability-manifest-check.yaml` runs on every PR.
 If you only wanted to look, `git checkout -- docs/agents/sdk-capabilities.md` afterwards.
 
 ---

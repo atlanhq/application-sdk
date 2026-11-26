@@ -13,7 +13,9 @@ this site. Read them on GitHub.
 
 ## How a section is generated and checked
 
-1. `release.yaml` runs `.github/scripts/update_changelog.py` on every merge to `main`.
+1. When a PR other than a `bump-version-*` one merges to `main`, `release.yaml` runs
+   `.github/scripts/update_changelog.py`. It skips PRs that touch only `contract-toolkit/` or
+   `packages/conformance/`, since those packages have their own release trains.
    It prepends a `## v<version> (<date>)` section built from the conventional
    commit subjects since the last tag. It drops `ci:` commits.
 2. With `--archive-dir docs/changelog`, the same script moves older-major sections

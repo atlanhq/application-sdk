@@ -612,6 +612,14 @@ class TestArchiveOlderMajors:
         for section in self.SECTIONS:
             assert everything.count(section.strip()) == self.SECTIONS.count(section)
 
+    @pytest.mark.parametrize("version", ["", "next", "vX.1.0"])
+    def test_rejects_a_version_without_a_major(self, repo: Path, version: str) -> None:
+        before = (repo / "CHANGELOG.md").read_text("utf-8")
+        with pytest.raises(ValueError, match="cannot read a major version"):
+            self._archive(repo, version)
+        assert (repo / "CHANGELOG.md").read_text("utf-8") == before
+        assert not (repo / "docs/changelog").exists()
+
     def test_is_idempotent(self, repo: Path) -> None:
         self._archive(repo, "4.0.0")
         before = {p: p.read_text("utf-8") for p in repo.rglob("*.md")}
