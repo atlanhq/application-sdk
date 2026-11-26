@@ -93,6 +93,34 @@ def test_flags_error_code_keyword_on_an_app_subclass_imported_from_the_repo(
     assert "CredentialError" in findings[0].message
 
 
+@pytest.mark.parametrize(
+    ("imports", "expr"),
+    [
+        ("import app.base as base\n", "base.AppCredentialError"),
+        ("import app.base\n", "app.base.AppCredentialError"),
+        ("from app import base\n", "base.AppCredentialError"),
+        ("from . import base\n", "base.AppCredentialError"),
+    ],
+)
+def test_flags_error_code_keyword_on_a_module_qualified_repo_subclass(
+    tmp_path: Path, imports: str, expr: str
+) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "base.py").write_text(
+        "from application_sdk.credentials.errors import CredentialError\n\n\n"
+        "class AppCredentialError(CredentialError):\n"
+        "    pass\n"
+    )
+    target = tmp_path / "app" / "handler.py"
+    target.write_text(
+        imports + f"\n\ndef f(code):\n    raise {expr}('boom', error_code=code)\n"
+    )
+    findings = [f for f in scan_path(target, tmp_path) if f.rule_id == "E023"]
+    assert [f.line for f in findings] == [5]
+    assert "CredentialError" in findings[0].message
+
+
 # ---------------------------------------------------------------------------
 # Flagged: reads
 # ---------------------------------------------------------------------------
@@ -179,6 +207,36 @@ def test_canonical_errors_module_classes_are_not_legacy_coded() -> None:
         "        return exc.error_code\n"
     )
     assert _lines(src) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def f(StorageError, code):\n    raise StorageError('x', error_code=code)\n",
+        "def f(make, code):\n"
+        "    StorageError = make()\n"
+        "    raise StorageError('x', error_code=code)\n",
+    ],
+)
+def test_shadowed_import_is_not_flagged(body: str) -> None:
+    assert _lines(_STORAGE + "\n\n" + body) == []
+
+
+def test_rebound_module_alias_head_is_not_flagged(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "base.py").write_text(
+        "from application_sdk.credentials.errors import CredentialError\n\n\n"
+        "class AppCredentialError(CredentialError):\n"
+        "    pass\n"
+    )
+    target = tmp_path / "app" / "handler.py"
+    target.write_text(
+        "import app.base as base\n\n\n"
+        "def f(base, code):\n"
+        "    raise base.AppCredentialError('boom', error_code=code)\n"
+    )
+    assert [f for f in scan_path(target, tmp_path) if f.rule_id == "E023"] == []
 
 
 def test_unnarrowed_value_is_not_tracked() -> None:

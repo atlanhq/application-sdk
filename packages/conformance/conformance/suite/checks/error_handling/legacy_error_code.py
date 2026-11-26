@@ -28,6 +28,7 @@ from pathlib import Path
 
 from ._constants import SDK_LEGACY_CODE_NAMES, SDK_LEGACY_CODED_CLASSES
 from ._sdk_errors import _Resolver as _SdkErrorResolver
+from .untyped_raise import module_bindings
 
 _SDK_PACKAGE = "application_sdk"
 
@@ -209,6 +210,74 @@ def legacy_coded_names(
             base = resolver.name_base(tree, module_path, local, frozenset())
             if base is not None:
                 found[local] = base
+    found.update(_qualified_repo_names(tree, resolver, module_path))
+    return found
+
+
+def _repo_module_refs(tree: ast.Module) -> dict[str, tuple[str, int]]:
+    """Module-level names that may bind a module of the scanned repo.
+
+    Each maps to the ``(module, level)`` :meth:`_Resolver.module_file` takes:
+    ``import app.errors as errors`` binds ``errors`` to ``app.errors``,
+    ``import app.errors`` binds ``app``, and ``from app import errors`` or
+    ``from . import errors`` binds ``errors`` to that submodule. SDK imports
+    are left out: :meth:`LegacyErrorCodeMixin._sdk_origin` resolves those.
+    """
+    refs: dict[str, tuple[str, int]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == _SDK_PACKAGE:
+                    continue
+                if alias.asname:
+                    refs[alias.asname] = (alias.name, 0)
+                else:
+                    head = alias.name.split(".")[0]
+                    refs[head] = (head, 0)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and (
+                node.module is None or node.module.split(".")[0] == _SDK_PACKAGE
+            ):
+                continue
+            for alias in node.names:
+                module = f"{node.module}.{alias.name}" if node.module else alias.name
+                refs[alias.asname or alias.name] = (module, node.level)
+    return refs
+
+
+def _qualified_repo_names(
+    tree: ast.Module, resolver: _Resolver, module_path: Path | None
+) -> dict[str, str]:
+    """Each ``mod.Cls`` chain in *tree* naming a repo class that reaches an SDK
+    legacy-coded class, keyed by the dotted text (``errors.AppStorageError``).
+
+    A head the module also rebinds anywhere (an assignment, a parameter, a
+    handler name) is skipped, like :func:`._checker.import_bindings` does.
+    """
+    refs = _repo_module_refs(tree)
+    if not refs:
+        return {}
+    _, rebound = module_bindings(tree)
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        dotted = _dotted(node)
+        if dotted is None or dotted in found:
+            continue
+        parts = dotted.split(".")
+        ref = refs.get(parts[0])
+        if ref is None or parts[0] in rebound:
+            continue
+        module, level = ref
+        owner = ".".join([module, *parts[1:-1]])
+        target = resolver.module_file(owner, level, module_path)
+        loaded = resolver.load(target) if target is not None else None
+        if loaded is None:
+            continue
+        base = resolver.name_base(loaded, target, parts[-1], frozenset())
+        if base is not None:
+            found[dotted] = base
     return found
 
 
@@ -221,6 +290,7 @@ class LegacyErrorCodeMixin:
     _import_origins: dict[str, str]
     _legacy_coded_bases: dict[str, str]
     _legacy_coded_names: dict[str, str]
+    _rebound_names: frozenset[str]
     _class_stack: list[ast.ClassDef]
     _except_stack: list[ast.ExceptHandler]
 
@@ -282,12 +352,22 @@ class LegacyErrorCodeMixin:
     # ── E023 ─────────────────────────────────────────────────────────────────
 
     def _legacy_class_of(self, expr: ast.expr) -> str | None:
-        """The SDK legacy-coded class *expr* names, if it names one."""
+        """The SDK legacy-coded class *expr* names, if it names one.
+
+        A bare name the module also rebinds anywhere (a parameter, a local
+        assignment, a handler name) may not mean the import or class it
+        shadows, so it does not resolve.
+        """
         if isinstance(expr, ast.Name):
+            if expr.id in self._rebound_names:
+                return None
             return self._legacy_coded_names.get(expr.id)
         dotted = _dotted(expr)
         if dotted is None or "." not in dotted:
             return None
+        repo_class = self._legacy_coded_names.get(dotted)
+        if repo_class is not None:
+            return repo_class
         origin = self._sdk_origin(expr)
         if origin is None or origin.split(".")[0] != _SDK_PACKAGE:
             return None
