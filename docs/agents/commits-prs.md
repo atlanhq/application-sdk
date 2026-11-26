@@ -19,12 +19,6 @@ CI will fail if pre-commit checks fail. Common failures:
 
 ## Commit Message Format
 
-Use Conventional Commits format:
-- `fix: description` - Bug fixes
-- `feat: description` - New features
-- `chore: description` - Maintenance tasks
-- `docs: description` - Documentation changes
-- `refactor: description` - Code refactoring
-- `test: description` - Test additions/changes
+Conventional Commits, `type(scope): description`. The allowed types and scopes are listed once, in `docs/standards/commits.md`; read them there rather than from a copy.
 
 Example: `fix(io): align parquet writer row-group size with reader batch size`

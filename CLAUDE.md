@@ -2,11 +2,13 @@
 
 Atlan Application SDK is a Python library for building applications on the Atlan platform.
 
+This is the agent guide for every agent, not only Claude Code. `AGENTS.md` is a generated pointer to this file (`.github/scripts/check_agents_md_sync.py`, run by pre-commit); edit this file, never `AGENTS.md`.
+
 Package manager: `uv` (task runner via `poe` in `pyproject.toml`).
 
-Non-standard commands used across the repo:
+Non-standard commands used across the repo (the full list, including how to run the tests, is `docs/agents/dev-commands.md`; prerequisites are `docs/standards/setup.md`):
 - `uv sync --all-extras --all-groups` (full dev/test deps)
-- `uv run poe start-deps` (local Dapr + Temporal)
+- `uv run poe start-deps` (optional: a standalone Temporal server plus the SDK-pinned `daprd`; needs the Temporal CLI. Tests and `run_dev_combined()` need neither)
 - `uv run poe generate-apidocs` (MkDocs + API docs)
 - `uv run --group docs mkdocs build --strict` (docs site check; CI runs it on every `docs/` or `mkdocs.yml` change)
 - `uv run pre-commit run --files <file>` (run pre-commit on specific file)

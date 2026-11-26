@@ -6,14 +6,7 @@ This guide walks you through building and running your first application on the 
 
 ## Prerequisites
 
-You need just two tools installed:
-
-| Tool | Minimum version | Install |
-|------|----------------|---------|
-| Python | 3.11 | [python.org](https://www.python.org/downloads/) |
-| uv | latest | [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) |
-
-The SDK auto-downloads and manages everything else — the Dapr runtime (`daprd`) and an in-process Temporal server — the first time you run an app locally. You do **not** need to install the Dapr or Temporal CLIs.
+You need Python (3.11 to 3.14) and uv; the [Setup Overview](../standards/setup.md) is the full list, and says what the optional external-infrastructure path below adds. The SDK downloads the Dapr runtime (`daprd`) and an in-process Temporal server the first time you run an app locally, so you do **not** need the Dapr or Temporal CLIs.
 
 For platform-specific setup see the [macOS](../setup/MAC.md), [Linux](../setup/LINUX.md), or [Windows](../setup/WINDOWS.md) setup guides.
 

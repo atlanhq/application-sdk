@@ -281,11 +281,16 @@ docs = [
 
 [tool.poe.tasks]
 download-components.shell = "ls -l components/*.yaml"
-# Dapr and Temporal service tasks
-start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
+# Dapr and Temporal service tasks. start-dapr runs the daprd the SDK pins
+# (application_sdk.dev._dapr downloads it on first use), as production does, so
+# no Dapr CLI or `dapr init` is needed; start-deps needs only the Temporal CLI.
+# It is a cmd task that execs through Python, not a shell task, so it runs the
+# same on Windows (no `$(...)` substitution). The daprd flags follow `-c`.
+# Prerequisites are listed once, in docs/standards/setup.md.
+start-dapr = """python -c "import subprocess, sys; from application_sdk.dev._dapr import _ensure_daprd_binary; sys.exit(subprocess.call([str(_ensure_daprd_binary()), *sys.argv[1:]]))" --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"""
 
-# if you need to test dapr with environment values for an app
-#start-dapr.shell = "set -a && source .env && set +a && dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
+# To give daprd an app's environment, source the app's .env into your shell
+# before running the task.
 
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 # Export Dapr ports before backgrounding so `uv run main.py` (run separately)

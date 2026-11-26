@@ -234,7 +234,7 @@ def create_distributed_lock(
 - Minimum test coverage: 85% for new code
 - Critical business logic must have comprehensive edge case testing
 
-**Testing command:** `uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics`
+**Testing command:** see [Development Commands](../agents/dev-commands.md#testing).
 
 #### Test Quality Standards
 
