@@ -188,6 +188,13 @@ class TestCategorize:
         cats = release_train.categorize([_c("feat!: remove old API")], _REPO)
         assert cats["breaking"] == [(_link("abc1234"), "remove old API")]
 
+    def test_breaking_revert_keeps_its_whole_subject(self) -> None:
+        """Only a conventional prefix is stripped: a revert of a breaking change
+        must still read as a revert, without a stray quote."""
+        subject = 'Revert "feat(api)!: drop v1"'
+        cats = release_train.categorize([_c(subject)], _REPO)
+        assert cats["breaking"] == [(_link("abc1234"), subject)]
+
     def test_breaking_body_lands_in_breaking(self) -> None:
         commit = _c("feat: overhaul", "BREAKING CHANGE: old interface removed")
         cats = release_train.categorize([commit], _REPO)

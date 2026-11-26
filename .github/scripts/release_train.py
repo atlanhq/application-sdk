@@ -118,6 +118,9 @@ TRAINS: dict[str, Train] = {t.name: t for t in (CONFORMANCE, CONTRACT_TOOLKIT)}
 _VERSION_RE = re.compile(r'^\s*version\s*=\s*"([^"]+)"', re.MULTILINE)
 
 
+_CONVENTIONAL_PREFIX = re.compile(r"^[a-z]+(\([^)]*\))?!?:\s*")
+
+
 class Commit(NamedTuple):
     sha: str  # 7 characters
     subject: str
@@ -129,36 +132,35 @@ class Commit(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-def _run(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, text=True).strip()
+def _git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Every git call this script makes goes through here."""
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=check)
+
+
+def _out(*args: str) -> str:
+    """Stdout of a git command that must succeed."""
+    return _git(*args).stdout.strip()
 
 
 def tag_exists(tag: str) -> bool:
-    return (
-        subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"],
-            capture_output=True,
-        ).returncode
-        == 0
-    )
+    # A missing tag is an expected nonzero exit, not an error.
+    probe = _git("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}", check=False)
+    return probe.returncode == 0
 
 
 def release_tags(train: Train) -> list[str]:
-    listed = _run(["git", "tag", "--list", f"{train.tag_prefix}*"])
+    listed = _out("tag", "--list", f"{train.tag_prefix}*")
     return [t for t in listed.splitlines() if train.is_release_tag(t.strip())]
 
 
 def get_commits(train: Train, base: str) -> list[Commit]:
     """Commits in ``base..HEAD`` touching the train's pathspec, newest first."""
-    raw = _run(
-        [
-            "git",
-            "log",
-            f"{base}..HEAD",
-            "--format=%H%x00%s%x00%b%x1e",  # NUL-delimited fields, RS records
-            "--",
-            *train.pathspec,
-        ]
+    raw = _out(
+        "log",
+        f"{base}..HEAD",
+        "--format=%H%x00%s%x00%b%x1e",  # NUL-delimited fields, RS records
+        "--",
+        *train.pathspec,
     )
     commits: list[Commit] = []
     for record in raw.split("\x1e"):
@@ -257,7 +259,10 @@ def categorize(
             # package, so it is the one type left out of the notes (FND-3748).
             continue
         if breaking:
-            cats["breaking"].append((link, re.sub(r"^[^:]+:\s*", "", subject)))
+            # Strip a conventional `type(scope)!:` prefix only. A breaking
+            # subject that is not conventional — `Revert "feat(api)!: x"` —
+            # is listed whole, or the note loses what the commit did.
+            cats["breaking"].append((link, _CONVENTIONAL_PREFIX.sub("", subject)))
         elif re.match(r"feat[(!:]", subject):
             msg = re.sub(r"^feat(\([^)]+\))?!?:\s*", "", subject)
             cats["features"].append((link, msg))
@@ -320,7 +325,7 @@ def _changelog_base(train: Train, current: str) -> str:
             f"ERROR: tag {tag!r} not found but other {train.name} release tags "
             "exist. Publish the current version first, or create the tag manually."
         )
-    root = _run(["git", "rev-list", "--max-parents=0", "HEAD"])
+    root = _out("rev-list", "--max-parents=0", "HEAD")
     print(f"No {train.name} release tags found; treating as first release.")
     return root
 
@@ -389,7 +394,7 @@ def publish_meta(train: Train) -> None:
             f"ERROR: {train.version_file} declares {version!r}; a {train.name} "
             f"release tag must be {train.tag_prefix}X.Y.Z, not {tag!r}."
         )
-    merge_sha = _run(["git", "rev-parse", "HEAD"])
+    merge_sha = _out("rev-parse", "HEAD")
     set_output("version", version)
     set_output("tag", tag)
     set_output("merge_sha", merge_sha)

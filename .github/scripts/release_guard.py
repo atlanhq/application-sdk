@@ -127,6 +127,25 @@ def version_tuple(version):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
+#: Upper bound on one ``git fetch``. A stalled remote must not hold a release
+#: job until the workflow's own timeout cancels it; a fetch that runs out is a
+#: failed fetch, and both guards already fail open on one.
+FETCH_TIMEOUT_S = 60
+
+
+def _fetch(*args: str) -> int:
+    """Run ``git fetch --quiet *args``; its exit code, or -1 when it timed out."""
+    try:
+        return subprocess.run(
+            ["git", "fetch", "--quiet", *args],
+            capture_output=True,
+            text=True,
+            timeout=FETCH_TIMEOUT_S,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        return -1
+
+
 def landed_on_branch(
     sha: str | None, branch: str = "main", remote: str = "origin"
 ) -> tuple[bool, str]:
@@ -152,12 +171,7 @@ def landed_on_branch(
         return True, "no merge commit supplied; ancestry not checked"
 
     tracking = f"refs/remotes/{remote}/{branch}"
-    fetched = subprocess.run(
-        ["git", "fetch", "--quiet", remote, f"+{branch}:{tracking}"],
-        capture_output=True,
-        text=True,
-    )
-    if fetched.returncode != 0:
+    if _fetch(remote, f"+{branch}:{tracking}") != 0:
         return True, f"could not fetch {remote}/{branch}; ancestry not checked"
 
     probe = subprocess.run(
@@ -195,19 +209,10 @@ def version_on_branch(path, branch="main", remote="origin"):
     # would be wrong: it is mutable global state in the checkout, so any other
     # git fetch earlier in the job (the private-dependency auth steps in the
     # app lane do run git commands) leaves its own value behind.
-    fetched = subprocess.run(
-        ["git", "fetch", "--quiet", remote, f"{branch}:refs/remotes/{remote}/{branch}"],
-        capture_output=True,
-        text=True,
-    )
-    if fetched.returncode != 0:
+    if _fetch(remote, f"{branch}:refs/remotes/{remote}/{branch}") != 0:
         # A non-fast-forward update of the tracking ref is fine to ignore; the
         # plain fetch below still refreshes it in the common case.
-        subprocess.run(
-            ["git", "fetch", "--quiet", remote, branch],
-            capture_output=True,
-            text=True,
-        )
+        _fetch(remote, branch)
 
     for ref in (f"{remote}/{branch}", "FETCH_HEAD"):
         shown = subprocess.run(
