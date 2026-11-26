@@ -26,6 +26,8 @@ bugs are caught at CI time rather than under production orchestration.
 * ``P054`` ScopedExecutorJoinedOnCancel — a ``with``-scoped
   ``ThreadPoolExecutor`` whose ``.run_in_executor(...)`` joins on cancel and
   freezes the event loop (FND-2873).
+* ``P069`` ImportInWorkflow — an ``import`` inside a workflow-context method,
+  which runs under Temporal's deadlock timer and can freeze the worker.
 
 Discovery
 ---------
@@ -36,7 +38,7 @@ mistakes in throwaway test fixtures are not production replay risks, and toy
 
 Scope
 -----
-All eight rules are ``both``-scoped: workflow-context code and async SDK usage exist
+All nine rules are ``both``-scoped: workflow-context code and async SDK usage exist
 in the SDK itself and in every consumer app, so the contract applies to any repo.
 
 Inline suppression
@@ -67,6 +69,7 @@ from ._p024_sync_atlan_client import check_p024
 from ._p031_executor_offload import check_p031
 from ._p036_process_isolation import check_p036
 from ._p054_scoped_executor import check_p054
+from ._p069_import_in_workflow import check_p069
 
 SERIES = "P"
 
@@ -76,7 +79,7 @@ __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 def scan_text(
     text: str, file: str, *, path: Path | None = None, root: Path | None = None
 ) -> list[Finding]:
-    """Scan a single Python source *text* for all determinism findings (P020–P024, P031, P036, P054).
+    """Scan a single Python source *text* for all determinism findings (P020–P024, P031, P036, P054, P069).
 
     *path* and *root* let P023 follow a sync helper imported from the scanned
     repo and see a deprecation marker on an enclosing package.
@@ -95,6 +98,7 @@ def scan_text(
         *check_p031(tree, file, directives),
         *check_p036(tree, file, directives),
         *check_p054(tree, file, directives),
+        *check_p069(tree, file, directives),
     ]
 
 
@@ -105,7 +109,7 @@ scan_path = make_scan_path(
 
 main = make_cli_main(
     scan_all=lambda paths, root: [f for p in paths for f in scan_path(p, root)],
-    description="Determinism / async-correctness P-series checks (P020-P024, P031, P036, P054).",
+    description="Determinism / async-correctness P-series checks (P020-P024, P031, P036, P054, P069).",
 )
 
 

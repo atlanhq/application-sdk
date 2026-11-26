@@ -1,4 +1,4 @@
-"""Determinism / async-correctness rule definitions (P020–P024, P031, P036).
+"""Determinism / async-correctness rule definitions (P020–P024, P031, P036, P054, P069).
 
 App and SDK code must respect the SDK's async and determinism expectations in the
 execution path.  Temporal **workflow** code (an ``App`` subclass's ``run`` /
@@ -625,6 +625,60 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="P069",
+        canonical_reference=(
+            "atlan-metabase-app app/connector.py — every `app.*` module the "
+            "`extract_metadata` and `extract_lineage` entrypoints use is imported at "
+            "the top of the file, so neither entrypoint imports anything while the "
+            "workflow runs."
+        ),
+        scope=RuleScope.BOTH,
+        name="ImportInWorkflow",
+        tier=EnforcementTier.WARN,
+        category="determinism",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.63.0",
+        rationale=(
+            "Temporal creates a workflow instance on the worker's event-loop thread, "
+            "with no deadlock timer, so module-level imports are free at run time. "
+            "Every later activation runs on a workflow thread that Temporal "
+            "interrupts after 2 seconds (TMPRL1101). An import inside workflow code "
+            "runs there, and the sandbox re-executes any module it has not loaded "
+            "yet; the app's own package is never passed through. On a cold, busy "
+            "worker the import overruns the timer and the interrupt lands while "
+            "importlib holds its global lock. The lock is never released, every "
+            "later import in the process blocks, and the whole worker stops making "
+            "progress while its pod stays up: every activity on it then fails by "
+            "heartbeat timeout."
+        ),
+        short_description="Function-local import in workflow-context code",
+        full_description=(
+            "Inside an ``App`` subclass's workflow-context method (``run``, an\n"
+            "``@entrypoint`` method, or a ``@signal`` / ``@query`` / ``@update``\n"
+            "handler, including functions nested in one) an ``import`` or\n"
+            "``from ... import`` statement runs while the workflow executes.  Move it\n"
+            "to module level.  If the import was local to break a cycle, break the\n"
+            "cycle instead: import under ``if TYPE_CHECKING:`` for annotations, or\n"
+            "move the shared name to a module both sides can import.\n"
+            "\n"
+            "Imports under ``if TYPE_CHECKING:`` never run and are not flagged.\n"
+            "``@task`` activity bodies are exempt: activities run outside the\n"
+            "sandbox and the deadlock timer.\n"
+            "\n"
+            "Undecorated helpers that workflow code calls, in this module or\n"
+            "another, are a documented false negative, as for P020 and P021: the\n"
+            "rule cannot see the call graph.  An app that keeps workflow logic in\n"
+            "such helpers should add its own tripwire over those modules.  Land as\n"
+            "``WARN``; suppress a reviewed exception with\n"
+            "``# conformance: ignore[P069] <reason>``.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),
