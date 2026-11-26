@@ -1729,9 +1729,10 @@ async def _get_bytes(
         result = await _past_gateway_no_route(
             "get", key, lambda: obstore.get_async(resolved, key)
         )
-        # GetResult.bytes() is the sync accessor; bytes(result) iterates
-        # over Rust Bytes chunks and yields bytes objects, not ints.
-        raw = result.bytes()
+        # The body is read with the async accessor: GetResult.bytes() would
+        # block the event loop (and every heartbeat on it) for as long as a
+        # slow store takes to send the body. Only the request is retried.
+        raw = await result.bytes_async()
         return bytes(raw)
     # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
