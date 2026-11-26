@@ -393,7 +393,7 @@ against `TARGET_PATH`. Use `LOGGER_VAR_PATTERN` in place of hardcoded `logger\.`
 | L10 credential in log | `LOGGER_VAR_PATTERN\.\w+\(.*(?:password\|secret\|token\|api_key\|credential\|bearer\|private_key)` (case-insensitive) | heuristic |
 | L11 concatenation | `LOGGER_VAR_PATTERN\.\w+\(["'].*["']\s*\+` | mechanical |
 | L12 %-style (non-stdlib only) | `LOGGER_VAR_PATTERN\.\w+\(["'].*%[sdfr]` — skip if `LOGGER_FRAMEWORK == stdlib` | heuristic |
-| L18 exception() outside except | `LOGGER_VAR_PATTERN\.exception\(` | heuristic |
+| L18 exception() used | `LOGGER_VAR_PATTERN\.exception\(` | mechanical |
 | L24 kwargs in application log calls | `LOGGER_VAR_PATTERN\.\w+\([^)]*,\s*\w+=` (non-stdlib only) — collect hits for Step 2.3 | heuristic |
 | L25 handled failure at ERROR | multiline: `except` block containing `LOGGER_VAR_PATTERN\.error\(` — collect hits for Step 2.3 | heuristic |
 
@@ -414,7 +414,7 @@ against `TARGET_PATH`. Use `LOGGER_VAR_PATTERN` in place of hardcoded `logger\.`
 
 For **heuristic patterns**: collect `file:line` hits for Step 2.3 context reading.
 
-For **mechanical patterns** (L1, L2, L5, L7, L11, L15, L21, L23): record directly as findings.
+For **mechanical patterns** (L1, L2, L5, L7, L11, L15, L18, L21, L23): record directly as findings.
 
 #### Step 2.3 — Context Reading and Classification
 
@@ -429,7 +429,6 @@ Classify each hit:
 - L12: if `LOGGER_FRAMEWORK == stdlib` → ACCEPTABLE. If the log call goes through `CANONICAL_FACTORY` (e.g. `get_logger()`) AND that factory has a %-style bridge (look for `_format_printf_args` or similar in the adapter) → ACCEPTABLE. If the log call uses a direct loguru import (`from loguru import logger` / `loguru.logger`) even when a bridge adapter exists → HIGH (the bridge is bypassed; positional args are silently dropped because loguru uses `str.format()` not `%`). If vanilla loguru (no bridge) → HIGH. If vanilla structlog → MEDIUM.
 - L10: read context — `token_name=name` is acceptable; `token=value` is CRITICAL.
 - L6: if loop is clearly bounded to ≤10 items → ACCEPTABLE.
-- L18: read 5 lines before the `.exception()` call — if inside an `except` block → ACCEPTABLE.
 - L24: skip `exc_info=True/False`. Skip files that define the logging factory/adapter (the file containing `get_logger` or the logger adapter class). Flag all other kwargs as MEDIUM.
 - L25: read the whole `except` block. If it contains a `raise`, a `sys.exit`/`os._exit`, or returns a failure result (a call or dict with `success=False`, `status=<Enum>.FAILURE|FAILED|ERROR`, or a 5xx `status_code`) → ACCEPTABLE. Otherwise the failure was handled → MEDIUM. If the failure is in fact fatal later (collected and raised after other work) or loses data the run cannot recover → ACCEPTABLE with a `# conformance: ignore[L022] <reason>` directive.
 

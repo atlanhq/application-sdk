@@ -173,9 +173,9 @@ except Exception:
 except ConnectionError:
     logger.warning("connection to %s:%d failed on attempt %d, retrying", host, port, n, exc_info=True)
 
-# GOOD — .exception() implies exc_info=True
+# GOOD — terminal handler: ERROR with exc_info=True (never logger.exception(), see L18)
 except Exception:
-    logger.exception("operation failed for batch %s", batch_id)
+    logger.error("operation failed for batch %s", batch_id, exc_info=True)
 ```
 
 ---
@@ -621,43 +621,57 @@ Single calls in `if __name__ == "__main__":` blocks are acceptable.
 
 ---
 
-### L18 — `logger.exception()` Called Outside an `except` Block
+### L18 — `logger.exception()` Used Anywhere
 
-**Grep:** `\.exception\(` — then verify context in Step 2.3
+**Grep:** `\.exception\(` — every logger match is a finding; no context check
 
 **Severity:** MEDIUM
 
-**Auto-fixable:** No
+**Auto-fixable:** Yes
 
 **Applies to:** all frameworks
 
-**Description:** `logger.exception()` is equivalent to `logger.error(..., exc_info=True)`. When
-called outside an `except` block, `sys.exc_info()` returns `(None, None, None)`, so the log
-output appends `NoneType: None` — a meaningless traceback that actively misleads debugging.
+**Description:** ADR-0011 (`docs/adr/0011-logging-level-guidelines.md`) forbids
+`logger.exception()` in app code, inside or outside an `except` block. App logging uses four
+levels (DEBUG/INFO/WARNING/ERROR) and `exc_info=True` is the one sanctioned way to attach a
+traceback. `logger.exception()` reads like a fifth level, and it reads `sys.exc_info()`
+implicitly: outside an `except` block that is `(None, None, None)`, so the record carries a
+meaningless `NoneType: None` traceback.
 
-The call itself does not crash, but the output is misleading. Use `logger.error()` when you
-want to log an error without an active exception context.
+Replace it with `logger.error(..., exc_info=True)` inside an `except` block, or with
+`logger.warning(..., exc_info=True)` when the failure is handled and the run continues (L25).
+Outside an `except` block there is no traceback to attach, so drop `exc_info`.
 
 ```python
-# BAD — outside except block, logs "NoneType: None" as the traceback
-def validate(data):
-    if not data:
-        logger.exception("validation failed")  # misleading output
-
-# GOOD — use logger.error() outside except blocks
-def validate(data):
-    if not data:
-        logger.error("validation failed")
-
-# GOOD — logger.exception() is appropriate inside except
+# BAD — inside except: still forbidden (ADR-0011)
 try:
     process(data)
 except ValueError:
-    logger.exception("processing failed")  # correct — has exception context
+    logger.exception("processing failed")
+
+# BAD — outside except block, logs "NoneType: None" as the traceback
+def validate(data):
+    if not data:
+        logger.exception("validation failed")
+
+# GOOD — inside except: ERROR with exc_info=True
+try:
+    process(data)
+except ValueError:
+    logger.error("processing failed", exc_info=True)
+
+# GOOD — outside except: plain error(), no traceback to attach
+def validate(data):
+    if not data:
+        logger.error("validation failed")
 ```
 
-**Context reading:** Read 5 lines before the `.exception()` call. If there is no `except`
-clause in scope, flag MEDIUM.
+**Context reading:** None needed to decide whether to flag — every call is a finding. Read the
+enclosing block only to choose the replacement (`error`/`warning` with `exc_info=True` inside
+`except`, plain `error` outside).
+
+**Conformance:** suite rule L017 (LoggerExceptionUsage). Ruff `G201` is its inverse and must be
+ignored (suite rule L021).
 
 ---
 
@@ -951,7 +965,7 @@ except Exception:
 | L15 | `event=` kwarg overwrites message | HIGH | structlog | Silently replaces log message with domain value |
 | L16 | `dictConfig` with `disable_existing_loggers` default | HIGH | stdlib | Silently disables all pre-existing loggers |
 | L17 | `basicConfig()` no-op after first call | HIGH | stdlib | Configuration silently ignored; wrong config in effect |
-| L18 | `logger.exception()` outside except | MEDIUM | all | Logs `NoneType: None`; misleads debugging |
+| L18 | `logger.exception()` used | MEDIUM | all | Forbidden by ADR-0011; outside except it logs `NoneType: None` |
 | L19 | `bind()` return value discarded | HIGH | structlog/loguru | Context silently not attached to any log call |
 | L20 | `propagate=False` without handlers | HIGH | stdlib | Messages silently dropped at DEBUG/INFO |
 | L21 | `logger.remove()` kills all sinks | HIGH | loguru | All log output silently stops |
@@ -970,7 +984,6 @@ Not every grep match is a real finding. These patterns look like violations but 
 |---------|-----------|----------------|
 | `logger.info("token refreshed", token_name=name)` | L10 | Logs the name, not the value |
 | `logger.debug("processing %s", item_id)` | L12 | Only flag if framework is not stdlib |
-| `logger.exception("failed")` (no `exc_info=True`) | L4 | `.exception()` implies `exc_info=True` |
 | `extra={"count": n}` in stdlib project | L3 | Correct stdlib pattern |
 | `logger.info("...")` in a loop of known size ≤ 10 | L6 | Loop is bounded and small |
 | `print(result)` in `if __name__ == "__main__":` | L5 | CLI output, not logging |
@@ -980,7 +993,6 @@ Not every grep match is a real finding. These patterns look like violations but 
 | `logger.info("event", event="startup")` where event is intentionally the message | L15 | Intentional — must be commented explaining the choice |
 | `dictConfig({..., "disable_existing_loggers": False, ...})` | L16 | Explicitly opts out of the dangerous default |
 | Single `basicConfig()` in `if __name__ == "__main__":` | L17 | Controlled entrypoint, no competing calls |
-| `logger.exception("msg")` inside an `except` block | L18 | Correct use — has exception context |
 | `bound = logger.bind(request_id="abc")` (return captured) | L19 | Return value captured; context properly attached |
 | `logger.remove(handler_id)` (specific ID) | L21 | Removes only that sink; default may still be present |
 | `logger.info("user %d logged in", user_id)` | L22, L24 | Correct pattern — context in message body via %-style, no kwargs |
@@ -1210,13 +1222,25 @@ logging.basicConfig(level=logging.DEBUG, force=True)
 # or switch to dictConfig with disable_existing_loggers=False
 ```
 
-### FT-L18 — Replace exception() with error() outside except block
+### FT-L18 — Replace exception() with error(..., exc_info=True)
 
 ```python
+# Before — inside except (forbidden by ADR-0011)
+except ValueError:
+    logger.exception("processing failed")
+
+# After — inside except: ERROR with exc_info=True
+except ValueError:
+    logger.error("processing failed", exc_info=True)
+
+# After — handled failure, run continues (L25): WARNING with exc_info=True
+except ValueError:
+    logger.warning("processing failed, skipping record", exc_info=True)
+
 # Before — outside except, logs "NoneType: None"
 logger.exception("validation failed")
 
-# After — use error() when no exception context
+# After — outside except: plain error(), no traceback to attach
 logger.error("validation failed")
 ```
 

@@ -120,7 +120,8 @@ but this operation is done.
 - Data validation failed and the record must be skipped or the job aborted
 - A workflow step failed after all retries were exhausted
 
-**Always include `exc_info=True`** (or use `logger.exception()` which does this automatically).
+**Always include `exc_info=True`.** Never use `logger.exception()` instead — ADR-0011 forbids
+it in app code (conformance L017).
 
 **Do not use when:**
 - The condition is expected (e.g., "entity not found" when checking existence) — use DEBUG or INFO
@@ -225,25 +226,30 @@ logger.info("published %s event to %s", event_type, topic)
 
 ---
 
-## `logger.exception()` vs `logger.error(..., exc_info=True)`
+## Never `logger.exception()` — use `logger.error(..., exc_info=True)`
 
-These are functionally equivalent — both log at ERROR level with the current exception's traceback.
+ADR-0011 (`docs/adr/0011-logging-level-guidelines.md`) forbids `logger.exception()` in app
+code, inside or outside an `except` block, and conformance L017 (LoggerExceptionUsage) flags
+every call. App logging has four levels and `exc_info=True` is the one way to attach a
+traceback; `logger.exception()` reads like a fifth level and reads `sys.exc_info()`
+implicitly (`NoneType: None` outside an `except` block). Ruff `G201` demands the opposite
+rewrite, so it must be ignored (conformance L021).
 
-**Use `logger.exception()`** only at **terminal catch sites where you are NOT re-raising** the
-exception. It signals "this is where the exception stops".
-
-**Use `logger.error(..., exc_info=True)`** when you want to embed additional context in the
-message alongside the traceback.
+**Use `logger.error(..., exc_info=True)`** at a terminal catch site, and when embedding context
+in the message alongside the traceback.
 
 **Use `logger.warning(..., exc_info=True)`** when downgrading a caught exception to a warning
 (and not re-raising).
 
-**Never use** `logger.exception()` and then re-raise — you'll get a duplicate traceback downstream.
-
 ```python
-# Terminal handler — use .exception()
+# BAD — forbidden by ADR-0011, even at a terminal handler
 except Exception:
     logger.exception("batch load failed for batch %s", batch_id)
+    return FailedResult()
+
+# Terminal handler — ERROR with exc_info=True
+except Exception:
+    logger.error("batch load failed for batch %s", batch_id, exc_info=True)
     return FailedResult()
 
 # Embedding context in message — use exc_info=True

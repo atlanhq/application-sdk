@@ -128,7 +128,9 @@ except ValueError:
     logger.warning("Validation failed", exc_info=True)
 ```
 
-**Special case:** `logger.exception(...)` automatically includes `exc_info=True` — no fix needed.
+**Special case:** `logger.exception(...)` still needs a fix: ADR-0011 forbids it (conformance
+L017). Rewrite it as `logger.error(..., exc_info=True)`, or `logger.warning(..., exc_info=True)`
+for a handled failure.
 
 **Acceptable?** Only when the exception is 100% expected and carries no diagnostic value
 (e.g. `except StopIteration` in a manual iterator — but prefer `for` loops instead).
@@ -670,8 +672,6 @@ Add to `pyproject.toml` `[tool.ruff.lint]` `select` list to prevent regressions:
 | `BLE001` | Blind exception caught | Broad catch |
 | `S110` | `try`-`except`-`pass` detected | Silent swallow |
 | `S112` | `try`-`except`-`continue` detected | Silent swallow in loop |
-| `TRY400` | Use `logging.exception` instead of `logging.error` | Missing exc_info |
-| `TRY401` | Redundant `exc_info` in `logging.exception` | Cleanup |
 | `TRY300` | Consider moving `return` out of `try` | Error-hiding return |
 | `TRY302` | Useless `try`-`except` (just reraises) | Dead code |
 
@@ -684,9 +684,12 @@ select = [
   "BLE",    # blind exceptions
   "S110",   # try-except-pass
   "S112",   # try-except-continue
-  "TRY400", "TRY401",  # logging with exc_info
 ]
 ```
+
+Do not enable `TRY400` or `G201`: both rewrite `logger.error(..., exc_info=True)` to
+`logger.exception(...)`, the inverse of ADR-0011 and conformance L017. Conformance L021 requires
+`G201` to be ignored.
 
 Note: `TRY300` and `TRY302` can be noisy on existing codebases — introduce separately after
 fixing the higher-severity issues.
