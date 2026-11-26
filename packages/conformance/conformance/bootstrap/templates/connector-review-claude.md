@@ -55,23 +55,31 @@ pass: a principle change is its own pull request.
 
 ### 3. Validate with unit and integration tests, never e2e (mandatory)
 
-An agent validates a change with this repository's unit and integration
-tests only: run them locally before pushing, and rely on the pull request's
-`tests` checks after. That is the whole validation bar for an agent, before
-or after the pull request is opened. There is no exception.
+Each test tier already runs at its own point, so a change never needs e2e to
+be validated:
 
-An agent never starts an e2e run, for any reason:
+- **Unit** tests run on every commit pushed to the pull request.
+- **Integration** tests run when the pull request goes through the merge
+  queue.
+- **e2e** runs only as part of a release: on the version-bump pull request,
+  through `/gate-check`.
 
-- never comment `/e2e` or `/gate-check` on a pull request;
-- never dispatch the `tests` workflow with `run_e2e` set, or any other e2e
-  workflow, through `gh workflow run`, the API or any other route;
-- never add a label, empty commit or push meant to start one.
+An agent validates a change with unit and integration tests only: run them
+locally before pushing, then rely on the pull request's `tests` checks and
+the merge queue. That is the whole validation bar, before and after the pull
+request is opened. There is no exception.
 
-e2e runs against a live tenant and gates releases; it is not a check on an
-agent's change. If the unit or integration tests are not enough to prove the
-change, add or fix those tests, or say what they cannot cover in the pull
-request. Starting e2e, including `/gate-check` on a release, is a person's
-decision and is done by that person.
+- **Never comment `/e2e`**, on any pull request, for any reason. It is not a
+  validation step.
+- **`/gate-check` is for release (version-bump) pull requests only.** Never
+  comment it on a feature, fix, refactor or any other pull request, and
+  never use it to validate a change.
+- Never dispatch the `tests` workflow with `run_e2e` set, or any other e2e
+  workflow, through `gh workflow run`, the API or any other route; never add
+  a label, empty commit or push meant to start one.
+
+If the unit or integration tests are not enough to prove the change, add or
+fix those tests, or say in the pull request what they cannot cover.
 
 ## After opening a pull request: `/review`
 
@@ -122,7 +130,8 @@ Run conformance and the principles review, push fixes, comment `/review` after
 a push, and comment `/review recheck` with evidence when it believes a finding
 is wrong. Dismissing and waiving are a person's decision: post them only with
 that person's reason. Use `/review force` only when a person asks. Never
-start e2e (`/e2e`, `/gate-check` or a dispatch): see section 3.
+comment `/e2e`, and `/gate-check` only on a release pull request: see
+section 3.
 
 The repository's CI configuration remains authoritative for enforcement.
 <!-- END APPLICATION SDK CONNECTOR REVIEW -->
