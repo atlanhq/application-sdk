@@ -107,6 +107,10 @@ runs:
     - name: Run unit tests with coverage
       id: tests
       shell: bash
+      # Through env, not `${{ }}` text in the script, so a caller's value is
+      # never parsed as shell.
+      env:
+        FAIL_UNDER: ${{ inputs.fail-under }}
       # xml/html subcommands ALSO honor pyproject.toml's
       # [tool.coverage.report].fail_under. Pin them to --fail-under=0 so
       # artifact generation never short-circuits the run. The actual
@@ -156,7 +160,7 @@ runs:
           # before the exit code can be recorded, which is the very failure
           # mode this change exists to remove.
           set +e
-          uv run --with coverage coverage report --fail-under=${{ inputs.fail-under }}
+          uv run --with coverage coverage report --fail-under="${FAIL_UNDER}"
           COVERAGE_EXIT_CODE=$?
           set -e
         fi
@@ -209,6 +213,7 @@ runs:
       env:
         TEST_EXIT_CODE: ${{ steps.tests.outputs.test_exit_code }}
         COVERAGE_EXIT_CODE: ${{ steps.tests.outputs.coverage_exit_code }}
+        FAIL_UNDER: ${{ inputs.fail-under }}
       run: |
         # Empty means the step above never recorded a verdict (it died early);
         # treat that as a failure rather than silently passing.
@@ -221,7 +226,7 @@ runs:
           exit "${TEST_EXIT_CODE}"
         fi
         if [ "${COVERAGE_EXIT_CODE:-0}" -ne 0 ]; then
-          echo "::error::coverage below --fail-under=${{ inputs.fail-under }} (exit ${COVERAGE_EXIT_CODE})"
+          echo "::error::coverage below --fail-under=${FAIL_UNDER} (exit ${COVERAGE_EXIT_CODE})"
           exit "${COVERAGE_EXIT_CODE}"
         fi
         echo "unit tests and coverage gate passed"
