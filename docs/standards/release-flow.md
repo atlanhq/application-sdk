@@ -30,6 +30,12 @@ feat/fix commit merged to main
   Renovate merge, so each repo switches over in the same `bootstrap --resync` that gates
   its bump-PR CI — the extra pushes never run ahead of the gate. The SDK repo renders the
   full notes immediately; it gates its own bump PRs from the same merge.
+- SDK repo only (`release.yaml`): `update_changelog.py --archive-dir docs/changelog` moves
+  every section from a major older than the new version's into `docs/changelog/v<major>.md`,
+  so `CHANGELOG.md` holds only the current major; then `lint_changelog.py <version>` fails
+  the run before the push unless the new section's heading is unique, it has at least one
+  bullet, and every bullet carries a `(#N)` PR reference (FND-4274). App repos'
+  `release-version-bump.yaml` does neither: its hand-over carries `CHANGELOG.md` alone.
 - Opens a PR from `bump-version-main` into `main` with the `release` label — or, when
   that PR is already open, re-syncs its title, body and label to the version this run
   produced (`.github/scripts/upsert_release_pr.py`).
@@ -206,7 +212,8 @@ jobs:
 
 **What it does:**
 - Reads the new version from `pyproject.toml`.
-- Extracts the matching section from `CHANGELOG.md` as release notes.
+- Extracts the matching section from `CHANGELOG.md` as release notes
+  (`extract_release_notes.py`: exact version match, ends at the next `## ` heading).
 - Creates and pushes an annotated git tag `v<VERSION>` (idempotent — skips if the tag already exists on the correct commit; errors if it points at a different commit).
 - Creates a GitHub Release (pre-release flag set for versions containing a `-` suffix, e.g. `1.2.3-rc1`, `1.2.3-alpha.1`).
 

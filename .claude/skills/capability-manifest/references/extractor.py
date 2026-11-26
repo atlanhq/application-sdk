@@ -20,9 +20,7 @@ import inspect
 import json
 import linecache
 import re
-import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -59,38 +57,6 @@ CONTRACT_NAMESPACES = [
 def eprint(*args: Any, **kwargs: Any) -> None:
     """Print to stderr."""
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
-
-
-def get_source_sha() -> str:
-    """Return the git SHA of the last commit touching application_sdk/."""
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%H", "--", "application_sdk/"],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-    return result.stdout.strip()
-
-
-def get_source_date(sha: str) -> str:
-    """Return the commit date (ISO 8601) of the given SHA."""
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%cI", sha],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-    return result.stdout.strip()
-
-
-def get_sdk_version() -> str:
-    """Read the SDK version from pyproject.toml (no import needed).
-
-    ``application_sdk.__version__`` is read from installed metadata, so
-    pyproject.toml is the one place the version is written down.
-    """
-    pyproject = REPO_ROOT / "pyproject.toml"
-    return tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
 
 
 def extract_all_from_init(pkg_path: Path) -> list[str]:
@@ -623,16 +589,7 @@ def cmd_dump() -> None:
         docstring_parser="google",
     )
 
-    source_sha = get_source_sha()
-    source_date = get_source_date(source_sha)
-    sdk_version = get_sdk_version()
-
     output: dict[str, Any] = {
-        "meta": {
-            "sdk_version": sdk_version,
-            "source_sha": source_sha,
-            "source_date": source_date,
-        },
         "subpackages": {},
     }
 
@@ -829,9 +786,7 @@ def cmd_normalize(raw_json_path: str) -> None:
     with open(raw_json_path, encoding="utf-8") as f:
         raw = json.load(f)
 
-    # Meta passes through unchanged
     normalized: dict[str, Any] = {
-        "meta": raw["meta"],
         "subpackages": {},
         "contracts": {},
     }
@@ -889,7 +844,6 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
 
     purposes = _load_purposes(purposes_yaml_path)
 
-    meta = data["meta"]
     subpackages = data["subpackages"]
     contracts = data["contracts"]
 
@@ -902,9 +856,6 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     lines.append(
         "generated-by:  capability-manifest skill (.claude/skills/capability-manifest)"
     )
-    lines.append(f"sdk-version:   {meta['sdk_version']}")
-    lines.append(f"source-sha:    {meta['source_sha']}")
-    lines.append(f"source-date:   {meta['source_date']}")
     lines.append("do-not-edit:   re-run the skill instead of hand-editing")
     lines.append("-->")
     lines.append("")
@@ -919,8 +870,8 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     )
     lines.append(">")
     lines.append(
-        "> **To check if current:** `awk '/^source-sha:/{print $2}' docs/agents/sdk-capabilities.md`"
-        " vs `git log -1 --format=%H -- application_sdk/`"
+        "> **To check if current:** `uv run poe regen-capabilities &&"
+        " git diff --exit-code -- docs/agents/sdk-capabilities.md`"
     )
     lines.append("")
 
