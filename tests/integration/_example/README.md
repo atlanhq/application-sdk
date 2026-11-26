@@ -63,6 +63,7 @@ _example/
 
 Defines all test scenarios using the declarative format:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import Scenario, lazy, equals
 
@@ -81,6 +82,7 @@ scenarios = [
 
 The test class that runs scenarios:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import BaseIntegrationTest
 from .scenarios import scenarios
@@ -234,6 +236,7 @@ Turn the check off for a class or a single scenario with `validate_assets = Fals
 
 ## Assertion Examples
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import (
     equals, exists, one_of, contains, is_not_empty,

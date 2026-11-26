@@ -18,3 +18,35 @@ When modifying SDK code, update corresponding conceptual documentation under `do
 *   `application_sdk/credentials/**` -> `docs/concepts/handlers.md` (credential resolution section)
 *   `application_sdk/storage/**` -> `docs/concepts/apps.md` (built-in storage tasks section)
 *   `application_sdk/observability/**` -> `docs/concepts/monitoring.md`
+
+## Code examples use current APIs
+
+A Python example in a Markdown file teaches whatever it imports, so an example
+on a deprecated symbol lands every app that copies it on a base it must migrate
+off again. `.github/scripts/check_docs_deprecated_imports.py` (pre-commit hook
+`check-docs-deprecated-imports`, run on every PR by the required `Pre-commit`
+check) parses each Python block in every tracked Markdown file and fails on a
+use of any symbol in `packages/conformance/conformance/data/deprecated_symbols.json`.
+It uses conformance's own B001 matcher, so an import resolves through
+re-exports (`from application_sdk.templates import SqlMetadataExtractor`) and
+an enum member (`PreflightStatus.PARTIAL`) through its enum, exactly as in an
+app.
+
+When the check fails, rewrite the example onto the replacement the message
+names. A block that shows a deprecated API on purpose (a v2 "before" snippet, a
+page about a deprecated framework, a target kept until its replacement exists)
+says so on the line directly above its opening fence:
+
+````markdown
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
+```python
+from application_sdk.transformers.atlas import AtlasTransformer
+```
+````
+
+The reason is required. A page that presents itself as the current way to
+build an app carries no marker: if it needs one, the page needs rewriting.
+
+The check sees only Python blocks; a deprecated name in prose or in a table is
+on the author. Run it on its own with
+`uv run --frozen python .github/scripts/check_docs_deprecated_imports.py [FILE.md ...]`.

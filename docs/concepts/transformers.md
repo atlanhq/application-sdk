@@ -49,6 +49,7 @@ The helper modules under `application_sdk.transformers` are deprecated too. Each
 
 Converts metadata into Atlas entities using `pyatlan` model classes. Supports `typename` values: `DATABASE`, `SCHEMA`, `TABLE`, `VIEW`, `COLUMN`, `MATERIALIZED VIEW`, `PROCEDURE`, `FUNCTION`, `TAG_REF`.
 
+<!-- legacy-example: this page documents the deprecated transformer stack -->
 ```python
 from application_sdk.transformers.atlas import AtlasTransformer  # deep import — legacy
 ```
@@ -75,6 +76,7 @@ class MyConnectorApp(SqlMetadataExtractor):
 
 A YAML-template-driven transformer. SQL queries defined in YAML files are executed against input data via DuckDB to produce transformed output. See the upgrade guide for why this approach is being retired.
 
+<!-- legacy-example: this page documents the deprecated transformer stack -->
 ```python
 from application_sdk.transformers.query import QueryBasedTransformer  # deep import — legacy
 ```
@@ -86,5 +88,5 @@ Both transformers use pyarrow and DuckDB internally (already included in the `sq
 ## See Also
 
 - [v3 Migration Guide — Step 2](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — the recommended migration path
-- [Apps](apps.md) — `SqlMetadataExtractor` and the `transform_data` task contract
+- [Apps](apps.md) — `SqlApp`, whose `map_*` methods replace the transformer
 - [REST API Application Guide](../guides/rest-api-application-guide.md) — non-SQL connector without transformers

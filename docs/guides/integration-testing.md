@@ -445,6 +445,7 @@ cp -r tests/integration/_example tests/integration/my_connector
 
 Edit `scenarios.py`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import (
     Scenario, lazy, equals, exists
@@ -474,6 +475,7 @@ scenarios = [
 
 Edit `test_integration.py`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import BaseIntegrationTest
 from .scenarios import scenarios
@@ -556,6 +558,7 @@ Benefits:
 
 The assertion DSL provides **higher-order functions** that return predicates:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import (
     equals, exists, one_of, contains, greater_than
@@ -626,6 +629,7 @@ assert_that = {
 
 Combine multiple assertions:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import all_of, any_of, none_of
 
@@ -643,6 +647,7 @@ from application_sdk.testing.integration import all_of, any_of, none_of
 
 Create your own:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import custom
 

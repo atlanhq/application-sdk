@@ -80,7 +80,7 @@ class PreflightOutput(BaseModel):
 
 `PreflightOutput.error` is additive (`None` by default). Handlers that only set `message` keep working. When `error` is set, `resolved_message` prefers it over `message` — the same precedence `PreflightCheck.error` already uses. Pass a `FailureDetails` (or a bare `AppError`, which is coerced).
 
-**Return the verdict; do not raise it.** On the gate path, anything that escapes `preflight_check` is treated as a statement about the source (typed) or an app fault (untyped), and a hard-mode app blocks on it only when its category is in `GATE_BLOCKING_CATEGORIES` (`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`, and `SOURCE_UNAVAILABLE` and `RATE_LIMITED` once they persist to the gate's final attempt). On the HTTP `/workflows/v1/check` path a raise keeps its HTTP status and `detail` string, and the body additionally carries the same verdict shape a returned `NOT_READY` would: `preflight.status` is `not_ready` and one `preflightVerdict` check carries the raise as typed `FailureDetails`, the leaf's own for a typed raise or `InternalError` with `classification_pending` for a crash, so the caller always has per-check data and a classification. A transient the extraction can cope with — a 429, a database still resuming — is a failed check on a `PARTIAL` output, with `error=RateLimitedError(...).to_failure_details()` (retryable): the run proceeds in both modes, the outcome row names the check's code, and the other checks survive. Bound every probe to `input.timeout_seconds` so the handler returns its own typed verdict before the gate's cancel; a probe the gate has to end leaves no check evidence.
+**Return the verdict; do not raise it.** On the gate path, anything that escapes `preflight_check` is treated as a statement about the source (typed) or an app fault (untyped), and a hard-mode app blocks on it only when its category is in `GATE_BLOCKING_CATEGORIES` (`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`, and `SOURCE_UNAVAILABLE` and `RATE_LIMITED` once they persist to the gate's final attempt). On the HTTP `/workflows/v1/check` path a raise keeps its HTTP status and `detail` string, and the body additionally carries the same verdict shape a returned `NOT_READY` would: `preflight.status` is `not_ready` and one `preflightVerdict` check carries the raise as typed `FailureDetails`, the leaf's own for a typed raise or `InternalError` with `classification_pending` for a crash, so the caller always has per-check data and a classification. A transient the extraction can cope with — a 429, a database still resuming — is a failed check on a `READY` output, with `error=RateLimitedError(...).to_failure_details()` (retryable): the run proceeds in both modes, the outcome row names the check's code, and the other checks survive. Bound every probe to `input.timeout_seconds` so the handler returns its own typed verdict before the gate's cancel; a probe the gate has to end leaves no check evidence.
 
 #### Multi-credential preflight
 
@@ -396,25 +396,26 @@ class MyHandler(Handler):
             ...
 ```
 
-## Error Handling with HandlerError
+## Error Handling
 
-Raise `HandlerError` to return a structured HTTP error response:
+Raise a typed `AppError` leaf from `application_sdk.errors` to return a structured HTTP error response. The server picks the status from the leaf's category: `InvalidInputError` answers 400, `AuthError` 401, `AppPermissionDeniedError` 403, `NotFoundError` 404, `PreconditionError` 412, `SourceUnavailableError` 503, and anything untyped 500.
 
 ```python
-from application_sdk.handler import Handler, HandlerError
+from application_sdk.errors import InvalidInputError
+from application_sdk.handler import Handler
 
 class MyHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         api_key = await self.context.get_secret("my-api-key")
         if not api_key:
-            raise HandlerError(
+            raise InvalidInputError(
                 message="API key not configured",
-                http_status=400,
+                field="api_key",
             )
         ...
 ```
 
-`HandlerError` is translated by the server into an HTTP response with the specified status code and a JSON body containing the error message.
+The response `detail` is the error's redacted message; an exception that is not an `AppError` answers with a fixed `Internal server error` instead, so its text never reaches the caller. `HandlerError` is deprecated (removal in v4.0); see [ADR-0013](../adr/0013-error-hierarchy-and-failure-taxonomy.md) for choosing a leaf.
 
 ## SQL Handler Pattern
 

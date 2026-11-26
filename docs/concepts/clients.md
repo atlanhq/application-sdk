@@ -84,10 +84,9 @@ class SnowflakeClient(BaseSQLClient):
 
 *   **Role of `BaseSQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
 *   **Role of `@task` methods:**
-    *   Tasks (e.g., `fetch_tables`, `fetch_columns` in your `SqlMetadataExtractor` subclass) orchestrate the extraction process.
-    *   They create a client instance and call `load()` with a credentials dict.
-    *   They call `client.run_query(query)` to execute queries and yield row batches.
-    *   They process the resulting data (e.g., pass to asset mappers for transformation).
+    *   On a `SqlApp` subclass, the `extract_*` tasks (e.g., `extract_tables`, `extract_columns`) load a `sql_client_class` instance with the run's credentials and stream each `fetch_*_sql` query's rows through `client.run_query(query)`.
+    *   The matching `transform_*` tasks pass those rows to the `map_*` asset mappers.
+    *   A custom `@task` that needs its own query creates a client instance, calls `load()` with a credentials dict, and calls `client.run_query(query)` the same way.
 
 **Simplified Flow:**
 `@task method` → creates `BaseSQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.

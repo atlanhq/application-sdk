@@ -154,6 +154,11 @@ class MyQueryActivities(SQLQueryExtractionActivities):
 
 ### After (v3)
 
+`SqlQueryExtractor` is deprecated (removal in v4.0.0) but stays the query-log
+target until `SqlApp` has a query-log capability (FND-4313). Expect a `B001`
+finding for it and accept it.
+
+<!-- legacy-example: SqlQueryExtractor stays the query-log target until SqlApp has a query-log capability (FND-4313) -->
 ```python
 from application_sdk.templates import SqlQueryExtractor
 from application_sdk.templates.contracts.sql_query import (

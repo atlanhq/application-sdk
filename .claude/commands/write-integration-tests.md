@@ -36,6 +36,7 @@ tests/
 ```
 
 ### Import Pattern
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import (
     BaseIntegrationTest,

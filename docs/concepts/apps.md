@@ -148,82 +148,45 @@ You never register tasks or apps manually. When Python imports your `App` subcla
 
 The SDK provides pre-built `App` subclasses for common patterns. Override only the tasks you need to customize.
 
-### SqlMetadataExtractor
+### SqlApp
 
-Deprecated (removal in v4.0.0): subclass `SqlApp` instead (reference: atlan-mysql-app). The example below is the legacy API, kept for apps that still use it; new and migrating apps do not copy it.
-
-Extracts metadata (databases, schemas, tables, columns, procedures) from SQL sources:
+Extracts metadata (databases, schemas, tables, columns, and optionally views and procedures) from SQL sources. Set the client and the SQL templates, and write one `map_*` function per entity; the default `run()` extracts every entity in parallel, transforms each through its mapper, and verifies the output before publish (reference: atlan-mysql-app):
 
 ```python
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    FetchDatabasesInput, FetchDatabasesOutput,
-    ExtractionInput, ExtractionOutput,
-)
-from application_sdk.app import task
+from application_sdk.templates import SqlApp
 
-class MyExtractor(SqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_databases(
-        self, input: FetchDatabasesInput
-    ) -> FetchDatabasesOutput:
-        # Custom database fetching logic
-        return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
+class MyExtractor(SqlApp):
+    sql_client_class = MyClient
+
+    fetch_database_sql = "SELECT ..."
+    fetch_schema_sql = "SELECT ..."
+    fetch_table_sql = "SELECT ..."
+    fetch_column_sql = "SELECT ..."
+
+    def map_database(self, record, connection_qn):
+        from pyatlan_v9.model.assets import Database
+        return Database.creator(
+            name=record["database_name"],
+            connection_qualified_name=connection_qn,
+        )
+
+    # map_schema / map_table / map_column likewise. All four are required for
+    # the default run(): the base ones raise Map*UnimplementedError.
 ```
 
-### SqlQueryExtractor
+A connector whose fetches must run in sequence, or that adds an entity the default `run()` does not drive, overrides `run()` and calls the `extract_*` / `transform_*` tasks itself, ending in `finalize_extraction`. The `SqlApp` class docstring lists that override surface.
 
-Extracts query history/logs from SQL sources:
+### Deprecated SQL templates
 
-```python
-from application_sdk.templates import SqlQueryExtractor
-from application_sdk.templates.contracts import (
-    QueryBatchInput, QueryBatchOutput,
-    QueryFetchInput, QueryFetchOutput,
-)
-from application_sdk.app import task
+`SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are deprecated (removal in v4.0.0):
 
-class MyQueryExtractor(SqlQueryExtractor):
-    @task(timeout_seconds=600)
-    async def get_query_batches(
-        self, input: QueryBatchInput
-    ) -> QueryBatchOutput: ...
-
-    @task(timeout_seconds=3600)
-    async def fetch_queries(
-        self, input: QueryFetchInput
-    ) -> QueryFetchOutput: ...
-```
-
-### IncrementalSqlMetadataExtractor
-
-Deprecated (removal in v4.0.0): subclass `SqlApp` and override `run()` with the incremental phases as `@task` methods. The phases and example below are the legacy API, kept for apps that still use it; new and migrating apps do not copy them.
-
-Runs a 5-phase incremental extraction:
-
-1. **Prerequisites** — fetch the prior run marker and the previous state snapshot.
-2. **Base extraction** — extract databases, schemas (in parallel), then tables.
-3. **Incremental columns** — batch preparation followed by parallel column discovery.
-4. **Write state** — create and upload the new current-state snapshot.
-5. **Update marker** — persist the new run marker after the state write succeeds.
-
-```python
-from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    FetchColumnsIncrementalInput, FetchColumnsOutput,
-)
-from application_sdk.app import task
-
-class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_columns(
-        self, input: FetchColumnsIncrementalInput
-    ) -> FetchColumnsOutput: ...
-```
+- **`SqlMetadataExtractor`**: subclass `SqlApp` as above.
+- **`IncrementalSqlMetadataExtractor`**: subclass `SqlApp` and override `run()`, writing the incremental phases (marker, fetch, diff, state write) as `@task` methods. See [Step 3 of the upgrade guide](../upgrade-guide-v3.md#step-3-upgrade-incremental-sql-extraction).
+- **`SqlQueryExtractor`**: still the target for query-log connectors, because `SqlApp` has no query-log capability yet (FND-4313). See [Step 2 of the upgrade guide](../upgrade-guide-v3.md#step-2-upgrade-sql-query-extraction).
 
 ### BaseMetadataExtractor
 
-Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
+Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task.
 
 ## Offloading Blocking Work (`run_in_thread` and auto-holds)
 
@@ -1370,7 +1333,7 @@ from application_sdk.common.sql_filters import read_sql_files
 
 SQL_QUERIES = read_sql_files("/path/to/queries")
 
-class MyExtractor(SqlMetadataExtractor):
+class MyExtractor(SqlApp):
     fetch_database_sql = SQL_QUERIES.get("FETCH_DATABASES")
     fetch_table_sql = SQL_QUERIES.get("FETCH_TABLES")
 ```
