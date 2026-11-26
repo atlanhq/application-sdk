@@ -12,7 +12,6 @@
 #   - github-actions[bot] identity, NOT atlan-ci (nor the App), so the bot commit
 #     does not auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
 #   - Fork PRs are rejected immediately with an explanatory comment.
-#   - fetch-depth: 0 for the same reason as the drift-check workflow (source-sha).
 #   - Regenerating runs the PR's own `poe` task, so that job never holds the
 #     commit-signing key: the task could leave a git hook or config behind that
 #     reads it. It hands over only the regenerated manifest, and a fresh `commit`
@@ -145,7 +144,6 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.branch }}
           token: ${{ steps.app-token.outputs.token }}
-          fetch-depth: 0
 
       # Recorded before any PR code runs, so the commit job can refuse a branch
       # that moved (or a HEAD the regen task itself moved).
