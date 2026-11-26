@@ -53,6 +53,26 @@ and grade by its `Severity:` line. Fix what you judge valid; the reviewer
 judges the rest on the pull request. Never weaken or reword a principle to
 pass: a principle change is its own pull request.
 
+### 3. Validate with unit and integration tests, never e2e (mandatory)
+
+An agent validates a change with this repository's unit and integration
+tests only: run them locally before pushing, and rely on the pull request's
+`tests` checks after. That is the whole validation bar for an agent, before
+or after the pull request is opened. There is no exception.
+
+An agent never starts an e2e run, for any reason:
+
+- never comment `/e2e` or `/gate-check` on a pull request;
+- never dispatch the `tests` workflow with `run_e2e` set, or any other e2e
+  workflow, through `gh workflow run`, the API or any other route;
+- never add a label, empty commit or push meant to start one.
+
+e2e runs against a live tenant and gates releases; it is not a check on an
+agent's change. If the unit or integration tests are not enough to prove the
+change, add or fix those tests, or say what they cannot cover in the pull
+request. Starting e2e, including `/gate-check` on a release, is a person's
+decision and is done by that person.
+
 ## After opening a pull request: `/review`
 
 The connector reviewer judges a change against the principles, not a rule
@@ -101,7 +121,8 @@ arrives by resync.
 Run conformance and the principles review, push fixes, comment `/review` after
 a push, and comment `/review recheck` with evidence when it believes a finding
 is wrong. Dismissing and waiving are a person's decision: post them only with
-that person's reason. Use `/review force` only when a person asks.
+that person's reason. Use `/review force` only when a person asks. Never
+start e2e (`/e2e`, `/gate-check` or a dispatch): see section 3.
 
 The repository's CI configuration remains authoritative for enforcement.
 <!-- END APPLICATION SDK CONNECTOR REVIEW -->
