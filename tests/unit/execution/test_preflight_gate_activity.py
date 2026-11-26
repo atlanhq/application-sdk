@@ -2328,12 +2328,12 @@ class TestPreflightGateStorageChecks:
         from application_sdk.execution._temporal.preflight_gate import (
             _storage_failure_details,
         )
-        from application_sdk.storage.errors import StorageBucketRelocationError
-        from application_sdk.storage.preflight import (
+        from application_sdk.storage._classify import (
             _OBJECT_STORE_ERROR_CLASSES,
             RELOCATION_BUCKET,
-            ObjectStoreCheckResult,
         )
+        from application_sdk.storage.errors import StorageBucketRelocationError
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
 
         OBJECT_STORE_RELOCATION_CODE = StorageBucketRelocationError.code
 

@@ -66,12 +66,19 @@ from typing import Any, TypeVar
 from urllib.parse import quote
 
 import httpx
-import obstore as obs
 import orjson
-from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
+from obstore.exceptions import (  # noqa: F401 — importable from here in past releases
+    PermissionDeniedError,
+    UnauthenticatedError,
+)
 from obstore.store import ObjectStore
 
 from application_sdk import _deprecation
+from application_sdk.storage._classify import (  # noqa: F401 — _DENIED_* importable from here in past releases
+    _DENIED_ERROR_STATUS,
+    _DENIED_STATUSES,
+)
+from application_sdk.storage._classify import denied_evidence as _denied_evidence
 from application_sdk.storage.batch import DataObject, _download_listed, _upload_tree
 from application_sdk.storage.errors import (
     StorageAuthError,
@@ -84,8 +91,8 @@ from application_sdk.storage.errors import (
 from application_sdk.storage.ops import (
     GATEWAY_INVALID_CLIENT_CODE,
     BoundStore,
+    _get_bytes,
     _list_items,
-    _obstore_http_evidence,
     _store_target,
     download_file_chunked,
     upload_bytes,
@@ -127,35 +134,6 @@ def _log():
 
         _logger = get_logger(__name__)
     return _logger
-
-
-# Statuses that mean the caller's credential or the bucket's policy refused the
-# request. obstore maps some of these to a typed error and leaves the rest as
-# text, so both are checked.
-_DENIED_STATUSES = frozenset({401, 403})
-_DENIED_ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
-    (PermissionDeniedError, 403),
-    (UnauthenticatedError, 401),
-)
-
-
-def _denied_evidence(exc: BaseException) -> tuple[int, str | None] | None:
-    """Return ``(http_status, provider_code)`` when *exc* is a 401/403.
-
-    Walks explicit ``__cause__`` links so a ``StorageError`` the shared
-    primitives already wrapped is judged by the driver error inside it.
-    """
-    current: BaseException | None = exc
-    while current is not None:
-        http_status, provider_code = _obstore_http_evidence(current)
-        if http_status is None:
-            http_status = next(
-                (s for t, s in _DENIED_ERROR_STATUS if isinstance(current, t)), None
-            )
-        if http_status in _DENIED_STATUSES:
-            return http_status, provider_code
-        current = current.__cause__
-    return None
 
 
 class CloudStore:
@@ -301,20 +279,20 @@ class CloudStore:
             StorageNotFoundError: If the key does not exist.
         """
         await self._ensure_region()
-        try:
-            result = await obs.get_async(self._store, key)
-            return bytes(await result.bytes_async())
-        except FileNotFoundError as exc:
-            raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
-        # conformance: ignore[E004] re-raise only; discriminates NotFoundError by name then wraps in StorageError/StorageNotFoundError
-        except Exception as exc:
-            # obstore backends raise different exception types for not-found:
-            # - LocalStore: FileNotFoundError (caught above)
-            # - S3/GCS/Azure: obstore.exceptions.NotFoundError
-            if type(exc).__name__ == "NotFoundError":
-                raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
-            self._raise_if_denied(exc, "reading", key)
-            raise StorageError(f"Failed to get key: {key}", cause=exc) from exc
+        # The shared primitive, so this read rides out the gateway's
+        # "no Route matched" 404 and fails with the same typed leaves as
+        # every other read; ``_mapping_denied`` then makes a 401/403 the
+        # customer's. No sidecar: external buckets do not carry one.
+        data = await self._mapping_denied(
+            "reading", key, _get_bytes(key, self._store, normalize=False)
+        )
+        if data is None:
+            raise StorageNotFoundError(
+                f"Key not found: {key}",
+                key=key,
+                target=_store_target(self._store, key),
+            )
+        return data
 
     async def download(
         self,

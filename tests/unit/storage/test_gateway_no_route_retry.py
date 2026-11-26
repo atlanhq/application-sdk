@@ -217,7 +217,7 @@ async def test_request_path_recovers_after_transient_gateway_no_route(
 ) -> None:
     head_meta = {"size": 1, "e_tag": "e"}
     get_result = MagicMock()
-    get_result.bytes.return_value = b"x"
+    get_result.bytes_async = AsyncMock(return_value=b"x")
     ok = {"head_async": head_meta, "get_async": get_result}.get(target)
     flaky = AsyncMock(side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), ok])
     with patch(f"application_sdk.storage.ops.obstore.{target}", flaky):
@@ -338,3 +338,54 @@ async def test_marker_list_probe_rides_out_gateway_no_route(sleeps) -> None:
 
     assert calls["n"] == 2
     assert sleeps == [5.0]
+
+
+async def test_cloud_store_get_bytes_rides_out_gateway_no_route(sleeps) -> None:
+    """``CloudStore.get_bytes`` reads through the seam, not obstore directly."""
+    from obstore.store import MemoryStore
+
+    from application_sdk.storage.cloud import CloudStore
+
+    get_result = MagicMock()
+    get_result.bytes_async = AsyncMock(return_value=b"x")
+    flaky = AsyncMock(side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), get_result])
+    with patch("application_sdk.storage.ops.obstore.get_async", flaky):
+        data = await CloudStore(MemoryStore(), provider="memory").get_bytes("k")
+
+    assert data == b"x"
+    assert flaky.await_count == 2
+    assert sleeps == [5.0]
+
+
+async def test_cloud_store_get_bytes_exhausted_gateway_404_is_not_missing(
+    sleeps,
+) -> None:
+    """An exhausted retry is the gateway leaf, never ``StorageNotFoundError``."""
+    from obstore.store import MemoryStore
+
+    from application_sdk.storage.cloud import CloudStore
+
+    failing = AsyncMock(side_effect=RuntimeError(_GATEWAY_NO_ROUTE))
+    with (
+        patch("application_sdk.storage.ops.obstore.get_async", failing),
+        pytest.raises(StorageGatewayNoRouteError),
+    ):
+        await CloudStore(MemoryStore(), provider="memory").get_bytes("k")
+
+
+async def test_get_bytes_reads_the_body_without_blocking_the_loop() -> None:
+    """The body comes from ``bytes_async``; the sync accessor is never called."""
+    from obstore.store import MemoryStore
+
+    from application_sdk.storage.cloud import CloudStore
+
+    get_result = MagicMock()
+    get_result.bytes.side_effect = AssertionError("sync body read blocks the loop")
+    get_result.bytes_async = AsyncMock(return_value=b"x")
+    with patch(
+        "application_sdk.storage.ops.obstore.get_async",
+        AsyncMock(return_value=get_result),
+    ):
+        assert await ops._get_bytes("k", MemoryStore(), normalize=False) == b"x"
+        assert await CloudStore(MemoryStore(), provider="memory").get_bytes("k") == b"x"
+    get_result.bytes.assert_not_called()
