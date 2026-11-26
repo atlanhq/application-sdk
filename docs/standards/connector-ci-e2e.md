@@ -136,7 +136,7 @@ the tenant's ingress, the same way the UI does.
   fails with `RouteNotReadyError`, which carries the last answer seen.
 - Register undo steps with `self.add_cleanup(fn, *args)`. They run after each
   test, last added first, even when the test failed.
-- `self.expect_status(response, status)` asserts the status with the method,
+- `self.assert_status(response, status)` asserts the status with the method,
   path and body in the failure message, and returns the response.
 - `RouteE2ETest` is not a `BaseE2ETest` subclass: it submits no DAG, creates no
   Connection and declares no `mode`. Put the suite in its own file under

@@ -30,7 +30,7 @@ What a suite gets:
   credentials, for pages and for checking that a route refuses anonymous calls.
 * :meth:`RouteE2ETest.add_cleanup` — undo steps that run after each test,
   last added first, even when the test failed.
-* :meth:`RouteE2ETest.expect_status` — assert a status code, with the method,
+* :meth:`RouteE2ETest.assert_status` — assert a status code, with the method,
   path and body in the failure message, and return the response.
 * :attr:`RouteE2ETest.run_label` — a label naming this CI run, for records the
   suite writes.
@@ -159,7 +159,7 @@ class RouteE2ETest:
         """Register an undo step that runs after this test, pass or fail."""
         self._cleanups.append(lambda: fn(*args, **kwargs))
 
-    def expect_status(
+    def assert_status(
         self, response: httpx.Response, status: int = 200
     ) -> httpx.Response:
         """Assert *response* has *status* and return it, for ``.json()`` chaining.

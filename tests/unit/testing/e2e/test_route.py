@@ -277,18 +277,18 @@ class TestExpectStatus:
     def test_returns_the_response_for_chaining(self) -> None:
         suite = _suite(_ok)()
         response = self._response(200, json={"a": 1})
-        assert suite.expect_status(response) is response
-        assert suite.expect_status(response).json() == {"a": 1}
+        assert suite.assert_status(response) is response
+        assert suite.assert_status(response).json() == {"a": 1}
 
     def test_accepts_the_expected_non_200_status(self) -> None:
         suite = _suite(_ok)()
         response = self._response(204)
-        assert suite.expect_status(response, status=204) is response
+        assert suite.assert_status(response, status=204) is response
 
     def test_wrong_status_names_method_path_and_body(self) -> None:
         suite = _suite(_ok)()
         with pytest.raises(AssertionError) as raised:
-            suite.expect_status(self._response(422, text="bad answer"))
+            suite.assert_status(self._response(422, text="bad answer"))
         message = str(raised.value)
         assert "PUT /demo-app/api/v1/steps/x returned 422, expected 200" in message
         assert "bad answer" in message
