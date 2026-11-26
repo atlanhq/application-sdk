@@ -1020,7 +1020,7 @@
     {
       "kind": "method",
       "marker_via": "decorator",
-      "message": "CredentialRef.from_workflow_args is deprecated; use CredentialRef.resolve(input) instead \u2014 it routes on extraction_method, where this falls through to the GUID. Will be removed in v4.0.0.",
+      "message": "CredentialRef.from_workflow_args is deprecated; use CredentialRef.resolve(input) instead, passing the typed Input itself (a dict-only caller validates it first: CredentialRef.resolve(ExtractionInput.model_validate(workflow_args))) \u2014 resolve routes on extraction_method, where this falls through to the GUID. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.credentials.ref",
       "removal_version": "4.0.0",

@@ -215,8 +215,11 @@ class CredentialRef(BaseModel, frozen=True):
     @classmethod
     @deprecated(
         "CredentialRef.from_workflow_args is deprecated; use "
-        "CredentialRef.resolve(input) instead — it routes on extraction_method, "
-        "where this falls through to the GUID. Will be removed in v4.0.0.",
+        "CredentialRef.resolve(input) instead, passing the typed Input itself "
+        "(a dict-only caller validates it first: "
+        "CredentialRef.resolve(ExtractionInput.model_validate(workflow_args))) "
+        "— resolve routes on extraction_method, where this falls through to "
+        "the GUID. Will be removed in v4.0.0.",
         category=DeprecationWarning,
     )
     def from_workflow_args(cls, workflow_args: dict[str, Any]) -> CredentialRef:
@@ -226,6 +229,14 @@ class CredentialRef(BaseModel, frozen=True):
             Use :meth:`CredentialRef.resolve` instead. This method has
             loose routing (falls through to GUID regardless of
             extraction_method). Removed in v4.0.0.
+
+            ``resolve`` takes a :class:`CredentialResolvable` model, not a
+            dict. Pass the task's typed Input itself rather than its
+            ``model_dump()``; a caller holding only the dict validates it
+            first, e.g.
+            ``CredentialRef.resolve(ExtractionInput.model_validate(workflow_args))``.
+            ``extraction_method`` then defaults to ``"direct"``, and an
+            ``agent_json`` JSON string is parsed to a spec.
 
         This is the canonical adapter for the Atlan Argo marketplace
         template contract.  It inspects ``extraction_method``,
