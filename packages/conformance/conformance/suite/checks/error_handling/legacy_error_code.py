@@ -186,11 +186,43 @@ def legacy_coded_bases(
     return found
 
 
+def legacy_coded_names(
+    tree: ast.Module, *, path: Path | None = None, root: Path | None = None
+) -> dict[str, str]:
+    """Each module-level name in *tree* that resolves to an SDK legacy-coded class.
+
+    E023's view: the classes :func:`legacy_coded_bases` finds, plus every name a
+    module-level ``from … import`` binds that reaches one, whether it is the SDK
+    class itself (``from application_sdk.storage.errors import StorageError``)
+    or an app subclass imported from the scanned repo.
+    """
+    resolver = _Resolver(root)
+    module_path = path.resolve() if path is not None else None
+    found = dict(legacy_coded_bases(tree, path=path, root=root))
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if local in found:
+                continue
+            base = resolver.name_base(tree, module_path, local, frozenset())
+            if base is not None:
+                found[local] = base
+    return found
+
+
+_SELF_NAMES: frozenset[str] = frozenset({"self", "cls"})
+
+
 class LegacyErrorCodeMixin:
-    """Rule method for E022 (legacy-error-code)."""
+    """Rule methods for E022 and E023 (legacy-error-code)."""
 
     _import_origins: dict[str, str]
     _legacy_coded_bases: dict[str, str]
+    _legacy_coded_names: dict[str, str]
+    _class_stack: list[ast.ClassDef]
+    _except_stack: list[ast.ExceptHandler]
 
     def _add(self, rule_id: str, node: ast.AST, message: str) -> None: ...
 
@@ -246,3 +278,99 @@ class LegacyErrorCodeMixin:
                 f"deprecated and removed in v4.0.0. Delete the DEFAULT_ERROR_CODE "
                 f"line and give the class its own code ClassVar.",
             )
+
+    # ── E023 ─────────────────────────────────────────────────────────────────
+
+    def _legacy_class_of(self, expr: ast.expr) -> str | None:
+        """The SDK legacy-coded class *expr* names, if it names one."""
+        if isinstance(expr, ast.Name):
+            return self._legacy_coded_names.get(expr.id)
+        dotted = _dotted(expr)
+        if dotted is None or "." not in dotted:
+            return None
+        origin = self._sdk_origin(expr)
+        if origin is None or origin.split(".")[0] != _SDK_PACKAGE:
+            return None
+        owner, _, attr = origin.rpartition(".")
+        return _sdk_legacy_name(owner, attr)
+
+    def _enclosing_legacy_class(self) -> str | None:
+        """The SDK legacy-coded class the innermost enclosing class reaches."""
+        if not self._class_stack:
+            return None
+        return self._legacy_coded_names.get(self._class_stack[-1].name)
+
+    def _handler_legacy_class(self, name: str) -> str | None:
+        """The SDK legacy-coded class the innermost ``except … as name`` catches."""
+        for handler in reversed(self._except_stack):
+            if handler.name != name or handler.type is None:
+                continue
+            caught = (
+                handler.type.elts
+                if isinstance(handler.type, ast.Tuple)
+                else [handler.type]
+            )
+            for expr in caught:
+                found = self._legacy_class_of(expr)
+                if found is not None:
+                    return found
+            return None
+        return None
+
+    def _e023(self, node: ast.AST, what: str, cls: str, fix: str) -> None:
+        self._add(
+            "E023",
+            node,
+            f"{what} on {cls}, an SDK error carrying the deprecated AAF-* "
+            f"vocabulary. It warns today and is removed in v4.0.0, when this "
+            f"line fails. {fix}",
+        )
+
+    def _check_e023_call(self, node: ast.Call) -> None:
+        keyword = next((k for k in node.keywords if k.arg == "error_code"), None)
+        if keyword is None:
+            return
+        cls = self._legacy_class_of(node.func)
+        if cls is None and _is_super_init(node.func):
+            cls = self._enclosing_legacy_class()
+        if cls is None:
+            return
+        self._e023(
+            keyword.value,
+            "Passes the error_code= keyword",
+            cls,
+            "Drop the keyword and raise a subclass that sets its own code ClassVar.",
+        )
+
+    def _check_e023_attribute(self, node: ast.Attribute) -> None:
+        if not isinstance(node.ctx, ast.Load):
+            return
+        if node.attr not in {"DEFAULT_ERROR_CODE", "error_code"}:
+            return
+        value = node.value
+        cls: str | None = None
+        if isinstance(value, ast.Name) and value.id in _SELF_NAMES:
+            cls = self._enclosing_legacy_class()
+        elif node.attr == "DEFAULT_ERROR_CODE":
+            cls = self._legacy_class_of(value)
+        elif isinstance(value, ast.Name):
+            cls = self._handler_legacy_class(value.id)
+        if cls is None:
+            return
+        self._e023(
+            node,
+            f"Reads {node.attr}",
+            cls,
+            "Read the code ClassVar instead (a str: .error_code.code becomes .code).",
+        )
+
+
+def _is_super_init(func: ast.expr) -> bool:
+    """``super().__init__`` or ``super(X, self).__init__``."""
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "__init__"
+        and isinstance(func.value, ast.Call)
+        and isinstance(func.value.func, ast.Name)
+        and func.value.func.id == "super"
+    )
