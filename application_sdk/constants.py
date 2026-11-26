@@ -855,6 +855,17 @@ WORKER_LIVENESS_FATAL_RECOVERY_SECONDS = _load_non_negative_finite_float(
     "ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS", 600.0
 )
 
+#: Seconds one thread may wait on the same module import lock before the worker
+#: ``/live`` probe fails (FND-5531). Temporal's deadlock interrupt (TMPRL1101)
+#: can land inside ``importlib`` and leave a module's import lock unable to wake
+#: its next waiter, which then waits forever while holding the lock of the
+#: module it was importing. Every later import of that module hangs, while the
+#: poll loop keeps polling. A healthy import never waits this long. ``0``
+#: disables this check.
+WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS = _load_non_negative_finite_float(
+    "ATLAN_WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS", 300.0
+)
+
 
 #: How long a worker whose pod already restarted waits before it starts polling.
 #: The mechanism is in ``application_sdk.common.restart_marker``.

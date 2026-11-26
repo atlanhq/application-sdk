@@ -8,6 +8,7 @@ Endpoints:
     GET /health - Always returns 200 (container is running)
     GET /ready  - Returns 200 only if Temporal client is connected
     GET /live   - Returns 200 unless the worker's poll loop is confirmed dead
+                  or its import machinery is wedged
 
 Usage::
 
@@ -39,6 +40,7 @@ from typing import Any, Protocol
 from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.server._import_wait import ImportWaitWatch
 
 logger = get_logger("health")
 
@@ -122,6 +124,7 @@ class WorkerHealthServer:
         max_idle_seconds: float | None = None,
         max_zero_poller_readings: int = 0,
         fatal_recovery_seconds: float = 0,
+        max_import_wait_seconds: float = 0,
     ) -> None:
         """Initialize the health server.
 
@@ -149,6 +152,13 @@ class WorkerHealthServer:
                 unhealthy once a fatal poll error has gone this many seconds
                 without a later ``polling`` reading (FND-4641). ``0`` disables
                 the check.
+            max_import_wait_seconds: When positive, ``check_live`` reports
+                unhealthy once a thread has waited longer than this on the
+                same module import lock (FND-5531). A deadlock interrupt
+                delivered inside ``importlib`` can strand such a wait forever,
+                and every later import of that module then hangs. See
+                ``application_sdk/server/_import_wait.py``. ``0`` disables the
+                check.
         """
         self.host = host
         self.port = port
@@ -177,6 +187,16 @@ class WorkerHealthServer:
         self._fatal_recovery_seconds: float | None = (
             fatal_recovery_seconds
             if fatal_recovery_seconds > 0 and math.isfinite(fatal_recovery_seconds)
+            else None
+        )
+        self._max_import_wait_seconds: float | None = (
+            max_import_wait_seconds
+            if max_import_wait_seconds > 0 and math.isfinite(max_import_wait_seconds)
+            else None
+        )
+        self._import_wait_watch: ImportWaitWatch | None = (
+            ImportWaitWatch(self._max_import_wait_seconds)
+            if self._max_import_wait_seconds is not None
             else None
         )
         # Reject non-finite windows to match the env loader
@@ -329,15 +349,20 @@ class WorkerHealthServer:
         * sdk-core's poller gauge has read a definitive zero for
           ``max_zero_poller_readings`` consecutive readings (FND-4641);
         * a fatal poll error has gone ``fatal_recovery_seconds`` without a
-          later ``polling`` reading (FND-4641); or
+          later ``polling`` reading (FND-4641);
+        * a thread has waited longer than ``max_import_wait_seconds`` on the
+          same module import lock, which a deadlock interrupt delivered inside
+          ``importlib`` leaves stranded forever (FND-5531). The rest of the
+          process keeps polling, so no poll-loop check sees it; or
         * a liveness window is configured (``max_idle_seconds``) and no worker
           activity has been recorded within it — an opt-in proxy for a silently
           stalled poll loop, disabled by default because it false-positives on
           legitimately idle queues (see BLDX-1552).
 
         The restart supervisor (``execution/_temporal/supervisor.py``) already recovers a worker whose
-        ``run()`` returns/raises, so this probe targets the harder case where
-        the poll loop parks without the worker ever exiting.
+        ``run()`` returns/raises, so this probe targets the harder cases where
+        the poll loop parks, or the process stops being able to run its work,
+        without the worker ever exiting.
 
         Returns healthy otherwise.
         """
@@ -354,6 +379,26 @@ class WorkerHealthServer:
                     "last_activity": last_activity_iso,
                     "max_zero_poller_readings": self._max_zero_poller_readings,
                     "fatal_recovery_seconds": self._fatal_recovery_seconds,
+                    **self._poll_diagnostics(),
+                },
+            )
+
+        stuck_import = (
+            self._import_wait_watch.check()
+            if self._import_wait_watch is not None
+            else None
+        )
+        if stuck_import is not None:
+            return HealthStatus(
+                healthy=False,
+                message="Worker import machinery is wedged",
+                details={
+                    "last_activity": last_activity_iso,
+                    "stuck_import_module": stuck_import.module,
+                    "stuck_import_thread": stuck_import.thread,
+                    "stuck_import_waited_seconds": stuck_import.waited_seconds,
+                    "stuck_import_site": stuck_import.import_site,
+                    "max_import_wait_seconds": self._max_import_wait_seconds,
                     **self._poll_diagnostics(),
                 },
             )
@@ -538,7 +583,8 @@ def build_worker_health_server(
     than growing ``main.py``. The window comes from
     ``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS`` (default disabled); the
     poll-loop checks (FND-4641) from ``ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS``
-    and ``ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS``. The per-mode
+    and ``ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS``; the import-wait check
+    (FND-5531) from ``ATLAN_WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS``. The per-mode
     ``on_activity`` recorder is wired separately in each ``_build_worker()``
     closure, since it depends on the mode's worker.
 
@@ -555,6 +601,7 @@ def build_worker_health_server(
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker/combined boot only
         WORKER_LIVENESS_FATAL_RECOVERY_SECONDS,
         WORKER_LIVENESS_MAX_IDLE_SECONDS,
+        WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS,
         WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS,
     )
 
@@ -563,6 +610,7 @@ def build_worker_health_server(
         max_idle_seconds=WORKER_LIVENESS_MAX_IDLE_SECONDS,
         max_zero_poller_readings=WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS,
         fatal_recovery_seconds=WORKER_LIVENESS_FATAL_RECOVERY_SECONDS,
+        max_import_wait_seconds=WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS,
     )
     server.set_temporal_client(client)
     return server

@@ -62,6 +62,27 @@ so a fatal restarts the pod after the bound even if the supervisor recovered in
 process. The 503 body carries the poller counts, fatal count and
 `fatal_unrecovered_since` for diagnosis.
 
+#### Import-wait check (on by default)
+
+`/live` also returns 503 when a thread has waited longer than
+`ATLAN_WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS` (default 300) on the same
+module import lock (FND-5531). Temporal's deadlock interrupt (TMPRL1101) can
+land inside Python's import system and leave a module's import lock unable to
+wake its next waiter. That thread then waits forever while holding the lock of
+the module it was importing, so every later import of that module hangs in
+every thread, activities included, while the poll loop keeps polling.
+
+The check reads CPython's own record of which thread waits on which import lock
+(`importlib._bootstrap._blocking_on`). It starts no thread and imports nothing.
+A wait is timed from the first `/live` request that sees it. A healthy import,
+even a slow cold one, never waits this long. The 503 body names the module and
+the waiting thread, and the ERROR log adds where the stuck import chain was
+started (the outermost line that called into the import machinery) plus the
+thread's full stack. When that line is a function-local import in workflow
+code, the fix is to move it to module level; restarting the pod only stops
+the bleeding, and a cold, busy replacement can hit the same wedge. If a future Python changes that private table, the check
+logs one warning and stays healthy. Set the variable to `0` to disable it.
+
 #### Idle window (off by default)
 
 Setting `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` to a positive value
