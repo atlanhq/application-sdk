@@ -1,6 +1,16 @@
-name: "GlobalProtect VPN Connect"
-description: "Connect to GlobalProtect VPN using OpenConnect"
+name: "GlobalProtect VPN Connect (deprecated)"
+description: "Deprecated: use twingate-connect. Connect to GlobalProtect VPN using OpenConnect."
 author: "Atlan"
+
+# DEPRECATED (FND-4676). CI's VPN client is twingate-connect, and nothing in
+# this repository calls this action any more: the dataforge path in the tests
+# workflows went Twingate-only in FND-4169. GlobalProtect signs CI in as a
+# person against a /24 address pool shared with every engineer, and runs fail
+# when it is full.
+#
+# Kept, with a warning on every run, because callers pin it @main from repos
+# this one cannot see; deleting it would break them on their next run instead
+# of telling them. Delete it once no caller remains.
 
 inputs:
   portal-url:
@@ -54,11 +64,10 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # Ran as a separate `continue-on-error: true` step in each of the four
-    # dataforge call sites in tests-reusable.yaml — four byte-identical copies of
-    # the same subnet literals, which have to agree or the tunnel shadows
-    # container networking on whichever one drifted. Folded in here, behind an
-    # opt-in input, so the values live in one place.
+    # Once ran as a separate step at each dataforge call site in the tests
+    # workflows, as byte-identical copies of the same subnet literals that had
+    # to agree or the tunnel shadowed container networking. Folded in here,
+    # behind an opt-in input, so the values live in one place.
     #
     # Composite steps do not support `continue-on-error`, so the best-effort
     # tolerance the call sites had is in the shell instead: this must never stop
@@ -73,6 +82,12 @@ runs:
           echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json &&
           sudo systemctl restart docker
         } || echo "::warning::could not move docker off 172.17/16; containers may lose the network once the tunnel is up."
+
+    # After the re-subnet, which must stay the first step (it has to run
+    # before anything touches the network; test_dataforge_lifecycle_wiring.py).
+    - name: Warn that this action is deprecated
+      shell: bash
+      run: echo "::warning::globalprotect-connect is deprecated and will be removed. Switch to atlanhq/application-sdk/.github/actions/twingate-connect@main with the TWINGATE_SHARED_KEY org secret (FND-4676)."
 
     - name: Connect via OpenConnect
       uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4

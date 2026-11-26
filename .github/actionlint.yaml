@@ -57,6 +57,27 @@ paths:
   .github/workflows/tests-reusable.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
+  # The three tier workflows tests-reusable.yaml calls (FND-4676).
+  #
+  # Unit and e2e also hit a second FALSE POSITIVE: `jobs.<job_id>.result` in
+  # `on.workflow_call.outputs`. GitHub documents it on the `jobs` context ("The
+  # result of a job in the reusable workflow. Possible values are success,
+  # failure, cancelled, or skipped") and allows `jobs` in
+  # `on.workflow_call.outputs.<output_id>.value`; actionlint 1.7.12 models
+  # `jobs.<job_id>` as {outputs} only. Tests Gate reads each tier job's result
+  # through it, so it cannot be rewritten. Verified against docs.github.com
+  # (contexts reference) on 2026-11-25.
+  .github/workflows/unit-tests-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+      - 'property "result" is not defined in object type \{outputs: '
+  .github/workflows/integration-tests-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+  .github/workflows/e2e-tests-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
+      - 'property "result" is not defined in object type \{outputs: '
   .github/workflows/build-and-scan.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'

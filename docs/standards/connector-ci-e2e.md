@@ -12,7 +12,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 
 | Component | Location | Purpose |
 |---|---|---|
-| `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Called from `tests-reusable.yaml`'s `e2e` job. |
+| `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Called from the `e2e` job of `e2e-tests-reusable.yaml`, the e2e tier `tests-reusable.yaml` calls. |
 | `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no single replacement because SDR is a deployment mode, not a test tier: see [The SDR base class](#the-sdr-base-class). |
@@ -302,7 +302,7 @@ The second case is the connector-side recheck below.
 
 ### Standing down before the lease
 
-`sdk-head-recheck` runs in `tests-reusable.yaml` immediately before
+`sdk-head-recheck` runs in the e2e tier (`e2e-tests-reusable.yaml`) immediately before
 `lease-tenant` and asks the same question the dispatch guard asked, at the last
 moment the answer can still save a tenant. When it says the SHA has been
 superseded, `lease-tenant` skips — and `prepare-tenant`, the `e2e` legs and
@@ -432,7 +432,12 @@ The action runs `envsubst < app.yaml > app-resolved.yaml` and feeds it to `atlan
 
 ## E2E secrets
 
-Full-DAG e2e runs through `tests-reusable.yaml`'s `e2e` job. The standalone
+Full-DAG e2e runs through `tests-reusable.yaml`'s `e2e` job, which calls
+`e2e-tests-reusable.yaml` (FND-4676): the image build, tenant lease and
+install, the suite × cloud legs and the lease release live there, while
+discovery, the dataforge wake/pause and Tests Gate stay in
+`tests-reusable.yaml`. Connectors still call only `tests-reusable.yaml`; see
+[ci.md](ci.md#tests-reusableyaml-calls-its-tiers-fnd-4676). The standalone
 `e2e-full-reusable.yaml` wrapper had no callers left and was deleted (FND-4249).
 
 Threaded secrets `tests-reusable.yaml` expects on the caller side (`secrets: inherit`):
@@ -1512,7 +1517,7 @@ The check is `application_sdk/testing/_setup_routes.py`; the CI shell around it 
 - It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.
 - The `e2e` job that invokes this composite has `prepare-tenant` in its `needs:`, so every step here is strictly after the install.
 
-One insertion covers the e2e caller (`tests-reusable`'s `e2e`), and no app repo carries any of it. `.github/scripts/tests/test_setup_routes_wiring.py` pins the placement, gate and injection discipline; `tests/unit/testing/test_setup_routes.py` proves the check bites, including a round-trip against the live configmap endpoint.
+One insertion covers the e2e caller (the `e2e` legs in `e2e-tests-reusable.yaml`), and no app repo carries any of it. `.github/scripts/tests/test_setup_routes_wiring.py` pins the placement, gate and injection discipline; `tests/unit/testing/test_setup_routes.py` proves the check bites, including a round-trip against the live configmap endpoint.
 
 ### Known limitation
 

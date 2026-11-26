@@ -51,7 +51,7 @@ NOT_REQUIRED = {
     ("build-and-publish-app.yaml", "build", "image-git-token"): "image "
     "build: minted on every build, only a Dockerfile mounting git_token needs it",
     ("build-and-scan.yaml", "build", "image-git-token"): "image build",
-    ("tests-reusable.yaml", "build-e2e-image", "image-git-token"): "image build",
+    ("e2e-tests-reusable.yaml", "build-e2e-image", "image-git-token"): "image build",
 }
 
 

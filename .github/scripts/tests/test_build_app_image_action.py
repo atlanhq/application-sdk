@@ -36,7 +36,7 @@ import re
 
 import pytest
 import yaml
-from _workflows import ACTIONS, job, load_workflow, step_named, steps
+from _workflows import ACTIONS, job, load_workflow, step_named, steps, tier_job
 
 _BUILD_ACTION_DIR = ACTIONS / "build-app-image"
 _BUILD_ACTION = _BUILD_ACTION_DIR / "action.yaml"
@@ -220,7 +220,7 @@ def test_each_architecture_builds_on_a_runner_native_to_it() -> None:
     build just takes several times longer, forever, on a path that runs on every
     install-path e2e. So the pairing is pinned rather than trusted.
     """
-    build_job = job(load_workflow("tests-reusable.yaml"), "build-e2e-image")
+    build_job = tier_job("build-e2e-image")
     assert build_job["runs-on"] == "${{ matrix.runner }}", (
         "the runner must come from the matrix, or both architectures land on the "
         "same one and one of them is emulated"
@@ -247,7 +247,7 @@ def test_each_architecture_builds_on_a_runner_native_to_it() -> None:
 
 
 def test_the_per_arch_legs_do_not_collide_in_the_tag_or_the_cache() -> None:
-    build_job = job(load_workflow("tests-reusable.yaml"), "build-e2e-image")
+    build_job = tier_job("build-e2e-image")
     step = next(
         s for s in build_job["steps"] if "build-app-image" in str(s.get("uses", ""))
     )
@@ -267,7 +267,7 @@ def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
     the same, and nothing downstream notices: GM accepts the version, LM accepts
     the install.
     """
-    merge_job = job(load_workflow("tests-reusable.yaml"), "merge-e2e-image")
+    merge_job = tier_job("merge-e2e-image")
     scripts = " ".join(str(s.get("run", "")) for s in merge_job["steps"])
     assert "imagetools create" in scripts
     assert "assert_image_platforms.py" in scripts, (
@@ -325,7 +325,7 @@ def test_both_architectures_are_asserted_not_just_one() -> None:
     checks. Each leg runs on a runner native to what it built, so each asserts its
     own variant — and the legs are parallel, so the second check is free.
     """
-    build_job = job(load_workflow("tests-reusable.yaml"), "build-e2e-image")
+    build_job = tier_job("build-e2e-image")
     step = next(
         s for s in build_job["steps"] if "build-app-image" in str(s.get("uses", ""))
     )
@@ -343,7 +343,7 @@ def test_the_merge_job_retries_its_manifest_read() -> None:
     the registry, so there is no local copy to inspect and reading it back a step
     later is the same race that failed a build leg.
     """
-    merge_job = job(load_workflow("tests-reusable.yaml"), "merge-e2e-image")
+    merge_job = tier_job("merge-e2e-image")
     inspect = next(
         s for s in merge_job["steps"] if "imagetools inspect" in str(s.get("run", ""))
     )
@@ -463,12 +463,7 @@ def _legs(job: dict) -> dict:
 def test_the_pr_base_image_serves_every_arch_the_connector_matrix_builds() -> None:
     """Both matrices are read from the YAML, so adding a third architecture to
     the app image cannot silently leave the base behind."""
-    consumed = {
-        leg["platform"]
-        for leg in _legs(
-            job(load_workflow("tests-reusable.yaml"), "build-e2e-image")
-        ).values()
-    }
+    consumed = {leg["platform"] for leg in _legs(tier_job("build-e2e-image")).values()}
     published = {leg["platform"] for leg in _legs(_sdk_base_job()).values()}
 
     missing = consumed - published

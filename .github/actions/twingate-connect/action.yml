@@ -1,8 +1,8 @@
 name: 'Twingate Connect'
 description: >
   Connect the runner to Twingate with a service-account key, then verify the
-  tunnel actually reaches the dispatch target. Drop-in alternative to
-  globalprotect-connect: same mothership-url probe, same `connected` output.
+  tunnel actually reaches the dispatch target. CI's only VPN client: it
+  replaced globalprotect-connect, which is retired (FND-4169, FND-4676).
 
   Why this exists: GlobalProtect authenticates CI as a *human* against a /24
   DHCP pool capped at ~252 concurrent sessions, shared with every engineer on
@@ -32,8 +32,9 @@ inputs:
   resubnet-docker:
     description: >
       Move Docker's bridge networks off 172.17/16 before dialling the tunnel.
-      Same step as globalprotect-connect's input of this name, so a caller that
-      runs containers gets the same Docker networking whichever VPN connects.
+      Atlan's internal ELBs share Docker's default 172.17/16 subnet, so once
+      that range routes via tun0 any container on the default bridge loses the
+      network. Re-subnetting must happen BEFORE the connect.
     required: false
     default: "false"
 
@@ -85,7 +86,7 @@ runs:
 
         sudo cp /etc/resolv.conf /tmp/resolv.conf.pre-twingate || true
         teardown() {
-          echo "::group::Teardown before GlobalProtect fallback"
+          echo "::group::Teardown after a failed connect"
           sudo timeout -k 5 15 twingate stop || true
           sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
           sudo rm -f /etc/apt/sources.list.d/twingate.list
@@ -98,8 +99,8 @@ runs:
         # Linux docs use; the trusted=yes form in their CI snippet disables
         # signature verification for a package that then runs as root and
         # creates network interfaces on the runner.
-        # Retried: a one-shot fetch that hits a reset or a 5xx skips Twingate and
-        # lands the job back on the GlobalProtect pool this action exists to avoid.
+        # Retried: a one-shot fetch that hits a reset or a 5xx would fail the
+        # connect for a reason that has nothing to do with the tunnel.
         curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 15 https://packages.twingate.com/apt/gpg.key \
           | sudo gpg --dearmor -o /usr/share/keyrings/twingate-client-keyring.gpg || {
             echo "::error::could not fetch the Twingate signing key."; exit 1; }
@@ -119,11 +120,9 @@ runs:
 
 
         # A failed probe must not leave tun0, its routes and its resolvers in
-        # place: openconnect then builds the GlobalProtect tunnel on the same
-        # runner, and two clients fighting over routing and DNS is how a
-        # working fallback becomes a broken one. The failure path has to be
-        # clean, not merely non-zero - otherwise the "cannot make things worse
-        # than main" property this PR claims is not actually true.
+        # place: the callers are continue-on-error and carry on to steps (a
+        # hermetic source, Docker pulls) that need the runner's own routing and
+        # DNS. The failure path has to be clean, not merely non-zero.
         echo "::group::Start headless client"
         # Checked explicitly: `shell: bash` runs with -e, so an unchecked failure
         # here would exit without teardown, and a failure that reached the probe
@@ -159,7 +158,7 @@ runs:
         done
 
         echo "connected=false" >> "$GITHUB_OUTPUT"
-        echo "::error::Twingate started but ${MOTHERSHIP_URL}/health never returned 200. Falling back to GlobalProtect."
+        echo "::error::Twingate started but ${MOTHERSHIP_URL}/health never returned 200."
         echo "::group::Diagnostics"
         timeout -k 5 10 twingate status || true
         sudo timeout -k 5 10 journalctl -u twingate --no-pager -n 50 2>/dev/null || true
