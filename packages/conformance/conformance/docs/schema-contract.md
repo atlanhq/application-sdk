@@ -120,8 +120,8 @@ Rule ID namespaces:
 
 | Prefix | Domain |
 |---|---|
-| `E001–E099` | Error-handling patterns (from `signal-over-noise` surface phase) |
-| `L001–L099` | Logging patterns (from `signal-over-noise` tune phase) |
+| `E001–E099` | Error-handling patterns |
+| `L001–L099` | Logging patterns |
 | `C001–C099` | CI/workflow supply-chain (action-pinning, permissions, trigger hygiene) |
 | `T001–T099` | Test-quality patterns (reserved) |
 | `D001–D099` | Dependency patterns (pyproject.toml conformance against the SDK contract) |
