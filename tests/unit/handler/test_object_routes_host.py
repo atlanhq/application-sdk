@@ -1045,3 +1045,24 @@ def test_an_upload_is_size_checked_after_the_write(
     monkeypatch.setattr(obstore, "head_async", _head)
     response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
     assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("given", "stored"),
+    [("dir\\file.csv", "dir/file.csv"), ("/dir/file.csv/", "dir/file.csv")],
+)
+def test_a_direct_put_file_normalises_its_key(
+    memory: MemoryStore, tmp_path: Path, given: str, stored: str
+) -> None:
+    """``put_file`` is public: a direct caller's key is normalised as it always
+    was, so the object (and its sidecar) sit where the worker's download looks."""
+    from application_sdk.storage import ops
+
+    local = tmp_path / "f.csv"
+    local.write_bytes(b"a,b\n")
+    asyncio.run(HostObjectStore(memory, kind="memory").put_file(given, str(local)))
+    assert set(_stored(memory)) == {stored, stored + ".sha256"}
+    digest = asyncio.run(
+        ops.download_file(given, tmp_path / "back.csv", memory, compute_hash=True)
+    )
+    assert digest == hashlib.sha256(b"a,b\n").hexdigest()

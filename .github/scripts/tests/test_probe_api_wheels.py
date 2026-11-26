@@ -189,3 +189,97 @@ def test_every_install_is_bounded(monkeypatch, tmp_path: Path) -> None:
     for call in calls:
         assert call["check"] is True
         assert 0 < call["timeout"] <= probe.INSTALL_TIMEOUT_S, call
+
+
+_LISTED = [
+    "application_sdk/handler/base.py",
+    "application_sdk/_obstore_config.py",
+    "application_sdk/storage/ops.py",
+    "application_sdk/clients/sql.py",
+]
+_GROUPS = {
+    "application_sdk/handler/base.py": {"core"},
+    "application_sdk/_obstore_config.py": {"core", "obstore"},
+    "application_sdk/storage/ops.py": {"obstore"},
+    "application_sdk/clients/sql.py": {"sql"},
+}
+
+
+def _legs(tmp_path: Path) -> dict[str, probe.ApiLeg]:
+    api = tmp_path / "atlan_application_sdk_api-1.0-py3-none-any.whl"
+    legs = probe.api_legs(api, _LISTED, _GROUPS, ["obstore", "sql"], 120)
+    return {leg.name: leg for leg in legs}
+
+
+def test_the_obstore_leg_installs_only_that_extra(tmp_path: Path) -> None:
+    """The host's store path must import without what the other extras bring
+    (python-dotenv): the leg installs ``[obstore]`` alone and imports the core
+    and obstore modules, never a module only another extra reaches."""
+    leg = _legs(tmp_path)["api [obstore]"]
+    assert leg.requirement.startswith("atlan-application-sdk-api[obstore] @ file:")
+    assert leg.modules.split(",") == [
+        "application_sdk.handler.base",
+        "application_sdk._obstore_config",
+        "application_sdk.storage.ops",
+    ]
+    assert leg.store_mode == "full"
+
+
+def test_the_core_and_all_extras_legs_are_unchanged(tmp_path: Path) -> None:
+    legs = _legs(tmp_path)
+    assert list(legs) == ["api core", "api [obstore]", "api [obstore,sql]"]
+    core = legs["api core"]
+    assert core.requirement == str(
+        tmp_path / "atlan_application_sdk_api-1.0-py3-none-any.whl"
+    )
+    assert core.modules.split(",") == [
+        "application_sdk.handler.base",
+        "application_sdk._obstore_config",
+    ]
+    assert (core.budget_mb, core.store_mode) == (120, "core")
+    assert legs["api [obstore,sql]"].modules.split(",") == [
+        m.removesuffix(".py").replace("/", ".") for m in _LISTED
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failing", "expected"),
+    [
+        (None, []),
+        ("_ALONE", ["api [obstore] install failed"]),
+        ("_STORE", ["api [obstore]: object-store routes failed"]),
+    ],
+)
+def test_a_leg_reports_each_failed_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failing: str | None,
+    expected: list[str],
+) -> None:
+    """Each probe a leg runs surfaces as that leg's failure."""
+    installed: list[tuple[str, ...]] = []
+
+    def fake_venv(where: Path) -> Path:
+        return where / "bin" / "python"
+
+    def fake_pip(_py: Path, *args: str) -> None:
+        installed.append(args)
+
+    def fake_alone(_py: Path, _names: list[str], jobs: int) -> list[str]:
+        return []
+
+    def fake_run(
+        argv: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        script = argv[2]
+        code = 1 if failing and script == getattr(probe, failing) else 0
+        return subprocess.CompletedProcess(argv, code)
+
+    monkeypatch.setattr(probe, "_venv", fake_venv)
+    monkeypatch.setattr(probe, "_pip", fake_pip)
+    monkeypatch.setattr(probe, "import_each_alone", fake_alone)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    leg = _legs(tmp_path)["api [obstore]"]
+    assert probe.run_leg(leg, tmp_path, "every") == expected
+    assert installed == [(leg.requirement, "httpx")]

@@ -915,7 +915,8 @@ class HostObjectStore:
         stored size after the write (``ATLAN_STORAGE_VERIFY_TRANSFERS``). The
         sidecar is best-effort: the object is stored either way, and a failed
         sidecar write is logged at WARNING with its classified cause. The key
-        is stored as given: the route built it, and answers with it.
+        is normalised as it always was here (backslashes to ``/``, outer
+        slashes stripped), so ``dir\\file.csv`` is stored as ``dir/file.csv``.
         """
         try:
             from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
@@ -923,7 +924,10 @@ class HostObjectStore:
             )
         except ModuleNotFoundError as exc:
             raise _without_storage(exc) from exc
-        await upload_file(key, local_path, self._store, normalize=False)
+        # The host's own normalisation (separators and outer slashes), as
+        # before; not the worker's staging-path rewrite, so the key a direct
+        # caller stores is the key it reads back.
+        await upload_file(_normalize_key(key), local_path, self._store, normalize=False)
 
 
 #: The attributes the host writes a config with.
