@@ -150,6 +150,8 @@ The following patterns are acceptable and used in the codebase:
 ### **VALID: Signal Handlers and Cleanup Operations**
 ```python
 # Illustrative — cleanup/flush errors that must not crash the process
+try:
+    flush()
 except Exception as e:
     logger.warning("Error during signal handler flush: %s", e, exc_info=True)
     # Don't re-raise - cleanup failures shouldn't crash the application
@@ -173,9 +175,11 @@ except Exception as publish_error:
 ### **VALID: Cleanup in Finally Blocks**
 ```python
 # Illustrative — cleanup inside finally so workflow end is non-fatal
+try:
+    ...
 finally:
     try:
-        await workflow.execute_activity(cleanup, ...)
+        await workflow.execute_activity(cleanup)
     except Exception as e:
         logger.warning("Failed to cleanup artifacts: %s", e, exc_info=True)
         # Don't re-raise - cleanup failures shouldn't fail the workflow

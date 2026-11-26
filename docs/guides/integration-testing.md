@@ -279,7 +279,7 @@ asyncio_default_test_loop_scope = "session"
 
 ```python
 @pytest.mark.asyncio(loop_scope="session")
-async def test_workflow_extracts_tables(...):
+async def test_workflow_extracts_tables(your_app_worker):
     ...
 ```
 
@@ -629,14 +629,16 @@ Combine multiple assertions:
 ```python
 from application_sdk.testing.integration import all_of, any_of, none_of
 
-# All must pass
-"data.name": all_of(exists(), is_string(), is_not_empty())
+assert_that = {
+    # All must pass
+    "data.name": all_of(exists(), is_string(), is_not_empty()),
 
-# At least one must pass
-"data.role": any_of(equals("admin"), equals("superuser"))
+    # At least one must pass
+    "data.role": any_of(equals("admin"), equals("superuser")),
 
-# None should pass
-"message": none_of(contains("error"), contains("fail"))
+    # None should pass
+    "message": none_of(contains("error"), contains("fail")),
+}
 ```
 
 ### Custom Assertions
@@ -646,11 +648,13 @@ Create your own:
 ```python
 from application_sdk.testing.integration import custom
 
-# Using custom()
-"data.count": custom(lambda x: x % 2 == 0, "is_even")
+assert_that = {
+    # Using custom()
+    "data.count": custom(lambda x: x % 2 == 0, "is_even"),
 
-# Or directly as a lambda
-"data.value": lambda x: x > 0 and x < 100
+    # Or directly as a lambda
+    "data.value": lambda x: x > 0 and x < 100,
+}
 ```
 
 ## Writing Effective Scenarios
@@ -929,12 +933,12 @@ Don't just test the happy path:
 ```python
 scenarios = [
     # Happy path
-    Scenario(name="auth_valid", ...),
+    Scenario(name="auth_valid", api="auth"),  # ... credentials, assert_that
 
     # Negative cases
-    Scenario(name="auth_invalid_password", ...),
-    Scenario(name="auth_empty_credentials", ...),
-    Scenario(name="auth_missing_username", ...),
+    Scenario(name="auth_invalid_password", api="auth"),
+    Scenario(name="auth_empty_credentials", api="auth"),
+    Scenario(name="auth_missing_username", api="auth"),
 ]
 ```
 

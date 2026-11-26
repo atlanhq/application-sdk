@@ -187,6 +187,7 @@ ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
 from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
@@ -237,6 +238,7 @@ Key changes:
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
@@ -272,6 +274,7 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.workflows.metadata_extraction.incremental_sql import (
     IncrementalSQLMetadataExtractionWorkflow,
@@ -460,6 +463,7 @@ The import rewriter (`tools/migrate_v3/rewrite_imports.py`) cannot auto-convert 
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.handlers import HandlerInterface
 
@@ -508,6 +512,7 @@ When a v2 flat credential arrives (top-level `host`, `authType`, ...), the SDK l
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
@@ -689,6 +694,7 @@ don't register anything manually.
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.worker import Worker
 from application_sdk.clients.temporal import TemporalWorkflowClient
@@ -858,7 +864,7 @@ You do not need to create `DaprClient` instances in your code.
 
 ```python
 # v2 — all calls went through the Dapr binding
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.services.objectstore import ObjectStore  # v2
 
 await ObjectStore.upload_file(source="/local/file.parquet", key="output/file.parquet")
 data = await ObjectStore.get_content("config/settings.json")
@@ -881,6 +887,7 @@ await delete("output/old.parquet")
 
 ### Migrating AtlanStorage
 
+<!-- doc-example: v2 -->
 ```python
 # v2
 from application_sdk.services.atlan_storage import AtlanStorage
@@ -921,7 +928,7 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
 
 # In @task method:
-from application_sdk.services.secretstore import SecretStore  # deprecated v2
+from application_sdk.services.secretstore import SecretStore  # v2, deprecated
 
 credentials = await SecretStore.get_credentials({"credential_guid": input.credential_guid})
 await client.load(credentials)  # dict[str, Any]
@@ -1013,6 +1020,7 @@ register_credential_type("my_service", MyCredential, _parse_my)
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.clients.atlan import get_client, get_async_client
 
@@ -1051,7 +1059,7 @@ class MyConnector(AtlanClientMixin, App):
 
 ```python
 # v2
-from application_sdk.clients.atlan_auth import AtlanAuthClient
+from application_sdk.clients.atlan_auth import AtlanAuthClient  # v2
 auth = AtlanAuthClient()
 headers = await auth.get_authenticated_headers()
 
@@ -1071,6 +1079,7 @@ timing them out. In v3, heartbeating is built into `@task` — no decorator need
 
 ### v2
 
+<!-- doc-example: v2 -->
 ```python
 from application_sdk.activities.common.utils import auto_heartbeater
 
@@ -1264,9 +1273,9 @@ if you need to trigger cleanup mid-run (e.g., after a particularly large interme
 
 ```python
 # v2 — all of these are deprecated
-from application_sdk.test_utils import ...
-from application_sdk.test_utils.credentials import MockCredentialStore
-from application_sdk.test_utils.scale_data_generator import ...
+import application_sdk.test_utils  # v2
+from application_sdk.test_utils.credentials import MockCredentialStore  # v2
+import application_sdk.test_utils.scale_data_generator  # v2
 
 # v3
 from application_sdk.testing import (
@@ -1277,7 +1286,7 @@ from application_sdk.testing import (
     MockCredentialStore,
     MockHeartbeatController,
 )
-from application_sdk.testing.scale_data_generator import ...
+import application_sdk.testing.scale_data_generator
 ```
 
 ### Using mock infrastructure in tests
