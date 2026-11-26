@@ -1018,12 +1018,21 @@
       "symbol": "CREDENTIAL_VALIDATION_ERROR"
     },
     {
-      "kind": "function",
+      "kind": "method",
       "marker_via": "decorator",
-      "message": "legacy_credential_ref() is deprecated and will be removed in v4.0. Use CredentialRef.resolve(input) instead.",
+      "message": "CredentialRef.from_workflow_args is deprecated; use CredentialRef.resolve(input) instead \u2014 it routes on extraction_method, where this falls through to the GUID. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.credentials.ref",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
+      "symbol": "from_workflow_args"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "legacy_credential_ref is deprecated; use CredentialRef.resolve(input) instead, which routes a direct-mode input to the same GUID ref. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.ref",
+      "removal_version": "4.0.0",
       "symbol": "legacy_credential_ref"
     },
     {
@@ -1403,6 +1412,15 @@
       "module": "application_sdk.errors._legacy_codes",
       "removal_version": "4.0.0",
       "symbol": "ErrorCode"
+    },
+    {
+      "kind": "property",
+      "marker_via": "warn",
+      "message": "error_code is deprecated; use the error's code (or qualified_code) instead \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors.base",
+      "removal_version": "4.0.0",
+      "symbol": "error_code"
     },
     {
       "kind": "class",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -214,13 +213,19 @@ class CredentialRef(BaseModel, frozen=True):
             return _guid_credential_ref(guid) if guid else None
 
     @classmethod
+    @deprecated(
+        "CredentialRef.from_workflow_args is deprecated; use "
+        "CredentialRef.resolve(input) instead — it routes on extraction_method, "
+        "where this falls through to the GUID. Will be removed in v4.0.0.",
+        category=DeprecationWarning,
+    )
     def from_workflow_args(cls, workflow_args: dict[str, Any]) -> CredentialRef:
         """Build a :class:`CredentialRef` from a Temporal workflow payload.
 
         .. deprecated::
             Use :meth:`CredentialRef.resolve` instead. This method has
             loose routing (falls through to GUID regardless of
-            extraction_method) and will be removed in a future release.
+            extraction_method). Removed in v4.0.0.
 
         This is the canonical adapter for the Atlan Argo marketplace
         template contract.  It inspects ``extraction_method``,
@@ -259,13 +264,6 @@ class CredentialRef(BaseModel, frozen=True):
         Raises:
             ValueError: If no routable credential source is present.
         """
-        warnings.warn(
-            "CredentialRef.from_workflow_args() is deprecated and will be removed "
-            "in v4.0. Use CredentialRef.resolve(input) instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
         from application_sdk.credentials.ingress import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             normalize_agent_json,
         )
@@ -370,8 +368,9 @@ def _guid_credential_ref(guid: str, credential_type: str = "unknown") -> Credent
 
 
 @deprecated(
-    "legacy_credential_ref() is deprecated and will be removed in v4.0. "
-    "Use CredentialRef.resolve(input) instead.",
+    "legacy_credential_ref is deprecated; use CredentialRef.resolve(input) "
+    "instead, which routes a direct-mode input to the same GUID ref. "
+    "Will be removed in v4.0.0.",
     category=DeprecationWarning,
 )
 def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> CredentialRef:
@@ -379,7 +378,7 @@ def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> Creden
 
     .. deprecated::
         Use :meth:`CredentialRef.resolve` instead, which routes a direct-mode
-        input to this same GUID ref. Removed in v4.0. The GUID route itself is
+        input to this same GUID ref. Removed in v4.0.0. The GUID route itself is
         supported; only this public constructor is going away.
     """
     return _guid_credential_ref(guid, credential_type)
