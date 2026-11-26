@@ -239,6 +239,56 @@ def test_rebound_module_alias_head_is_not_flagged(tmp_path: Path) -> None:
     assert [f for f in scan_path(target, tmp_path) if f.rule_id == "E023"] == []
 
 
+def test_unrelated_function_parameter_does_not_hide_a_real_use() -> None:
+    src = _STORAGE + (
+        "\n\ndef helper(StorageError):\n"
+        "    return StorageError\n\n\n"
+        "def handle(code):\n"
+        "    raise StorageError('x', error_code=code)\n"
+    )
+    assert _lines(src) == [_line_of(src, "raise StorageError")]
+
+
+def test_function_local_reimport_of_the_sdk_class_still_resolves() -> None:
+    src = (
+        "def handle(code):\n"
+        "    from application_sdk.storage.errors import StorageError\n"
+        "    raise StorageError('x', error_code=code)\n"
+    )
+    assert _lines(src) == [3]
+
+
+def test_module_level_rebinding_shadows_the_import() -> None:
+    src = _STORAGE + (
+        "StorageError = object\n\n\n"
+        "def handle(code):\n"
+        "    raise StorageError('x', error_code=code)\n"
+    )
+    assert _lines(src) == []
+
+
+def test_unrelated_parameter_does_not_hide_a_module_qualified_use(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "base.py").write_text(
+        "from application_sdk.credentials.errors import CredentialError\n\n\n"
+        "class AppCredentialError(CredentialError):\n"
+        "    pass\n"
+    )
+    target = tmp_path / "app" / "handler.py"
+    target.write_text(
+        "import app.base as base\n\n\n"
+        "def helper(base):\n"
+        "    return base\n\n\n"
+        "def f(code):\n"
+        "    raise base.AppCredentialError('boom', error_code=code)\n"
+    )
+    findings = [f for f in scan_path(target, tmp_path) if f.rule_id == "E023"]
+    assert [f.line for f in findings] == [9]
+
+
 def test_unnarrowed_value_is_not_tracked() -> None:
     src = _STORAGE + (
         "\n\ndef f(mapped):\n"

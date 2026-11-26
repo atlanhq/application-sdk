@@ -28,7 +28,6 @@ from pathlib import Path
 
 from ._constants import SDK_LEGACY_CODE_NAMES, SDK_LEGACY_CODED_CLASSES
 from ._sdk_errors import _Resolver as _SdkErrorResolver
-from .untyped_raise import module_bindings
 
 _SDK_PACKAGE = "application_sdk"
 
@@ -251,13 +250,12 @@ def _qualified_repo_names(
     """Each ``mod.Cls`` chain in *tree* naming a repo class that reaches an SDK
     legacy-coded class, keyed by the dotted text (``errors.AppStorageError``).
 
-    A head the module also rebinds anywhere (an assignment, a parameter, a
-    handler name) is skipped, like :func:`._checker.import_bindings` does.
+    Whether a given use's head still names that module is decided per scope
+    at the use (:meth:`LegacyErrorCodeMixin._scope_binding`).
     """
     refs = _repo_module_refs(tree)
     if not refs:
         return {}
-    _, rebound = module_bindings(tree)
     found: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Attribute):
@@ -267,7 +265,7 @@ def _qualified_repo_names(
             continue
         parts = dotted.split(".")
         ref = refs.get(parts[0])
-        if ref is None or parts[0] in rebound:
+        if ref is None:
             continue
         module, level = ref
         owner = ".".join([module, *parts[1:-1]])
@@ -283,6 +281,125 @@ def _qualified_repo_names(
 
 _SELF_NAMES: frozenset[str] = frozenset({"self", "cls"})
 
+_FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
+
+#: Nodes that open their own scope: their name (if any) binds in the
+#: enclosing scope, but names bound inside them do not.
+_SCOPE_BOUNDARIES = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.Lambda,
+    ast.ClassDef,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+#: A name bound in a scope, mapped to the SDK legacy-coded class it names
+#: there, or ``None`` when that binding is anything else (shadowing).
+_ScopeBindings = dict[str, "str | None"]
+
+
+def _scope_nodes(body: list[ast.stmt]) -> list[ast.AST]:
+    """The nodes of one scope: *body* without the inside of nested scopes."""
+    out: list[ast.AST] = []
+    stack: list[ast.AST] = list(body)
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        if not isinstance(node, _SCOPE_BOUNDARIES):
+            stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _shadowing_names(node: ast.AST, *, module_scope: bool) -> list[str]:
+    """Names *node* binds in its scope other than by a ``from`` import."""
+    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+        return [node.id]
+    if isinstance(node, _FuncDef):
+        return [node.name]
+    if isinstance(node, ast.ClassDef):
+        return [] if module_scope else [node.name]
+    if isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar):
+        return [node.name] if node.name else []
+    if isinstance(node, ast.MatchMapping):
+        return [node.rest] if node.rest else []
+    if isinstance(node, ast.Import) and not module_scope:
+        return [alias.asname or alias.name.split(".")[0] for alias in node.names]
+    return []
+
+
+def _from_import_bindings(node: ast.ImportFrom) -> _ScopeBindings:
+    """What a function-local ``from`` import binds: an SDK legacy-coded class
+    keeps resolving to it, anything else shadows."""
+    from_sdk = (
+        node.level == 0
+        and node.module is not None
+        and node.module.split(".")[0] == _SDK_PACKAGE
+    )
+    return {
+        alias.asname or alias.name: (
+            _sdk_legacy_name(node.module, alias.name)
+            if from_sdk and node.module is not None
+            else None
+        )
+        for alias in node.names
+    }
+
+
+def _bindings_of(
+    nodes: list[ast.AST], *, module_scope: bool
+) -> tuple[_ScopeBindings, set[str]]:
+    """Names *nodes* bind, and the names they declare ``global``.
+
+    At module scope imports and class definitions are what
+    :func:`legacy_coded_names` already resolved, so only the other bindings
+    (an assignment, a ``def``, a handler name) are returned.
+    """
+    bound: _ScopeBindings = {}
+    declared_global: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.Global):
+            declared_global.update(node.names)
+        elif isinstance(node, ast.ImportFrom) and not module_scope:
+            bound.update(_from_import_bindings(node))
+        else:
+            for name in _shadowing_names(node, module_scope=module_scope):
+                bound.setdefault(name, None)
+    return bound, declared_global
+
+
+def _function_bindings(node: _FuncDef) -> tuple[_ScopeBindings, set[str]]:
+    """Names *node*'s own scope binds (parameters included), minus globals."""
+    bound, declared_global = _bindings_of(_scope_nodes(node.body), module_scope=False)
+    args = node.args
+    for arg in [
+        *args.posonlyargs,
+        *args.args,
+        *args.kwonlyargs,
+        *([args.vararg] if args.vararg else []),
+        *([args.kwarg] if args.kwarg else []),
+    ]:
+        bound[arg.arg] = None
+    for name in declared_global:
+        bound.pop(name, None)
+    return bound, declared_global
+
+
+def _module_rebindings(tree: ast.Module) -> frozenset[str]:
+    """Module-scope names bound other than by import or class definition,
+    including through a function's ``global`` declaration."""
+    bound, _ = _bindings_of(_scope_nodes(tree.body), module_scope=True)
+    names = set(bound)
+    for node in ast.walk(tree):
+        if isinstance(node, _FuncDef):
+            stored, declared_global = _bindings_of(
+                _scope_nodes(node.body), module_scope=False
+            )
+            names.update(declared_global & set(stored))
+    return frozenset(names)
+
 
 class LegacyErrorCodeMixin:
     """Rule methods for E022 and E023 (legacy-error-code)."""
@@ -290,7 +407,12 @@ class LegacyErrorCodeMixin:
     _import_origins: dict[str, str]
     _legacy_coded_bases: dict[str, str]
     _legacy_coded_names: dict[str, str]
-    _rebound_names: frozenset[str]
+    _function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef]
+    _module: ast.Module | None
+    # E023 per-scope bindings, keyed by id() of the function node, and the
+    # module's own non-import rebindings (computed on first use).
+    _e023_scope_cache: dict[int, dict[str, str | None]]
+    _e023_module_rebound: frozenset[str] | None
     _class_stack: list[ast.ClassDef]
     _except_stack: list[ast.ExceptHandler]
 
@@ -351,19 +473,46 @@ class LegacyErrorCodeMixin:
 
     # ── E023 ─────────────────────────────────────────────────────────────────
 
+    def _scope_binding(self, name: str) -> tuple[bool, str | None]:
+        """Whether a scope at the current use rebinds *name*, and if so the SDK
+        legacy-coded class that binding names.
+
+        Python resolves a name in the innermost enclosing function that binds
+        it, else at module scope, so only those scopes are consulted: a
+        parameter of an unrelated function does not shadow the import here.
+        """
+        cache = self._e023_scope_cache
+        for func in reversed(self._function_stack):
+            key = id(func)
+            if key not in cache:
+                cache[key] = _function_bindings(func)[0]
+            if name in cache[key]:
+                return True, cache[key][name]
+        rebound = self._e023_module_rebound
+        if rebound is None:
+            rebound = (
+                _module_rebindings(self._module)
+                if self._module is not None
+                else frozenset()
+            )
+            self._e023_module_rebound = rebound
+        return (True, None) if name in rebound else (False, None)
+
     def _legacy_class_of(self, expr: ast.expr) -> str | None:
         """The SDK legacy-coded class *expr* names, if it names one.
 
-        A bare name the module also rebinds anywhere (a parameter, a local
-        assignment, a handler name) may not mean the import or class it
-        shadows, so it does not resolve.
+        A name a scope at this use rebinds (a parameter, a local assignment, a
+        handler name) means that binding, not the module import it shadows.
         """
         if isinstance(expr, ast.Name):
-            if expr.id in self._rebound_names:
-                return None
+            shadowed, local = self._scope_binding(expr.id)
+            if shadowed:
+                return local
             return self._legacy_coded_names.get(expr.id)
         dotted = _dotted(expr)
         if dotted is None or "." not in dotted:
+            return None
+        if self._scope_binding(dotted.partition(".")[0])[0]:
             return None
         repo_class = self._legacy_coded_names.get(dotted)
         if repo_class is not None:

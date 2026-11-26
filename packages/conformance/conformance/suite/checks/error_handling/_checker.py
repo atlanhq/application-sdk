@@ -106,6 +106,8 @@ class Checker(
         self._legacy_coded_bases = legacy_coded_bases or {}
         # E023: module-level name -> the SDK legacy-coded class it names.
         self._legacy_coded_names = legacy_coded_names or {}
+        self._e023_scope_cache: dict[int, dict[str, str | None]] = {}
+        self._e023_module_rebound: frozenset[str] | None = None
         self._deprecated_module = deprecated_module
         # False for build / dev tooling outside the app runtime (see
         # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
