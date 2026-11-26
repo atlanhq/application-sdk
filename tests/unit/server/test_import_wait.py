@@ -25,6 +25,7 @@ from application_sdk.server import _import_wait
 from application_sdk.server._import_wait import (
     ImportWaitWatch,
     _import_site,
+    _ImportWait,
     _module_lock_waits,
 )
 from application_sdk.server.health import WorkerHealthServer
@@ -75,19 +76,24 @@ def blocked_import(
         __import__(name)
 
     holder = threading.Thread(target=do_import, daemon=True)
-    holder.start()
-    assert gate.entered.wait(5)
     waiter = threading.Thread(target=do_import, name="waiter", daemon=True)
-    waiter.start()
-    assert _wait_until(
-        lambda: any(w.thread_ident == waiter.ident for w in _module_lock_waits() or [])
-    )
+    # Everything after the first thread starts is under the finally, so a
+    # failed setup assertion still releases the threads it left blocked.
     try:
+        holder.start()
+        assert gate.entered.wait(5)
+        waiter.start()
+        assert _wait_until(
+            lambda: any(
+                w.thread_ident == waiter.ident for w in _module_lock_waits() or []
+            )
+        )
         yield _BlockedImport(module=name, waiter=waiter, release=gate.release)
     finally:
         gate.release.set()
-        holder.join(5)
-        waiter.join(5)
+        for thread in (holder, waiter):
+            if thread.ident is not None:
+                thread.join(5)
         sys.modules.pop(name, None)
 
 
@@ -191,6 +197,37 @@ class TestImportWaitWatch:
         clock.now += 100
 
         assert watch.check() is None
+
+    def test_reused_thread_ident_starts_a_fresh_wait(self):
+        """Python recycles the ident of a thread that exited. A new thread
+        that waits on the same lock under the same ident is a new wait, not a
+        continuation of the old one."""
+
+        class _Lock:
+            name = "some_module"
+
+        lock = _Lock()
+        old_thread, new_thread = threading.Thread(), threading.Thread()
+        clock = _Clock()
+        watch = ImportWaitWatch(10, clock=clock)
+
+        def waits_by(thread: threading.Thread) -> list[_ImportWait]:
+            return [_ImportWait(thread, 1234, "worker", "some_module", lock)]
+
+        with patch.object(
+            _import_wait, "_module_lock_waits", return_value=waits_by(old_thread)
+        ):
+            assert watch.check() is None
+        clock.now += 100
+        with patch.object(
+            _import_wait, "_module_lock_waits", return_value=waits_by(new_thread)
+        ):
+            assert watch.check() is None
+            clock.now += 11
+            stuck = watch.check()
+
+        assert stuck is not None
+        assert stuck.waited_seconds == 11
 
     def test_stuck_wait_is_logged_once(self, blocked_import):
         clock = _Clock()

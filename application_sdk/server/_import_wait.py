@@ -99,6 +99,7 @@ def _thread_stack(ident: int) -> traceback.StackSummary | None:
 
 @dataclass(frozen=True)
 class _ImportWait:
+    thread: threading.Thread
     thread_ident: int
     thread_name: str
     module: str
@@ -108,6 +109,7 @@ class _ImportWait:
 @dataclass
 class _Sighting:
     first_seen: float
+    thread_ref: weakref.ref[threading.Thread]
     lock_ref: weakref.ref[object]
     reported: bool = False
     import_site: str | None = None
@@ -137,7 +139,7 @@ def _module_lock_waits() -> list[_ImportWait] | None:
             module = getattr(lock, "name", None)
             if not isinstance(module, str):
                 return None
-            waits.append(_ImportWait(ident, thread.name, module, lock))
+            waits.append(_ImportWait(thread, ident, thread.name, module, lock))
     return waits
 
 
@@ -189,10 +191,20 @@ class ImportWaitWatch:
         for wait in waits:
             key = (wait.thread_ident, id(wait.lock))
             sighting = self._sightings.get(key)
-            # The id check alone could match a new lock reusing a freed one's
-            # address, so confirm it is the same object.
-            if sighting is None or sighting.lock_ref() is not wait.lock:
-                sighting = _Sighting(first_seen=now, lock_ref=weakref.ref(wait.lock))
+            # Both halves of the key can be reused: Python recycles the ident
+            # of a thread that exited, and a new lock can take a freed one's
+            # address. Confirm the same thread and lock objects, so a fresh
+            # wait never inherits an old wait's start time.
+            if (
+                sighting is None
+                or sighting.thread_ref() is not wait.thread
+                or sighting.lock_ref() is not wait.lock
+            ):
+                sighting = _Sighting(
+                    first_seen=now,
+                    thread_ref=weakref.ref(wait.thread),
+                    lock_ref=weakref.ref(wait.lock),
+                )
             sightings[key] = sighting
             waited = now - sighting.first_seen
             if waited > self._max_wait_seconds and (
