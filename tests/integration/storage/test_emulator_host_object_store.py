@@ -175,7 +175,10 @@ def test_an_upload_lands_under_the_apps_namespace(
     cloud: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The sidecar assertion needs emission on, whatever the runner's env says.
+    # The host's store writes through the worker's storage.upload_file, which
+    # reads constants' value when constants is loaded, as it is here.
     monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
+    monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", True)
     make, existing = _STORES[cloud]
     store = make(existing)
     response = _host(store).post(

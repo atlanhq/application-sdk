@@ -36,9 +36,11 @@ import collections
 import contextlib
 import weakref
 from collections.abc import AsyncIterator
+from types import ModuleType
 
+from application_sdk._install import lazy_getattr, worker_only_missing
 from application_sdk._runtime.progress import current_progress_tracker
-from application_sdk.observability import cgroup
+from application_sdk.storage import _settings
 
 _MIB = 1024 * 1024
 
@@ -56,15 +58,43 @@ _MIN_BUDGET_BYTES = 128 * _MIB
 _UNKNOWN_LIMIT_BUDGET_BYTES = 1024 * _MIB
 
 
+def _cgroup() -> ModuleType | None:
+    """The worker's cgroup readings, or ``None`` on an api-only install.
+
+    ``application_sdk.observability.cgroup`` is worker code; the API host ships
+    this module without it and sizes its budget as for an unknown limit.
+    """
+    try:
+        from application_sdk.observability import (  # noqa: PLC0415 — worker-only; absent on the API host
+            cgroup,
+        )
+    except ModuleNotFoundError as exc:
+        if not worker_only_missing(exc):
+            raise
+        return None
+    return cgroup
+
+
+#: ``cgroup`` was imported here at module level before this module shipped on
+#: the API host; on the worker it stays an attribute of this module.
+_LAZY: dict[str, tuple[str, str]] = {
+    "cgroup": ("application_sdk.observability", "cgroup"),
+}
+
+
+def __getattr__(name: str) -> ModuleType:
+    if name == "cgroup":
+        _cgroup()  # imports the submodule, so its package has it as an attribute
+    return lazy_getattr(__name__, name, _LAZY, globals())
+
+
 def budget_bytes() -> int:
     """Return the configured budget: the override, else a share of the limit."""
-    from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
-        STORAGE_TRANSFER_MEMORY_BUDGET_BYTES,
-    )
-
-    if STORAGE_TRANSFER_MEMORY_BUDGET_BYTES > 0:
-        return STORAGE_TRANSFER_MEMORY_BUDGET_BYTES
-    limit = cgroup.memory_limit_bytes()
+    override = _settings.transfer_memory_budget_bytes()
+    if override > 0:
+        return override
+    cgroup = _cgroup()
+    limit = None if cgroup is None else cgroup.memory_limit_bytes()
     if limit is None:
         return _UNKNOWN_LIMIT_BUDGET_BYTES
     return max(_MIN_BUDGET_BYTES, int(limit * _LIMIT_FRACTION))
@@ -123,9 +153,7 @@ class ByteBudget:
         if not self._waiters and self._used + nbytes <= self.capacity:
             self._grant(nbytes)
             return
-        from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
-            STORAGE_LOCK_WAIT_PROGRESS_SECONDS,
-        )
+        lock_wait_seconds = _settings.lock_wait_progress_seconds()
 
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         entry = (nbytes, fut)
@@ -136,9 +164,7 @@ class ByteBudget:
             while True:
                 # asyncio.wait, not wait_for: a timeout must leave the future
                 # queued, not cancel it.
-                done, _ = await asyncio.wait(
-                    {fut}, timeout=STORAGE_LOCK_WAIT_PROGRESS_SECONDS
-                )
+                done, _ = await asyncio.wait({fut}, timeout=lock_wait_seconds)
                 if done:
                     return
                 current_progress_tracker().mark_progress("storage.budget_wait")

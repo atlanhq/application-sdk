@@ -33,8 +33,6 @@ key is the one that app's worker reads.
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import mimetypes
 import os
 import re
@@ -44,8 +42,8 @@ import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypeVar, cast
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 from uuid import uuid4
 
 import orjson
@@ -68,8 +66,14 @@ from typing_extensions import deprecated
 
 from application_sdk import _env, _obstore_config, _storage_classify
 from application_sdk._logging import get_logger
-from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
-from application_sdk._storage_classify import (
+from application_sdk._runtime.offload import (  # noqa: F401 — raise_if_offload_abandoned: importable from here in past releases
+    raise_if_offload_abandoned,
+    run_in_thread,
+)
+
+# Unused here since HostObjectStore calls the worker's primitives, but
+# importable from this module in past releases (docs/standards/symbols.md).
+from application_sdk._storage_classify import (  # noqa: F401
     StorageFailureKind,
     classify_storage_failure,
     past_gateway_no_route,
@@ -86,8 +90,6 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
 logger = get_logger(__name__)
-
-_T = TypeVar("_T")
 
 # Allowed characters for config_id and config_type path components. Prevents
 # path traversal (no slashes, dots, or percent-encoding) when these values are
@@ -798,26 +800,18 @@ class S3ObjectStore:
         )
 
 
-# Indirection so tests can record the gateway retry's backoff without sleeping.
-_retry_sleep = asyncio.sleep
-
-
-async def _past_gateway_no_route(
-    op: str, key: str, call: Callable[[], Awaitable[_T]]
-) -> _T:
-    """One host store request through the worker's gateway no-route retry."""
-    return await past_gateway_no_route(op, key, call, sleep=_retry_sleep)
-
-
 class HostObjectStore:
     """One bucket or container through obstore: the host's store.
 
     The store comes from the constructors the worker uses
     (:mod:`application_sdk._obstore_config`), so the host gets the worker's
-    timeouts, retries, proxy and custom-CA settings. obstore runs its requests
-    on its own Rust runtime, so store latency never blocks the host's event
-    loop. Credentials stay inside the obstore store; ``repr`` names only the
-    kind of store.
+    timeouts, retries, proxy and custom-CA settings. Every request goes
+    through the worker's own primitives (:mod:`application_sdk.storage.ops`,
+    shipped in the ``obstore`` extra): its gateway retry, post-write size
+    check, ``.sha256`` sidecar, transfer budget and telemetry apply here as on
+    the worker. obstore runs its requests on its own Rust runtime, so store
+    latency never blocks the host's event loop. Credentials stay inside the
+    obstore store; ``repr`` names only the kind of store.
     """
 
     def __init__(self, store: ObjectStore, *, kind: str = "obstore") -> None:
@@ -881,117 +875,77 @@ class HostObjectStore:
 
         Any other failure (auth, network, throttling, a missing bucket or
         container, a gateway that is not ready) raises: the store could not
-        answer, which is not a missing object. Missing is the shared table's
-        verdict (:func:`~application_sdk._storage_classify.is_not_found`).
+        answer, which is not a missing object. A not-found is confirmed with a
+        listing under the key, which tells a missing object from a missing
+        bucket or container (``storage.ops._get_bytes_confirmed``).
         """
-        import obstore  # noqa: PLC0415 — the obstore extra
-
-        async def _get() -> bytes:
-            result = await obstore.get_async(self._store, key)
-            return bytes(await result.bytes_async())
-
         try:
-            raw = await _past_gateway_no_route("get", key, _get)
-        except Exception as exc:
-            if classify_storage_failure(exc).kind is not StorageFailureKind.NOT_FOUND:
-                raise
-            # S3, GCS and Azure also answer a missing bucket or container with
-            # a 404, which reads as not-found too. A listing under the key
-            # tells them apart: it succeeds (empty) when only the object is
-            # missing, and raises when the bucket or container is.
-            await _past_gateway_no_route(
-                "list",
-                key,
-                lambda: obstore.list_with_delimiter_async(self._store, prefix=key),
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
+                _get_bytes_confirmed,
             )
-            return None
-        return orjson.loads(raw)
+        except ModuleNotFoundError as exc:
+            raise _without_storage(exc) from exc
+        raw = await _get_bytes_confirmed(key, self._store, normalize=False)
+        return None if raw is None else orjson.loads(raw)
 
     async def put_json(self, key: str, body: dict[str, Any]) -> None:
-        """Store ``body`` as JSON at ``key``.
+        """Store ``body`` as JSON at ``key``, as the worker's ``storage.put_json``.
 
-        No sidecar, as the worker's ``storage.put_json``: a config is small and
-        read whole by its JSON parser, so a truncation cannot read as valid.
+        No sidecar, as on the worker: a config is small and read whole by its
+        JSON parser, so a truncation cannot read as valid.
         """
-        import obstore  # noqa: PLC0415 — the obstore extra
-
-        data = orjson.dumps(body)
-        await _past_gateway_no_route(
-            "put",
-            key,
-            lambda: obstore.put_async(
-                self._store,
-                key,
-                data,
-                attributes={"Content-Type": "application/json"},
-            ),
+        try:
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
+                BoundStore,
+                put_json,
+            )
+        except ModuleNotFoundError as exc:
+            raise _without_storage(exc) from exc
+        await put_json(
+            key, body, BoundStore(self._store, _JSON_ATTRIBUTES), normalize=False
         )
 
     async def put_file(self, key: str, local_path: str) -> None:
-        """Store the file at ``local_path`` under ``key``, then its sidecar.
+        """Store the file at ``local_path`` under ``key``, as the worker's
+        ``storage.upload_file``.
 
-        The ``{key}.sha256`` sidecar records the digest of the bytes uploaded,
-        as the worker's ``upload_file`` does, so a downstream download through
-        ``application_sdk.storage`` verifies the object against it.
-        ``ATLAN_STORAGE_WRITE_SIDECARS=false`` turns it off, as on the worker.
-        The sidecar is best-effort, as on the worker: the object is stored
-        either way, and a failed sidecar write is logged at WARNING.
+        That writes the ``{key}.sha256`` sidecar a downstream download through
+        ``application_sdk.storage`` verifies the object against
+        (``ATLAN_STORAGE_WRITE_SIDECARS=false`` turns it off), and checks the
+        stored size after the write (``ATLAN_STORAGE_VERIFY_TRANSFERS``). The
+        sidecar is best-effort: the object is stored either way, and a failed
+        sidecar write is logged at WARNING with its classified cause. The key
+        is normalised as it always was here (backslashes to ``/``, outer
+        slashes stripped), so ``dir\\file.csv`` is stored as ``dir/file.csv``.
         """
-        import obstore  # noqa: PLC0415 — the obstore extra
-
-        stored = _normalize_key(key)
-        # As the worker's write_digest_sidecar: no sidecar for a bookkeeping
-        # key, which nothing would read (the upload route keeps data off them).
-        write_sidecar = _env.env_bool(
-            _storage_classify.WRITE_SIDECARS_ENV, True, report=_report_env
-        ) and not _storage_classify.is_internal_key(stored)
-        # The route drained the upload to this file itself, so nothing writes
-        # it while it is hashed or read. Hashed only when the digest is used.
-        digest = await run_in_thread(_sha256_file, local_path) if write_sidecar else ""
-        # obstore streams the file from disk, in parts when it is large.
-        await _past_gateway_no_route(
-            "put",
-            stored,
-            lambda: obstore.put_async(self._store, stored, Path(local_path)),
-        )
-        if not write_sidecar:
-            return
-        sidecar = _storage_classify.sidecar_key(stored)
         try:
-            await _past_gateway_no_route(
-                "put",
-                sidecar,
-                lambda: obstore.put_async(self._store, sidecar, digest.encode()),
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
+                upload_file,
             )
-        # conformance: ignore[E002] best-effort sidecar, as on the worker; the object itself is stored and the failure is logged with its classified cause
-        except Exception as exc:  # noqa: BLE001 — best-effort sidecar; logged at WARNING with the classified cause
-            failure = classify_storage_failure(exc)
-            # Only the classified evidence and the exception type: obstore's
-            # message and traceback can quote the request's signed URL or the
-            # store's credential.
-            # conformance: ignore[L004] exc_info would log that message, and the credential with it.
-            logger.warning(
-                "Integrity sidecar write failed for key '%s' (%s: %s, "
-                "http_status=%s, provider_code=%s): the object was stored, but "
-                "downstream readers cannot verify it",
-                stored,
-                type(exc).__name__,
-                failure.kind.value,
-                failure.http_status,
-                failure.provider_code,
-            )
+        except ModuleNotFoundError as exc:
+            raise _without_storage(exc) from exc
+        # The host's own normalisation (separators and outer slashes), as
+        # before; not the worker's staging-path rewrite, so the key a direct
+        # caller stores is the key it reads back.
+        await upload_file(_normalize_key(key), local_path, self._store, normalize=False)
 
 
-def _sha256_file(path: str) -> str:
-    """The SHA-256 hex digest of the local file at *path* (1 MiB reads)."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            # Per 1 MiB read: a request cancelled mid-hash stops here instead
-            # of holding the app's blocking slot for the rest of the file.
-            raise_if_offload_abandoned()
-            digest.update(chunk)
-    return digest.hexdigest()
+#: The attributes the host writes a config with.
+_JSON_ATTRIBUTES = {"Content-Type": "application/json"}
+
+
+def _without_storage(exc: ModuleNotFoundError) -> Exception:
+    """The error a store call raises when the ``obstore`` extra is missing.
+
+    ``application_sdk.storage`` ships in the api wheel; only obstore can be
+    absent, and :meth:`HostObjectStore.from_env` builds no store without it.
+    Any other missing module is a broken install, raised as is.
+    """
+    if exc.name != "obstore":
+        return exc
+    return RuntimeError(
+        "HostObjectStore needs obstore: install atlan-application-sdk-api[obstore]"
+    )
 
 
 def _s3_store(bucket: str) -> ObjectStore:
@@ -1090,7 +1044,10 @@ def _host_store_failure(
     The shared table names the failure, so an operator reads the same verdict
     the worker's ``StorageError`` leaves carry, not a raw obstore exception.
     """
-    failure = classify_storage_failure(exc)
+    # The worker's primitives raise a StorageError chained to obstore's own
+    # exception; the shared table reads that one.
+    cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+    failure = classify_storage_failure(cause)
     # Only the classified evidence and the exception type, as from_env logs a
     # store it could not build: obstore's message and traceback can quote the
     # request's signed URL or the store's credential.
@@ -1101,7 +1058,7 @@ def _host_store_failure(
         app_name,
         key,
         failure.kind.value,
-        type(exc).__name__,
+        type(cause).__name__,
         failure.http_status,
         failure.provider_code,
     )

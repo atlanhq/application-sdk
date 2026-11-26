@@ -68,16 +68,15 @@ class PathLockRegistry:
         queued activity killed as stalled. Marking progress on a short
         interval while blocked keeps the waiter visibly alive.
         """
-        from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
-            STORAGE_LOCK_WAIT_PROGRESS_SECONDS,
+        from application_sdk.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+            _settings,
         )
 
+        lock_wait_seconds = _settings.lock_wait_progress_seconds()
         lock = self.lock(local_path)
         while True:
             try:
-                await asyncio.wait_for(
-                    lock.acquire(), timeout=STORAGE_LOCK_WAIT_PROGRESS_SECONDS
-                )
+                await asyncio.wait_for(lock.acquire(), timeout=lock_wait_seconds)
                 break
             except TimeoutError:
                 current_progress_tracker().mark_progress(self._progress_label)

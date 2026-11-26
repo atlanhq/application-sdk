@@ -388,3 +388,113 @@ def test_a_lazy_name_defined_in_a_core_file_loads_through_a_core_file(
         if "core" in group_of(defined_in) and "core" not in group_of(target):
             detours.append(f"{name}: via {target}, defined in {defined_in}")
     assert detours == []
+
+
+def test_the_storage_package_serves_its_worker_names_lazily() -> None:
+    """``application_sdk.storage`` imports only its read and write path eagerly
+    (the API host ships it); the worker's names load on first access and are
+    the objects they always were."""
+    import application_sdk.storage as storage
+    from application_sdk.storage import CloudStore, create_store_from_binding
+    from application_sdk.storage._budget import cgroup
+    from application_sdk.storage.binding import create_store_from_binding as defined
+    from application_sdk.storage.cloud import CloudStore as cloud_defined
+
+    assert CloudStore is cloud_defined
+    assert create_store_from_binding is defined
+    assert storage.binding.__name__ == "application_sdk.storage.binding"
+    assert storage.preflight.__name__ == "application_sdk.storage.preflight"
+    assert cgroup.__name__ == "application_sdk.observability.cgroup"
+    assert set(storage.__all__) <= set(dir(storage))
+
+
+#: Each setting the API host's storage path reads without ``constants``, set
+#: to a value other than its default.
+_STORAGE_SETTINGS_ENV = {
+    "ATLAN_TEMPORARY_PATH": "probe-staging/",
+    "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS": "7",
+    "ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS": "12.5",
+    "ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS": "400",
+    "ATLAN_MAX_NO_PROGRESS_SECONDS": "800",
+    "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES": "16777216",
+    "ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY": "5",
+    "ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES": "123456",
+    "ATLAN_STORAGE_RESUME_DOWNLOADS": "false",
+    "ATLAN_STORAGE_VERIFY_TRANSFERS": "false",
+    "ATLAN_STORAGE_WRITE_SIDECARS": "false",
+    "ENABLE_ATLAN_UPLOAD": "true",
+}
+
+#: Runs as the API host would: the worker's modules (and ``constants``, with its
+#: python-dotenv) are not importable and the install reads as api-only. It
+#: imports the object store's read and write path, reads every setting through
+#: it, then lets ``constants`` load and prints both values per setting.
+_READERS_AGREE = r"""
+import importlib.abc, json, sys
+_ABSENT = (
+    "application_sdk.observability", "application_sdk.infrastructure",
+    "application_sdk.constants", "loguru", "dotenv", "dapr", "temporalio",
+    "opentelemetry",
+)
+class _Absent(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name in _ABSENT or name.startswith(tuple(a + "." for a in _ABSENT)):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        return None
+absent = _Absent()
+sys.meta_path.insert(0, absent)
+import application_sdk._install as install
+install.api_only_install = lambda: True
+from application_sdk import _env
+from application_sdk.common import atomic
+from application_sdk.storage import _settings, ops  # noqa: F401 — the host's path
+readers = {
+    "TEMPORARY_PATH": _env.temporary_path,
+    "MAX_CONCURRENT_STORAGE_TRANSFERS": _settings.max_concurrent_storage_transfers,
+    "STORAGE_PROGRESS_LOG_INTERVAL_SECONDS": _settings.progress_log_interval_seconds,
+    "STORAGE_LOCK_WAIT_PROGRESS_SECONDS": _settings.lock_wait_progress_seconds,
+    "STORAGE_UPLOAD_PART_SIZE_BYTES": _settings.upload_part_size_bytes,
+    "STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN": _settings.upload_part_size_overridden,
+    "STORAGE_UPLOAD_MAX_CONCURRENCY": _settings.upload_max_concurrency,
+    "STORAGE_TRANSFER_MEMORY_BUDGET_BYTES": _settings.transfer_memory_budget_bytes,
+    "STORAGE_RESUME_DOWNLOADS": _settings.resume_downloads,
+    "STORAGE_VERIFY_TRANSFERS": _settings.verify_transfers,
+    "STORAGE_WRITE_SIDECARS": _settings.write_sidecars,
+    "ENABLE_ATLAN_UPLOAD": atomic._enable_atlan_upload,
+    "WORKFLOW_OUTPUT_PATH_TEMPLATE": lambda: atomic.WORKFLOW_OUTPUT_PATH_TEMPLATE,
+}
+fallback = {name: read() for name, read in readers.items()}
+sys.meta_path.remove(absent)
+import application_sdk.constants as constants
+print(json.dumps({n: [v, getattr(constants, n)] for n, v in fallback.items()}))
+"""
+
+
+@pytest.mark.parametrize("overridden", [False, True], ids=["defaults", "set"])
+def test_the_storage_settings_readers_agree_with_constants(overridden: bool) -> None:
+    """Without ``constants`` loaded (as on the API host), each reader reads the
+    same variable with the same default as ``constants`` does."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _STORAGE_SETTINGS_ENV and not k.startswith("PYTHON")
+    }
+    if overridden:
+        env.update(_STORAGE_SETTINGS_ENV)
+    out = subprocess.run(
+        [sys.executable, "-c", _READERS_AGREE],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=ROOT,
+        timeout=120,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    pairs = json.loads(out.stdout.strip().splitlines()[-1])
+    assert {n: a for n, (a, b) in pairs.items() if a != b} == {}

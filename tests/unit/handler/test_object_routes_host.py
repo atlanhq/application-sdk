@@ -43,8 +43,13 @@ def _stored(store: MemoryStore) -> dict[str, bytes]:
 
 @pytest.fixture(autouse=True)
 def _sidecars_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sidecar emission at its default, whatever the runner's env says."""
+    """Sidecar emission at its default, whatever the runner's env says.
+
+    ``constants`` is loaded in this process, as on the worker, so its value is
+    the one ``storage._settings`` reads; on the host the env is read.
+    """
     monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
+    monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", True)
 
 
 @pytest.fixture
@@ -119,10 +124,13 @@ def test_an_unreadable_object_raises_rather_than_reads_as_missing(
     locked.mkdir()
     (locked / "config.json").write_text("{}")
     locked.chmod(0)
+    from application_sdk.storage.errors import StorageError
+
     try:
         store = HostObjectStore(LocalStore(tmp_path), kind="local")
-        with pytest.raises(obstore.exceptions.BaseError):
+        with pytest.raises(StorageError) as raised:
             asyncio.run(store.get_json("persistent-artifacts/config.json"))
+        assert isinstance(raised.value.__cause__, obstore.exceptions.BaseError)
         assert asyncio.run(store.get_json("absent/config.json")) is None
     finally:
         locked.chmod(0o700)
@@ -741,6 +749,24 @@ _GATEWAY_AUTH_UNAVAILABLE = (
 )
 
 
+def _failing_writer(put: Callable[..., Any]) -> Callable[..., Any]:
+    """``obstore.open_writer_async`` (the upload's multipart writer) failing as
+    the async *put* does: it is entered with ``async with``, not awaited."""
+
+    class _Writer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._call = (args, kwargs)
+
+        async def __aenter__(self) -> Any:
+            args, kwargs = self._call
+            return await put(*args, **kwargs)
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    return _Writer
+
+
 @pytest.fixture
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     """Record the gateway retry's backoff instead of sleeping through it."""
@@ -749,7 +775,10 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def _sleep(delay: float) -> None:
         slept.append(delay)
 
-    monkeypatch.setattr(object_routes, "_retry_sleep", _sleep)
+    from application_sdk.storage import ops
+
+    # The host's requests go through the worker's store seam, and its retry.
+    monkeypatch.setattr(ops, "_retry_sleep", _sleep)
     return slept
 
 
@@ -777,7 +806,7 @@ def test_an_uploaded_file_verifies_through_the_workers_download(
 def test_sidecars_off_writes_only_the_object(
     host: TestClient, memory: MemoryStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "false")
+    monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", False)
     response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
     assert response.status_code == 200
     assert list(_stored(memory)) == [response.json()["data"]["key"]]
@@ -881,7 +910,9 @@ def test_a_failed_write_is_a_classified_503(
     async def _put(*_: Any, **__: Any) -> Any:
         raise RuntimeError(message)
 
+    # A config is one PUT; an upload goes through the worker's multipart writer.
     monkeypatch.setattr(obstore, "put_async", _put)
+    monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
     config = host.post("/workflows/v1/config/g?type=credentials", json={"a": 1})
     upload = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
     for response in (config, upload):
@@ -913,36 +944,6 @@ def test_an_upload_named_like_a_sidecar_is_stored_as_data(
         asyncio.run(ops.download_file(key, tmp_path / "x", memory))
 
 
-def test_with_sidecars_off_the_upload_is_not_hashed(
-    host: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "false")
-
-    def _no_hash(_path: str) -> str:
-        raise AssertionError("hashed although no sidecar is written")
-
-    monkeypatch.setattr(object_routes, "_sha256_file", _no_hash)
-    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
-    assert response.status_code == 200
-
-
-def test_the_hash_stops_once_its_request_is_abandoned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    big = tmp_path / "big"
-    big.write_bytes(b"x" * (3 << 20))
-    checks: list[int] = []
-
-    def _abandoned() -> None:
-        checks.append(1)
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(object_routes, "raise_if_offload_abandoned", _abandoned)
-    with pytest.raises(asyncio.CancelledError):
-        object_routes._sha256_file(str(big))
-    assert checks == [1]
-
-
 def test_a_store_failure_logs_no_driver_text(
     host: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -958,6 +959,7 @@ def test_a_store_failure_logs_no_driver_text(
     log = MagicMock()
     monkeypatch.setattr(object_routes, "logger", log)
     monkeypatch.setattr(obstore, "put_async", _put)
+    monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
     assert (
         host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
         == 503
@@ -985,8 +987,11 @@ def test_a_failed_sidecar_write_logs_no_driver_text(
             raise RuntimeError(secret)
         return await real_put(store, key, *args, **kwargs)
 
+    from application_sdk.storage import integrity
+
+    # The sidecar write is the worker's (storage.integrity), so is its log.
     log = MagicMock()
-    monkeypatch.setattr(object_routes, "logger", log)
+    monkeypatch.setattr(integrity, "logger", log)
     monkeypatch.setattr(obstore, "put_async", _put)
     assert (
         host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
@@ -995,3 +1000,69 @@ def test_a_failed_sidecar_write_logs_no_driver_text(
     (call,) = log.warning.call_args_list
     assert "exc_info" not in call.kwargs
     assert all(secret not in str(arg) for arg in call.args)
+    assert "RuntimeError" in call.args
+
+
+def test_on_the_host_a_failed_upload_event_carries_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's per-attempt storage event copies the driver's (redacted)
+    message for its OTLP pipeline; on an api-only install it carries only the
+    error class, as the host's own failure log does."""
+    from unittest.mock import MagicMock
+
+    from application_sdk.storage import ops
+
+    signed = "https://b.example.invalid/k?X-Goog-Signature=deadbeef"
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(f"Server returned non-2xx status code: 403 {signed}")
+
+    log = MagicMock()
+    monkeypatch.setattr(ops, "logger", log)
+    monkeypatch.setattr(ops, "api_only_install", lambda: True)
+    monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")})
+    assert response.status_code == 503
+    (call,) = log.log.call_args_list
+    assert call.kwargs["extra"]["error_class"] == "RuntimeError"
+    assert "error_message" not in call.kwargs["extra"]
+    assert signed not in str(call)
+
+
+def test_an_upload_is_size_checked_after_the_write(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's post-write check runs on the host: a store that reports a
+    different size than was sent fails the upload instead of answering 200."""
+    real_head = obstore.head_async
+
+    async def _head(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        meta = dict(await real_head(store, key, *args, **kwargs))
+        meta["size"] = 0
+        return meta
+
+    monkeypatch.setattr(obstore, "head_async", _head)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("given", "stored"),
+    [("dir\\file.csv", "dir/file.csv"), ("/dir/file.csv/", "dir/file.csv")],
+)
+def test_a_direct_put_file_normalises_its_key(
+    memory: MemoryStore, tmp_path: Path, given: str, stored: str
+) -> None:
+    """``put_file`` is public: a direct caller's key is normalised as it always
+    was, so the object (and its sidecar) sit where the worker's download looks."""
+    from application_sdk.storage import ops
+
+    local = tmp_path / "f.csv"
+    local.write_bytes(b"a,b\n")
+    asyncio.run(HostObjectStore(memory, kind="memory").put_file(given, str(local)))
+    assert set(_stored(memory)) == {stored, stored + ".sha256"}
+    digest = asyncio.run(
+        ops.download_file(given, tmp_path / "back.csv", memory, compute_hash=True)
+    )
+    assert digest == hashlib.sha256(b"a,b\n").hexdigest()

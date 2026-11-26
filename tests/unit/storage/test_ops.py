@@ -1738,10 +1738,14 @@ class TestTransferProgressHeartbeat:
         assert "in_progress" in args[1]
         assert "50%" in args[1]
         # Structured fields promote to OTLP attributes (all in _KNOWN_EXTRA_KEYS).
-        assert kwargs["storage_op"] == "download"
-        assert kwargs["outcome"] == "in_progress"
-        assert kwargs["size_bytes"] == 50 * 1024 * 1024
-        assert kwargs["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
+        # Passed as stdlib ``extra``, which both loggers take: the SDK logger
+        # spreads it into the bound fields, a stdlib one (the API host) sets
+        # them on the record.
+        extra = kwargs["extra"]
+        assert extra["storage_op"] == "download"
+        assert extra["outcome"] == "in_progress"
+        assert extra["size_bytes"] == 50 * 1024 * 1024
+        assert extra["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
 
     def test_no_total_omits_percentage(self) -> None:
         from application_sdk.storage._telemetry import _log_transfer_progress

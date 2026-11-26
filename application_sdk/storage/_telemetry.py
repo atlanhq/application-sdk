@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._install import worker_only_missing
+from application_sdk._logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -68,10 +69,15 @@ def _record_transfer_metric(
     before its workflows start failing, rather than after. (BLDX-1513)
     """
     try:
-        from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — lazy: avoid import-time cycle observability<->storage
-            MetricType,
-            get_metrics,
-        )
+        try:
+            from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — lazy: avoid import-time cycle observability<->storage
+                MetricType,
+                get_metrics,
+            )
+        except ModuleNotFoundError as exc:
+            if not worker_only_missing(exc):
+                raise
+            return  # the API host: no metrics pipeline
 
         metrics = get_metrics()
         family = _classify_transfer_error(error_class)
@@ -152,4 +158,4 @@ def _log_transfer_progress(
     else:
         progress = f"{bytes_so_far} bytes"
     msg = f"storage.{op} in_progress path={store_path} {progress}"
-    logger.log(logging.INFO, msg, **extra)
+    logger.log(logging.INFO, msg, extra=extra)

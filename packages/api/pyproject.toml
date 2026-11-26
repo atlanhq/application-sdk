@@ -119,9 +119,13 @@ sql = [
 aws = [
     "application_sdk.common.aws_utils",
 ]
-# The host's object store: core reaches this module too (object_routes.py
-# builds the store through it), and the group makes the wheel probe install
-# the obstore extra and import it.
+# The host's object store: core reaches _obstore_config too (object_routes.py
+# builds the store through it). storage.ops is the worker's read and write
+# path, which HostObjectStore calls (lazily, so core does not reach it); its
+# closure must stay free of loguru, python-dotenv (constants), Dapr and
+# OpenTelemetry. The group makes the wheel probe install the obstore extra and
+# import them.
 obstore = [
     "application_sdk._obstore_config",
+    "application_sdk.storage.ops",
 ]

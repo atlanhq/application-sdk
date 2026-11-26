@@ -93,6 +93,10 @@ def _field_keys(call: ast.Call) -> Iterator[str]:
                 if isinstance(key, ast.Constant) and isinstance(key.value, str):
                     yield key.value
             continue
+        if keyword.arg == "extra" and isinstance(keyword.value, ast.Name):
+            # A dict built at runtime, spread into fields like ``**fields``:
+            # its keys are not literal here, so it is skipped as that is.
+            continue
         yield keyword.arg
 
 
