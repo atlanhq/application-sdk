@@ -2,6 +2,7 @@
 
 - When changing `application_sdk` modules, update the matching conceptual docs per `docs/standards/documentation.md`.
 - Conceptual docs live under `docs/concepts/` (see the mapping in that rule file).
+- A new page under `docs/` goes into `nav` in `mkdocs.yml`, and links to repo source use a full GitHub URL; CI's `mkdocs build --strict` fails otherwise (`docs/standards/documentation.md`).
 
 ## Incremental state (`application_sdk/common/incremental/**`)
 

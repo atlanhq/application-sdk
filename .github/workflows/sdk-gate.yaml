@@ -7,11 +7,13 @@ name: SDK Gate
 #   - SDK Tests        (sdk-tests-reusable.yaml)         — unit / integration / storage
 #   - Conformance      (conformance-reusable.yaml)       — C/E/P/O/D/L/I/T/B rule series
 #   - Contract Toolkit (contract-toolkit-reusable.yaml)  — PKL generate / lint / docs
+#   - Docs             (docs.yaml)                       — mkdocs build --strict
 #
 # Design:
 #   - Selective: each area is gated on a paths-filter output, so a PR that
 #     touches only docs / .claude / .agents / .vscode / .github-meta skips all
-#     three areas and the gate goes green in seconds.
+#     three test areas and the gate goes green in seconds (a docs/ or
+#     mkdocs.yml change runs only the seconds-long Docs build).
 #   - Force-all: release/* and bump-version* head refs, and v* tags, run every
 #     area regardless of changed paths (release safety net).
 #   - Merge-queue escalation: merge_group entries that touch SDK code (or the
@@ -65,6 +67,7 @@ jobs:
       conformance: ${{ steps.filter.outputs.conformance }}
       conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
       api_pkg: ${{ steps.filter.outputs.api_pkg }}
+      docs: ${{ steps.filter.outputs.docs }}
       container: ${{ steps.filter.outputs.container }}
       force_all: ${{ steps.final-force.outputs.force_all }}
       force_sdk: ${{ steps.final-force.outputs.force_sdk }}
@@ -253,6 +256,15 @@ jobs:
               - '.github/scripts/check_api_surface.py'
               - '.github/scripts/gen_api_files.py'
               - '.github/scripts/probe_api_wheels.py'
+            # The MkDocs site (FND-4271): its pages, its config, the job that
+            # builds it, and the lock that pins mkdocs and its extensions.
+            docs:
+              - 'docs/**'
+              - 'mkdocs.yml'
+              - '.github/workflows/docs.yaml'
+              - '.github/workflows/sdk-gate.yaml'
+              - 'pyproject.toml'
+              - 'uv.lock'
             # A container change (base image / daprd / system deps / entrypoint)
             # can alter SDK runtime behaviour, so it runs ALL gate areas — in
             # addition to the orthogonal Trivy container scan + connector e2e
@@ -436,6 +448,17 @@ jobs:
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.api_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_sdk == 'true' || needs.changes.outputs.force_all == 'true')
     uses: ./.github/workflows/api-suite-tests-reusable.yaml
 
+  # The MkDocs site, built with --strict (FND-4271). Runs on any docs input
+  # change, and on force_all (release/* and v* tags) so a release never ships
+  # with a site that no longer builds. Like api-suite-tests, it checks
+  # force_all explicitly: the paths-filter step is skipped when forcing, so
+  # `docs` is the empty string rather than 'false'.
+  docs:
+    name: Docs
+    needs: changes
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.force_all == 'true')
+    uses: ./.github/workflows/docs.yaml
+
   # ── The single required check ───────────────────────────────────────────────
   # Always runs and always concludes, so branch protection can require exactly
   # this one context for all three areas.  A reusable-workflow call that was
@@ -448,7 +471,7 @@ jobs:
     # ANDed with success(needs.changes), so if detection fails every area
     # skips — and skipped→pass would make this gate falsely green while
     # NOTHING ran. Fail closed on a non-success `changes` result.
-    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests]
+    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests, docs]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -473,6 +496,7 @@ jobs:
           TOOLKIT_RESULT: ${{ needs.toolkit.result }}
           CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
           API_PKG_RESULT: ${{ needs.api-suite-tests.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
         run: |
           set -euo pipefail
           # Detection has no `if:`, so it always runs — anything other than
@@ -496,6 +520,7 @@ jobs:
           check "Contract Toolkit"      "$TOOLKIT_RESULT"
           check "Conformance Suite Tests" "$CONFORMANCE_PKG_RESULT"
           check "API Suite Tests"         "$API_PKG_RESULT"
+          check "Docs"                    "$DOCS_RESULT"
           if [[ "$ok" != "true" ]]; then
             echo "::error::SDK gate FAILED — one or more areas did not pass."
             exit 1

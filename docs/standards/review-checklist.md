@@ -99,8 +99,8 @@ Review for critical issues first - these take priority over everything else.
 
 ```python
 # REJECT: Poor file organization
-# Decorators far from their consumers
-application_sdk/utils/lock_helpers.py  # Used only by execution/_temporal/
+# Decorators far from their consumers (hypothetical path)
+application_sdk/utils/lock_decorators.py  # Used only by execution/
 
 # REQUIRE: Colocate decorators with consumers
 application_sdk/execution/decorators.py  # Lock decorators near lock interceptor

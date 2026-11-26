@@ -92,7 +92,7 @@ routing, polling, grading and teardown are unchanged.
 
 Which base an app's suites use follows from the top-level `type` it declares in
 `atlan.yaml` (generated from `contract/app.pkl`). Conformance rule
-[T026](../../packages/conformance/conformance/docs/rules/tests.md#t026) checks
+[T026](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/tests.md#t026) checks
 every e2e test class against it, case-insensitively:
 
 | Declared `type` | e2e test classes | Why |
@@ -811,7 +811,7 @@ A single always-on job (`connector-tests`) on apps-sdk PRs fans out to the conne
 > The two are deliberately split: the dispatch job can't stay pending for the whole (8+ min) connector run without polling, so a separate `run` check holds the "is it done?" state and is closed by a push callback. Both are owned by the fleet App so the cross-repo callback can complete them and they're attributed to the fleet App's check suite (not an arbitrary `github-actions` one). The `E2E Callback Watchdog` sweeps any `run` check left pending if a connector runner dies before its callback fires.
 
 **The `run` check reports the connector's Tests Gate verdict, and nothing else.**
-`report-to-sdk` runs the same [`verify-test-gate`](../../.github/actions/verify-test-gate/action.yaml)
+`report-to-sdk` runs the same [`verify-test-gate`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/verify-test-gate/action.yaml)
 action as the connector's own `Tests Gate` job, over the same job results, and
 completes the check run with its `conclusion` output. This is a contract, not an
 implementation detail: a red connector run must be red on the SDK PR that
@@ -836,7 +836,7 @@ Since v4 the action reads the dispatched run's id straight out of the `workflow_
 >
 > **This paragraph is the single source of truth for the receiver's grouping expression.** It is the one place the expression is written down: `e2e-apps/action.yaml` and the `pull_request.yaml` call site state the invariant and point here instead of restating it. The receiver lives in another repo and moves independently, so every in-repo copy of the expression goes stale silently — which is exactly what happened when the middle `inputs.application_sdk_ref` term landed there after #2939. When updating this, check the receiver rather than trusting a copy.
 >
-> The middle term is the receiver's own second line of defence, added after #2939: because both SDK call sites always pass `application_sdk_ref`, a dispatcher that drops `distinct_id` today degrades to per-SDK-SHA grouping rather than one global group. That narrows the blast radius; it does not remove the caller's obligation, and it only helps receivers that have adopted the fallback. On the SDK side the obligation is enforced, not just documented — `e2e-apps`'s `Require a distinct_id in workflow-inputs` step ([`validate_dispatch_inputs.py`](../../.github/scripts/validate_dispatch_inputs.py)) fails the job before dispatching if the key is missing or empty.
+> The middle term is the receiver's own second line of defence, added after #2939: because both SDK call sites always pass `application_sdk_ref`, a dispatcher that drops `distinct_id` today degrades to per-SDK-SHA grouping rather than one global group. That narrows the blast radius; it does not remove the caller's obligation, and it only helps receivers that have adopted the fallback. On the SDK side the obligation is enforced, not just documented — `e2e-apps`'s `Require a distinct_id in workflow-inputs` step ([`validate_dispatch_inputs.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/validate_dispatch_inputs.py)) fails the job before dispatching if the key is missing or empty.
 
 ### The SDK-side pollers and their tokens
 
@@ -851,7 +851,7 @@ The SDR composite renders one PR-comment body, writes it to `results/pr-comment-
 The test image reference is deterministic — `ghcr.io/atlanhq/<app-image-name>:sdr-test-<short-sha>`
 — so every cloud leg of a run used to rebuild the identical tag. The build
 sequence (SDK-ref repin → manifest regeneration → buildx → push → interpreter
-assert) therefore lives in its own [`build-app-image`](../../.github/actions/build-app-image/action.yaml)
+assert) therefore lives in its own [`build-app-image`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/build-app-image/action.yaml)
 composite, and `sdr-e2e` takes a `prebuilt-image` input that skips its own build
 and uses the supplied reference everywhere the built one would have gone (the
 configurator's `app_image`, and the action's `image` output).
@@ -1140,7 +1140,7 @@ express a manifest list; such a caller falls back to pulling, which still works.
 The one read that can't be avoided is `merge-e2e-image`'s: `imagetools create` is
 purely registry-side, so the manifest list exists *only* there and inspecting it a
 step later is inherently a fresh read. That one is wrapped in
-[`with-retry.sh`](../../.github/scripts/with-retry.sh) — around the *inspect*, and
+[`with-retry.sh`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/with-retry.sh) — around the *inspect*, and
 captured into a variable before parsing, because piping a retried command
 concatenates every attempt's output into the reader's stdin and would fail the
 parse on healthy data.
@@ -1206,7 +1206,7 @@ The reads are scoped to the distinct queues of the nodes AE still reports `Runni
 
 Because a reachable watchdog closes *before* the ceiling, it — not the ceiling — is now the exit a stall actually takes on any suite whose ceiling is 1800s or lower. It raises `DAGProgressStalledError` rather than returning, so the same per-node breakdown is rendered onto that exception: the error carries the last observation (`DAGRunResult.progress_stalled_after_seconds`, alongside the ceiling's `timed_out_after_seconds`) and `run_full_dag` re-raises it through the one renderer above. The only difference in the output is the clause naming which exit closed — `AE reports Pending when the 600s progress watchdog closed` instead of `at the 1800s poll ceiling`. A node wedged `Running` reads the same way rather than falling back to `status=Running error=None`.
 
-**Why the harness cannot shorten the timeouts that actually bind.** The node-level budget is generous by design: `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](../../contract-toolkit/docs/reference.md)). But the timeout that produced the stall above was one layer down — a `heartbeat_timeout_seconds` of 3600 on the `publish` activity, which turns each lost heartbeat into an hour of dead time before the retry, well past any e2e budget. Neither is reachable from the harness: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the app's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is what the harness can do; a heartbeat watchdog in the owning system app ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is where that class of stall actually gets fixed.
+**Why the harness cannot shorten the timeouts that actually bind.** The node-level budget is generous by design: `publish` and `lineage-publish` default to a 3-day `startToCloseTimeoutSeconds` (right for a large tenant doing real work, see [contract-toolkit reference](https://github.com/atlanhq/application-sdk/blob/main/contract-toolkit/docs/reference.md)). But the timeout that produced the stall above was one layer down — a `heartbeat_timeout_seconds` of 3600 on the `publish` activity, which turns each lost heartbeat into an hour of dead time before the retry, well past any e2e budget. Neither is reachable from the harness: at AE submit Heracles re-fetches the manifest from the **tenant-deployed pod** and that DAG is what executes (see [Building the image once](#building-the-image-once)); the seed DAG establishes the workflow record, not the graph. The only effective place is the app's own committed contract — which is the manifest that also ships to production, so shortening it for CI would mean e2e no longer exercises the contract we ship. Precise reporting plus a reachable watchdog is what the harness can do; a heartbeat watchdog in the owning system app ([ADR-0018](../adr/0018-progress-aware-heartbeat.md)) is where that class of stall actually gets fixed.
 
 ## What a red leg means when Atlas could not be read (FND-225)
 
@@ -1451,7 +1451,7 @@ Empty (the default) makes no extra Atlas call.
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).
 
-The shared [`regenerate-contract`](../../.github/actions/regenerate-contract/action.yaml) composite regenerates `app/generated/**` from `contract/app.pkl` **before** the manifest is consumed (driver: [`.github/scripts/regenerate_contract.py`](../../.github/scripts/regenerate_contract.py)). It self-skips when there is no `contract/app.pkl`.
+The shared [`regenerate-contract`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/regenerate-contract/action.yaml) composite regenerates `app/generated/**` from `contract/app.pkl` **before** the manifest is consumed (driver: [`.github/scripts/regenerate_contract.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/regenerate_contract.py)). It self-skips when there is no `contract/app.pkl`.
 
 | Where it runs | Placement | Drift gate |
 |---|---|---|
@@ -1511,7 +1511,7 @@ The same race is waited for one step earlier, on the build-identity route — se
 
 ### Where the logic lives, and why
 
-The check is `application_sdk/testing/_setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](../../.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. It is private because it is SDK CI tooling, not app API (FND-4660): the public `application_sdk.testing.setup_routes` is a deprecated alias of it until v4.0.0, when the implementation moves under `.github/` and leaves the wheel. The shell probes the private module first and falls back to the public one, so an app pinned to an SDK from before the move still runs the check. The split is not arbitrary:
+The check is `application_sdk/testing/_setup_routes.py`; the CI shell around it is [`verify_setup_routes.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/sdr-e2e/verify_setup_routes.py) in the composite. It is private because it is SDK CI tooling, not app API (FND-4660): the public `application_sdk.testing.setup_routes` is a deprecated alias of it until v4.0.0, when the implementation moves under `.github/` and leaves the wheel. The shell probes the private module first and falls back to the public one, so an app pinned to an SDK from before the move still runs the check. The split is not arbitrary:
 
 - The SDK is on **both** sides of the join being asserted. `/api/service/configmaps/<name>` is Heracles proxying to the app pod's own `GET /workflows/v1/configmap/{id}`, so the response envelope, the form-file selection rule and the generated-tree layout are read from `application_sdk/common/_generated_tree.py` — the same authority the server reads. A second copy would let the server serve one file while the check compared against another, and that mismatch would read as a contract regression.
 - It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.
@@ -2065,7 +2065,7 @@ beyond the check running something real. It is **not** gated on the four-tier
 test bar, the 85% coverage target, or every tier being wired up — pytest already
 exits non-zero when it collects nothing, so a vacuous pass is not possible, and
 the gate's verdict comes from a tested driver
-([`verify-test-gate`](../../.github/actions/verify-test-gate/action.yaml)) rather
+([`verify-test-gate`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/verify-test-gate/action.yaml)) rather
 than from a job's own exit status. Turn it on with a thin suite and grow the
 suite behind it; a suite nothing enforces has no authority and degrades under
 pressure.
@@ -2090,9 +2090,9 @@ pass/fail already blocks publish while the 85% threshold only annotates.
 ## Reference
 
 - [Reference adopter walkthrough (mysql-app)](https://github.com/atlanhq/atlan-mysql-app/blob/main/docs/CI-E2E.md)
-- SDR composite action: [`.github/actions/sdr-e2e/action.yaml`](../../.github/actions/sdr-e2e/action.yaml)
-- Cross-repo dispatcher action: [`.github/actions/e2e-apps/action.yaml`](../../.github/actions/e2e-apps/action.yaml)
-- Test harness: [`application_sdk/testing/e2e/`](../../application_sdk/testing/e2e/) (the deprecated predecessor, [`application_sdk/testing/full_dag/`](../../application_sdk/testing/full_dag/), is removed in v4.0)
+- SDR composite action: [`.github/actions/sdr-e2e/action.yaml`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/sdr-e2e/action.yaml)
+- Cross-repo dispatcher action: [`.github/actions/e2e-apps/action.yaml`](https://github.com/atlanhq/application-sdk/blob/main/.github/actions/e2e-apps/action.yaml)
+- Test harness: [`application_sdk/testing/e2e/`](https://github.com/atlanhq/application-sdk/tree/main/application_sdk/testing/e2e) (the deprecated predecessor, [`application_sdk/testing/full_dag/`](https://github.com/atlanhq/application-sdk/tree/main/application_sdk/testing/full_dag), is removed in v4.0)
 - Series of merged PRs that built this:
   - [#1669](https://github.com/atlanhq/application-sdk/pull/1669) — SDR composite + pytest base
   - [#1710](https://github.com/atlanhq/application-sdk/pull/1710) — Cross-repo dispatch + full-DAG harness + sticky comments

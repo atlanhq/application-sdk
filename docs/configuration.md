@@ -1,6 +1,6 @@
 # Configuration Reference
 
-The Application SDK reads configuration from environment variables at startup. Variables are grouped below by subsystem. The canonical source of truth is [`application_sdk/constants.py`](../application_sdk/constants.py) (import-time constants) and [`application_sdk/main.py`](../application_sdk/main.py) (`AppConfig` runtime values).
+The Application SDK reads configuration from environment variables at startup. Variables are grouped below by subsystem. The canonical source of truth is [`application_sdk/constants.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/constants.py) (import-time constants) and [`application_sdk/main.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/main.py) (`AppConfig` runtime values).
 
 Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 

@@ -7,6 +7,21 @@ site_author: App Framework Team
 copyright: App Framework Team © 2025
 docs_dir: docs
 
+# CI builds the site with `mkdocs build --strict` (.github/workflows/docs.yaml),
+# which turns every warning below into a failure: a page missing from `nav`, a
+# relative link to a file that is not a doc page, an anchor the target page
+# does not have. Link to repo source with a full GitHub URL, not `../` out of
+# docs/: the site serves docs/ only, so a relative link there is a 404.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+# Working design notes, not site pages.
+exclude_docs: |
+  superpowers/
+
 theme:
   name: material
   font:
@@ -104,6 +119,7 @@ nav:
       - MCP: concepts/mcp.md
       - Monitoring: concepts/monitoring.md
       - Transformers: concepts/transformers.md
+      - FileReference & App.upload(): concepts/file-reference.md
   - Migration:
       - What's New in v3: whats-new-v3.md
       - Upgrade Guide v3: upgrade-guide-v3.md
@@ -117,6 +133,7 @@ nav:
       - Code Review: agents/review.md
       - DeepWiki MCP: agents/deepwiki.md
       - SDK Capability Manifest: agents/sdk-capabilities.md
+      - Canonical Apps: agents/canonical-apps.md
 
   - Standards:
       - Coding: standards/coding.md
@@ -133,6 +150,16 @@ nav:
       - Cross-Repo Contracts: standards/cross-repo-contracts.md
       - Release Flow: standards/release-flow.md
       - v3 Readiness: standards/v3-readiness.md
+      - CI Authoring: standards/ci.md
+      - Symbol Removal & Rename: standards/symbols.md
+      - Env Var Removal & Rename: standards/env-vars.md
+      - API Distribution: standards/api-distribution.md
+      - Metrics: standards/metrics.md
+      - App Certification: standards/app-certification.md
+      - Credential Leak Gate: standards/credential-leak-gate.md
+      - Unit-Tests Gate: standards/unit-tests-gate.md
+      - Connector CI (SDR + Full-DAG E2E): standards/connector-ci-e2e.md
+      - Preflight Conformance Spec: standards/preflight-conformance-spec.md
   - Architecture Decisions:
       - Index: adr/index.md
       - adr/0001-per-app-handlers.md
@@ -146,6 +173,17 @@ nav:
       - adr/0009-separate-handler-worker-deployments.md
       - adr/0010-async-first-blocking-code.md
       - adr/0011-logging-level-guidelines.md
+      - adr/0012-observability-consolidation.md
+      - adr/0013-error-hierarchy-and-failure-taxonomy.md
+      - adr/0014-two-store-storage-architecture.md
+      - adr/0015-directory-listing-race-fix.md
+      - adr/0016-multi-pool-worker-routing.md
+      - adr/0017-native-execution-isolation.md
+      - adr/0018-progress-aware-heartbeat.md
+      - adr/0019-runtime-substrate-layer.md
+      - adr/0020-artifact-validation.md
+      - adr/0021-source-validation.md
+      - adr/0022-skipped-record-capture.md
   - Reference:
       - CLI: reference/cli.md
       - HTTP API: reference/http-api.md

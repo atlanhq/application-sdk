@@ -18,3 +18,14 @@ When modifying SDK code, update corresponding conceptual documentation under `do
 *   `application_sdk/credentials/**` -> `docs/concepts/handlers.md` (credential resolution section)
 *   `application_sdk/storage/**` -> `docs/concepts/apps.md` (built-in storage tasks section)
 *   `application_sdk/observability/**` -> `docs/concepts/monitoring.md`
+
+## Site build (`mkdocs build --strict`)
+
+CI builds the docs site with `mkdocs build --strict` on every PR that touches `docs/` or `mkdocs.yml` (the Docs area of the SDK Gate, `.github/workflows/docs.yaml`). The `validation:` block in `mkdocs.yml` makes each of these a failure:
+
+- **A page not in `nav`.** Add every new page under `docs/` to `nav` in `mkdocs.yml`. Working notes that are not site pages go under an `exclude_docs` path instead.
+- **A link to a file outside `docs/`.** The site serves `docs/` only, so `../../application_sdk/main.py` is a 404 there. Link repo source with a full URL: `https://github.com/atlanhq/application-sdk/blob/main/application_sdk/main.py`.
+- **An anchor the target page lacks.** MkDocs and GitHub slug headings differently: a heading with `&` or `—` gets a double hyphen on GitHub and a single one in MkDocs. Avoid punctuation in headings you link to, so both renderers agree.
+
+Run `uv run mkdocs build --strict` locally before pushing a docs change.
+

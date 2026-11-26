@@ -5,7 +5,8 @@
 
 ## Context
 
-Before this work, `application_sdk/errors.py` was a 100-line file containing
+Before this work, `application_sdk/errors.py` (now the `application_sdk/errors/`
+package) was a 100-line file containing
 only a frozen `ErrorCode("APP", 1)` dataclass and ~30 `AAF-{COMP}-{ID:03d}`
 string constants. A parallel `application_sdk/common/error_codes.py` provided
 an `Atlan-{Component}-{HTTP}-{ID}` taxonomy that coupled failure classification

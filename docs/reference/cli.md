@@ -141,4 +141,4 @@ asyncio.run(
 `temporal_ui` is local-dev only. When enabled, the embedded Temporal Web UI
 binds to `http://127.0.0.1:8233` unless `temporal_ui_port` is set.
 
-See [Getting Started](../guides/getting-started.md#step-7-optional-use-run_dev_combined) for details.
+See [Getting Started](../guides/getting-started.md#step-3-run-your-app) for details.
