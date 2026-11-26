@@ -23,8 +23,10 @@ assert _spec and _spec.loader
 mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
+# The integration tier tests-reusable.yaml calls (FND-4676).
 _WORKFLOW = (
-    Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
+    Path(__file__).resolve().parents[3]
+    / ".github/workflows/integration-tests-reusable.yaml"
 )
 MIRROR = "https://mirror.gcr.io"
 
@@ -247,7 +249,7 @@ def test_rejects_non_https_mirror(daemon_json: Path) -> None:
         )
 
 
-# ── wiring in tests-reusable.yaml ─────────────────────────────────────────
+# ── wiring in tests-reusable.yaml's integration tier ──────────────────────
 
 
 @pytest.fixture(scope="module")

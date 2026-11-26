@@ -35,6 +35,16 @@ from conformance.bootstrap.render import render
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REUSABLE = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
+#: The tiers tests-reusable.yaml calls (FND-4676). The caller's block is the
+#: ceiling for their jobs too, so their declarations count.
+_TIERS = tuple(
+    _REPO_ROOT / ".github/workflows" / name
+    for name in (
+        "unit-tests-reusable.yaml",
+        "integration-tests-reusable.yaml",
+        "e2e-tests-reusable.yaml",
+    )
+)
 
 #: GitHub's permission levels, weakest first. Used to take the maximum a scope is
 #: declared at across the reusable's jobs — a caller has ONE block covering every
@@ -55,12 +65,13 @@ def _required_scopes() -> dict[str, str]:
     date with it: adding `checks: write` to one job of the reusable makes the
     assertions below fail until the scaffolded caller carries it too.
     """
-    workflow = yaml.safe_load(_REUSABLE.read_text(encoding="utf-8"))
     required: dict[str, str] = {}
-    for job in workflow["jobs"].values():
-        for scope, level in (job.get("permissions") or {}).items():
-            if _LEVELS.index(level) > _LEVELS.index(required.get(scope, "none")):
-                required[scope] = level
+    for path in (_REUSABLE, *_TIERS):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job in workflow["jobs"].values():
+            for scope, level in (job.get("permissions") or {}).items():
+                if _LEVELS.index(level) > _LEVELS.index(required.get(scope, "none")):
+                    required[scope] = level
     return required
 
 

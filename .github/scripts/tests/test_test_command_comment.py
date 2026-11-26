@@ -26,7 +26,7 @@ import pr_test_command as ptc
 import pytest
 import test_command_comment as tcc
 import yaml
-from _workflows import REPO_ROOT, job, load_workflow, step_named
+from _workflows import REPO_ROOT, job, load_workflow, step_named, tier_job
 from conformance.bootstrap import render as bootstrap_render
 
 TEMPLATES = REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
@@ -116,7 +116,9 @@ class TestRender:
 
 def _job(leg: str, conclusion: str | None = "success", status: str = "completed"):
     return {
-        "name": f"e2e / End-to-end ({leg})",
+        # The API name of a leg in e2e-tests-reusable.yaml, called from
+        # tests-reusable.yaml's `e2e` job (FND-4676), on a `/e2e` run.
+        "name": f"e2e / e2e / End-to-end ({leg})",
         "conclusion": conclusion,
         "status": status,
     }
@@ -575,10 +577,14 @@ class TestWiring:
         assert permissions["pull-requests"] == "write"
 
     def test_e2e_job_names_are_what_legs_from_jobs_parses(self) -> None:
-        e2e = job(load_workflow("tests-reusable.yaml"), "e2e")
+        # The legs run in e2e-tests-reusable.yaml, so the API lists each as
+        # `<caller job> / <tests-reusable's e2e job> / <leg job>` (FND-4676).
+        caller = job(load_workflow("tests-reusable.yaml"), "e2e")
+        e2e = tier_job("e2e")
         assert e2e["name"] == "End-to-end (${{ matrix.name }})"
+        leg = e2e["name"].replace("${{ matrix.name }}", "x-aws")
         assert tcc.legs_from_jobs(
-            [{"name": "e2e / " + e2e["name"].replace("${{ matrix.name }}", "x-aws")}],
+            [{"name": f"e2e / {caller['name']} / {leg}"}],
             ["aws"],
         ) == [("x", "aws", "")]
 

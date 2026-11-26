@@ -25,7 +25,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _workflows import ACTIONS, load_workflow, step_named, steps, triggers
+from _workflows import (
+    ACTIONS,
+    load_workflow,
+    step_named,
+    steps,
+    tier_jobs,
+    triggers,
+)
 
 UNIT_ACTION = ACTIONS / "connector-unit-tests" / "action.yaml"
 INTEGRATION_ACTION = ACTIONS / "connector-integration-tests" / "action.yaml"
@@ -42,8 +49,9 @@ def workflow() -> dict:
 
 
 @pytest.fixture(scope="module")
-def jobs(workflow: dict) -> dict:
-    return workflow["jobs"]
+def jobs() -> dict:
+    # The tier jobs live in the workflows tests-reusable.yaml calls (FND-4676).
+    return tier_jobs()
 
 
 def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:

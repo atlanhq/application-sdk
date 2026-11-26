@@ -45,7 +45,7 @@ GITHUB = REPO_ROOT / ".github"
 
 MINT_ID = "image-git-token"
 #: e2e mints once for the image build and the host-side ``uv sync`` (FND-4901).
-SHARED_MINT = {("tests-reusable.yaml", "e2e"): "git-deps-token"}
+SHARED_MINT = {("e2e-tests-reusable.yaml", "e2e"): "git-deps-token"}
 
 
 def _mint_id(workflow_file: str, job_id: str) -> str:
@@ -59,9 +59,9 @@ def _token_ref(workflow_file: str, job_id: str) -> str:
 #: (workflow file, job id, step locator) for every step that hands a token to
 #: an image build. The locator is the step's id, else its name.
 SITES = [
-    ("tests-reusable.yaml", "build-e2e-image", "build"),
+    ("e2e-tests-reusable.yaml", "build-e2e-image", "build"),
     (
-        "tests-reusable.yaml",
+        "e2e-tests-reusable.yaml",
         "e2e",
         "atlanhq/application-sdk/.github/actions/sdr-e2e@main",
     ),

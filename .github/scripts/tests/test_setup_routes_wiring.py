@@ -30,7 +30,8 @@ import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
+# The e2e legs, which tests-reusable.yaml calls (FND-4676).
+_WORKFLOW = _REPO_ROOT / ".github/workflows/e2e-tests-reusable.yaml"
 _SDR_ACTION = _REPO_ROOT / ".github/actions/sdr-e2e/action.yaml"
 _SHELL = _REPO_ROOT / ".github/actions/sdr-e2e/verify_setup_routes.py"
 
@@ -181,7 +182,7 @@ def test_the_token_never_reaches_argv(steps: list[dict]) -> None:
 def test_the_e2e_caller_reaches_this_action() -> None:
     """The check lives in this composite, so it only runs if the caller uses it.
 
-    If tests-reusable.yaml stopped using the action, its route coverage would
+    If tests-reusable.yaml's e2e tier stopped using the action, its route coverage would
     vanish with no failing check to say so.
     """
     assert "actions/sdr-e2e" in _WORKFLOW.read_text(encoding="utf-8")

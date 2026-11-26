@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 from _bump_skip import without_bump_skip
-from _workflows import ACTIONS, WORKFLOWS, load_workflow, triggers
+from _workflows import ACTIONS, WORKFLOWS, load_workflow, tier_jobs, tier_text, triggers
 
 _WORKFLOW = WORKFLOWS / "tests-reusable.yaml"
 _TWINGATE_ACTION = ACTIONS / "twingate-connect" / "action.yml"
@@ -28,8 +28,9 @@ def workflow() -> dict:
 
 
 @pytest.fixture(scope="module")
-def jobs(workflow: dict) -> dict:
-    return workflow["jobs"]
+def jobs() -> dict:
+    # The integration and e2e jobs live in the tier workflows (FND-4676).
+    return tier_jobs()
 
 
 @pytest.fixture(scope="module")
@@ -208,17 +209,27 @@ def test_evaluator_would_catch_the_unguarded_count(jobs: dict) -> None:
     assert not _evaluate(_job_if(jobs, "wake-dataforge-source"), unit_only)
 
 
-def test_legs_need_wake_for_ordering_only(jobs: dict) -> None:
-    # wake is in each leg's `needs` (so the source is up before the fetch)…
-    assert "wake-dataforge-source" in jobs["integration"]["needs"]
-    assert "wake-dataforge-source" in jobs["e2e"]["needs"]
+def test_legs_need_wake_for_ordering_only(workflow: dict) -> None:
+    # The tiers are called from tests-reusable.yaml (FND-4676), so the ordering
+    # lives on the caller jobs: wake is in each caller's `needs` (so the source
+    # is up before the fetch)…
+    callers = workflow["jobs"]
+    assert "wake-dataforge-source" in callers["integration"]["needs"]
+    assert "wake-dataforge-source" in callers["e2e"]["needs"]
     # …but NOT gated in their `if:` — a wake failure must not skip the leg, so a
     # hermetic-fallback connector can still fall back.
-    assert "wake-dataforge-source" not in _job_if(jobs, "integration")
-    assert "wake-dataforge-source" not in _job_if(jobs, "e2e")
+    assert "wake-dataforge-source" not in _job_if(callers, "integration")
+    assert "wake-dataforge-source" not in _job_if(callers, "e2e")
+    # And the wake is SKIPPED on every connector that has not opted in. Without
+    # a status function GitHub's implicit success() over `needs` would then
+    # skip both callers before their `if:` is read, so each must carry one.
+    for name in ("integration", "e2e"):
+        assert "always()" in _job_if(callers, name), name
 
 
 def test_pause_runs_on_any_outcome_after_all_consumers(jobs: dict) -> None:
+    # `integration` and `e2e` here are the tests-reusable.yaml caller jobs, which
+    # complete only once their whole tier has.
     pause = jobs["pause-dataforge-source"]
     assert set(pause["needs"]) == {"wake-dataforge-source", "integration", "e2e"}
     cond = _job_if(jobs, "pause-dataforge-source")
@@ -262,7 +273,7 @@ def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
 
 def test_dataforge_path_has_no_globalprotect_fallback() -> None:
     # FND-4169: Twingate is the only route; GlobalProtect is being retired.
-    assert "globalprotect-connect" not in _WORKFLOW.read_text(encoding="utf-8")
+    assert "globalprotect-connect" not in tier_text()
 
 
 def test_both_jobs_connect_over_twingate(workflow: dict, jobs: dict) -> None:
@@ -383,7 +394,7 @@ def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> 
     one that drifted silently loses container networking. Asserting the literal
     is absent stops a fifth copy being pasted in rather than the input being set.
     """
-    assert "default-address-pools" not in _WORKFLOW.read_text(encoding="utf-8")
+    assert "default-address-pools" not in tier_text()
 
     # Every dataforge call site that runs Docker afterwards opts in.
     for name in ("integration", "e2e"):

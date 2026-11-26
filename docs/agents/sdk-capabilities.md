@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    7b0b45a838b4cf94504993c8eabd2611b1132836
-source-date:   2026-11-25T20:19:04Z
+source-sha:    c29554f764d866e3a9dc49ad0c16e6743f64ebe4
+source-date:   2026-11-25T22:44:57Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 47 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 37 |
+| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 40 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 51 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 43 |
@@ -1965,6 +1965,20 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 - **Summary:** Return the leaf class for an HTTP status, or ``None`` when unmapped.
 - **Defined in:** `application_sdk/errors/http.py`
 
+#### `degraded_failure_details`
+
+- **Import:** `from application_sdk.errors import degraded_failure_details`
+- **Signature:** `degraded_failure_details(err: AppError)`
+- **Summary:** Re-serialise a verdict the wire envelope rejected, keeping its routing.
+- **Defined in:** `application_sdk/errors/wire.py`
+
+#### `error_from_failure_details`
+
+- **Import:** `from application_sdk.errors import error_from_failure_details`
+- **Signature:** `error_from_failure_details(details: FailureDetails)`
+- **Summary:** Rebuild a typed error from its wire envelope.
+- **Defined in:** `application_sdk/errors/wire.py`
+
 #### `redact_secrets`
 
 - **Import:** `from application_sdk.errors import redact_secrets`
@@ -1978,6 +1992,13 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 - **Signature:** `redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0)`
 - **Summary:** Redact every string reachable inside a value bound for the wire.
 - **Defined in:** `application_sdk/errors/base.py`
+
+#### `register_wire_leaf`
+
+- **Import:** `from application_sdk.errors import register_wire_leaf`
+- **Signature:** `register_wire_leaf(leaf: _LeafT)`
+- **Summary:** Register ``leaf`` as the class :func:`error_from_failure_details` rebuilds for its ``code``.
+- **Defined in:** `application_sdk/errors/wire.py`
 
 #### `safe_traceback`
 

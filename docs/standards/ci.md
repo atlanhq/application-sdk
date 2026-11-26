@@ -1003,8 +1003,9 @@ tell you what it needs.
 Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
 
 * `tests-reusable.yaml`: Detect merge queue, Detect integration suite, Discover
-  e2e suites, Recheck the dispatched SDK ref, Release tenant lease, Report to
-  application-sdk, Test-readiness scorecard, Renovate artifacts, Tests Gate.
+  e2e suites, Report to application-sdk, Test-readiness scorecard, Renovate
+  artifacts, Tests Gate. Its e2e tier, `e2e-tests-reusable.yaml`: Recheck the
+  dispatched SDK ref, Release tenant lease.
 * `build-and-publish-app.yaml`: Validate Channel + Branch, Dispatch App
   Deployment, Publish.
 * `build-and-scan.yaml`: Security Gate.
@@ -1021,9 +1022,9 @@ Short fleet jobs that stay on `ubuntu-latest`:
 | `renovate-auto-approve` | A conformance-resync PR is verified by rendering in a Docker container, and the job only finds out which kind of PR it has after it starts. Its 25-minute ceiling (fan-in wait) is also over the slim cap. Moving it needs the resync render split into its own job. |
 | build-and-publish-app `prepare` | Runs `parse_atlan_yaml.py` / `validate_atlan_yaml.py` on the system `python3`, which import PyYAML and `packaging` from the full image. |
 | build-and-publish-app `leak-scan`, `certify`; `generated-freshness` | `sudo` (gitleaks / `install-pkl`), not yet verified on slim. |
-| tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
+| e2e-tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
 | tests-reusable `wake-` / `pause-dataforge-source` | The Twingate client needs a tun device, which an unprivileged container cannot create. |
-| `checks-reusable` pre-commit, tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
+| `checks-reusable` pre-commit, unit-tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
 | Image build, merge, scan and e2e jobs | Docker. |
 
 Jobs that only run in application-sdk itself stay put because moving them saves
@@ -1244,7 +1245,7 @@ venv, later `uv sync`, `uv run`, `uv lock --check` and even a re-lock of a
 stale lock fetch nothing. `uv run --isolated` and a re-resolve on a cold cache
 do fetch, so give them the token too, through `git_auth.py`.
 
-Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
+Used by `tests-reusable.yaml`'s tiers (unit, integration, e2e), `checks-reusable.yaml`,
 `conformance-reusable.yaml`, `release-version-bump.yaml` and the certify gate
 in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
 `test_private_git_deps_wiring.py` pins the shape (FND-4740).
@@ -1961,7 +1962,7 @@ The same list has three input names and a file, and all of them go through it:
 
 | Where it is declared | Installed by |
 | --- | --- |
-| `apt-packages` (`tests-reusable.yaml`, three jobs; `conformance-reusable.yaml`) | `--env APT_PACKAGES` |
+| `apt-packages` (`tests-reusable.yaml`, one job in each tier; `conformance-reusable.yaml`) | `--env APT_PACKAGES` |
 | `apt_packages` (`build-and-publish-app.yaml`, `certify` and `certify-unit`) | `--env APT_PACKAGES` |
 | `system_deps` (`checks-reusable.yaml`) | `--env SYSTEM_DEPS` |
 | `.github/ci-system-deps.txt` (bootstrap `--system-deps`) | `conformance-reusable.yaml`, `--file`, before the D series |
@@ -1976,8 +1977,8 @@ declare the same list three ways and get a different answer from each.
 
 **How the script reaches the step:** from this workflow's own commit, like any
 other driver (see [Reusing scripts from a reusable
-workflow](#reusing-scripts-from-a-reusable-workflow)). `tests-reusable.yaml`
-and `checks-reusable.yaml` sparse-check it out into `.sdk-apt` and remove it
+workflow](#reusing-scripts-from-a-reusable-workflow)). `tests-reusable.yaml`'s
+tiers and `checks-reusable.yaml` sparse-check it out into `.sdk-apt` and remove it
 after the install; `build-and-publish-app.yaml` reads it from its existing
 `sdk/` checkout; `conformance-reusable.yaml` fetches it with the lock-check
 scripts and copies it to `$RUNNER_TEMP`.
@@ -2094,6 +2095,56 @@ reaching 65+ repos in the same minute. We are not adopting one:
 
 Breaking edits to a reusable go through the same path as any other: keep old
 inputs working until callers move, and test on a consumer before merge.
+
+### `tests-reusable.yaml` calls its tiers (FND-4676)
+
+`tests-reusable.yaml` is the only connector test workflow a connector calls. It
+owns every input and secret declaration, routes the run, and aggregates the
+verdict. The tiers live in three workflows it calls, each at `@main`:
+
+| Workflow | Jobs |
+| --- | --- |
+| `tests-reusable.yaml` | `queue-proof`, `detect-merge-queue`, `detect-integration`, `discover-e2e`, `wake-` / `pause-dataforge-source`, `report-to-sdk`, `scorecard`, `renovate-artifacts`, `tests-passed` (Tests Gate), and one caller job per tier |
+| `unit-tests-reusable.yaml` | `unit`, `detect-api-member`, `api-member` |
+| `integration-tests-reusable.yaml` | `integration` |
+| `e2e-tests-reusable.yaml` | `build-e2e-image`, `merge-e2e-image`, `sdk-head-recheck`, `lease-tenant`, `prepare-tenant`, `e2e`, `release-tenant` |
+
+The rules at the seams, all pinned by
+`.github/scripts/tests/test_tests_reusable_split.py`:
+
+* **Inputs are declared once.** A tier input is `required: true` with no
+  default, and the caller job forwards it from the `tests-reusable.yaml` input
+  of the same name. A forgotten passthrough fails at parse time instead of
+  taking a second default. The one exception is the integration tier's
+  `timeout-minutes`, whose literal default `test_job_timeouts.py` reads.
+* **The caller job declares the tier's permissions,** exactly the strongest
+  level each scope is used at in that tier. A called job can only narrow its
+  caller's grant, so a scope missing there arrives as `none`.
+* **The gate reads each tier job's result as a tier output**
+  (`jobs.<id>.result`, which actionlint 1.7.12 does not model; see
+  `.github/actionlint.yaml`). Outputs are empty when the caller job was skipped,
+  cancelled or failed at startup, so every read falls back to the caller's own
+  result: `needs.e2e.outputs.lease-tenant-result || needs.e2e.result`. A
+  cancelled tier never reads as a pass.
+* **A tier job never names a `tests-reusable.yaml` job.** `needs.<job>` cannot
+  resolve across the call and renders empty. Discovery's outputs reach the e2e
+  tier as inputs (`e2e-matrix`, `e2e-cloud-*`), and the conditions every e2e job
+  used to repeat (discovery succeeded, at least one suite) are the `e2e` caller
+  job's `if:`.
+
+Two consequences to know:
+
+* **Check names gained a segment:** `tests / unit / Unit`,
+  `tests / integration / Integration`, `tests / e2e / End-to-end (<leg>)`.
+  Nothing in the fleet requires them; every ruleset requires
+  `tests / Tests Gate`, which did not move. `test_command_comment.py` matches
+  the leg suffix, so the `/e2e` table is unaffected.
+* **Piloting a tier change needs two edits.** A connector pointed at a
+  `tests-reusable.yaml` branch still runs `main`'s tiers, because `uses:` cannot
+  take an expression. To pilot a change to a tier, also point that tier's
+  `uses:` line in `tests-reusable.yaml` at the branch, on the pilot branch only.
+  `test_self_reference_pinning.py` fails that branch, which is what keeps it
+  from merging.
 
 ## `concurrency:` is not a lock, and not a queue
 
@@ -2337,7 +2388,8 @@ make that edit easy to get wrong:
   strictly *worse* than declaring nothing, because it clamps a job whose
   repository default would have carried it.
 * **Derive the set from the reusable, in a test.** `test_tests_yaml_permissions`
-  reads every `permissions:` block in `tests-reusable.yaml`, takes the strongest
+  reads every `permissions:` block in `tests-reusable.yaml` and the three tiers
+  it calls, takes the strongest
   level each scope is used at, and asserts the scaffolded caller declares exactly
   that — so adding a scope to a job of the reusable fails there rather than
   silently arriving as `none` in every connector.

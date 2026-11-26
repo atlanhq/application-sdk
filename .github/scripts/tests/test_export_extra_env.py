@@ -722,7 +722,9 @@ def test_call_sites_are_the_expected_files():
     assert relative == {
         ".github/actions/connector-integration-tests/action.yaml",
         ".github/actions/sdr-e2e/action.yaml",
-        ".github/workflows/tests-reusable.yaml",
+        # The integration and e2e tiers tests-reusable.yaml calls (FND-4676).
+        ".github/workflows/e2e-tests-reusable.yaml",
+        ".github/workflows/integration-tests-reusable.yaml",
     }
 
 

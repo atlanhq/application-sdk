@@ -2532,6 +2532,24 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "Audience is deprecated; use application_sdk.errors.categories.Audience \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "Audience"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "FailureCategory is deprecated; use application_sdk.errors.categories.FailureCategory \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "FailureCategory"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_app",
@@ -2548,6 +2566,15 @@
       "symbol": "_build_transform_input"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_error_from_failure_details is deprecated; use application_sdk.errors.wire.error_from_failure_details \u2014 the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_error_from_failure_details"
+    },
+    {
       "kind": "method",
       "marker_via": "decorator",
       "message": "SqlApp._extract_entity is deprecated; use the public SqlApp.extract_entity instead. Will be removed in v4.0.0.",
@@ -2555,6 +2582,15 @@
       "module": "application_sdk.templates.sql_app",
       "removal_version": "4.0.0",
       "symbol": "_extract_entity"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_redacted_validation_reason is deprecated; use application_sdk.errors.wire.redacted_validation_reason \u2014 the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_redacted_validation_reason"
     },
     {
       "kind": "method",
@@ -2591,6 +2627,33 @@
       "module": "application_sdk.templates.sql_app",
       "removal_version": "4.0.0",
       "symbol": "legacy_credential_ref"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "redact_wire_value is deprecated; use application_sdk.errors.base.redact_wire_value \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "redact_wire_value"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sanitize_cause_repr is deprecated; use application_sdk.errors.base.sanitize_cause_repr \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "sanitize_cause_repr"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "secret_named_evidence_keys is deprecated; use application_sdk.errors.wire.secret_named_evidence_keys \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "secret_named_evidence_keys"
     },
     {
       "kind": "class",

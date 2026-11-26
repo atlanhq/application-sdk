@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from _workflows import ACTIONS, job, load_workflow, step_named, steps, triggers
+from _workflows import ACTIONS, load_workflow, step_named, steps, tier_job, triggers
 
 JAVA_STEP_NAME = "Set up Java (java-version)"
 # job -> the composite it runs the tests through
@@ -48,7 +48,7 @@ def test_test_jobs_forward_test_lfs_not_lfs(
     job_name: str,
     action: str,
 ) -> None:
-    step = _composite_step(job(workflow, job_name), action)
+    step = _composite_step(tier_job(job_name), action)
     assert step["with"]["lfs"] == "${{ inputs.test-lfs }}", (
         f"{job_name}: the test checkout must follow test-lfs; `lfs` is the e2e "
         "image build's and existing callers already set it"
@@ -61,7 +61,7 @@ def test_java_is_set_up_only_on_opt_in_and_before_the_tests(
     job_name: str,
     action: str,
 ) -> None:
-    test_job = job(workflow, job_name)
+    test_job = tier_job(job_name)
     step = step_named(test_job, JAVA_STEP_NAME)
     assert step["if"] == "inputs.java-version != ''"
     assert step["uses"].startswith("actions/setup-java@")

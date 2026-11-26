@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 442,
-    "warning": 5297
+    "warning": 5295
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -530,7 +530,7 @@
     },
     ".github/scripts/tests/test_label_trigger_gates.py": {
       "error:reportArgumentType": 1,
-      "warning:reportUnknownMemberType": 8
+      "warning:reportUnknownMemberType": 6
     },
     ".github/scripts/tests/test_lens.py": {
       "error:reportArgumentType": 95,

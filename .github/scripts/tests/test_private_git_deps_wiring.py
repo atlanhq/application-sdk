@@ -49,16 +49,17 @@ Step = dict[str, Any]
 #: mints on that input; e2e mints on every run (the image build needs it too)
 #: and requires the token only with the input (``E2E_UNGATED``).
 JOBS = [
-    ("tests-reusable.yaml", "unit", "private-git-deps"),
-    ("tests-reusable.yaml", "integration", "private-git-deps"),
-    ("tests-reusable.yaml", "e2e", "private-git-deps"),
-    ("tests-reusable.yaml", "api-member", "private-git-deps"),
+    # tests-reusable.yaml's tiers, in the workflows it calls (FND-4676).
+    ("unit-tests-reusable.yaml", "unit", "private-git-deps"),
+    ("integration-tests-reusable.yaml", "integration", "private-git-deps"),
+    ("e2e-tests-reusable.yaml", "e2e", "private-git-deps"),
+    ("unit-tests-reusable.yaml", "api-member", "private-git-deps"),
     ("checks-reusable.yaml", "pre-commit", "private-git-deps"),
     ("conformance-reusable.yaml", "suite", "private-git-deps"),
     ("release-version-bump.yaml", "bump-version", "private_git_auth"),
 ]
 JOB_IDS = [f"{wf}:{job}" for wf, job, _ in JOBS]
-E2E_UNGATED = {("tests-reusable.yaml", "e2e")}
+E2E_UNGATED = {("e2e-tests-reusable.yaml", "e2e")}
 #: Still inline: the SDK's own PRs run it (sdk-gate.yaml, conformance.yaml), so
 #: it cannot call an action that is not on main yet. Moves to the action in a
 #: follow-up once this one has merged.
@@ -465,7 +466,7 @@ def test_secrets_interface_keeps_org_pat_and_declares_the_app(
 
 
 def test_api_member_installs_through_git_auth_after_the_mirror() -> None:
-    member = steps(job(load_workflow("tests-reusable.yaml"), "api-member"))
+    member = steps(job(load_workflow("unit-tests-reusable.yaml"), "api-member"))
     names = [s.get("name") for s in member]
     mirror = names.index("Mirror private git dependencies")
     install = names.index("Install the api member alone and mount it like the host")

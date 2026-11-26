@@ -19,7 +19,15 @@ import e2e_tenant_app as app
 import pytest
 from _bump_skip import without_bump_skip
 from _gha_expr import evaluate, evaluate_operand
-from _workflows import ACTIONS, WORKFLOWS, job, load_workflow, triggers
+from _workflows import (
+    ACTIONS,
+    WORKFLOWS,
+    job,
+    load_workflow,
+    tier_job,
+    tier_jobs,
+    triggers,
+)
 
 # The lease knobs used to live on a composite action's `inputs:`; the driver's own
 # defaults are the single source now that the action is gone (FND-2674), so the
@@ -44,8 +52,10 @@ def workflow() -> dict:
 
 
 @pytest.fixture(scope="module")
-def jobs(workflow: dict) -> dict:
-    return workflow["jobs"]
+def jobs() -> dict:
+    # The install path lives in e2e-tests-reusable.yaml since FND-4676; the
+    # routing and gate jobs stay in tests-reusable.yaml.
+    return tier_jobs()
 
 
 # ── On by default, with a working opt-out ────────────────────────────────────
@@ -285,7 +295,7 @@ def test_the_acquire_is_one_job_over_an_ordered_cloud_set(jobs: dict) -> None:
     step = _lease_step(jobs, "lease-tenant")
     env = step["env"]
     assert env["APP"] == "${{ inputs.app-name }}"
-    assert env["CLOUDS"] == "${{ needs.discover-e2e.outputs.cloud-list }}"
+    assert env["CLOUDS"] == "${{ inputs.e2e-cloud-list }}"
     assert "--clouds" in step["run"]
     assert "--cloud " not in step["run"], (
         "passing both cloud and clouds fails the driver rather than silently "
@@ -406,11 +416,14 @@ def test_prepare_tenant_names_every_need_it_requires(jobs: dict) -> None:
     have succeeded has to be named — otherwise widening the lease gate silently
     also stopped requiring discovery and the image."""
     condition = " ".join(jobs["prepare-tenant"]["if"].split())
-    for needed in ("discover-e2e", "merge-e2e-image"):
-        assert f"needs.{needed}.result == 'success'" in condition, (
-            f"missing `needs.{needed}.result == 'success'`. With always() present, "
-            "this is the only thing still requiring it."
-        )
+    assert "needs.merge-e2e-image.result == 'success'" in condition, (
+        "missing `needs.merge-e2e-image.result == 'success'`. With always() "
+        "present, this is the only thing still requiring it."
+    )
+    # Discovery is outside the e2e tier since FND-4676: tests-reusable.yaml
+    # calls the tier only once it succeeded, so that is where it is required.
+    caller = " ".join(job(load_workflow(_WORKFLOW), "e2e")["if"].split())
+    assert "needs.discover-e2e.result == 'success'" in caller
 
 
 @pytest.mark.parametrize(
@@ -430,7 +443,7 @@ def test_install_runs_whenever_the_lease_job_ran(
     """Note the limit of this test, which is why the two above it exist: the
     evaluator models the `if:` expression only, not GitHub's needs-level skip. It
     passed on a gate that could never actually run."""
-    expression = job(load_workflow(_WORKFLOW), "prepare-tenant")["if"]
+    expression = tier_job("prepare-tenant")["if"]
     contexts = {
         "inputs": {"install-app-to-tenant": True},
         "needs": {
@@ -442,10 +455,10 @@ def test_install_runs_whenever_the_lease_job_ran(
     assert evaluate(expression, contexts) is should_install
 
 
-@pytest.mark.parametrize("blocker", ["discover-e2e", "merge-e2e-image"])
+@pytest.mark.parametrize("blocker", ["merge-e2e-image"])
 def test_install_does_not_run_without_its_upstreams(blocker: str) -> None:
     # always() would otherwise let the install proceed with no image to install.
-    expression = job(load_workflow(_WORKFLOW), "prepare-tenant")["if"]
+    expression = tier_job("prepare-tenant")["if"]
     contexts = {
         "inputs": {"install-app-to-tenant": True},
         "needs": {
@@ -501,12 +514,9 @@ def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
     GitHub expressions, so a gate that merely *mentions* the right terms can
     still be wrong. Widening this is only safe because the release driver checks
     ownership before deleting, so a leg that never acquired no-ops."""
-    expression = job(load_workflow(_WORKFLOW), "release-tenant")["if"]
+    expression = tier_job("release-tenant")["if"]
     assert (
-        evaluate(
-            without_bump_skip(expression),
-            {"needs": {"lease-tenant": {"result": lease_result}}},
-        )
+        evaluate(expression, {"needs": {"lease-tenant": {"result": lease_result}}})
         is should_release
     )
 
@@ -579,15 +589,19 @@ def test_the_lease_set_and_the_install_matrix_come_from_one_discovery(
     discovery STEP instead — `discover-clouds`, the clouds-only call — because
     that removes the possibility of disagreement rather than testing for it.
     """
-    outputs = job(load_workflow(_WORKFLOW), "discover-e2e")["outputs"]
+    outputs = tier_job("discover-e2e")["outputs"]
     assert outputs["cloud-list"] == "${{ steps.discover-clouds.outputs.clouds }}"
     assert outputs["cloud-matrix"] == "${{ steps.discover-clouds.outputs.matrix }}"
 
+    # Both reach the e2e tier as inputs, from those two outputs (FND-4676).
+    forwarded = job(load_workflow(_WORKFLOW), "e2e")["with"]
+    assert forwarded["e2e-cloud-list"] == "${{ needs.discover-e2e.outputs.cloud-list }}"
     assert (
-        _lease_env(jobs, "lease-tenant")["CLOUDS"]
-        == "${{ needs.discover-e2e.outputs.cloud-list }}"
+        forwarded["e2e-cloud-matrix"]
+        == "${{ needs.discover-e2e.outputs.cloud-matrix }}"
     )
-    assert "cloud-matrix" in jobs["prepare-tenant"]["strategy"]["matrix"]
+    assert _lease_env(jobs, "lease-tenant")["CLOUDS"] == "${{ inputs.e2e-cloud-list }}"
+    assert "inputs.e2e-cloud-matrix" in jobs["prepare-tenant"]["strategy"]["matrix"]
 
 
 def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) -> None:
@@ -601,7 +615,7 @@ def test_a_failed_lease_fails_the_install_rather_than_skipping_it(jobs: dict) ->
     """
     assert (
         evaluate(
-            job(load_workflow(_WORKFLOW), "prepare-tenant")["if"],
+            tier_job("prepare-tenant")["if"],
             {
                 "inputs": {"install-app-to-tenant": True},
                 "needs": {
@@ -929,14 +943,21 @@ def test_a_failed_discovery_skips_the_image_builds(
     `result != 'skipped'` — both of which read as harmless robustness — and the
     builds run anyway, at which point the early check saves nothing at all.
     """
+    # The builds are in the e2e tier, which tests-reusable.yaml calls only on a
+    # successful discovery (FND-4676): the gate is on the caller job now.
+    caller = job(load_workflow(_WORKFLOW), "e2e")
     ran = evaluate(
-        jobs["build-e2e-image"]["if"],
+        without_bump_skip(caller["if"]),
         {
             "inputs": {"install-app-to-tenant": True},
-            "needs": {"discover-e2e": {"result": discovery, "outputs": {"count": "2"}}},
+            "needs": {
+                "discover-e2e": {"result": discovery, "outputs": {"count": "2"}},
+                "wake-dataforge-source": {"result": "skipped"},
+            },
         },
     )
     assert ran is builds
+    assert jobs["build-e2e-image"]["if"] == "inputs.install-app-to-tenant"
 
 
 def test_job_timeout_stays_above_the_scripts_own_waits(jobs: dict) -> None:
