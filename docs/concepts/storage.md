@@ -358,6 +358,12 @@ a worker that downloads a setup-form file verifies it against the digest the
 host recorded. The host cannot import `application_sdk.storage`, so the sidecar
 key convention, the failure table and the gateway no-route retry both stacks
 use live in the obstore-free `application_sdk/_storage_classify.py`.
+The worker-only classifiers, which may name obstore's exception classes, live
+beside the storage package's other private modules in
+`application_sdk/storage/_classify.py`: the preflight probe's access buckets
+(which the write path also reads to recognise a bucket relocation), the etag
+precondition rule chunked downloads restart on, and the 401/403 evidence
+`CloudStore` turns into a typed USER error.
 
 ### What this does not prove
 
@@ -512,7 +518,7 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 | `extra.conditional_put`, `extra.copy_if_not_exists`, `extra.checksum_algorithm` | obstore's `aws_conditional_put`, `aws_copy_if_not_exists`, `aws_checksum_algorithm` |
 | `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
 
-`CloudStore` has no transfer code of its own. `upload` and `upload_bytes` call `upload_file` and `upload_bytes`, `upload_dir` runs on the same tree upload as `upload_prefix`, and `download` runs on the same engine as `download_prefix`. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no `.sha256` is written, and a `.sha256` file in the bucket or the local directory is moved as ordinary data. Every `CloudStore` write runs the post-write size check, so the credential must be allowed to HEAD the object it just wrote (`s3:GetObject`, `storage.objects.get`, or Blob read). `upload` and `upload_dir` have done this since FND-306; `upload_bytes` now does too. For a bucket whose policy grants PUT only, pass `upload_bytes(..., verify=False)`, or set `ATLAN_STORAGE_VERIFY_TRANSFERS=false` to turn the check off for the whole process.
+`CloudStore` has no transfer code of its own. `get_bytes` reads through the same primitive as every other small read, so it rides out the gateway's "no Route matched" 404 and fails with the same typed leaves and evidence. `upload` and `upload_bytes` call `upload_file` and `upload_bytes`, `upload_dir` runs on the same tree upload as `upload_prefix`, and `download` runs on the same engine as `download_prefix`. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no `.sha256` is written, and a `.sha256` file in the bucket or the local directory is moved as ordinary data. Every `CloudStore` write runs the post-write size check, so the credential must be allowed to HEAD the object it just wrote (`s3:GetObject`, `storage.objects.get`, or Blob read). `upload` and `upload_dir` have done this since FND-306; `upload_bytes` now does too. For a bucket whose policy grants PUT only, pass `upload_bytes(..., verify=False)`, or set `ATLAN_STORAGE_VERIFY_TRANSFERS=false` to turn the check off for the whole process.
 
 ADLS also accepts `extra.endpoint` (`https://` only). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
 

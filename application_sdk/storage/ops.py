@@ -54,17 +54,12 @@ from typing import TYPE_CHECKING, TypedDict, TypeVar
 import obstore
 import orjson
 
-# obstore-rs surfaces a typed exception hierarchy via obstore.exceptions; we
-# detect it once at import time so callers don't pay the import cost on every
-# error path.  Falls back to substring matching for older obstore versions
-# that lack typed exceptions.
-try:  # pragma: no cover — defensive import
-    from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
-    from obstore.exceptions import PreconditionError as _ObstorePreconditionError
-except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
-    _ObstoreNotFoundError = None
-    _ObstorePreconditionError = None
-
+# obstore's typed exceptions, under the names this module has always bound
+# them to. The ``obstore>=0.12`` pin guarantees both classes exist.
+from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
+from obstore.exceptions import (  # noqa: F401 — importable from here in past releases
+    PreconditionError as _ObstorePreconditionError,
+)
 
 if TYPE_CHECKING:
     from typing import Any
@@ -93,6 +88,11 @@ from application_sdk.observability.logger_adaptor import get_logger
 # top-level import is acyclic regardless of module load order.
 from application_sdk.storage import integrity
 from application_sdk.storage._budget import transfer_budget
+from application_sdk.storage._classify import (
+    RELOCATION_BUCKET,
+    classify_access_error,
+    is_precondition,
+)
 from application_sdk.storage._telemetry import (
     _log_transfer_progress,
     _record_transfer_metric,
@@ -395,16 +395,9 @@ def _exc_class_name(exc: BaseException) -> str:
 def _is_precondition(exc: BaseException) -> bool:
     """True when *exc* is an etag precondition failure (HTTP 412 / if_match miss).
 
-    Raised by version-pinned range GETs when the remote object was rewritten
-    between the initial HEAD/listing and the chunk fetch. Class-based detection
-    first (obstore ``PreconditionError``), substring fallback for older versions.
+    The rule is :func:`application_sdk.storage._classify.is_precondition`.
     """
-    if _ObstorePreconditionError is not None and isinstance(
-        exc, _ObstorePreconditionError
-    ):
-        return True
-    msg = str(exc).lower()
-    return "precondition" in msg or "412" in msg
+    return is_precondition(exc)
 
 
 # ``object_store`` formats every backend HTTP failure as
@@ -626,12 +619,7 @@ def _storage_error_for(
     # rule requires BOTH the "precondition" and "relocation" tokens, so a plain
     # etag/if-match 412 can never be misread as a relocation and pick up a
     # "wait for the move to finish" hint for a move that is not happening.
-    from application_sdk.storage.preflight import (  # noqa: PLC0415 — error path only; avoids a module-load cycle
-        RELOCATION_BUCKET,
-        _classify_access_error,
-    )
-
-    bucket, hint = _classify_access_error(exc)
+    bucket, hint = classify_access_error(exc)
     if bucket == RELOCATION_BUCKET:
         return StorageBucketRelocationError(
             f"{message}: the destination bucket is being relocated",
@@ -878,9 +866,7 @@ async def _head_not_found(store: ObjectStore, path: str) -> bool:
     except Exception as exc:  # noqa: BLE001 — probe only; any other error keeps the key and the download reports it
         if _is_gateway_no_route(exc):
             return False
-        return _ObstoreNotFoundError is not None and isinstance(
-            exc, _ObstoreNotFoundError
-        )
+        return isinstance(exc, _ObstoreNotFoundError)
     return False
 
 

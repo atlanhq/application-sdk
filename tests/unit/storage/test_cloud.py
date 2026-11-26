@@ -8,6 +8,7 @@ import ssl
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import obstore
 import pytest
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import GCSStore, LocalStore, MemoryStore
@@ -1642,18 +1643,50 @@ class TestReadWritePermissionDenied:
         async def _boom(*_a, **_k):
             raise PermissionDeniedError(_GCS_VPC_SC_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().get_bytes("data/a.json")
         assert ei.value.target == "gs://example-bucket/data/a.json"
         assert ei.value.provider_code == "SecurityPolicyViolated"
         assert ei.value.effective_retryable is False
 
+    async def test_get_bytes_outage_carries_the_shared_evidence(self, monkeypatch):
+        """A failed read gets the primitives' evidence, not a bare StorageError."""
+
+        async def _boom(*_a, **_k):
+            raise RuntimeError(
+                "Generic GCS error: Error performing GET "
+                "https://storage.example.invalid/data/a.json in 3ms - Server "
+                "returned non-2xx status code: 503 Service Unavailable: "
+                "<Error><Code>ServiceUnavailable</Code></Error>"
+            )
+
+        monkeypatch.setattr(obstore, "get_async", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert type(ei.value) is StorageError
+        assert ei.value.http_status == 503
+        assert ei.value.provider_code == "ServiceUnavailable"
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+        assert ei.value.effective_retryable is True
+
+    async def test_get_bytes_typed_not_found(self, monkeypatch):
+        from obstore.exceptions import NotFoundError
+
+        async def _boom(*_a, **_k):
+            raise NotFoundError("Object at location data/a.json not found")
+
+        monkeypatch.setattr(obstore, "get_async", _boom)
+        with pytest.raises(StorageNotFoundError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert ei.value.key == "data/a.json"
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+
     async def test_upload_bytes_403(self, monkeypatch):
         def _boom_open(*_a, **_k):
             raise RuntimeError(_S3_ACCESS_DENIED_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "open_writer_async", _boom_open)
+        monkeypatch.setattr(obstore, "open_writer_async", _boom_open)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().upload_bytes("out/a.json", b"x")
         assert ei.value.provider_code == "AccessDenied"
@@ -1747,7 +1780,7 @@ class TestAuthenticationRejected:
         async def _boom(*_a, **_k):
             raise RuntimeError(_AZURE_TOKEN_401)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StoragePermissionError):
             await _gcs_store().get_bytes("specs/api.json")
 
@@ -1755,7 +1788,7 @@ class TestAuthenticationRejected:
         async def _boom(*_a, **_k):
             raise PermissionDeniedError(_GCS_VPC_SC_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().get_bytes("data/a.json")
         assert not isinstance(ei.value, StorageAuthError)
@@ -1778,7 +1811,7 @@ class TestAuthenticationRejected:
         async def _boom(*_a, **_k):
             raise RuntimeError(_GATEWAY_1005_401)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StorageError) as ei:
             await _gcs_store().get_bytes("data/a.json")
         assert not isinstance(ei.value, StoragePermissionError)

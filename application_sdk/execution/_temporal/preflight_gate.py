@@ -1788,11 +1788,11 @@ def _storage_failure_details(
     # module load); the bucket name and the relocation code come from their
     # single definitions rather than copied literals, so a rename breaks
     # loudly here instead of silently dropping the code stamp.
+    from application_sdk.storage._classify import (  # noqa: PLC0415 — activity frame only
+        RELOCATION_BUCKET,
+    )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — activity frame only
         StorageBucketRelocationError,
-    )
-    from application_sdk.storage.preflight import (  # noqa: PLC0415 — activity frame only
-        RELOCATION_BUCKET,
     )
 
     if sdr_mode:

@@ -338,3 +338,36 @@ async def test_marker_list_probe_rides_out_gateway_no_route(sleeps) -> None:
 
     assert calls["n"] == 2
     assert sleeps == [5.0]
+
+
+async def test_cloud_store_get_bytes_rides_out_gateway_no_route(sleeps) -> None:
+    """``CloudStore.get_bytes`` reads through the seam, not obstore directly."""
+    from obstore.store import MemoryStore
+
+    from application_sdk.storage.cloud import CloudStore
+
+    get_result = MagicMock()
+    get_result.bytes.return_value = b"x"
+    flaky = AsyncMock(side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), get_result])
+    with patch("application_sdk.storage.ops.obstore.get_async", flaky):
+        data = await CloudStore(MemoryStore(), provider="memory").get_bytes("k")
+
+    assert data == b"x"
+    assert flaky.await_count == 2
+    assert sleeps == [5.0]
+
+
+async def test_cloud_store_get_bytes_exhausted_gateway_404_is_not_missing(
+    sleeps,
+) -> None:
+    """An exhausted retry is the gateway leaf, never ``StorageNotFoundError``."""
+    from obstore.store import MemoryStore
+
+    from application_sdk.storage.cloud import CloudStore
+
+    failing = AsyncMock(side_effect=RuntimeError(_GATEWAY_NO_ROUTE))
+    with (
+        patch("application_sdk.storage.ops.obstore.get_async", failing),
+        pytest.raises(StorageGatewayNoRouteError),
+    ):
+        await CloudStore(MemoryStore(), provider="memory").get_bytes("k")
