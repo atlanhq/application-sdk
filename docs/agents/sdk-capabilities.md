@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.59.0
-source-sha:    c29554f764d866e3a9dc49ad0c16e6743f64ebe4
-source-date:   2026-11-25T22:44:57Z
+source-sha:    46e29dc238229bbee76d5bfe0d163a3ca6986b41
+source-date:   2026-11-26T01:30:57Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -3537,13 +3537,6 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
 
-#### `is_sidecar_key`
-
-- **Import:** `from application_sdk.storage import is_sidecar_key`
-- **Signature:** `is_sidecar_key(key: str)`
-- **Summary:** Return ``True`` when *key* is a SHA-256 sidecar rather than a data object.
-- **Defined in:** `application_sdk/storage/integrity.py`
-
 #### `list_data_keys`
 
 - **Import:** `from application_sdk.storage import list_data_keys`
@@ -3643,6 +3636,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Defined in:** `application_sdk/storage/preflight.py`
 
 ### Constants and Enums
+
+#### `is_sidecar_key`
+
+- **Import:** `from application_sdk.storage import is_sidecar_key`
+- **Signature:** `is_sidecar_key`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/integrity.py`
 
 #### `SecretMap`
 
