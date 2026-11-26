@@ -15,7 +15,7 @@ and shows each change side-by-side.
 
 > For a step-by-step upgrade checklist, see [`upgrade-guide-v3.md`](upgrade-guide-v3.md).
 > For the ship-it sign-off checklist, see [`standards/v3-readiness.md`](standards/v3-readiness.md).
-> For automated tooling, see [`tools/migrate_v3/`](../tools/migrate_v3/README.md).
+> For automated tooling, see [`tools/migrate_v3/`](https://github.com/atlanhq/application-sdk/blob/main/tools/migrate_v3/README.md).
 
 ---
 
@@ -763,7 +763,7 @@ controller = MockHeartbeatController()
 ## Further Reading
 
 - **Step-by-step upgrade:** [`docs/upgrade-guide-v3.md`](upgrade-guide-v3.md)
-- **Automated upgrade tooling:** [`tools/migrate_v3/README.md`](../tools/migrate_v3/README.md)
+- **Automated upgrade tooling:** [`tools/migrate_v3/README.md`](https://github.com/atlanhq/application-sdk/blob/main/tools/migrate_v3/README.md)
 - **Design rationale (ADRs):**
   - [ADR-0005: Infrastructure Abstraction](adr/0005-infrastructure-abstraction.md)
   - [ADR-0006: Schema-Driven Contracts](adr/0006-schema-driven-contracts.md)

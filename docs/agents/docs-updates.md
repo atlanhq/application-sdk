@@ -2,6 +2,7 @@
 
 - When changing `application_sdk` modules, update the matching conceptual docs per `docs/standards/documentation.md`.
 - Conceptual docs live under `docs/concepts/` (see the mapping in that rule file).
+- A new page under `docs/` goes into `nav` in `mkdocs.yml`, and links to repo source use a full GitHub URL; CI's `mkdocs build --strict` fails otherwise (`docs/standards/documentation.md`).
 - A new or changed env var gets a row in `docs/configuration.md`. `tests/unit/test_env_var_docs_coverage.py` fails until the name appears in a table row there (its own, or as a fallback in another row); a mention in prose does not count. See `docs/standards/env-vars.md`.
 
 ## Incremental state (`application_sdk/common/incremental/**`)

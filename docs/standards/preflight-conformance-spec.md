@@ -88,12 +88,12 @@ Test warmup behaviour against `application_sdk.testing.WarmingSource`, a scripte
 
 Implementation references:
 
-- [Handler contract](../../application_sdk/handler/contracts.py) and [handler guidance](../../application_sdk/handler/base.py).
-- [Gate activity](../../application_sdk/execution/_temporal/preflight_gate.py) and [workflow boundary](../../application_sdk/app/base.py).
-- [Rule definitions](../../packages/conformance/conformance/suite/rules/preflight.py).
-- [Discovery](../../packages/conformance/conformance/suite/checks/preflight/_common.py), [typed failure detector](../../packages/conformance/conformance/suite/checks/preflight/_untyped_failure.py), and [metadata parity detector](../../packages/conformance/conformance/suite/checks/preflight/_metadata_parity.py).
-- [Rule schema](../../packages/conformance/conformance/suite/schema/disposition.py) and [suite runner](../../packages/conformance/conformance/suite/runner.py).
-- [Outcome assertion helpers](../../application_sdk/testing/preflight.py).
+- [Handler contract](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/handler/contracts.py) and [handler guidance](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/handler/base.py).
+- [Gate activity](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/execution/_temporal/preflight_gate.py) and [workflow boundary](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/app/base.py).
+- [Rule definitions](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/rules/preflight.py).
+- [Discovery](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/checks/preflight/_common.py), [typed failure detector](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/checks/preflight/_untyped_failure.py), and [metadata parity detector](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/checks/preflight/_metadata_parity.py).
+- [Rule schema](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/schema/disposition.py) and [suite runner](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/runner.py).
+- [Outcome assertion helpers](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/testing/preflight.py).
 
 ## Proposed rule allocation
 
