@@ -287,6 +287,7 @@ above into a five-phase `run()`. It is **deprecated** (removed in v4.0.0;
 the replacement is `application_sdk.templates.SqlApp` with a custom `run()`),
 but it is still the SDK's only built-in incremental orchestration.
 
+<!-- legacy-example: IncrementalSqlMetadataExtractor is deprecated but still the SDK's only built-in incremental orchestration -->
 ```python
 from application_sdk.app import task
 from application_sdk.templates import IncrementalSqlMetadataExtractor

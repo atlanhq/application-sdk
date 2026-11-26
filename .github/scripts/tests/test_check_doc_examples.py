@@ -118,21 +118,24 @@ def test_unresolvable_imports_fail(
     ]
 
 
-def test_v2_block_marker_skips_imports_but_not_parsing(
-    tmp_path: Path, src: Path
-) -> None:
-    marked = f"{check.V2_MARKER}\n```python\nfrom application_sdk.gone import X\n```\n"
+def test_legacy_marker_skips_imports_but_not_parsing(tmp_path: Path, src: Path) -> None:
+    marked = '<!-- legacy-example: v2 "before" snippet -->\n```python\nfrom application_sdk.gone import X\n```\n'
     assert _problems(tmp_path, src, marked) == []
-    broken = (
-        f"{check.V2_MARKER}\n```python\nfrom application_sdk.gone import ...\n```\n"
-    )
+    broken = '<!-- legacy-example: v2 "before" snippet -->\n```python\nfrom application_sdk.gone import ...\n```\n'
     assert [p.split(":")[1] for p in _problems(tmp_path, src, broken)] == [
         " does not parse"
     ]
 
 
+def test_legacy_marker_needs_a_reason(tmp_path: Path, src: Path) -> None:
+    text = (
+        "<!-- legacy-example -->\n```python\nfrom application_sdk.gone import X\n```\n"
+    )
+    assert _problems(tmp_path, src, text) == ["3: no module application_sdk.gone"]
+
+
 def test_marker_must_be_directly_above_the_fence(tmp_path: Path, src: Path) -> None:
-    text = f"{check.V2_MARKER}\n\n```python\nfrom application_sdk.gone import X\n```\n"
+    text = '<!-- legacy-example: v2 "before" snippet -->\n\n```python\nfrom application_sdk.gone import X\n```\n'
     assert _problems(tmp_path, src, text) == ["4: no module application_sdk.gone"]
 
 
@@ -179,4 +182,4 @@ def test_main_exit_codes(
     assert check.main(["--docs", str(docs), "--src", str(src)]) == 1
     out = capsys.readouterr()
     assert out.out == f"{docs / 'bad.md'}:2: application_sdk.plain has no name Nope\n"
-    assert check.V2_MARKER in out.err
+    assert check.LEGACY_MARKER in out.err

@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.39.2] - 2026-11-26
+
+### Bug fixes
+
+- delete migrate-to-native, fix a dead link, symlink duplicated skills, test skill paths [FND-4697] (#5108) ([acddc4a](https://github.com/atlanhq/application-sdk/commit/acddc4a))
+
+### Other changes
+
+- refactor(release): one release train for conformance and contract-toolkit, __version__ from package metadata [FND-4672] (#5146) ([dc4c5f7](https://github.com/atlanhq/application-sdk/commit/dc4c5f7))
+
 ## [0.39.1] - 2026-11-23
 
 ### Bug fixes

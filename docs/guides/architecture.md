@@ -254,7 +254,7 @@ application_sdk/
 │   └── types.py            # MaxItems, FileReference, GitReference, SerializableEnum, StorageTier
 │
 ├── handler/                # HTTP handler framework
-│   ├── base.py             # Handler ABC, HandlerError
+│   ├── base.py             # Handler ABC
 │   ├── context.py          # HandlerContext
 │   ├── contracts.py        # AuthInput/Output, PreflightInput/Output, etc.
 │   ├── manifest.py         # Manifest generation helpers

@@ -151,8 +151,8 @@ than the `large_string` pandas 3 converts to by default. Two exceptions:
 | App type | Install command |
 |----------|----------------|
 | Custom `App` / `BaseMetadataExtractor` (API-based) | `pip install atlan-application-sdk` |
-| `SqlMetadataExtractor` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
-| `IncrementalSqlMetadataExtractor` | `pip install atlan-application-sdk[incremental]` |
+| `SqlApp` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
+| `SqlApp` with an incremental `run()` | `pip install atlan-application-sdk[incremental]` |
 
 ### Dockerfile examples
 
@@ -187,7 +187,7 @@ ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
 from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
@@ -238,7 +238,7 @@ Key changes:
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
@@ -250,6 +250,12 @@ class MyQueryWorkflow(SQLQueryExtractionWorkflow):
 
 ### v3
 
+`SqlQueryExtractor` is deprecated (removal in v4.0.0), but it is still the
+target for query-log connectors: `SqlApp` has no query-log capability yet
+(FND-4313). Migrate onto it as below; when `SqlApp` gains that capability,
+this step and the import rewriter move to it.
+
+<!-- legacy-example: SqlQueryExtractor stays the query-log target until SqlApp has a query-log capability (FND-4313) -->
 ```python
 from application_sdk.templates import SqlQueryExtractor
 from application_sdk.templates.contracts import (
@@ -274,7 +280,7 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.workflows.metadata_extraction.incremental_sql import (
     IncrementalSQLMetadataExtractionWorkflow,
@@ -341,6 +347,7 @@ SQL connectors use `SqlApp` (Step 1) and the templated-query pattern.
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 blocks below replace it -->
 ```python
 # app/transformer.py
 from application_sdk.transformers.atlas import AtlasTransformer
@@ -463,7 +470,7 @@ The import rewriter (`tools/migrate_v3/rewrite_imports.py`) cannot auto-convert 
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.handlers import HandlerInterface
 
@@ -512,7 +519,7 @@ When a v2 flat credential arrives (top-level `host`, `authType`, ...), the SDK l
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
@@ -694,7 +701,7 @@ don't register anything manually.
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.worker import Worker
 from application_sdk.clients.temporal import TemporalWorkflowClient
@@ -887,7 +894,7 @@ await delete("output/old.parquet")
 
 ### Migrating AtlanStorage
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 # v2
 from application_sdk.services.atlan_storage import AtlanStorage
@@ -1020,7 +1027,7 @@ register_credential_type("my_service", MyCredential, _parse_my)
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.clients.atlan import get_client, get_async_client
 
@@ -1079,7 +1086,7 @@ timing them out. In v3, heartbeating is built into `@task` — no decorator need
 
 ### v2
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.activities.common.utils import auto_heartbeater
 

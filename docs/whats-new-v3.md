@@ -95,7 +95,7 @@ so there are no gRPC size limits and no sidecar dependency for storage.
 
 #### v2 — two classes, Temporal decorators, manual wiring
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from temporalio import workflow, activity
 from application_sdk.workflows import WorkflowInterface
@@ -177,8 +177,8 @@ class MyConnector(App):
 
 **SQL template apps** get an even bigger reduction. The whole
 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split collapses
-into a single `SqlMetadataExtractor` subclass where you only override the tasks you
-customise:
+into a single `SqlApp` subclass that declares its SQL and one asset mapper per
+entity; the template runs the extract and transform tasks:
 
 ```python
 # v2
@@ -191,10 +191,16 @@ class MyActivities(BaseSQLMetadataExtractionActivities):
         return ActivityStatistics(chunk_count=1, total_record_count=10)
 
 # v3
-class MyExtractor(SqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
-        return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
+class MyExtractor(SqlApp):
+    sql_client_class = MyClient
+    fetch_database_sql = "SELECT ..."
+    # fetch_schema_sql / fetch_table_sql / fetch_column_sql likewise
+
+    def map_database(self, record, connection_qn):
+        return Database.creator(
+            name=record["database_name"], connection_qualified_name=connection_qn
+        )
+    # map_schema / map_table / map_column likewise
 ```
 
 ---
@@ -302,7 +308,7 @@ class FetchInput(Input):
 
 #### v2 — direct Dapr calls
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.services.statestore import StateStore
 from application_sdk.services.secretstore import SecretStore
@@ -374,7 +380,7 @@ asyncio.run(run_dev_combined(
 
 #### v2 — untyped, manual load()
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.handlers import HandlerInterface
 
@@ -425,8 +431,9 @@ class MyHandler(Handler):
   generation, and pyright type checking end-to-end.
 - The `fetch_metadata` response shape changed: v2 returned a nested `[{value, title, children}]`
   tree; v3 returns a flat `SqlMetadataOutput(objects=[SqlMetadataObject(...)])`.
-- Error handling is structured: raise `HandlerError(message, http_status=400)` to get a
-  consistent HTTP error response.
+- Error handling is structured: raise a typed `AppError` leaf from `application_sdk.errors`
+  (`InvalidInputError`, `AuthError`, ...) and the server answers with the HTTP status for its
+  category. (`HandlerError` is deprecated, removed in v4.0.)
 
 ---
 
@@ -434,7 +441,7 @@ class MyHandler(Handler):
 
 #### v2 — BaseApplication + explicit Worker
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
@@ -509,7 +516,7 @@ await worker.run()
 
 #### v2 — credential_guid + raw dict
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
@@ -591,7 +598,7 @@ from `AtlanClientMixin` (shown above) as a full-fledged SDK client instead.
 
 #### v2 — @auto_heartbeater decorator
 
-<!-- doc-example: v2 -->
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.activities.common.utils import auto_heartbeater
 

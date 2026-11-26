@@ -107,6 +107,19 @@ repos:
         additional_dependencies: ["pyyaml==6.0.4"]
         files: ^(mkdocs\.yml|\.github/scripts/check_mkdocs_script_hosts\.py)$
         pass_filenames: false
+      # A Markdown code example on a deprecated SDK symbol teaches it as the
+      # current path; the docs did that for SqlMetadataExtractor, HandlerError
+      # and PreflightStatus.PARTIAL (FND-4268). Checks every tracked Markdown
+      # file against conformance's deprecated_symbols.json with its own B001
+      # matcher, so it also runs when the manifest gains a name. language:
+      # system + uv so the workspace conformance package is importable; CI's
+      # Pre-commit job syncs it (setup-deps) and runs this on every PR.
+      - id: check-docs-deprecated-imports
+        name: check docs examples for deprecated SDK symbols
+        entry: uv run --frozen python .github/scripts/check_docs_deprecated_imports.py
+        language: system
+        files: (\.md|^packages/conformance/conformance/data/deprecated_symbols\.json|^\.github/scripts/check_docs_deprecated_imports\.py)$
+        pass_filenames: false
       # Nothing executes the ```python blocks under docs/, so they drift: every
       # block must parse, and its application_sdk imports must resolve against
       # the source tree (FND-4272). Runs on SDK changes too, since renaming a

@@ -210,16 +210,17 @@ asyncio.run(run_dev_combined(MyExtractor))
 
 ## Error Handling
 
-Handler methods signal errors by raising `HandlerError`:
+Handler methods signal errors by raising a typed `AppError` leaf from `application_sdk.errors`:
 
 ```python
-from application_sdk.handler import Handler, HandlerError
+from application_sdk.errors import AuthError
+from application_sdk.handler import Handler
 
 class MyHandler(Handler):
     async def test_auth(self, input: AuthInput) -> AuthOutput:
         if not valid:
-            raise HandlerError("Invalid credentials", http_status=401)
+            raise AuthError(message="Invalid credentials")
         ...
 ```
 
-The service translates `HandlerError` into a structured HTTP error response with the specified status code.
+The service answers with the HTTP status for the leaf's category (`AuthError` is 401; see [Handlers](handlers.md#error-handling) for the table) and the redacted message as `detail`. `HandlerError` is deprecated (removal in v4.0).

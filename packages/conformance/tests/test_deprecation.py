@@ -2360,6 +2360,107 @@ def test_warn_deprecated_in_init_subclass_marks_the_class() -> None:
     )
 
 
+# Marker 5 (FND-4269): a public def whose body opens with a DeprecationWarning.
+
+
+@pytest.mark.parametrize(
+    ("src", "symbol", "kind"),
+    [
+        pytest.param(
+            "import warnings\n"
+            "def old():\n"
+            '    """Old."""\n'
+            "    warnings.warn('old is deprecated; use new — removed in v4.0.0', "
+            "DeprecationWarning, stacklevel=2)\n"
+            "    return new()\n",
+            "old",
+            "function",
+            id="function-warnings-warn",
+        ),
+        pytest.param(
+            "class Ref:\n"
+            "    @classmethod\n"
+            "    def from_args(cls, args):\n"
+            '        """Build one."""\n'
+            "        import warnings\n"
+            "        warnings.warn(\n"
+            "            'Ref.from_args is deprecated; use Ref.resolve — removed in v4.0.0',\n"
+            "            category=DeprecationWarning,\n"
+            "        )\n"
+            "        return cls()\n",
+            "from_args",
+            "method",
+            id="method-after-local-import",
+        ),
+        pytest.param(
+            "class Err:\n"
+            "    @property\n"
+            "    def error_code(self):\n"
+            "        _deprecation.warn_deprecated('error_code', 'code', '4.0.0')\n"
+            "        return None\n",
+            "error_code",
+            "property",
+            id="property-warn-deprecated",
+        ),
+    ],
+)
+def test_opening_warn_marks_the_def(src: str, symbol: str, kind: str) -> None:
+    sites = [s for s in extract_sites(ast.parse(src)) if s.symbol == symbol]
+    assert [(s.kind, s.marker_via, s.removal_version_raw) for s in sites] == [
+        (kind, "warn", "4.0.0")
+    ]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        pytest.param(
+            "import warnings\n"
+            "def read(path, mode=None):\n"
+            "    if mode is not None:\n"
+            "        warnings.warn('mode is deprecated; use x — removed in v4.0.0', "
+            "DeprecationWarning)\n",
+            id="conditional-warn-deprecates-a-parameter",
+        ),
+        pytest.param(
+            "import warnings\n"
+            "def warn_problem(attr):\n"
+            "    message = f'{attr} is bad; use y — removed in v4.0.0'\n"
+            "    warnings.warn(message, DeprecationWarning)\n",
+            id="later-warn-is-a-forwarding-helper",
+        ),
+        pytest.param(
+            "import warnings\n"
+            "def _warn_old_params():\n"
+            "    warnings.warn('p is deprecated; use q — removed in v4.0.0', "
+            "DeprecationWarning)\n",
+            id="private-helper",
+        ),
+        pytest.param(
+            "import warnings\n"
+            "def notify():\n"
+            "    warnings.warn('heads up', UserWarning)\n",
+            id="not-a-deprecation-warning",
+        ),
+    ],
+)
+def test_opening_warn_ignores_non_symbol_deprecations(src: str) -> None:
+    assert extract_sites(ast.parse(src)) == []
+
+
+def test_decorator_wins_over_opening_warn() -> None:
+    src = (
+        "import warnings\n"
+        "from typing_extensions import deprecated\n"
+        "@deprecated('old is deprecated; use new — removed in v4.0.0')\n"
+        "def old():\n"
+        "    warnings.warn('other text; use new — removed in v5.0.0', "
+        "DeprecationWarning)\n"
+    )
+    (site,) = extract_sites(ast.parse(src))
+    assert (site.marker_via, site.removal_version_raw) == ("decorator", "4.0.0")
+
+
 _FACTORY_SHIM = (
     "from application_sdk import _deprecation\n"
     "_DEPRECATED_CONSTANTS = {\n"

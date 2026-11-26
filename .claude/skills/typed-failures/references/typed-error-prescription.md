@@ -1,11 +1,12 @@
 # Typed Error Prescription Reference
 
-Authoritative reference for "which `AppError` should I raise here?" — used by
-the signal-over-noise skill when producing prescriptive fix entries for raise
-sites and silent-swallow → re-raise conversions.
+Authoritative reference for "which `AppError` should I raise here?" — used when
+fixing conformance E-series findings (untyped raises E012, legacy `AtlanError`
+raises E013, silent swallows E001–E003, E007–E010, E014 and E020) and by `/typed-failures`.
 
 Source of truth: `application_sdk/errors/{base,categories,leaves,wire}.py`.
 Companion for connector apps (not the SDK itself): `.claude/skills/typed-failures/SKILL.md`.
+Fix prescriptions per rule: `packages/conformance/conformance/programs/areas/error-handling.prose.md`.
 
 ---
 
@@ -482,7 +483,7 @@ Subclass code: `CANCELLED`.
 
 Full mapping of every constant in
 `application_sdk/common/error_codes.py`. Use this as a deterministic lookup
-when converting P13 (legacy `AtlanError`) raise sites.
+when converting E013 (legacy `AtlanError`) raise sites.
 
 Columns: `legacy constant` | `target leaf` | `suggested code` |
 `audience override?` | `notes`
@@ -707,7 +708,7 @@ blocks any evidence key matching the exact denylist or the suffix denylist
 (`_secret`, `_password`, `_token`). Use a safe proxy name (e.g.
 `credential_name` instead of `credential_token`) or omit.
 
-**Test assertion migration — when updating `pytest.raises` blocks after FT-8/FT-9.**
+**Test assertion migration — when updating `pytest.raises` blocks after converting an untyped (E012) or legacy `AtlanError` (E013) raise.**
 `AppError.__str__` returns `self.message` only (`base.py:65-66`). The cause
 string should not appear in `str(exc_info.value)` — if it does, §6 has been
 violated. Apply these rules:
@@ -772,12 +773,12 @@ detection — not a model to follow; see §2.)
 
 ## §8 — Surface or swallow? Decision tree
 
-When surface mode identifies a silent-swallow pattern and the right fix might
-involve re-raising (FT-1b, FT-3b, FT-5b), use this decision tree:
+When a silent-swallow finding (E001–E003, E007–E010, E014, E020) could be fixed either by logging and
+continuing or by re-raising as a typed `AppError`, use this decision tree:
 
 ```
 Does the caller depend on the operation succeeding?
-  YES → typed re-raise (FT-1b / FT-3b / FT-5b)
+  YES → typed re-raise
   NO  ↓
 Is the exception from an activity body that reaches AE?
   YES → typed re-raise — failure attribution depends on it
@@ -791,7 +792,7 @@ Is this a module-load / __init__ site?
   NO  ↓
 Is this genuinely best-effort cleanup (cache invalidation,
 stats flush, optional side-effect)?
-  YES → log-and-continue (FT-1a / FT-3a / FT-5a)
+  YES → log-and-continue
         log at DEBUG if failure is expected; WARNING if unexpected
   NO  → typed re-raise (default — lean toward surfacing)
 ```

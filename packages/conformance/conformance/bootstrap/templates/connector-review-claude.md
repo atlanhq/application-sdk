@@ -53,6 +53,39 @@ and grade by its `Severity:` line. Fix what you judge valid; the reviewer
 judges the rest on the pull request. Never weaken or reword a principle to
 pass: a principle change is its own pull request.
 
+### 3. Validate with unit and integration tests, never e2e (mandatory)
+
+Each test tier already runs at its own point, so a change never needs e2e to
+be validated:
+
+- **Unit** tests run on every commit pushed to the pull request.
+- **Integration** tests run when the pull request goes through the merge
+  queue.
+- **e2e** is part of a release: it runs on the version-bump pull request,
+  through `/gate-check`.
+
+These tiers are policy for agents, not a workflow restriction: the `/e2e`
+command still starts a live-tenant run on any pull request for the people
+who need it. An agent never uses it; the only e2e run an agent may start is
+`/gate-check` on a release (version-bump) pull request.
+
+An agent validates a change with unit and integration tests only: run them
+locally before pushing, then rely on the pull request's `tests` checks and
+the merge queue. That is the whole validation bar, before and after the pull
+request is opened. There is no exception.
+
+- **Never comment `/e2e`**, on any pull request, for any reason. It is not a
+  validation step.
+- **`/gate-check` is for release (version-bump) pull requests only.** Never
+  comment it on a feature, fix, refactor or any other pull request, and
+  never use it to validate a change.
+- Never dispatch the `tests` workflow with `run_e2e` set, or any other e2e
+  workflow, through `gh workflow run`, the API or any other route; never add
+  a label, empty commit or push meant to start one.
+
+If the unit or integration tests are not enough to prove the change, add or
+fix those tests, or say in the pull request what they cannot cover.
+
 ## After opening a pull request: `/review`
 
 The connector reviewer judges a change against the principles, not a rule
@@ -101,7 +134,9 @@ arrives by resync.
 Run conformance and the principles review, push fixes, comment `/review` after
 a push, and comment `/review recheck` with evidence when it believes a finding
 is wrong. Dismissing and waiving are a person's decision: post them only with
-that person's reason. Use `/review force` only when a person asks.
+that person's reason. Use `/review force` only when a person asks. Never
+comment `/e2e`, and `/gate-check` only on a release pull request: see
+section 3.
 
 The repository's CI configuration remains authoritative for enforcement.
 <!-- END APPLICATION SDK CONNECTOR REVIEW -->

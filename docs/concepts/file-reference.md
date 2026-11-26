@@ -1001,6 +1001,7 @@ and will be removed in the next major SDK release.
 
 **Deprecated:**
 
+<!-- legacy-example: the deprecated call this section migrates off -->
 ```python
 await self.upload_to_atlan(UploadInput(output_path=input.output_path))
 ```

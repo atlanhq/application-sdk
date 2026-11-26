@@ -1,5 +1,56 @@
 # Changelog
 
+## v3.60.0 (November 26, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.59.0...v3.60.0
+
+### Features
+
+- record per-item fetch failures as a run artifact and PARTIAL_SUCCESS [FND-5294] (#5073) (by @cmgrote in [016f5a5](https://github.com/atlanhq/application-sdk/commit/016f5a5))
+- warn at class definition on bad App and SqlApp config ClassVars [FND-5228] (#5092) (by @cmgrote in [bd893bf](https://github.com/atlanhq/application-sdk/commit/bd893bf))
+- make extract_entity, transform_entity and resolve_output_path public [FND-4686] (#5129) (by @cmgrote in [430929d](https://github.com/atlanhq/application-sdk/commit/430929d))
+- one settings type per cloud for every obstore store builder [FND-4681] (#5131) (by @cmgrote in [db40405](https://github.com/atlanhq/application-sdk/commit/db40405))
+- lift connector credential-form fields as credential keys on every surface, deprecate patching service globals, and add B010 for SDK rebinds [FND-4688] (#5132) (by @cmgrote in [da0aba3](https://github.com/atlanhq/application-sdk/commit/da0aba3))
+- rebuild a typed AppError from FailureDetails outside SqlApp [FND-4687] (#5135) (by @cmgrote in [524129b](https://github.com/atlanhq/application-sdk/commit/524129b))
+- one byte-put primitive, CloudStore delegates to batch [FND-4684] (#5137) (by @cmgrote in [d0c2ee6](https://github.com/atlanhq/application-sdk/commit/d0c2ee6))
+- the API host writes the .sha256 sidecar and reads store failures through the worker's table [FND-4683] (#5142) (by @cmgrote in [1dabb09](https://github.com/atlanhq/application-sdk/commit/1dabb09))
+
+### Bug Fixes
+
+- redact object-store credential key names in redact_secrets (#5078) (by @cmgrote in [a3ef470](https://github.com/atlanhq/application-sdk/commit/a3ef470))
+- pin run-shaping worker flags on the run so replay follows history [FND-5221] (#5075) (by @cmgrote in [34bc216](https://github.com/atlanhq/application-sdk/commit/34bc216))
+- wrap @task methods before first-activation signal/update handlers run [FND-5219] (#5085) (by @cmgrote in [775c97d](https://github.com/atlanhq/application-sdk/commit/775c97d))
+- use UTC for partitions and Segment timestamps, monotonic clock for durations [FND-5226] (#5088) (by @cmgrote in [8ddf32e](https://github.com/atlanhq/application-sdk/commit/8ddf32e))
+- emit the documented stable HTTP duration metric by default [FND-5227] (#5091) (by @cmgrote in [bca4695](https://github.com/atlanhq/application-sdk/commit/bca4695))
+- an empty env value keeps the default at every string read [FND-5223] (#5094) (by @cmgrote in [032ea6b](https://github.com/atlanhq/application-sdk/commit/032ea6b))
+- let SqlApp extract/transform tasks take the env timeout defaults [FND-5224] (#5118) (by @cmgrote in [b919356](https://github.com/atlanhq/application-sdk/commit/b919356))
+- make the console sink's lock re-entrant so a finalizer cannot deadlock logging (FND-5437) (#5123) (by @vaibhavatlan in [7ab9f6a](https://github.com/atlanhq/application-sdk/commit/7ab9f6a))
+- resolve the egress proxy with one rule at every connection [FND-5225] (#5120) (by @cmgrote in [e4e86cf](https://github.com/atlanhq/application-sdk/commit/e4e86cf))
+- warn when @task gets retry_policy and a retry scalar together [FND-5229] (#5126) (by @cmgrote in [ddc8a9b](https://github.com/atlanhq/application-sdk/commit/ddc8a9b))
+- one canonical type form for every backwards-compat checker [FND-4685] (#5130) (by @cmgrote in [eed35a6](https://github.com/atlanhq/application-sdk/commit/eed35a6))
+- grade a slashed qualified name on its ancestors' boundaries (FND-5435) (#5122) (by @vaibhavatlan in [76fedbb](https://github.com/atlanhq/application-sdk/commit/76fedbb))
+
+### Refactoring
+
+- render CI Dapr components from the SDK's own templates [FND-4698] (#5112) (by @cmgrote in [b96eb79](https://github.com/atlanhq/application-sdk/commit/b96eb79))
+- move infra bootstrap, restart supervisor, shutdown policy and dev runner out of main.py [FND-4689] (#5133) (by @cmgrote in [50724b0](https://github.com/atlanhq/application-sdk/commit/50724b0))
+- one release train for conformance and contract-toolkit, __version__ from package metadata [FND-4672] (#5146) (by @cmgrote in [dc4c5f7](https://github.com/atlanhq/application-sdk/commit/dc4c5f7))
+
+### Chores
+
+- make _gha importable when unit tests load parse_atlan_yaml (#5107) (by @cmgrote in [d8906d9](https://github.com/atlanhq/application-sdk/commit/d8906d9))
+- delete inert Vale styles, workflow templates, security dashboard and stale READMEs [FND-4696] (#5109) (by @cmgrote in [fc70172](https://github.com/atlanhq/application-sdk/commit/fc70172))
+- hold sibling threads until the failure is raised in TestFirstFailureStopsSiblings [FND-5415] (#5106) (by @cmgrote in [f0936ff](https://github.com/atlanhq/application-sdk/commit/f0936ff))
+- raise transfer-budget wait bound to the 30s floor [FND-4843] (#5104) (by @cmgrote in [3afe0d6](https://github.com/atlanhq/application-sdk/commit/3afe0d6))
+- parametrise repeated-scaffold test clusters [FND-4943] (#5117) (by @cmgrote in [f0dffd6](https://github.com/atlanhq/application-sdk/commit/f0dffd6))
+- share per-file test doubles and fixtures through _doubles.py and conftests [FND-4942] (#5121) (by @cmgrote in [ba17375](https://github.com/atlanhq/application-sdk/commit/ba17375))
+- add a shared FakeAE and DAG result builders, migrate 13 doubles and 19 helpers [FND-4941] (#5119) (by @cmgrote in [ae34ad0](https://github.com/atlanhq/application-sdk/commit/ae34ad0))
+- update github-actions (#5070) (by @renovate[bot] in [bf0ee1b](https://github.com/atlanhq/application-sdk/commit/bf0ee1b))
+- update postgres:19.0 docker digest to aaa10f7 (#5081) (by @renovate[bot] in [787bb21](https://github.com/atlanhq/application-sdk/commit/787bb21))
+- drop registry and infrastructure resets the unit conftest already does [FND-4940] (#5127) (by @cmgrote in [1bc49e6](https://github.com/atlanhq/application-sdk/commit/1bc49e6))
+- update aws-actions/configure-aws-credentials digest to 4566689 (#5136) (by @renovate[bot] in [60ec97f](https://github.com/atlanhq/application-sdk/commit/60ec97f))
+
+
 ## v3.59.0 (November 24, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.58.1...v3.59.0

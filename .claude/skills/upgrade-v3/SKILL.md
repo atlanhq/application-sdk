@@ -137,7 +137,7 @@ Examine the source files in the target path (exclude test files from this analys
 
 After identifying the connector type, determine the transformation strategy:
 
-**SQL connectors** (v2 `SqlMetadataExtractor`, `SqlQueryExtractor`, `IncrementalSqlMetadataExtractor`):
+**SQL connectors** (v2 SQL workflows, or an app already on the deprecated `SqlMetadataExtractor`, `SqlQueryExtractor` or `IncrementalSqlMetadataExtractor`):
 
 > **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead for metadata extraction:
 > ```python

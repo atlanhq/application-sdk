@@ -452,16 +452,31 @@ runs:
       env:
         ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+        # Caller-supplied strings reach the script only through env, never as
+        # `${{ }}` text in it: GitHub substitutes that text before bash parses
+        # the script, so a value like `tests; <command>` would run <command>.
+        TEST_PATHS: ${{ inputs.test-paths }}
+        PYTEST_ARGS: ${{ inputs.pytest-args }}
       # NOTE: TEST_<CONNECTOR>_* env vars are NOT declared here. They're
       # provided by the caller's job-level env block (which has access to
       # `secrets.*`) and inherited by this composite-action step.
       run: |
         mkdir -p results
+        # Split both strings with shell quoting rules (the default pytest-args
+        # quotes an `A|B` pattern) but no expansion or command execution, one
+        # NUL-terminated argument each. A string shlex cannot split fails the
+        # step instead of running pytest with no paths, i.e. every test.
+        ARGV_FILE="$(mktemp)"
+        python3 -c 'import os, shlex, sys; sys.stdout.write("".join(a + "\0" for a in shlex.split(os.environ["TEST_PATHS"]) + ["-v"] + shlex.split(os.environ["PYTEST_ARGS"])))' > "$ARGV_FILE" \
+          || { echo "::error::test-paths or pytest-args is not valid shell quoting"; exit 1; }
+        mapfile -d '' -t PYTEST_ARGV < "$ARGV_FILE"
         set +e
         # pytest-xdist, pytest-cov, and pytest-rerunfailures are installed
         # transiently — callers do not need to declare them as dependencies.
-        uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
-          ${{ inputs.pytest-args }} \
+        # Through `git_auth.py run` for the same reason as the unit action: a
+        # test that starts its own `uv sync` needs the private-dep mirrors.
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- \
+          uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest "${PYTEST_ARGV[@]}" \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}

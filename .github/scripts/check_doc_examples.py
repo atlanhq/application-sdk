@@ -17,10 +17,11 @@ top-level dict literals (the ``_LAZY`` tables), its ``__all__``, and the
 string constants its ``__getattr__`` compares ``name`` against count as
 defined.
 
-A block that shows v2 code on purpose (the "before" side of a migration
-example) is skipped when the line before its opening fence is the marker::
+A block that shows a v2 or deprecated API on purpose carries the
+``legacy-example`` marker that check_docs_deprecated_imports.py also reads, on
+the line directly above its opening fence::
 
-    <!-- doc-example: v2 -->
+    <!-- legacy-example: v2 "before" snippet -->
 
 It is still required to parse; only its imports are not resolved. In a block
 that shows v2 and v3 side by side, mark the v2 import statements instead, with
@@ -44,7 +45,8 @@ from pathlib import Path
 from typing import Iterator, Sequence
 
 PACKAGE = "application_sdk"
-V2_MARKER = "<!-- doc-example: v2 -->"
+LEGACY_MARKER = "<!-- legacy-example: <reason> -->"
+_LEGACY_LINE = re.compile(r"^\s*<!--\s*legacy-example:\s*\S.*?-->\s*$")
 _V2_COMMENT = re.compile(r"#\s*v2\b")
 
 _FENCE_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})\s*(?P<info>.*)$")
@@ -56,7 +58,7 @@ class Block:
 
     line: int
     source: str
-    v2: bool
+    legacy: bool
 
 
 def _language(info: str) -> str:
@@ -94,8 +96,10 @@ def python_blocks(text: str) -> Iterator[Block]:
             i += 1
         i += 1  # past the closing fence
         if _language(match["info"]) in ("python", "py"):
-            previous = lines[start - 1].strip() if start else ""
-            yield Block(start + 1, "\n".join(body) + "\n", previous == V2_MARKER)
+            previous = lines[start - 1] if start else ""
+            yield Block(
+                start + 1, "\n".join(body) + "\n", bool(_LEGACY_LINE.match(previous))
+            )
 
 
 def _module_path(src: Path, module: str) -> Path | None:
@@ -224,7 +228,7 @@ def check_file(path: Path, src: Path) -> Iterator[str]:
             line = block.line + (err.lineno or 0)
             yield f"{path}:{line}: does not parse: {err.msg}"
             continue
-        if block.v2:
+        if block.legacy:
             continue
         for lineno, message in import_problems(block.source, src):
             yield f"{path}:{block.line + lineno}: {message}"
@@ -245,7 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if failures:
         print(
             f"\n{len(failures)} doc example problem(s). Fix the example, or mark an "
-            f"intentional v2 block with `{V2_MARKER}` on the line before its fence.",
+            f"intentional v2 block with `{LEGACY_MARKER}` on the line before its fence.",
             file=sys.stderr,
         )
     return 1 if failures else 0

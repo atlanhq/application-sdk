@@ -116,6 +116,13 @@ Keep the body working by delegating to the replacement. An alias that raises is
 not an alias — it is the same break with a better error message, and it belongs
 in a `feat!:` commit (see [Deliberate breaks](#deliberate-breaks)).
 
+Use the decorator rather than a `warnings.warn` in the body: type checkers only
+see the decorator. The manifest still records a public def whose *first*
+statement (after the docstring and any local imports) is an unconditional
+`DeprecationWarning`, so a hand-written one is not lost to B001. A warn behind
+an `if`, or later in the body, deprecates a parameter or a mode and is not
+recorded as the def itself — see the parameter section below.
+
 ### An enum member → `__deprecated_members__`
 
 A decorator cannot reach a member: it is an assignment in a class body.
@@ -329,7 +336,9 @@ consumer's upgrade. Prefer the alias.
    python3 .github/scripts/check_symbol_removals.py check --repo .
    ```
 6. Update any docs that reference the old name, and mention the deprecation in
-   the PR description so it lands in the changelog.
+   the PR description so it lands in the changelog. Once the manifest lists the
+   name, the `check-docs-deprecated-imports` pre-commit hook fails every
+   Markdown code example that still uses it (`docs/standards/documentation.md`).
 7. When the removal version arrives, delete the alias and its manifest entry in
    one PR.
 
