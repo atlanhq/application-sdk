@@ -1541,8 +1541,27 @@ class SqlApp(App):
         own ``credential_ref``, routes direct (credential_guid) / agent
         (agent_json) modes, and degrades to a GUID ref or ``None`` on a
         routing edge case.
+
+        When the input names no credential and is not in agent mode, falls
+        back to the connection's ``defaultCredentialGuid`` — the same fallback
+        the gate applies, so a miner input that reuses a crawler's connection
+        resolves identically in both places.
         """
-        return CredentialRef.resolve_or_none(input)
+        ref = CredentialRef.resolve_or_none(input)
+        if ref is not None:
+            return ref
+        method = (getattr(input, "extraction_method", "") or "").strip().lower()
+        if method == "agent":
+            return None
+        from application_sdk.credentials.ref import (  # noqa: PLC0415
+            _guid_credential_ref,
+        )
+        from application_sdk.credentials.routing import (  # noqa: PLC0415
+            _connection_default_credential_guid,
+        )
+
+        guid = _connection_default_credential_guid(input)
+        return _guid_credential_ref(guid) if guid else None
 
     # =====================================================================
     # Deprecated private aliases — remove in v4.0.0

@@ -262,6 +262,47 @@ def _declared_run_credential_field(source: object) -> str | None:
     return declared if isinstance(declared, str) and declared else None
 
 
+_CONNECTION_CREDENTIAL_GUID_KEYS = ("defaultCredentialGuid", "default_credential_guid")
+"""Where a Connection carries its default credential GUID: the AE wire name
+first, then the snake_case form a Python-built input may use."""
+
+
+def _connection_default_credential_guid(source: object) -> str:
+    """The input's ``connection.attributes.defaultCredentialGuid``, or ``""``.
+
+    Query-extraction (miner) inputs reuse the crawler's connection: AE puts the
+    whole Connection on ``connection``, and the credential GUID arrives only on
+    its attributes, never on the top-level ``credential_guid``. The preflight
+    gate runs before the entrypoint body, so it cannot wait for app code to
+    copy the GUID across; it and :meth:`SqlApp.resolve_credential_ref` both
+    fall back to this when the input names no credential of its own.
+
+    ``ConnectionAttributes`` does not declare the field; it survives as an
+    ``extra="allow"`` value under its wire name. A dict-shaped connection (a
+    custom input that never typed it) is read the same way. Never raises: a
+    connection this cannot read means no fallback.
+    """
+    connection = getattr(source, "connection", None)
+    if connection is None:
+        return ""
+    attributes = (
+        connection.get("attributes")
+        if isinstance(connection, dict)
+        else getattr(connection, "attributes", None)
+    )
+    if attributes is None:
+        return ""
+    for key in _CONNECTION_CREDENTIAL_GUID_KEYS:
+        value = (
+            attributes.get(key)
+            if isinstance(attributes, dict)
+            else getattr(attributes, key, None)
+        )
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def find_prebuilt_credential_ref(source: object) -> CredentialRef | None:
     """Return the :class:`CredentialRef` an input already carries, if any.
 
