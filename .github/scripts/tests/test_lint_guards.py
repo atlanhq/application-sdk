@@ -5,10 +5,12 @@ Two failures this pins shut:
 1. **Local and CI lint disagree.** The pre-commit hooks and the dev group used
    to pin different versions of the same tool (isort 5.13.2 in the hook, 9.0.2
    in the lock), so `uv run isort` rewrote 16 files CI accepted. isort is gone;
-   ruff now sorts imports, and its three pins (the ruff-pre-commit hook rev, the
-   root dev group, packages/conformance's dev group) must be one version.
-   Renovate bumps them in a single grouped PR; this test is what fails a PR
-   that moves one without the others.
+   ruff now sorts imports, and its two pins (the ruff-pre-commit hook rev and
+   the root dev group's `ruff==`) must be one version. packages/conformance's
+   dev group names ruff unpinned: it is a member of the root uv workspace
+   (FND-4671), so the one uv.lock gives it the root's ruff. Renovate bumps both
+   pins in a single grouped PR; this test is what fails a PR that moves one
+   without the other.
 
 2. **The required `Pre-commit Checks` job runs with the default token.** It
    reads the tree and nothing else, so it gets `contents: read` and no more.
@@ -30,6 +32,10 @@ _PYPROJECTS = (
     _REPO_ROOT / "pyproject.toml",
     _REPO_ROOT / "packages/conformance/pyproject.toml",
 )
+
+_ROOT_PYPROJECT = _REPO_ROOT / "pyproject.toml"
+_CONFORMANCE_PYPROJECT = _REPO_ROOT / "packages/conformance/pyproject.toml"
+_LOCK = _REPO_ROOT / "uv.lock"
 
 _RUFF_HOOKS_REPO = "https://github.com/astral-sh/ruff-pre-commit"
 _RUFF_PIN_RE = re.compile(r"^ruff==(?P<version>\S+)$")
@@ -60,15 +66,22 @@ def ruff_dev_pin(pyproject: Path) -> str:
 class TestRuffPinParity:
     def test_every_ruff_pin_is_the_hook_version(self) -> None:
         hook = ruff_hook_version()
-        pins = {
-            str(path.relative_to(_REPO_ROOT)): ruff_dev_pin(path)
-            for path in _PYPROJECTS
-        }
-        assert set(pins.values()) == {hook}, (
-            f"ruff-pre-commit is at {hook} but the dev pins are {pins}: local "
+        pin = ruff_dev_pin(_ROOT_PYPROJECT)
+        assert pin == hook, (
+            f"ruff-pre-commit is at {hook} but the root dev pin is {pin}: local "
             "`uv run ruff` would lint, format and sort imports differently "
-            "from CI. Move all three together (Renovate's `ruff` group does)."
+            "from CI. Move both together (Renovate's `ruff` group does)."
         )
+
+    def test_the_lock_installs_the_hook_ruff_for_every_member(self) -> None:
+        """What actually installs: the workspace lock holds one ruff, and it is
+        the hook's. The conformance dev group gets it from there, so it must
+        not carry a pin of its own that Renovate would have to keep in step."""
+        lock = tomllib.loads(_LOCK.read_text())
+        versions = {p["version"] for p in lock["package"] if p["name"] == "ruff"}
+        assert versions == {ruff_hook_version()}, versions
+        dev = tomllib.loads(_CONFORMANCE_PYPROJECT.read_text())["dependency-groups"]
+        assert dev["dev"] == ["ruff"], dev
 
     def test_isort_is_not_a_second_import_sorter(self) -> None:
         # Two sorters with different rules is the drift this issue removed.

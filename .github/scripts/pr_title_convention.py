@@ -80,7 +80,6 @@ CT_EXEMPT_GLOBS = (
 )
 CF_EXEMPT_GLOBS = (
     "packages/conformance/tests/*",
-    "packages/conformance/uv.lock",
     "packages/conformance/*/package-lock.json",
     "packages/conformance/*/yarn.lock",
 )
@@ -201,7 +200,8 @@ This PR changes `packages/conformance/` source, so its title must use the
 - `fix(conformance): …`
 
 (Changes confined to `packages/conformance/tests/` or lock files
-such as `uv.lock`/`package-lock.json` should instead be `chore:`/`ci:`.)
+such as `package-lock.json` should instead be `chore:`/`ci:`. The package has
+no `uv.lock` of its own: the root lock covers it.)
 
 Editing the PR title re-runs this check and clears this comment automatically.
 """,

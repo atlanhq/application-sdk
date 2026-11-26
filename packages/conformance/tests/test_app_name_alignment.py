@@ -807,10 +807,11 @@ def test_parity_tests_import_the_sdk_from_this_checkout() -> None:
     """The parity tests here compare conformance's copies with the SDK they
     import, so that SDK must be the one in this repository, not a PyPI release.
 
-    packages/conformance path-sources atlan-application-sdk in its
-    [tool.uv.sources] (FND-4256). Before that its lock pinned a release from
-    PyPI two minors behind the tree, and every parity assertion here checked
-    that release instead of the code it sits beside.
+    packages/conformance takes atlan-application-sdk from this checkout: since
+    FND-4671 as a member of the root uv workspace, before that through a path
+    source in its [tool.uv.sources] (FND-4256). Before FND-4256 its own lock
+    pinned a release from PyPI two minors behind the tree, and every parity
+    assertion here checked that release instead of the code it sits beside.
     """
     import tomllib
 

@@ -675,7 +675,6 @@ extend-select = [
 ".github/scripts/build_and_publish/publish.py" = ["RUF100"]
 ".github/scripts/build_conformance_args.py" = ["RUF100"]
 ".github/scripts/build_scorecard_args.py" = ["RUF100"]
-".github/scripts/check_conformance_lock.py" = ["RUF100"]
 ".github/scripts/check_generated_freshness.py" = ["RUF100"]
 ".github/scripts/check_mkdocs_script_hosts.py" = ["RUF100"]
 ".github/scripts/check_symbol_removals.py" = ["RUF100"]
@@ -724,7 +723,6 @@ extend-select = [
 ".github/scripts/tests/test_bump_pr_ci_gates.py" = ["RUF100"]
 ".github/scripts/tests/test_check_allowlist.py" = ["RUF100"]
 ".github/scripts/tests/test_check_api_surface.py" = ["RUF100"]
-".github/scripts/tests/test_check_conformance_lock.py" = ["RUF100"]
 ".github/scripts/tests/test_check_mkdocs_script_hosts.py" = ["RUF100"]
 ".github/scripts/tests/test_check_pyright_baseline.py" = ["RUF100"]
 ".github/scripts/tests/test_check_test_write_hygiene.py" = ["RUF100"]
@@ -889,12 +887,22 @@ constraint-dependencies = [
     "dnspython>=2.9.2",          # CVE-2026-128089
 ]
 
+# packages/conformance is a workspace member, so this uv.lock is the only lock
+# in the tree that covers it (FND-4671). It used to carry its own lock, which
+# re-resolved the whole SDK through its `test` extra and needed sync lanes to
+# follow every dependency bump here. As a member it resolves together with the
+# SDK, takes the [tool.uv] constraints and index below, and its tests run
+# against this tree's SDK, installed editable. packages/api stays an editable
+# path source, as before.
+[tool.uv.workspace]
+members = ["packages/conformance"]
+
 [tool.uv.sources]
 # Source-pinned, not version-pinned: the conformance package's source lives
-# in this same repo (packages/conformance) and is published from it. Using
-# the local path means a packages/conformance change is picked up here
-# immediately, with no separate release-then-bump-the-pin cycle.
-atlan-application-sdk-conformance = { path = "packages/conformance" }
+# in this same repo (packages/conformance) and is published from it. As a
+# workspace member it is installed editable here, so a packages/conformance
+# change is picked up immediately, with no release-then-bump-the-pin cycle.
+atlan-application-sdk-conformance = { workspace = true }
 atlan-application-sdk-api = { path = "packages/api", editable = true }
 
 # Uncomment the following section in case you want to publish to testpypi

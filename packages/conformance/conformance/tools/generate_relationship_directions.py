@@ -20,10 +20,12 @@ deprecation manifest, the public-error allowlist and the SDK type-alias table.
 See ``conformance.suite.checks.prescriptions._relationship_directions`` for how
 the ends are paired.
 
-Run it from ``packages/conformance`` (as above): the drift test runs there, so
-the table must match the pyatlan pinned in that package's ``uv.lock``, which can
-differ from the repo root's.  A pyatlan bump that changes a relationship fails
-the drift test until the table is regenerated in the same PR.
+Run it from ``packages/conformance`` (as above), where ``--extra test`` installs
+the SDK and so pyatlan. The package is a member of the root uv workspace
+(FND-4671), so the table must match the pyatlan pinned in the root ``uv.lock``.
+A pyatlan bump that changes a relationship fails the drift test until the table
+is regenerated in the same PR; on a Renovate branch,
+``renovate-pyatlan-table-sync.yaml`` does that.
 """
 
 from __future__ import annotations

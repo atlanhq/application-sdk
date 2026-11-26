@@ -20,7 +20,7 @@ from typing import Any
 import bound_lock_branch
 import pytest
 import renovate_approval_conditions as approval
-import renovate_conformance_lock_sync
+import renovate_pyatlan_table_sync
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -30,7 +30,7 @@ REUSABLE = WORKFLOWS / "renovate-branch-fixup.yaml"
 #: caller file -> (its job id, the driver module it names)
 CALLERS: dict[str, tuple[str, Any]] = {
     "renovate-lock-cooldown.yaml": ("bound", bound_lock_branch),
-    "renovate-conformance-lock-sync.yaml": ("sync", renovate_conformance_lock_sync),
+    "renovate-pyatlan-table-sync.yaml": ("sync", renovate_pyatlan_table_sync),
 }
 
 

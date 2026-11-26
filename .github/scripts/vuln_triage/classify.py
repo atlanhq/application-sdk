@@ -5,7 +5,7 @@
     │                         NO  → upstream maintained?  YES → Case 2   NO → Case 3
     ├── vendored inside one of our installed wheels (a Cargo.lock in a wheel)
     │                         → Case 2: clears when that wheel ships the fix
-    ├── in another manifest of our tree (packages/conformance/uv.lock, ...)
+    ├── in another manifest of our tree (a nested lock file, ...)
     │                         → Case 2: clears when that manifest is updated
     └── NO (only in the base image) → Case 4: rebuild app-runtime-base:3
 
@@ -83,7 +83,7 @@ def classify_hit(hit: Hit, lock: dict[str, dict], upstream: UpstreamCheck) -> Tr
         fixed=hit.fixed,
     )
     # An fs hit is the root lock's only when Trivy read it from the root uv.lock; the fs
-    # scan also reads packages/conformance/uv.lock and anything vendored in .venv.
+    # scan also reads any other manifest in the tree and anything vendored in .venv.
     from_root_lock = hit.source == "image" or hit.target == ROOT_LOCK
     if from_root_lock and locked and locked["version"] == hit.installed:
         base.source = "our dependency"
@@ -122,7 +122,7 @@ def classify_hit(hit: Hit, lock: dict[str, dict], upstream: UpstreamCheck) -> Tr
         )
         return base
     if hit.source == "fs":
-        # Another manifest in our tree (e.g. packages/conformance/uv.lock). Ours, but
+        # Another manifest in our tree (e.g. a nested lock file). Ours, but
         # not something the root-lock bump can touch, and never a base-image rebuild.
         base.case = 2
         base.source = f"{OTHER_MANIFEST} {hit.target}"

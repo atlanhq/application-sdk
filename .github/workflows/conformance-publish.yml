@@ -61,8 +61,11 @@ jobs:
           echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
 
+      # --out-dir: packages/conformance is a uv workspace member (FND-4671), and
+      # a member's `uv build` otherwise writes to the workspace root's dist/,
+      # where neither the wheel gate nor `uv publish` below looks.
       - name: Build package
-        run: cd packages/conformance && uv build
+        run: cd packages/conformance && uv build --out-dir dist
 
       # The exact artifacts uv publish uploads, checked as an install: every
       # module imported first, every console script and subcommand run, a

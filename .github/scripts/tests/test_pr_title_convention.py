@@ -80,7 +80,6 @@ class TestClassifyFiles:
     @pytest.mark.parametrize(
         "path",
         [
-            "packages/conformance/uv.lock",
             "packages/conformance/ui/package-lock.json",
             "packages/conformance/ui/yarn.lock",
         ],
@@ -105,7 +104,7 @@ class TestClassifyFiles:
         "files",
         [
             ["pyproject.toml", "uv.lock"],
-            ["packages/conformance/pyproject.toml", "packages/conformance/uv.lock"],
+            ["packages/conformance/pyproject.toml", "uv.lock"],
             ["packages/conformance/conformance/package.json"],
             ["contract-toolkit/pyproject.toml"],
             ["requirements.txt"],
@@ -131,7 +130,6 @@ class TestClassifyFiles:
             ptc.classify_files(
                 [
                     "uv.lock",
-                    "packages/conformance/uv.lock",
                     "packages/conformance/conformance/data/relationship_directions.json",
                 ]
             )
@@ -152,7 +150,7 @@ class TestClassifyFiles:
         assert (
             ptc.classify_files(
                 [
-                    "packages/conformance/uv.lock",
+                    "uv.lock",
                     "packages/conformance/conformance/data/relationship_directions.json",
                     "packages/conformance/conformance/foo.py",
                 ]
@@ -271,7 +269,7 @@ class TestRun:
     def test_conformance_dependency_bump_accepts_chore_deps(self, tmp_path: Path):
         changed = _write_changed_files(
             tmp_path,
-            ["packages/conformance/pyproject.toml", "packages/conformance/uv.lock"],
+            ["packages/conformance/pyproject.toml", "uv.lock"],
         )
         comment_out = tmp_path / "comment.md"
         violation, expected = ptc.run(
@@ -286,7 +284,7 @@ class TestRun:
     def test_conformance_dependency_bump_rejects_feat(self, tmp_path: Path):
         changed = _write_changed_files(
             tmp_path,
-            ["packages/conformance/pyproject.toml", "packages/conformance/uv.lock"],
+            ["packages/conformance/pyproject.toml", "uv.lock"],
         )
         comment_out = tmp_path / "comment.md"
         violation, expected = ptc.run(
