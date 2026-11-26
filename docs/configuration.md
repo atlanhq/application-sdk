@@ -85,6 +85,12 @@ before changing either value.
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the bare app name (**no** `atlan-` prefix) when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. Setting this explicitly also changes the queue the served manifest advertises, so a worker on an overridden queue and the Automation Engine stay in step. The override is for local and CLI runs: **do not pin it in a deployed app's deploy or pool env** (`contract/app.pkl` or `atlan.yaml`) — the on-demand (`-od`) worker then polls the base queue and its retries hang (conformance rule K031). See [Task-queue naming](#task-queue-naming). |
 | `APPLICATION_SDK_ENABLE_OUTPUT_INTERCEPTOR` | `true` | Collect `get_outputs()` metrics and artifacts and merge them into the workflow result. Each activity carries its outputs back on its own result (`metrics` / `artifacts` on an `Output`, or a reserved `_atlan_outputs` key on a dict result, which the workflow strips from its own dict result), so they arrive whichever worker runs the activity. An activity returning anything else (e.g. `None`) cannot carry them: they are dropped with a warning. Set it on workflow **and** activity workers alike. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
+| `APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR` | `true` | Publish lifecycle events (workflow and activity start/end) through the event binding. Read once at worker start and pinned on each run the worker starts, so a run publishes (or not) according to the worker that started it. |
+| `ATLAN_POOL_<POOL>_QUEUE` | _(derived)_ | Task queue for tasks declared with `@task(pool="<pool>")`. `<POOL>` is the pool name upper-cased with `-` replaced by `_` (`cold-tier` reads `ATLAN_POOL_COLD_TIER_QUEUE`). Unset means `<task queue>-<pool>`, from `ATLAN_TASK_QUEUE` or the derived queue. |
+| `ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS` | _(unset: no limit)_ | Execution timeout, in hours, the handler sets on the workflows it starts. Unset, `0` or negative means no timeout (a negative value logs a warning). |
+| `TEMPORAL_HOST` | `localhost:7233` | Read by `load_execution_settings()` into `ExecutionSettings.host`, with `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` as the fallback. The SDK's own worker and client do not use this field: they connect with `ATLAN_TEMPORAL_HOST`. Set that one. |
+| `TEMPORAL_NAMESPACE` | `default` | Read into `ExecutionSettings.namespace`. Not used by the SDK's worker or client, which read `ATLAN_TEMPORAL_NAMESPACE`. |
+| `TEMPORAL_TASK_QUEUE` | `application-sdk` | Read into `ExecutionSettings.task_queue`. Not used by the SDK's worker or client, which read `ATLAN_TASK_QUEUE`. |
 
 ### Task-queue naming
 
@@ -117,6 +123,22 @@ Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your
 |----------|---------|-------------|
 | `ATLAN_APP_BUILD_ID` | _(empty)_ | Build ID for worker versioning. Fallback: `TEMPORAL_BUILD_ID`. |
 | `ATLAN_APP_DEPLOYMENT_NAME` | _(empty)_ | Worker Deployment name (`<namespace>/<twd-name>`). Fallback: `TEMPORAL_DEPLOYMENT_NAME`. |
+| `TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR` | `PINNED` | Versioning behavior for workflows that declare none, when the worker registers as a Worker Deployment version. `PINNED` or `AUTO_UPGRADE` (case-insensitive); any other value logs a warning and uses `PINNED`. |
+
+### Task timeouts and progress
+
+Process-wide defaults for `@task` timing, read once at startup. An explicit value on `@task(...)` always wins. See [Tasks: process-wide timeout defaults](concepts/tasks.md#process-wide-timeout-defaults-via-env-vars).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `86400` (24 h) | Default `timeout_seconds`: Temporal ends one activity attempt after this many seconds. |
+| `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | `60` | Default `heartbeat_timeout_seconds`: Temporal retries the activity when no heartbeat arrives within this window. The framework heartbeats every 10 s. |
+| `ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS` | _(unset: unbounded)_ | Default `schedule_to_close_seconds`: ceiling on a task's total time across every retry. `0` reads as unset; a negative value logs a warning and is ignored. |
+| `ATLAN_PROGRESS_WATCHDOG` | `warn` | Stall-watchdog mode: `off`, `warn` or `enforce`. `off` disables the watchdog and beats a per-task declaration. An unrecognised value logs a warning and uses `warn`. |
+| `ATLAN_MAX_NO_PROGRESS_SECONDS` | `900` | Default `max_no_progress_seconds`: how long an attempt may report no progress before the watchdog reports a gap. `0` or negative uses the default. |
+| `ATLAN_RUN_LENGTH_SLA_SECONDS` | `86400` (24 h) | How long a run may take before the run-length alert is raised. `0` disables it. See [Tasks](concepts/tasks.md). |
+| `ATLAN_SDR_<OP>_START_TO_CLOSE_SECONDS` | `300` | Per-attempt timeout for one SDR handler activity. `<OP>` is `AUTH` (`test_auth`), `PREFLIGHT` (`preflight_check`) or `METADATA` (`fetch_metadata`). |
+| `ATLAN_SDR_<OP>_SCHEDULE_TO_CLOSE_SECONDS` | `300` | Total-time ceiling for the same SDR activity across retries. A value lower than the matching start-to-close timeout logs a warning, because Temporal rejects that pair. |
 
 ### Worker Restart Supervisor
 
@@ -137,6 +159,12 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS` | `120`, or derived from `ATLAN_SHUTDOWN_GRACE_SECONDS` | Upper bound (seconds) on shutdown after the worker has drained on a shutdown signal. It is armed as soon as the Temporal drain returns, so it also covers the worker's own cleanup: credential directories, sizing rows, and the Pushgateway final push, hold and DELETE. It also covers closing infrastructure, flushing telemetry and interpreter exit hooks. No activity is in flight by then; if these steps have not finished within the bound the process exits with code 3, so a stuck telemetry flush cannot hold the pod for its whole grace period. The container entrypoint passes code 3 through as the container's exit code. Applies when the app is started through the SDK's entry point (`python -m application_sdk.main`); awaiting `run_worker_mode` / `run_combined_mode` directly does not start it unless `bound_post_drain_exit=True`. `0` or negative disables the bound. |
 | `DAPR_STOP_TIMEOUT_SECONDS` | `30` | Read by the container entrypoint. How long to wait for daprd to exit once the Python app has exited before killing it. Once the app has exited, daprd has nothing left to do: inbound pub/sub and bindings have no app to deliver to, and the app has no outbound call in flight. |
 | `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on every read of Temporal core's loopback metrics endpoint: the poll-state diagnostic, the combined-mode `/metrics` proxy and the worker's Pushgateway `TemporalCoreCollector`. Guards each reader against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is skipped: the diagnostic reports *unknown* (never zero), `/metrics` is served without Temporal core series and counts `temporal_core_metrics_proxy_failures_total{reason="oversize"}`, and the collector skips that push. |
+| `ATLAN_WORKER_EVICTION_MAX_RETRIES` | `3` | Maximum re-dispatches of one activity caused by worker pod eviction (SIGTERM during the activity: scale-down, spot reclaim, node drain, rolling deploy). These do not consume the activity's retry-policy attempts. Negative values clamp to `0`. |
+| `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` | `0` (off) | When positive, the worker `/live` probe fails if no activity execution or heartbeat was recorded within this window. Enable it only for queues that are always busy: on an idle queue it restarts a healthy worker. |
+| `ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS` | `150` | Longest a restarted worker container idles before polling, when the restart advice says to wait, so a pod killed for memory can be replaced instead of taking work back on the same limit. It resumes polling either way. |
+| `ATLAN_OOM_RESTART_CHECK` | `none` | Whether a restarted worker container asks the activity rerouter what the restart earns before it polls again. `api` sends one GET to `ATLAN_RESTART_ADVICE_URL` naming this pod, and the worker waits only when the answer says a replacement is scheduled. `none` never asks and resumes polling at once. |
+| `ATLAN_RESTART_ADVICE_URL` | _(empty)_ | Endpoint of the activity rerouter that a restarted worker asks whether it was killed and whether a replacement pod is coming. Used when `ATLAN_OOM_RESTART_CHECK=api`. Empty, no pod name, a timeout or an unparsable answer means the worker starts polling at once. |
+| `K8S_POD_NAME` | _(empty)_ | Pod name, injected by the Kubernetes Downward API. Used to name this pod in restart advice, sizing telemetry and OTel resource attributes. Falls back to `HOSTNAME`. See [Kubernetes-injected variables](standards/env-vars.md#kubernetes-injected-variables). |
 
 Reading the poller gauge requires Temporal core's Prometheus exporter, bound by
 `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (default `127.0.0.1:9464`). When it is
@@ -151,6 +179,7 @@ unavailable the poll state is reported as *unknown*, never as zero.
 | `ATLAN_TEMPORAL_TLS_CLIENT_CERT_PATH` | _(empty)_ | Path to the client certificate file. |
 | `ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH` | _(empty)_ | Path to the client private key file. |
 | `ATLAN_TEMPORAL_TLS_DOMAIN` | _(empty)_ | TLS server name override. |
+| `ATLAN_WORKFLOW_TLS_ENABLED` | `false` | **v2-compat** name for `ATLAN_TEMPORAL_TLS_ENABLED`. Read only when `ATLAN_TEMPORAL_TLS_ENABLED` is absent from the environment, so an explicit `ATLAN_TEMPORAL_TLS_ENABLED=false` wins over a stale value. |
 
 ---
 
@@ -191,6 +220,7 @@ Set these when `ATLAN_AUTH_ENABLED=true` to authenticate the worker and handler 
 | `ATLAN_DEPLOYMENT_SECRET_PATH` | `ATLAN_DEPLOYMENT_SECRETS` | Key name in the deployment secret store that holds the auth credentials. |
 | `ATLAN_AUTH_CLIENT_ID_KEY` | `ATLAN_AUTH_CLIENT_ID` | Key name for the client ID within the deployment secret. |
 | `ATLAN_AUTH_CLIENT_SECRET_KEY` | `ATLAN_AUTH_CLIENT_SECRET` | Key name for the client secret within the deployment secret. |
+| `ATLAN_INTERNAL_HERACLES_URL` | _(empty)_ | **Deprecated, removed in v4.0.0.** In-cluster base URL used by the deprecated `AtlanOAuthClient.effective_token_url()` (as `<url>/oauth/token`). No SDK path exchanges a token against it. |
 
 When `ATLAN_AUTH_ENABLED` is on, lifecycle events read the client credentials for their bearer token once and reuse them. If the credentials are missing or the token endpoint refuses them (a 4xx other than 408/429, or no `access_token`), events go out without auth and the lookup is not repeated for 60 s. If the secret store does not answer (not ready yet, throttled), the lookup is repeated after 5 s. A refusal discards the cached credentials, so a rotated credential is picked up within 60 s, without a restart. A transient exchange failure (5xx, 408/429, timeout) keeps the credentials, and the next event retries the exchange.
 
@@ -210,6 +240,14 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `ATLAN_EVENT_INGRESS_DIRECT_FALLBACK` | `true` | When the Dapr `EVENT_STORE_NAME` binding fails in a way that proves the event got no response (connection, TLS or DNS failure, missing binding), publish the lifecycle event (`worker_start`, `token_refresh`, workflow/activity start/end) directly to Event Ingress over HTTPS from the app process, reusing the same payload and bearer token and the `url` of the `bindings.http` component on disk. Errors that may already have been delivered (an upstream HTTP status) are not re-sent over direct HTTPS; the `publish_event` activity's Temporal retry re-sends `workflow_start` / `workflow_end` through Dapr, so those two are at-least-once. `activity_start` / `activity_end` and `worker_start` / `token_refresh` are published inline and not retried: after such an error they are logged and dropped, so they are at-most-once. Every event carries `metadata.event_id`, the same on every retry of one workflow event, so consumers can dedupe. Backs off 60 s after a failed direct publish. Logged at WARNING as `FALLBACK ACTIVE` / `Published event via direct HTTPS fallback`, `FALLBACK SKIPPED` / `FALLBACK SUSPENDED` when not attempted, `FALLBACK FAILED` / `FALLBACK UNAVAILABLE` at ERROR. Set `false` to disable. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
+| `ATLAN_ENABLE_OBJECTSTORE` | _(unset)_ | Whether the chart deployed the deployment object store, derived from `deploy.dapr.objectstore`. Only explains the startup error when the store is missing: the store is required whatever this says. See [The deployment object store is required](#the-deployment-object-store-is-required). |
+| `ATLAN_ENABLE_STATESTORE` | _(unset)_ | Whether the chart deployed the state store, derived from `deploy.dapr.statestore` in `atlan.yaml`. Startup compares it with the components the sidecar registered and logs any mismatch. It does not switch anything on or off. |
+| `ATLAN_ENABLE_SECRETSTORE` | _(unset)_ | As `ATLAN_ENABLE_STATESTORE`, for the secret store (`deploy.dapr.secretstore`). |
+| `ATLAN_ENABLE_EVENTSTORE` | _(unset)_ | As `ATLAN_ENABLE_STATESTORE`, for the event binding (`deploy.dapr.eventstore`). |
+| `DAPR_HTTP_PORT` | _(set by the sidecar)_ | Dapr sidecar HTTP port, injected by Dapr. Its presence selects Dapr-backed infrastructure; without it the SDK reports no sidecar. The local dev runner (`application_sdk.dev`) sets it for its embedded sidecar. |
+| `DAPR_GRPC_PORT` | _(set by the sidecar)_ | Dapr sidecar gRPC port. The local dev runner sets it for its embedded sidecar and restores the previous value afterwards. |
+| `DAPR_COMPONENTS_PATH` | `./components` | Directory of the Dapr component YAMLs. The SDK reads the files there to resolve the observability object store and the event binding's URL. The local dev runner points it at its generated components. |
+| `DAPR_LOG_LEVEL` | `info` | `daprd --log-level`, set by the image entrypoint. In SDR mode the Dapr log forwarder, which relays daprd's logs into the SDK pipeline, also reads it to set the level it forwards at. |
 
 ### The deployment object store is required
 
@@ -311,6 +349,11 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
 | `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. A value that is not a duration (see [How values are read](#how-values-are-read)) warns and keeps the default, as do the other `ATLAN_OBSTORE_*_TIMEOUT` variables. |
+| `ATLAN_OBSTORE_CONNECT_TIMEOUT` | `30s` | Object-store client connect timeout (duration). |
+| `ATLAN_OBSTORE_POOL_IDLE_TIMEOUT` | `90s` | How long an idle pooled connection is kept (duration). |
+| `ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT` | `30s` | HTTP/2 keep-alive ping timeout (duration). |
+| `ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST` | _(client default)_ | Maximum idle pooled connections per host. Unset keeps the object-store client's default. |
+| `ATLAN_OBSTORE_USER_AGENT` | `atlan-application-sdk/<version>` | `User-Agent` sent on object-store requests. |
 | `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. A malformed or negative value logs a warning and keeps the default. |
 | `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. A malformed or negative value logs a warning and keeps the default. |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its in-flight part file and checkpoint sidecar (`.sdk-partial/{name}.part` and `.sdk-partial/{name}.transfer-state` beside the destination), and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |
@@ -323,12 +366,36 @@ These configure only the deprecated `RedisClient` / `RedisClientAsync`, which ke
 | `ATLAN_FILE_REF_CHUNK_SIZE_BYTES` | `16777216` (16 MiB) | Size of each range-GET chunk in a chunked download. |
 | `ATLAN_FILE_REF_CHUNK_CONCURRENCY` | `4` | Maximum concurrent range-GET chunks per file. |
 | `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Bytes of transfer buffers the SDK's file transfers in the process may hold at once — the range GETs, streaming downloads and multipart uploads behind `download_file`, `upload_file`, the prefix operations and FileReference hand-offs reserve from one budget, so the per-call concurrency limits cannot multiply past it. `upload_bytes` and every `CloudStore` transfer reserve like any other; `put_json` and `CloudStore.get_bytes()` hold each object in memory outside the budget. `0` takes a quarter of the container memory limit (never under 128 MiB; 1 GiB when no limit is known). A transfer queued on the budget marks progress, so it is never killed as stalled. |
+| `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart upload part size. Larger parts mean fewer parts and a shorter completion window for large objects. Peak upload memory is roughly this times `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY`. |
+| `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently per multipart upload. Lower it when raising the part size, to hold peak memory steady. |
+| `ATLAN_UPLOAD_FILE_BLOCKED_PATHS` | _(empty)_ | Comma-separated substrings. A local path containing any of them is refused by the file-upload helpers, in addition to the built-in system, credential and `.env*` paths. `\` and `/` are matched alike. |
+| `ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS` | `30` | Per-store timeout for the SDR boot-time object-store access probe (runs when `ENABLE_ATLAN_UPLOAD=true`). Non-finite or non-positive values use the default. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 | `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | `best_effort` | Controls dual-write behaviour when both stores are configured (SDR only). `best_effort` (default): artifact is written to the deployment (customer) store and the upstream (Atlan) store; a deployment-write failure logs a `WARNING` and the run continues. `required`: same dual-write, but a deployment-write failure causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). `disabled`: upstream-only write (pre-BLDX-1464 behaviour). |
 | `ATLAN_VALIDATE_ASSETS_ON_UPLOAD` | `true` | Validate transformed assets against the pyatlan_v9 backbone before the SDR→Atlan upload handoff. Warn-only — invalid/orphaned assets are logged, never block the upload. Set to `false` to disable the check entirely. |
 | `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS` | `600` | Upper bound in seconds for one upload's asset-validation scan. The scan runs in an isolated child process (CNCT-85); past this bound the child is killed and the upload proceeds with a warning, so warn-only validation can neither stall nor crash a handoff. |
+| `ATLAN_VALIDATE_ARTIFACTS` | `true` | Deployment-level kill switch for artifact validation. When on, an outcome event is emitted for every artifact. `false` stops validation and its events. Whether a verdict blocks is `ATLAN_ARTIFACT_VALIDATION_MODE`. |
+| `ATLAN_ARTIFACT_VALIDATION_MODE` | _(the app's `artifact_validation_mode`, else `soft`)_ | `hard` makes a failed artifact validation block; any other non-empty value is soft. Overrides the app class's declaration. |
 | `ATLAN_FAULT_ISOLATION_IDLE_SECONDS` | `30` | Seconds a fault-isolation process pool (`run_fault_isolated` / `run_best_effort`, which the asset-validation scans use) keeps its spawn children after its last call finishes. Past it the children exit and their memory returns to the pod; the next call spawns afresh. `0` shuts the pool down as soon as it goes idle. Read when a pool goes idle, so a change applies from the next idle period. A value that isn't a non-negative number is ignored, with one warning. See [ADR-0017](adr/0017-native-execution-isolation.md#addendum-idle-children-are-reaped-fnd-4278). |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by the SDK's `httpx` clients when set. |
+
+---
+
+### Consolidated API host object store
+
+The consolidated API host serves object-store routes for its hosted apps from one store, built from these variables. The host's manifest aliases them from the atlan-app chart's per-cloud values. The first bucket or account set wins, in this order: GCP, S3, Azure. With none set the routes answer 503.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_GCP_BUCKET` | _(empty)_ | GCS bucket, reached through its S3-compatible endpoint. Needs both HMAC keys below. |
+| `ATLAN_GCP_REGION` | _(empty)_ | GCS region. |
+| `ATLAN_GCP_HMAC_ACCESS_KEY` | _(empty)_ | GCS HMAC access key. |
+| `ATLAN_GCP_HMAC_SECRET` | _(empty)_ | GCS HMAC secret. |
+| `ATLAN_S3_BUCKET` | _(empty)_ | S3 bucket, using the pod's ambient AWS identity. |
+| `ATLAN_S3_REGION` | `AWS_REGION`, then `AWS_DEFAULT_REGION`, then `us-east-1` | S3 region. |
+| `ATLAN_AZURE_STORAGE_ACCOUNT` | _(empty)_ | Azure Blob storage account. Needs `ATLAN_AZURE_STORAGE_CONTAINER`. |
+| `ATLAN_AZURE_STORAGE_CONTAINER` | _(empty)_ | Azure Blob container. |
+| `ATLAN_AZURE_STORAGE_ACCESS_KEY` | _(empty)_ | Account key. Unset means the pod's ambient (workload) identity. |
 
 ---
 
@@ -361,6 +428,9 @@ Every SDK connection that can go through an egress proxy resolves it with one ru
 | `ATLAN_LOG_RETENTION_DAYS` | _(removed)_ | No longer read; setting it logs a startup warning. The SDK never deletes exported files; bound object-store growth with a lifecycle rule on the bucket, for example expiring objects under `artifacts/apps/observability/` after N days. See [ADR-0012](adr/0012-observability-consolidation.md#addendum-retention-of-exported-files-belongs-to-the-bucket-not-the-sdk-fnd-4889). |
 | `ATLAN_LOG_CLEANUP_ENABLED` | _(removed)_ | No longer read; setting it logs a startup warning. See `ATLAN_LOG_RETENTION_DAYS`. |
 | `ATLAN_LOG_FILE_NAME` | `log.parquet` | Signal-type discriminator used internally to route records to the correct observability sub-path (logs / metrics / traces). **The default is kept as `log.parquet` for back-compat; the on-disk and object-store format is gzip-compressed NDJSON (`.json.gz`), not parquet.** |
+| `ATLAN_LOG_SOURCE` | `ATLAN_APPLICATION_NAME` | `source` label on log lines from the app's own code (not SDK or dependency lines, which are classified automatically). Services built on the SDK that are not connectors set their own, for example `ae`. |
+| `ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS` | `60` | Minimum seconds between repeated INFO summaries from the filter that suppresses Cloudflare 504s on Temporal long polls. |
+| `ENABLE_WORKFLOW_REPLAY_LOGS` | `false` | Emit SDK log lines during Temporal workflow replay. Off matches Temporal's own `workflow.logger`; turn on to debug with a `Replayer`. |
 
 ---
 
@@ -370,6 +440,13 @@ Every SDK connection that can go through an egress proxy resolves it with one ru
 |----------|---------|-------------|
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
+| `ATLAN_METRICS_FILE_NAME` | `metrics.parquet` | Signal-type discriminator for metrics records, as `ATLAN_LOG_FILE_NAME` is for logs. Not a real file name. |
+| `ATLAN_SIZING_BATCH_SIZE` | `500` | Activity sizing-telemetry records buffered before a flush. |
+| `ATLAN_SIZING_FLUSH_INTERVAL_SECONDS` | `60` | Seconds between sizing-telemetry flushes. |
+| `ATLAN_SIZING_FILE_NAME` | `sizing.parquet` | Signal-type discriminator for sizing records. |
+| `APPLICATION_SDK_ENABLE_SIZING_TELEMETRY` | `false` | Collect per-activity peak memory and CPU throttling. |
+| `APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES` | _(empty: none)_ | Comma-separated activity names to measure, or `*` for all. Empty collects nothing (and logs a warning when sizing telemetry is on). |
+| `APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS` | `1.0` | Memory poll interval when the kernel watermark is unusable. `0` disables polling, so kernels before 6.8 collect no peak. |
 | `ATLAN_METRICS_RETENTION_DAYS` | _(removed)_ | No longer read; setting it logs a startup warning. The SDK never deleted exported metric files. Use a bucket lifecycle rule, as for `ATLAN_LOG_RETENTION_DAYS`. |
 | `ATLAN_METRICS_CLEANUP_ENABLED` | _(removed)_ | No longer read; setting it logs a startup warning. See `ATLAN_METRICS_RETENTION_DAYS`. |
 | `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) in worker/combined mode so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the combined-mode FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, or in handler-only mode, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
@@ -390,6 +467,7 @@ Every SDK connection that can go through an egress proxy resolves it with one ru
 |----------|---------|-------------|
 | `ATLAN_ENABLE_OTLP_TRACES` | `false` | Export traces via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. `run_main` installs the process-wide tracer provider at startup, so worker spans from the Temporal `TraceInterceptor` are exported. |
 | `ATLAN_ENABLE_TRACES_CONSOLE` | `false` | Development only. Also print every span to stdout via OTel's `ConsoleSpanExporter`. Has no effect unless `ATLAN_ENABLE_OTLP_TRACES` is on. Leave off in deployed pods: it puts every span on the log stream. |
+| `ATLAN_TRACES_FILE_NAME` | `traces.parquet` | Signal-type discriminator for the traces adapter. No traces file is written: spans go over OTLP. |
 
 ---
 
@@ -403,6 +481,8 @@ Every SDK connection that can go through an egress proxy resolves it with one ru
 | `OTEL_RESOURCE_ATTRIBUTES` | _(empty)_ | Additional OTel resource attributes (key=value pairs). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint. Set to the node IP collector in Kubernetes: `$(K8S_NODE_IP):4317`. |
 | `ENABLE_OTLP_LOGS` | `false` | Export logs via OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `ENABLE_OTLP_WORKFLOW_LOGS` | `false` | Add a second OTLP log exporter for workflow-log archival. Needs `OTEL_WORKFLOW_LOGS_ENDPOINT`. |
+| `OTEL_WORKFLOW_LOGS_ENDPOINT` | _(empty)_ | Endpoint of the secondary, archival OTLP log collector. |
 | `OTEL_SEMCONV_STABILITY_OPT_IN` | `http` | Read by OTel instrumentation, once per process. The handler service sets it to `http` when unset, so HTTP metrics use the stable names (`http_server_request_duration_seconds`, in seconds). An explicit value replaces that default: keep `http` in it (or `http/dup` to emit both stable and legacy names), or the legacy `http_server_duration_milliseconds` comes back. |
 
 | `OTEL_WF_NODE_NAME` | _(empty)_ | Kubernetes node name for workflow telemetry. |

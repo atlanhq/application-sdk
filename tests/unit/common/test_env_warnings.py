@@ -112,3 +112,27 @@ class TestWarnRemovedEnvVars:
             warn_removed_env_vars()
 
         assert name in self._formatted_message(mock_logger)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "ATLAN_APP_DASHBOARD_HOST",
+            "ATLAN_APP_DASHBOARD_PORT",
+            "ATLAN_LOCAL_DEVELOPMENT",
+            "ATLAN_MAX_CONCURRENT_ACTIVITIES",
+            "ATLAN_SQL_SERVER_MIN_VERSION",
+            "ATLAN_WORKFLOW_UI_HOST",
+            "ATLAN_WORKFLOW_UI_PORT",
+        ],
+    )
+    def test_names_dropped_from_env_example_warn_when_set(
+        self, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        """``.env.example`` set these for years after the SDK stopped reading
+        them, so deployments copied from it may still carry them."""
+        monkeypatch.setenv(name, "1")
+        ctx, mock_logger = self._patch_logger()
+        with ctx:
+            warn_removed_env_vars()
+
+        assert name in self._formatted_message(mock_logger)
