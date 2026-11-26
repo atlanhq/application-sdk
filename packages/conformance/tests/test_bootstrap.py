@@ -2425,6 +2425,13 @@ def test_dep_cooldown_workflow_is_retired() -> None:
     assert "dep-cooldown.yml" in RETIRED_WORKFLOWS
 
 
+def test_marketplace_playwright_e2e_shims_are_retired() -> None:
+    """The dev-tenant Playwright callers post a permanently pending status and
+    no app repo triggers them; the managed tests.yaml e2e tier replaces them."""
+    assert "e2e-pr-init-check.yaml" in RETIRED_WORKFLOWS
+    assert "e2e-tests-feature.yaml" in RETIRED_WORKFLOWS
+
+
 # ---------------------------------------------------------------------------
 # Dependabot config: superseded by the Renovate preset, never managed
 # ---------------------------------------------------------------------------

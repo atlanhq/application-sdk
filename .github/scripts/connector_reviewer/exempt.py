@@ -82,6 +82,10 @@ BOOTSTRAP_MANAGED = (
     # Never bootstrap-managed: bootstrap never wrote it and only removes it (a per-repo
     # caller of atlanhq/.github's reusable-dep-cooldown.yml; see render.py).
     ".github/workflows/dep-cooldown.yml",
+    # Never bootstrap-managed: hand-copied callers of marketplace-releases' dev-tenant
+    # Playwright workflows; bootstrap only removes them (see render.py).
+    ".github/workflows/e2e-pr-init-check.yaml",
+    ".github/workflows/e2e-tests-feature.yaml",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
     ".github/actions/run-conformance-detect/**",
