@@ -26,6 +26,17 @@ host/username/password shape imposed on sources that have neither. Field
 per-datasource curation profiles — the endpoint's ``mandatory_missing`` is
 computed there, server-side.
 
+One exception to verbatim: ``dns_host`` (DATFORG-408). CI reaches DataForge
+sources over Twingate, which only tunnels hosts on the CI key. ``host`` is the
+source's AWS name (an EC2 name, an IP, an RDS endpoint), which is not on the
+key; ``dns_host`` is a stable name under ``dataforge.atlan.dev``, which one
+wildcard covers. So when ``dns_host`` is a non-empty hostname, ``host`` is
+exported as ``dns_host`` (keeping any scheme and port ``host`` carries) and the
+AWS name moves to ``original_host``. A connector that must dial the AWS name —
+TLS hostname verification, RDS/Redshift IAM auth, a Kerberos principal — reads
+``E2E_<DS>_ORIGINAL_HOST``. Other fields that embed the host (``jdbc_url``,
+``url``) are left unchanged.
+
 Security contract
 -----------------
 This script performs NO masking and NO ``$GITHUB_ENV`` writes. It prints the
@@ -333,6 +344,63 @@ def resolve_via_endpoint(
 
 # ── Normalization ─────────────────────────────────────────────────────────────
 
+# A DNS hostname: dot-separated labels, no scheme, port, path or whitespace.
+# dns_host lands in the env and becomes the address CI dials, so anything else
+# is ignored rather than passed on.
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+_HOST_PORT_RE = re.compile(r"^([^:/\s]+):(\d{1,5})$")
+
+
+def _swap_hostname(host: str, dns_host: str) -> str:
+    """Put *dns_host* in place of the hostname in *host*, keeping its shape.
+
+    ``host`` is a bare name or IP in most modules, but some publish
+    ``name:port`` or a URL; the scheme, credentials and port stay as they were.
+    """
+    if "://" in host:
+        parts = urllib.parse.urlsplit(host)
+        if parts.hostname:
+            userinfo, _, _ = parts.netloc.rpartition("@")
+            port = f":{parts.port}" if parts.port is not None else ""
+            netloc = (f"{userinfo}@" if userinfo else "") + dns_host + port
+            return urllib.parse.urlunsplit(parts._replace(netloc=netloc))
+        return host
+    match = _HOST_PORT_RE.match(host)
+    if match:
+        return f"{dns_host}:{match.group(2)}"
+    return dns_host
+
+
+def prefer_dns_host(raw: dict) -> dict:
+    """Return *raw* with ``host`` pointed at ``dns_host`` when one is published.
+
+    See the module docstring: Twingate tunnels ``*.dataforge.atlan.dev``, not
+    the AWS names in ``host``. A null/empty ``dns_host`` (internal or private
+    sources, instances provisioned before DATFORG-408) leaves *raw* as is.
+    The original ``host`` is kept as ``original_host`` unless the source
+    already has a field by that name.
+    """
+    dns_host = raw.get("dns_host")
+    host = raw.get("host")
+    if not isinstance(dns_host, str) or not isinstance(host, str):
+        return raw
+    dns_host = dns_host.strip().rstrip(".")
+    if not dns_host or not host.strip():
+        return raw
+    if not _HOSTNAME_RE.match(dns_host):
+        print(
+            "::warning::dataforge dns_host is not a hostname; dialing host instead",
+            file=sys.stderr,
+        )
+        return raw
+    out = dict(raw)
+    out.setdefault("original_host", host)
+    out["host"] = _swap_hostname(host.strip(), dns_host)
+    return out
+
 
 def _flatten(raw: dict) -> tuple[dict[str, str], dict[str, Any]]:
     """Split *raw* into scalar fields and non-scalar extras."""
@@ -415,7 +483,9 @@ def main(argv: list[str] | None = None) -> int:
             raise DataforgeSourceError(
                 f"dataforge credential resolution failed: {type(exc).__name__}"
             ) from exc
-        exports = build_exports(raw, args.datasource, args.output_prefix)
+        exports = build_exports(
+            prefer_dns_host(raw), args.datasource, args.output_prefix
+        )
     except DataforgeSourceError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

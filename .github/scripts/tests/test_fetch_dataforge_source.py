@@ -337,6 +337,95 @@ def test_main_uses_oidc_and_endpoint(monkeypatch, capsys):
     assert calls["endpoint"]["credential_id"] == ""
 
 
+# ── dns_host (DATFORG-408): Twingate tunnels *.dataforge.atlan.dev ───────────
+
+_DNS = "matillion-shared-a1b2c3.src.dataforge.atlan.dev"
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("ec2-13-205-117-188.ap-south-1.compute.amazonaws.com", _DNS),
+        ("15.207.215.237", _DNS),
+        ("15.207.215.237:1025", f"{_DNS}:1025"),
+        (
+            "http://ec2-13-234-224-47.ap-south-1.compute.amazonaws.com:9300",
+            f"http://{_DNS}:9300",
+        ),
+        ("https://u@db.example.com/p?q=1", f"https://u@{_DNS}/p?q=1"),
+    ],
+)
+def test_dns_host_replaces_host_keeping_scheme_and_port(host, expected):
+    out = fds.prefer_dns_host({"host": host, "dns_host": _DNS, "port": 80})
+    assert out["host"] == expected
+    assert out["original_host"] == host
+    assert out["dns_host"] == _DNS
+    assert out["port"] == 80
+
+
+@pytest.mark.parametrize("dns_host", [None, "", "  ", 42])
+def test_absent_dns_host_leaves_fields_untouched(dns_host):
+    raw = {"host": "ec2-1-2-3-4.compute.amazonaws.com", "dns_host": dns_host}
+    assert fds.prefer_dns_host(raw) == raw
+    assert fds.prefer_dns_host({"host": "h"}) == {"host": "h"}
+
+
+@pytest.mark.parametrize(
+    "dns_host",
+    [
+        "https://x.dataforge.atlan.dev",
+        "x.dataforge.atlan.dev:5432",
+        "1.2.3.4x y",
+        "nodots",
+    ],
+)
+def test_malformed_dns_host_is_ignored(dns_host, capsys):
+    raw = {"host": "h.example.com", "dns_host": dns_host}
+    assert fds.prefer_dns_host(raw) == raw
+    assert "not a hostname" in capsys.readouterr().err
+
+
+def test_dns_host_without_host_is_not_invented():
+    raw = {"account": "acme", "dns_host": _DNS}
+    assert fds.prefer_dns_host(raw) == raw
+
+
+def test_existing_original_host_field_is_not_overwritten():
+    out = fds.prefer_dns_host(
+        {"host": "h.example.com", "dns_host": _DNS, "original_host": "keep"}
+    )
+    assert out["original_host"] == "keep"
+    assert out["host"] == _DNS
+
+
+def test_dns_host_does_not_mutate_input():
+    raw = {"host": "h.example.com", "dns_host": _DNS}
+    fds.prefer_dns_host(raw)
+    assert raw == {"host": "h.example.com", "dns_host": _DNS}
+
+
+def test_main_exports_dns_host_as_host(monkeypatch, capsys):
+    monkeypatch.setattr(
+        fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
+    )
+    monkeypatch.setattr(
+        fds, "_exchange_for_service_token", lambda b, o: "service-token"
+    )
+    aws = "ec2-13-205-117-188.ap-south-1.compute.amazonaws.com"
+    monkeypatch.setattr(
+        fds,
+        "resolve_via_endpoint",
+        lambda *a, **k: ({"host": aws, "dns_host": _DNS, "username": "u"}, "res-1"),
+    )
+    assert fds.main(["--datasource", "matillion", "--resource-id", "res-1"]) == 0
+    exports = json.loads(capsys.readouterr().out)
+    assert exports["E2E_MATILLION_HOST"] == _DNS
+    assert exports["E2E_MATILLION_ORIGINAL_HOST"] == aws
+    assert exports["E2E_MATILLION_DNS_HOST"] == _DNS
+    blob = json.loads(exports["E2E_SOURCE_RAW_JSON"])
+    assert blob["host"] == _DNS and blob["original_host"] == aws
+
+
 def test_managed_mode_pin_becomes_credential_id(monkeypatch, capsys):
     monkeypatch.setattr(
         fds, "_github_oidc_token", lambda audience="dataforge": "oidc-jwt"
