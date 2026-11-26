@@ -2432,6 +2432,12 @@ def test_marketplace_playwright_e2e_shims_are_retired() -> None:
     assert "e2e-tests-feature.yaml" in RETIRED_WORKFLOWS
 
 
+def test_update_deps_workflow_is_retired() -> None:
+    """The weekly uv-upgrade job bypasses the dependency cooldown and
+    duplicates Renovate."""
+    assert "update-deps.yml" in RETIRED_WORKFLOWS
+
+
 # ---------------------------------------------------------------------------
 # Dependabot config: superseded by the Renovate preset, never managed
 # ---------------------------------------------------------------------------

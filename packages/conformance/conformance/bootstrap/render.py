@@ -168,6 +168,12 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # skipped. The managed ``tests.yaml`` e2e tier is the e2e path these repos
 # run. The Playwright specs themselves live elsewhere and are untouched.
 #
+# ``update-deps.yml``: never bootstrap-managed. A hand-written weekly job
+# that ran ``uv sync --upgrade --all-groups`` and opened a lock-bump PR with
+# a shared org PAT. The upgrade has no release-age bound, so it bypasses the
+# dependency cooldown, and it duplicates the Renovate preset bootstrap
+# always leaves behind in ``renovate.json``.
+#
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, or a config bootstrap supersedes, not
 # only a workflow.
@@ -181,6 +187,7 @@ RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/dep-cooldown.yml",
     ".github/workflows/e2e-pr-init-check.yaml",
     ".github/workflows/e2e-tests-feature.yaml",
+    ".github/workflows/update-deps.yml",
     ".github/scripts/connector_review_gate.py",
     ".github/scripts/release_gate.py",
     ".github/dependabot.yml",
@@ -249,6 +256,7 @@ RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
         "never bootstrap-managed; called marketplace-releases'"
         " e2e-app-test.yaml, not an SDK reusable"
     ),
+    "update-deps.yml": "never bootstrap-managed; an inline job, called no SDK reusable",
 }
 
 

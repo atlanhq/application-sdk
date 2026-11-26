@@ -140,6 +140,8 @@ bootstrap_managed = [
   # Playwright workflows; bootstrap only removes them (see render.py).
   ".github/workflows/e2e-pr-init-check.yaml",
   ".github/workflows/e2e-tests-feature.yaml",
+  # Never bootstrap-managed: a hand-written weekly uv-upgrade job Renovate replaces.
+  ".github/workflows/update-deps.yml",
   ".github/dependabot.yml",
   ".github/dependabot.yaml",
   ".github/actions/run-conformance-detect/**",
