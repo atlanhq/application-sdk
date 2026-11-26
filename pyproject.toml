@@ -728,7 +728,6 @@ extend-select = [
 ".github/scripts/tests/test_check_test_write_hygiene.py" = ["RUF100"]
 ".github/scripts/tests/test_check_uv_lock.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_apt_packages.py" = ["RUF100"]
-".github/scripts/tests/test_conformance_release.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_resync.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_series_globs.py" = ["RUF100"]
 ".github/scripts/tests/test_conformance_single_job.py" = ["RUF100"]

@@ -7,7 +7,6 @@ them on a dedicated ``bump-version-*`` branch:
 
   * conformance       -> bump-version-conformance
                          (packages/conformance/pyproject.toml,
-                          packages/conformance/conformance/__init__.py,
                           packages/conformance/CHANGELOG.md)
   * contract-toolkit  -> bump-version-contract-toolkit
                          (contract-toolkit/src/PklProject,
@@ -16,7 +15,7 @@ them on a dedicated ``bump-version-*`` branch:
 A human editing any of these files on a normal branch desyncs the package from
 its published state and wedges the release automation. The motivating incident:
 a feature PR hand-bumped the conformance version to a value that was never
-tagged/published, and conformance_release.py hard-errors when the declared
+tagged/published, and release_train.py hard-errors when the declared
 version has no matching ``conformance-v*`` tag -- so *every* later conformance
 merge failed and nothing reached the changelog. A second PR hand-edited the
 conformance CHANGELOG's ``[Unreleased]`` section, which fights the generator's
@@ -61,7 +60,6 @@ DIFF_GIT_RE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
 # pyproject [project] table is unindented; the toolkit's PklProject nests it
 # under the package block, so it is indented.
 _PYPROJECT_VERSION = re.compile(r"^version\s*=")
-_PY_DUNDER_VERSION = re.compile(r"^__version__\s*=")
 _PKL_VERSION = re.compile(r"^\s+version\s*=")
 
 
@@ -85,7 +83,6 @@ PACKAGES = (
         bump_branch="bump-version-conformance",
         version_files={
             "packages/conformance/pyproject.toml": _PYPROJECT_VERSION,
-            "packages/conformance/conformance/__init__.py": _PY_DUNDER_VERSION,
         },
         changelog_files=("packages/conformance/CHANGELOG.md",),
     ),

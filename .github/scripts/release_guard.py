@@ -127,7 +127,9 @@ def version_tuple(version):
     return tuple(int(x) for x in m.groups()) if m else None
 
 
-def landed_on_branch(sha, branch="main", remote="origin"):
+def landed_on_branch(
+    sha: str | None, branch: str = "main", remote: str = "origin"
+) -> tuple[bool, str]:
     """Return ``(landed, detail)``: did *sha* actually reach ``<remote>/<branch>``?
 
     *sha* is the commit the closing pull request produced. For a PR merged into
@@ -172,7 +174,7 @@ def landed_on_branch(sha, branch="main", remote="origin"):
     )
 
 
-def not_landed_message(sha, branch="main"):
+def not_landed_message(sha: str, branch: str = "main") -> str:
     """Human-readable reason, for the run log."""
     return (
         f"The commit this run is reacting to, {sha[:12]}, did not land on "
@@ -218,7 +220,9 @@ def version_on_branch(path, branch="main", remote="origin"):
     return None
 
 
-def already_released(path, new_version, branch="main", remote="origin"):
+def already_released(
+    path: str, new_version: str, branch: str = "main", remote: str = "origin"
+) -> tuple[bool, str | None]:
     """Return ``(skip, remote_version)`` for the release about to be minted.
 
     *skip* is True when ``<remote>/<branch>`` already carries *new_version* or
@@ -237,7 +241,9 @@ def already_released(path, new_version, branch="main", remote="origin"):
     return remote_t >= new_t, remote_version
 
 
-def skip_message(path, new_version, remote_version, branch="main"):
+def skip_message(
+    path: str, new_version: str, remote_version: str | None, branch: str = "main"
+) -> str:
     """Human-readable reason, for the run log."""
     return (
         f"{path} on origin/{branch} is already at {remote_version!r}, which is "

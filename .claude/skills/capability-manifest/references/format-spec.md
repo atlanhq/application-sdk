@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 -->
 ```
 
-- `sdk-version` — from `application_sdk/version.py`.
+- `sdk-version` — from `pyproject.toml` (`project.version`).
 - `source-sha` — deterministic: same source state → same SHA → byte-identical output.
 - `source-date` — `git log -1 --format=%cI <source-sha>`. Tied to the SHA, not skill invocation time.
 - **No wall-clock timestamps or random IDs anywhere in the file.**

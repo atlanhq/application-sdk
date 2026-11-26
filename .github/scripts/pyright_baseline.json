@@ -3,7 +3,7 @@
   "pyright_version": "1.1.414",
   "totals": {
     "error": 442,
-    "warning": 5291
+    "warning": 5114
   },
   "files": {
     ".github/scripts/_gh_refs.py": {
@@ -51,18 +51,12 @@
     ".github/scripts/config_validator.py": {
       "warning:reportUnknownMemberType": 36
     },
-    ".github/scripts/conformance_release.py": {
-      "warning:reportUnknownMemberType": 11
-    },
     ".github/scripts/conformance_resync.py": {
       "error:reportArgumentType": 6,
       "warning:reportUnknownMemberType": 67
     },
     ".github/scripts/conformance_wheel_gate.py": {
       "error:reportOptionalMemberAccess": 1
-    },
-    ".github/scripts/contract_toolkit_release.py": {
-      "warning:reportUnknownMemberType": 11
     },
     ".github/scripts/create_multiarch_manifest.py": {
       "warning:reportUnknownMemberType": 4
@@ -232,18 +226,12 @@
     ".github/scripts/regenerate_contract.py": {
       "warning:reportUnknownMemberType": 3
     },
-    ".github/scripts/release.py": {
-      "warning:reportUnknownMemberType": 4
-    },
     ".github/scripts/release_bump_debounce.py": {
       "error:reportOptionalMemberAccess": 1,
       "warning:reportUnknownMemberType": 3
     },
     ".github/scripts/release_candidate.py": {
       "warning:reportUnknownMemberType": 7
-    },
-    ".github/scripts/release_guard.py": {
-      "warning:reportUnknownMemberType": 1
     },
     ".github/scripts/renovate_approval_conditions.py": {
       "warning:reportUnknownMemberType": 32
@@ -398,9 +386,6 @@
     ".github/scripts/tests/test_conformance_apt_packages.py": {
       "warning:reportUnknownMemberType": 4
     },
-    ".github/scripts/tests/test_conformance_release.py": {
-      "warning:reportUnknownMemberType": 97
-    },
     ".github/scripts/tests/test_conformance_resync.py": {
       "error:reportArgumentType": 20,
       "error:reportOptionalSubscript": 4,
@@ -408,9 +393,6 @@
     },
     ".github/scripts/tests/test_conformance_single_job.py": {
       "warning:reportUnknownMemberType": 6
-    },
-    ".github/scripts/tests/test_contract_toolkit_release.py": {
-      "warning:reportUnknownMemberType": 18
     },
     ".github/scripts/tests/test_create_check_run.py": {
       "warning:reportUnknownMemberType": 10
@@ -610,7 +592,7 @@
       "warning:reportUnknownMemberType": 7
     },
     ".github/scripts/tests/test_release_guard.py": {
-      "warning:reportUnknownMemberType": 28
+      "warning:reportUnknownMemberType": 6
     },
     ".github/scripts/tests/test_renovate_approval_conditions.py": {
       "error:reportArgumentType": 18,
@@ -753,7 +735,7 @@
     },
     ".github/scripts/tests/test_update_changelog.py": {
       "error:reportArgumentType": 2,
-      "warning:reportUnknownMemberType": 23
+      "warning:reportUnknownMemberType": 13
     },
     ".github/scripts/tests/test_update_check_run_details_url.py": {
       "warning:reportUnknownMemberType": 5
@@ -812,7 +794,7 @@
     },
     ".github/scripts/update_changelog.py": {
       "error:reportOptionalSubscript": 1,
-      "warning:reportUnknownMemberType": 15
+      "warning:reportUnknownMemberType": 12
     },
     ".github/scripts/update_check_run_details_url.py": {
       "warning:reportUnknownMemberType": 1
