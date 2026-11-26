@@ -5,7 +5,7 @@
 # Env:     RETRY_MAX_ATTEMPTS         (default 5)     — total attempts; 1 means no retry
 #          RETRY_BACKOFF_BASE_SECONDS (default 5)     — first delay; doubles each retry
 #          RETRY_BACKOFF_MAX_SECONDS  (default 60)    — per-delay ceiling
-#          RETRY_SLEEP_COMMAND        (default sleep) — test seam; see the bats suite
+#          RETRY_SLEEP_COMMAND        (default sleep) — test seam; see tests/test_with_retry.py
 #
 # Backoff is exponential (base, 2×base, 4×base, … up to the ceiling) plus up
 # to 25% jitter. The defaults give 5+10+20+40 ≈ 75s of cover across 5 attempts.
@@ -18,8 +18,8 @@
 #
 # Jitter is proportional to the delay, so a fleet of jobs retrying against the
 # same degraded endpoint does not resynchronise into a thundering herd, and
-# RETRY_BACKOFF_BASE_SECONDS=0 stays exactly 0 (the bats suite relies on that
-# to run without sleeping).
+# RETRY_BACKOFF_BASE_SECONDS=0 stays exactly 0 (tests/test_with_retry.py relies
+# on that to run without sleeping).
 #
 # Exit code: the exit code of the last (failing) attempt, or 0 on success.
 set -uo pipefail

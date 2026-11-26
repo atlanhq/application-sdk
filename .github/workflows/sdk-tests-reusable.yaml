@@ -21,7 +21,19 @@ name: SDK tests (reusable)
 # here as a dedicated SDK reusable.
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      # The unit job's OS x Python grid. True runs all 12 legs; false runs the
+      # full Python range on Linux plus only the container's Python on macOS
+      # and Windows (6 legs). sdk-gate.yaml passes false on an ordinary PR push
+      # and true in the merge queue, on v* tags and on release/bump PRs, so
+      # every combination still runs before anything lands (FND-4673). The
+      # default is the full grid so a caller that forgets the input loses no
+      # coverage.
+      full-unit-grid:
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -43,6 +55,14 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
+        # On a PR push (full-unit-grid false) macOS and Windows run only the
+        # container's Python, 3.13: the interpreter the image ships, and the
+        # one most likely to show an OS-specific break. The other versions run
+        # on Linux every push and on every OS in the merge queue (FND-4673).
+        # A cross-OS failure on 3.11/3.12/3.14 alone therefore surfaces in the
+        # queue rather than on the PR. test_container_python_version.py pins this
+        # list to the Dockerfile's Python and keeps the coverage leg in it.
+        exclude: ${{ fromJSON(inputs.full-unit-grid && '[]' || '[{"os":"macOS-latest","python-version":"3.11"},{"os":"macOS-latest","python-version":"3.12"},{"os":"macOS-latest","python-version":"3.14"},{"os":"windows-latest","python-version":"3.11"},{"os":"windows-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.14"}]') }}
     env:
       # One leg measures coverage; it posts the PR comment, enforces fail-under
       # and the per-package floors, and uploads the report. Tracing under xdist
@@ -170,31 +190,6 @@ jobs:
         run: |
           VERSION=$(python3 .github/scripts/container_python_version.py print-version)
           python3 .github/scripts/container_python_version.py check-matrix --expected "$VERSION" --matrix "3.11,3.12,3.13,3.14"
-
-  script-tests:
-    name: Script Tests (bats)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: "./.github/actions/setup-deps"
-        with:
-          checkout: "false"
-      # A pinned bats-core checkout instead of `apt-get update && apt-get
-      # install` on every run.
-      - name: Check out bats-core
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: bats-core/bats-core
-          ref: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5 # v1.14.0
-          path: .bats-core
-          persist-credentials: false
-      - name: Put bats on PATH
-        run: echo "${GITHUB_WORKSPACE}/.bats-core/bin" >> "$GITHUB_PATH"
-      - name: Run shell script tests
-        run: uv run poe test-scripts
 
   # Collects the test trees no PR job executes: the storage load suite in
   # tests/load (nightly smoke only, schedule.yaml) and the integration example

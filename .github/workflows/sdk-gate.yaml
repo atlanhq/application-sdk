@@ -343,6 +343,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true')
     uses: ./.github/workflows/sdk-tests-reusable.yaml
+    with:
+      # The reduced 6-leg unit grid on an ordinary PR push; all 12 legs in the
+      # merge queue, on v* tags, and on release/* and bump-version PRs, which
+      # set force_sdk (FND-4673). The queue tests the merged state of every
+      # PR, so no combination lands untested.
+      full-unit-grid: ${{ github.event_name != 'pull_request' || needs.changes.outputs.force_sdk == 'true' }}
     # packages: read lets the Storage Emulator job pull the private MinIO
     # mirror (ghcr.io/atlanhq/ci-mirror/minio); statuses: read lets
     # "Decide integration request" read the /e2e and /gate-check markers. A
