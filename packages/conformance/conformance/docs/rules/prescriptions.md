@@ -3661,11 +3661,14 @@ imported from a module under the scanned root (by name, or through a module alia
 as `flows.run_flow()`), and a method of the same class called through `self`.  An import
 such a helper runs is reported at the call site in the workflow method, naming the chain
 and the import's `path:line`. Calls into third-party code, inherited methods and local
-variables are not resolved.
+variables are not resolved, and a name bound in the calling function (a parameter, an
+assignment, a local import or `def`) shadows the module-level function or import of the
+same name, so a call through it is not followed.
 
-Imports under `if TYPE_CHECKING:` never run and are not flagged. `@task` activity bodies
-are exempt, and a call to a `@task` method is not followed: it schedules an activity,
-which runs outside the sandbox and the deadlock timer.
+Imports under `if TYPE_CHECKING:` never run and are not flagged; the guard's `else`
+branch runs and is scanned. `@task` activity bodies are exempt, and a call to a `@task`
+method is not followed: it schedules an activity, which runs outside the sandbox and the
+deadlock timer.
 
 Land as `WARN`.  Suppress a reviewed exception with `# conformance: ignore[P069]
 <reason>` on the import (which waives it for every caller) or on the call site.

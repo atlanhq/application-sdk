@@ -203,3 +203,141 @@ def test_helper_outside_an_app_module_is_not_a_root(tmp_path: Path) -> None:
     _write(tmp_path, "app/__init__.py", "")
     flows = _write(tmp_path, "app/flows.py", _FLOW)
     assert _p069_at(flows, tmp_path) == []
+
+
+# ── TYPE_CHECKING else branches (lens F-109e36) ──────────────────────────────
+
+
+def test_type_checking_else_branch_import_is_flagged() -> None:
+    src = _HEADER + (
+        "from typing import TYPE_CHECKING\n"
+        "class C(App):\n"
+        "    async def run(self, input):\n"
+        "        if TYPE_CHECKING:\n"
+        "            from app.models import Meta\n"
+        "        else:\n"
+        "            import json\n"
+        "        return input\n"
+    )
+    (finding,) = _p069(src)
+    assert finding.line == 8
+    assert "'json'" in finding.message
+
+
+def test_type_checking_elif_branch_call_is_followed() -> None:
+    src = _HEADER + (
+        "import typing\n"
+        "def helper(x):\n"
+        "    import json\n"
+        "    return json\n"
+        "class C(App):\n"
+        "    async def run(self, input):\n"
+        "        if typing.TYPE_CHECKING:\n"
+        "            pass\n"
+        "        elif input:\n"
+        "            return helper(input)\n"
+    )
+    (finding,) = _p069(src)
+    assert finding.line == 11
+    assert "helper()" in finding.message
+
+
+# ── shadowed names (lens F-ac8ead, F-72cd23) ─────────────────────────────────
+
+
+_SHADOWED_HELPER = (
+    "def helper(x):\n"
+    "    import json\n"
+    "    return json\n"
+    "class C(App):\n"
+    "    async def run(self, input):\n"
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "        helper = lambda x: x\n        return helper(input)\n",
+        "        def helper(x):\n            return x\n        return helper(input)\n",
+        "        from app.other import helper\n        return helper(input)\n",
+        "        for helper in input:\n            helper(input)\n",
+    ],
+    ids=["assignment", "nested-def", "local-import", "loop-target"],
+)
+def test_locally_bound_name_shadows_the_module_helper(body: str) -> None:
+    src = _HEADER + _SHADOWED_HELPER + body
+    # A local import of `helper` is itself a direct finding; nothing is reached.
+    assert all("reaches" not in f.message for f in _p069(src))
+
+
+def test_parameter_shadows_the_module_helper() -> None:
+    src = _HEADER + (
+        "def helper(x):\n"
+        "    import json\n"
+        "    return json\n"
+        "class C(App):\n"
+        "    async def run(self, helper):\n"
+        "        return helper(1)\n"
+    )
+    assert _p069(src) == []
+
+
+def test_shadowed_imported_helper_is_not_followed(tmp_path: Path) -> None:
+    _write(tmp_path, "app/__init__.py", "")
+    _write(tmp_path, "app/flows.py", _FLOW)
+    caller = _write(
+        tmp_path,
+        "app/connector.py",
+        f"from app.flows import run_extract_flow\nfrom app import flows\n{_HEADER}"
+        "class C(App):\n"
+        "    async def run(self, input):\n"
+        "        run_extract_flow = lambda x: x\n"
+        "        flows = input\n"
+        "        run_extract_flow(input)\n"
+        "        return flows.run_extract_flow(input)\n",
+    )
+    assert _p069_at(caller, tmp_path) == []
+
+
+def test_global_declaration_does_not_shadow() -> None:
+    src = _HEADER + (
+        "def helper(x):\n"
+        "    import json\n"
+        "    return json\n"
+        "class C(App):\n"
+        "    async def run(self, input):\n"
+        "        global helper\n"
+        "        return helper(input)\n"
+    )
+    (finding,) = _p069(src)
+    assert "helper()" in finding.message
+
+
+def test_nested_function_sees_enclosing_shadowing() -> None:
+    src = _HEADER + (
+        "def helper(x):\n"
+        "    import json\n"
+        "    return json\n"
+        "class C(App):\n"
+        "    async def run(self, input):\n"
+        "        helper = str\n"
+        "        def inner():\n"
+        "            return helper(input)\n"
+        "        return inner()\n"
+    )
+    assert _p069(src) == []
+
+
+def test_shadowing_in_a_reached_helper_stops_the_walk() -> None:
+    src = _HEADER + (
+        "def deep(x):\n"
+        "    import json\n"
+        "    return json\n"
+        "def middle(x):\n"
+        "    deep = str\n"
+        "    return deep(x)\n"
+        "class C(App):\n"
+        "    async def run(self, input):\n"
+        "        return middle(input)\n"
+    )
+    assert _p069(src) == []

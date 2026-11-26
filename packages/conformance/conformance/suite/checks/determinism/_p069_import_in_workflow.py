@@ -16,7 +16,8 @@ was importing it, hangs.  Every workflow run imports the same modules, so the wh
 worker stops making progress while its pod stays up.  The global import lock is
 not involved: imports of unrelated modules still work.
 
-Imports guarded by ``if TYPE_CHECKING:`` never run and are not flagged.
+Imports guarded by ``if TYPE_CHECKING:`` never run and are not flagged; an
+``else`` branch of that guard does run and is scanned.
 
 Reach into helpers
 ------------------
@@ -36,7 +37,12 @@ Sync and async helpers are both followed — an awaited helper runs on the same
 workflow thread.  A ``@task`` method is never followed: calling it from
 workflow code schedules an activity, whose body runs outside the sandbox.
 Calls on anything else (a third-party module, an inherited method, a local
-variable) are not resolved.
+variable) are not resolved.  A name bound in the calling function (a parameter,
+an assignment, a local import or ``def``) shadows the module-level function or
+import of the same name, so a call through it is not followed either.
+
+Imports and calls under ``if TYPE_CHECKING:`` are skipped, but its ``else`` /
+``elif`` branch runs and is scanned.
 
 A reached import is reported at the call site in the workflow method, naming
 the import and the chain that reaches it, so the reader sees a line in the
@@ -90,24 +96,97 @@ def _is_type_checking_guard(node: ast.AST) -> bool:
     )
 
 
-def _walk(node: ast.AST) -> list[ast.AST]:
-    """Every node under *node*, skipping ``if TYPE_CHECKING:`` blocks."""
-    found: list[ast.AST] = []
+def _children(node: ast.AST) -> list[ast.AST]:
+    """*node*'s children, with each ``if TYPE_CHECKING:`` replaced by its ``else``.
+
+    The guarded body never runs, but ``TYPE_CHECKING`` is false at run time, so
+    the ``else`` (or ``elif``) branch does.
+    """
+    children: list[ast.AST] = []
     for child in ast.iter_child_nodes(node):
-        if _is_type_checking_guard(child):
-            continue
+        if isinstance(child, ast.If) and _is_type_checking_guard(child):
+            children.extend(child.orelse)
+        else:
+            children.append(child)
+    return children
+
+
+def _walk(node: ast.AST) -> list[ast.AST]:
+    """Every node under *node* that runs, skipping ``if TYPE_CHECKING:`` bodies."""
+    found: list[ast.AST] = []
+    for child in _children(node):
         found.append(child)
         found.extend(_walk(child))
     return found
 
 
 def _imports(node: ast.AST) -> list[_Import]:
-    """Every import under *node*, skipping ``if TYPE_CHECKING:`` blocks."""
+    """Every import under *node* that runs, skipping ``if TYPE_CHECKING:`` bodies."""
     return [n for n in _walk(node) if isinstance(n, (ast.Import, ast.ImportFrom))]
 
 
-def _calls(node: ast.AST) -> list[ast.Call]:
-    return [n for n in _walk(node) if isinstance(n, ast.Call)]
+_Scope = ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
+
+
+def _local_names(scope: _Scope) -> frozenset[str]:
+    """Names *scope* binds locally, which shadow a module-level name of the same
+    spelling for the whole function: parameters, assignment targets, local
+    imports, nested ``def`` / ``class`` names, ``except … as`` and ``match``
+    captures.  ``global`` / ``nonlocal`` names are left out; bodies of nested
+    functions are not entered (their bindings are their own).
+    """
+    args = scope.args
+    params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    names = {arg.arg for arg in params}
+    names.update(arg.arg for arg in (args.vararg, args.kwarg) if arg is not None)
+    declared: set[str] = set()
+    stack: list[ast.AST] = (
+        list(scope.body) if isinstance(scope.body, list) else [scope.body]
+    )
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            continue
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            declared.update(node.names)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(
+                (alias.asname or alias.name).partition(".")[0] for alias in node.names
+            )
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
+        stack.extend(ast.iter_child_nodes(node))
+    return frozenset(names - declared)
+
+
+def _calls(scope: _Scope) -> list[tuple[ast.Call, frozenset[str]]]:
+    """Every call under *scope* that runs, with the local names it sees.
+
+    A call in a nested function sees that function's locals as well as every
+    enclosing function's, which is how Python resolves the name.
+    """
+    found: list[tuple[ast.Call, frozenset[str]]] = []
+
+    def visit(node: ast.AST, shadowed: frozenset[str]) -> None:
+        for child in _children(node):
+            inner = shadowed
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                inner = shadowed | _local_names(child)
+            elif isinstance(child, ast.Call):
+                found.append((child, shadowed))
+            visit(child, inner)
+
+    visit(scope, _local_names(scope))
+    return found
 
 
 def _module_name(node: _Import) -> str:
@@ -255,10 +334,22 @@ class _Reach:
         return self._repo_module(module, package, node.level)
 
     def resolve(
-        self, module: _Module, call: ast.Call, cls: ast.ClassDef | None
+        self,
+        module: _Module,
+        call: ast.Call,
+        cls: ast.ClassDef | None,
+        shadowed: frozenset[str],
     ) -> _Target | None:
+        """The repo function *call* runs, if it can be named statically.
+
+        *shadowed* is the set of names bound in the calling function: a call
+        through one of them runs whatever was bound locally, not the module's
+        function or import of the same name, so it is not followed.
+        """
         func = call.func
         if isinstance(func, ast.Name):
+            if func.id in shadowed:
+                return None
             local = module.functions.get(func.id)
             if local is not None:
                 return _Target(module, local, None)
@@ -274,6 +365,8 @@ class _Reach:
             ):
                 return None
             return _Target(module, method, cls)
+        if receiver in shadowed:
+            return None
         target_module = self._module_ref(module, receiver)
         if target_module is None:
             return None
@@ -295,8 +388,8 @@ class _Reach:
                 )
                 break
         if result is None:
-            for call in _calls(target.function):
-                callee = self.resolve(target.module, call, target.cls)
+            for call, shadowed in _calls(target.function):
+                callee = self.resolve(target.module, call, target.cls, shadowed)
                 found = self.reach(callee) if callee is not None else None
                 if found is not None:
                     result = _Reached(
@@ -349,8 +442,8 @@ def check_p069(
             for node in _imports(method)
         )
         cls = owners.get(id(method))
-        for call in _calls(method):
-            target = reach.resolve(module, call, cls)
+        for call, shadowed in _calls(method):
+            target = reach.resolve(module, call, cls, shadowed)
             # Another workflow-context method is scanned on its own; following
             # it here would report its imports twice.
             if target is None or id(target.function) in workflow_ids:
