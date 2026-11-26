@@ -82,6 +82,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+from application_sdk import _storage_classify
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -94,8 +95,10 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: Suffix of the SHA-256 sidecar written alongside every uploaded object.
-SIDECAR_SUFFIX = ".sha256"
+# The sidecar key convention is defined once, in the obstore-free module the
+# API host shares (its file upload route writes the same sidecar), and
+# re-exported here, where every worker caller already imports it from.
+SIDECAR_SUFFIX = _storage_classify.SIDECAR_SUFFIX
 
 #: Suffix of the resumable-download checkpoint written by ``storage.chunked``.
 #: Listed here so the sidecar lookup can skip keys that are themselves
@@ -103,14 +106,8 @@ SIDECAR_SUFFIX = ".sha256"
 _TRANSFER_STATE_SUFFIX = ".transfer-state"
 
 
-def sidecar_key(key: str) -> str:
-    """Object-store key of the SHA-256 sidecar written alongside *key*."""
-    return key + SIDECAR_SUFFIX
-
-
-def is_sidecar_key(key: str) -> bool:
-    """Return ``True`` when *key* is a SHA-256 sidecar rather than a data object."""
-    return key.endswith(SIDECAR_SUFFIX)
+sidecar_key = _storage_classify.sidecar_key
+is_sidecar_key = _storage_classify.is_sidecar_key
 
 
 def _is_sha256_hex(value: str) -> bool:

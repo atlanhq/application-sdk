@@ -219,7 +219,9 @@ def build_asgi_app(
     the host to shut down. The metadata routes are served when the app ships a
     generated folder (``generated_dir``, else ``<app_package>/generated``). The
     config and file routes use ``object_store`` (by default
-    :func:`default_object_store`) and answer 503 without one.
+    :func:`default_object_store`) and answer 503 without one, or when the
+    store cannot answer (named by the worker's failure table,
+    :mod:`application_sdk._storage_classify`).
     """
     app = FastAPI(title=app_name)
     app.state.app_name = app_name

@@ -677,6 +677,9 @@ STORAGE_VERIFY_TRANSFERS = env_bool("ATLAN_STORAGE_VERIFY_TRANSFERS", True)
 #: extra keys (e.g. a reader that globs a prefix without filtering sidecars).
 #: Sidecar *verification* is independent: a download still verifies whatever
 #: sidecars it finds.
+#: The API host's file upload route honours the same variable: it cannot import
+#: this module, so it reads it through ``_env`` by the name
+#: ``application_sdk._storage_classify.WRITE_SIDECARS_ENV`` holds.
 STORAGE_WRITE_SIDECARS = env_bool("ATLAN_STORAGE_WRITE_SIDECARS", True)
 
 

@@ -210,7 +210,8 @@ def test_an_upload_gets_its_own_larger_cap(
         "/workflows/v1/file", files={"file": ("a.csv", b"a" * (_BODY_CAP * 4))}
     )
     assert response.status_code == 200
-    assert len(_stored(memory)) == 1
+    # The upload and its integrity sidecar.
+    assert len(_stored(memory)) == 2
     assert list(_small_caps.iterdir()) == []
 
 

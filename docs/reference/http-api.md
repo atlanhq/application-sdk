@@ -278,6 +278,12 @@ Retrieve a named configuration object from the state store.
 
 **Query params:** `type` (string, default `"workflows"`) — namespace key used to scope the config in the state store.
 
+**Error responses:**
+
+- `404` — no config is stored under this id and type.
+- `503 {"detail": "No object store configured"}` — no store.
+- `503` — the store could not answer. On the consolidated API host the detail names the failure: `"Object store gateway is not ready; retry shortly"` (the gateway's transient `404 "no Route matched"`, after the same retries the worker makes), `"Object store gateway could not verify the request; retry shortly"`, `"Object store container does not exist"`, or `"Object store unavailable"` for anything else, including a missing bucket.
+
 ### `POST /workflows/v1/config/{config_id}`
 
 Store a named configuration object.
@@ -285,6 +291,11 @@ Store a named configuration object.
 **Query params:** `type` (string, default `"workflows"`) — namespace key. Using `type=workflows` is deprecated; pass a specific config type instead.
 
 **Request body:** Any JSON object.
+
+**Error responses:**
+
+- `503 {"detail": "No object store configured"}` — no store.
+- `503` — on the consolidated API host, a failed write, with the same details as the `GET`.
 
 ---
 
@@ -367,6 +378,9 @@ Upload a file to be used as workflow input (e.g. CSV for file-based connectors).
 
 - `400` — `prefix` is unsafe, or (on the worker) starts with an SDK-owned root.
 - `503 {"detail": "Storage not configured"}`
+- `503` — on the consolidated API host, a failed upload, with the same details as `GET /workflows/v1/config/{config_id}`.
+
+The stored object gets a `{key}.sha256` integrity sidecar beside it, on the worker and on the host alike, unless `ATLAN_STORAGE_WRITE_SIDECARS=false`.
 
 **Response:** `FileUploadResponse` serialized with camelCase aliases:
 ```json

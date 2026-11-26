@@ -19,6 +19,13 @@ consolidated API host register the same routes through
   ``ATLAN_AZURE_STORAGE_ACCOUNT`` / ``ATLAN_AZURE_STORAGE_CONTAINER``. Without
   any, the routes answer 503, exactly as the worker does without a store.
 
+The host's store reads a failure through the table the worker's store uses
+(:mod:`application_sdk._storage_classify`): it retries the gateway's transient
+``404 "no Route matched"`` the same way, tells a missing object from a missing
+bucket or a gateway that is not ready the same way, and answers 503 for every
+failure that is not a missing config. Like the worker's ``upload_file``, its
+file upload writes a ``{key}.sha256`` sidecar beside the object.
+
 Both write a config to ``persistent-artifacts/apps/{app_name}/{type}/{id}/config.json``.
 On the host ``app_name`` is the hosted app's name, never the host's own, so the
 key is the one that app's worker reads.
@@ -26,6 +33,8 @@ key is the one that app's worker reads.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import mimetypes
 import os
 import re
@@ -36,7 +45,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 import orjson
@@ -57,9 +66,14 @@ from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from typing_extensions import deprecated
 
-from application_sdk import _env, _obstore_config
+from application_sdk import _env, _obstore_config, _storage_classify
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk._storage_classify import (
+    StorageFailureKind,
+    classify_storage_failure,
+    past_gateway_no_route,
+)
 from application_sdk.handler.contracts import FileUploadResponse
 from application_sdk.handler.routes import _wrap_response
 from application_sdk.handler.service_errors import (
@@ -72,6 +86,8 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
 logger = get_logger(__name__)
+
+_T = TypeVar("_T")
 
 # Allowed characters for config_id and config_type path components. Prevents
 # path traversal (no slashes, dots, or percent-encoding) when these values are
@@ -424,6 +440,9 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
         """Fetch workflow config from object store."""
         try:
             config = await source.load_config(config_id, type)
+        except HTTPException:
+            # Already answered: the host maps a store failure to its own 503.
+            raise
         except Exception as exc:
             # A missing key loads as None (404 below). Anything else (IAM,
             # network, a 5xx, an unreadable object) means the store could not
@@ -773,6 +792,17 @@ class S3ObjectStore:
         )
 
 
+# Indirection so tests can record the gateway retry's backoff without sleeping.
+_retry_sleep = asyncio.sleep
+
+
+async def _past_gateway_no_route(
+    op: str, key: str, call: Callable[[], Awaitable[_T]]
+) -> _T:
+    """One host store request through the worker's gateway no-route retry."""
+    return await past_gateway_no_route(op, key, call, sleep=_retry_sleep)
+
+
 class HostObjectStore:
     """One bucket or container through obstore: the host's store.
 
@@ -844,40 +874,103 @@ class HostObjectStore:
         """The object at ``key``, or ``None`` when it is missing.
 
         Any other failure (auth, network, throttling, a missing bucket or
-        container) raises: the store could not answer, which is not a missing
-        object.
+        container, a gateway that is not ready) raises: the store could not
+        answer, which is not a missing object. Missing is the shared table's
+        verdict (:func:`~application_sdk._storage_classify.is_not_found`).
         """
         import obstore  # noqa: PLC0415 — the obstore extra
-        from obstore.exceptions import NotFoundError  # noqa: PLC0415
+
+        async def _get() -> bytes:
+            result = await obstore.get_async(self._store, key)
+            return bytes(await result.bytes_async())
 
         try:
-            result = await obstore.get_async(self._store, key)
-            raw = await result.bytes_async()
-        except (FileNotFoundError, NotFoundError):
-            # Current obstore raises the built-in; older releases its own class.
+            raw = await _past_gateway_no_route("get", key, _get)
+        except Exception as exc:
+            if classify_storage_failure(exc).kind is not StorageFailureKind.NOT_FOUND:
+                raise
             # S3, GCS and Azure also answer a missing bucket or container with
-            # a 404, which obstore reports the same way. A listing under the key
+            # a 404, which reads as not-found too. A listing under the key
             # tells them apart: it succeeds (empty) when only the object is
             # missing, and raises when the bucket or container is.
-            await obstore.list_with_delimiter_async(self._store, prefix=key)
+            await _past_gateway_no_route(
+                "list",
+                key,
+                lambda: obstore.list_with_delimiter_async(self._store, prefix=key),
+            )
             return None
-        return orjson.loads(bytes(raw))
+        return orjson.loads(raw)
 
     async def put_json(self, key: str, body: dict[str, Any]) -> None:
+        """Store ``body`` as JSON at ``key``.
+
+        No sidecar, as the worker's ``storage.put_json``: a config is small and
+        read whole by its JSON parser, so a truncation cannot read as valid.
+        """
         import obstore  # noqa: PLC0415 — the obstore extra
 
-        await obstore.put_async(
-            self._store,
+        data = orjson.dumps(body)
+        await _past_gateway_no_route(
+            "put",
             key,
-            orjson.dumps(body),
-            attributes={"Content-Type": "application/json"},
+            lambda: obstore.put_async(
+                self._store,
+                key,
+                data,
+                attributes={"Content-Type": "application/json"},
+            ),
         )
 
     async def put_file(self, key: str, local_path: str) -> None:
+        """Store the file at ``local_path`` under ``key``, then its sidecar.
+
+        The ``{key}.sha256`` sidecar records the digest of the bytes uploaded,
+        as the worker's ``upload_file`` does, so a downstream download through
+        ``application_sdk.storage`` verifies the object against it.
+        ``ATLAN_STORAGE_WRITE_SIDECARS=false`` turns it off, as on the worker.
+        The sidecar is best-effort, as on the worker: the object is stored
+        either way, and a failed sidecar write is logged at WARNING.
+        """
         import obstore  # noqa: PLC0415 — the obstore extra
 
+        stored = _normalize_key(key)
+        # The route drained the upload to this file itself, so nothing writes
+        # it while it is hashed or read.
+        digest = await run_in_thread(_sha256_file, local_path)
         # obstore streams the file from disk, in parts when it is large.
-        await obstore.put_async(self._store, _normalize_key(key), Path(local_path))
+        await _past_gateway_no_route(
+            "put",
+            stored,
+            lambda: obstore.put_async(self._store, stored, Path(local_path)),
+        )
+        if not _env.env_bool(
+            _storage_classify.WRITE_SIDECARS_ENV, True, report=_report_env
+        ):
+            return
+        sidecar = _storage_classify.sidecar_key(stored)
+        try:
+            await _past_gateway_no_route(
+                "put",
+                sidecar,
+                lambda: obstore.put_async(self._store, sidecar, digest.encode()),
+            )
+        # conformance: ignore[E002] best-effort sidecar, as on the worker; the object itself is stored and the failure is logged with its cause
+        except Exception:
+            logger.warning(
+                "Integrity sidecar write failed for key '%s': the object was "
+                "stored, but downstream readers cannot verify it",
+                stored,
+                exc_info=True,
+            )
+
+
+def _sha256_file(path: str) -> str:
+    """The SHA-256 hex digest of the local file at *path* (1 MiB reads)."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _s3_store(bucket: str) -> ObjectStore:
@@ -951,6 +1044,46 @@ def _azure_store(account: str) -> ObjectStore | None:
     return _obstore_config.build_azure_store(settings, label="host-azure")
 
 
+#: The host's answer to each kind of store failure, by the shared table's
+#: verdict. Every one is a 503: the store could not answer. A missing config is
+#: not here; the store reads it as ``None`` and the route answers 404.
+_HOST_STORE_FAILURE_DETAIL: dict[StorageFailureKind, str] = {
+    StorageFailureKind.GATEWAY_NO_ROUTE: (
+        "Object store gateway is not ready; retry shortly"
+    ),
+    StorageFailureKind.GATEWAY_AUTH_UNAVAILABLE: (
+        "Object store gateway could not verify the request; retry shortly"
+    ),
+    StorageFailureKind.AZURE_CONTAINER_MISSING: (
+        "Object store container does not exist"
+    ),
+}
+_HOST_STORE_UNAVAILABLE = "Object store unavailable"
+
+
+def _host_store_failure(
+    exc: Exception, op: str, app_name: str, key: str
+) -> HTTPException:
+    """The 503 a failed host store request answers, logged with its evidence.
+
+    The shared table names the failure, so an operator reads the same verdict
+    the worker's ``StorageError`` leaves carry, not a raw obstore exception.
+    """
+    failure = classify_storage_failure(exc)
+    logger.warning(
+        "Object-store %s failed for app=%s key=%s: %s (http_status=%s, provider_code=%s)",
+        op,
+        app_name,
+        key,
+        failure.kind.value,
+        failure.http_status,
+        failure.provider_code,
+        exc_info=True,
+    )
+    detail = _HOST_STORE_FAILURE_DETAIL.get(failure.kind, _HOST_STORE_UNAVAILABLE)
+    return HTTPException(status_code=503, detail=detail)
+
+
 def host_object_source(
     app_name: str, store: ObjectStoreOps | None
 ) -> ObjectRoutesSource:
@@ -959,20 +1092,31 @@ def host_object_source(
     async def load_config(config_id: str, config_type: str) -> dict[str, Any] | None:
         if store is None:
             return None
-        return await store.get_json(config_key(app_name, config_id, config_type))
+        key = config_key(app_name, config_id, config_type)
+        try:
+            return await store.get_json(key)
+        except Exception as exc:
+            raise _host_store_failure(exc, "config read", app_name, key) from exc
 
     async def save_config(
         config_id: str, body: dict[str, Any], config_type: str
     ) -> bool:
         if store is None:
             return False
-        await store.put_json(config_key(app_name, config_id, config_type), body)
+        key = config_key(app_name, config_id, config_type)
+        try:
+            await store.put_json(key, body)
+        except Exception as exc:
+            raise _host_store_failure(exc, "config write", app_name, key) from exc
         return True
 
     async def upload_file(key: str, local_path: str) -> None:
         if store is None:  # the route answers 503 before it gets here
             raise HTTPException(status_code=503, detail="Storage not configured")
-        await store.put_file(key, local_path)
+        try:
+            await store.put_file(key, local_path)
+        except Exception as exc:
+            raise _host_store_failure(exc, "file upload", app_name, key) from exc
 
     return ObjectRoutesSource(
         configured=lambda: store is not None,

@@ -14,6 +14,7 @@ application_sdk/_runtime/__init__.py
 application_sdk/_runtime/cgroup.py
 application_sdk/_runtime/offload.py
 application_sdk/_runtime/progress.py
+application_sdk/_storage_classify.py
 application_sdk/clients/__init__.py
 application_sdk/clients/_interface.py
 application_sdk/clients/_sql_failure_classifier.py

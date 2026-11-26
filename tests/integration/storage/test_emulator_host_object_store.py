@@ -10,7 +10,8 @@ cloud's, and pin the status codes the routes promise:
 * a missing config is 404;
 * a missing bucket or container is 503, although S3 and Azure answer it with
   a 404 too;
-* an upload lands under the app's namespace with its bytes.
+* an upload lands under the app's namespace with its bytes, and the
+  worker's ``{key}.sha256`` integrity sidecar beside it.
 
 Marked ``storage_emulator``; see ``test_emulator_s3.py`` and
 ``test_emulator_azure.py`` for running the emulators locally.
@@ -18,6 +19,7 @@ Marked ``storage_emulator``; see ``test_emulator_s3.py`` and
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 
@@ -173,5 +175,8 @@ def test_an_upload_lands_under_the_apps_namespace(cloud: str) -> None:
     try:
         assert key.startswith("persistent-artifacts/apps/mysql/uploads/sample_data/")
         assert bytes(obstore.get(store._store, key).bytes()) == b"a,b\n1,2\n"
+        sidecar = bytes(obstore.get(store._store, key + ".sha256").bytes())
+        assert sidecar == hashlib.sha256(b"a,b\n1,2\n").hexdigest().encode()
     finally:
         obstore.delete(store._store, key)
+        obstore.delete(store._store, key + ".sha256")
