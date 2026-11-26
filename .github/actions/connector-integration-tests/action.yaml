@@ -460,7 +460,10 @@ runs:
         set +e
         # pytest-xdist, pytest-cov, and pytest-rerunfailures are installed
         # transiently — callers do not need to declare them as dependencies.
-        uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
+        # Through `git_auth.py run` for the same reason as the unit action: a
+        # test that starts its own `uv sync` needs the private-dep mirrors.
+        python3 "${{ github.action_path }}/../../scripts/git_auth.py" run -- \
+          uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
           ${{ inputs.pytest-args }} \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt
