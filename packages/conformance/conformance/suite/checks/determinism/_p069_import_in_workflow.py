@@ -10,9 +10,11 @@ time.  Every later activation runs on a workflow thread that Temporal interrupts
 after 2 seconds (``TMPRL1101``).  An import inside the method body runs there, and
 the sandbox re-executes any module it has not loaded yet — the app's own package
 is never passed through.  On a cold, busy worker that import overruns the timer,
-and the interrupt is raised into the thread while importlib may hold its global
-lock.  The lock is never released, every later import in the process blocks, and
-the whole worker stops making progress while its pod stays up.
+and the interrupt can land while the thread waits on that module's import lock,
+leaving the lock held.  Every later import of that module, and of the module that
+was importing it, hangs.  Every workflow run imports the same modules, so the whole
+worker stops making progress while its pod stays up.  The global import lock is
+not involved: imports of unrelated modules still work.
 
 Imports guarded by ``if TYPE_CHECKING:`` never run and are not flagged.
 
@@ -71,7 +73,8 @@ RULE_ID = "P069"
 _HINT = (
     "Move it to module level: inside workflow code it runs on the workflow thread "
     "under Temporal's 2s deadlock timer, and an interrupt mid-import can leave "
-    "importlib's lock held and freeze the whole worker."
+    "that module's import lock held, hanging every later import of it and "
+    "stalling the worker."
 )
 
 _Function = ast.FunctionDef | ast.AsyncFunctionDef

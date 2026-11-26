@@ -650,11 +650,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "interrupts after 2 seconds (TMPRL1101). An import inside workflow code "
             "runs there, and the sandbox re-executes any module it has not loaded "
             "yet; the app's own package is never passed through. On a cold, busy "
-            "worker the import overruns the timer and the interrupt lands while "
-            "importlib holds its global lock. The lock is never released, every "
-            "later import in the process blocks, and the whole worker stops making "
-            "progress while its pod stays up: every activity on it then fails by "
-            "heartbeat timeout."
+            "worker the import overruns the timer, and the interrupt can land while "
+            "the thread waits on that module's import lock. It leaves the lock held: "
+            "every later import of that module, and of the module that was importing "
+            "it, hangs. Every workflow run imports the same modules, so the whole "
+            "worker stops making progress while its pod stays up: every activity "
+            "on it then fails by heartbeat timeout. The global import lock is not "
+            "involved, so imports of unrelated modules still work."
         ),
         short_description="Import that runs in workflow-context code",
         full_description=(
