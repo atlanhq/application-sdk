@@ -37,8 +37,10 @@ def api_only(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         "temporalio",
         "temporalio.workflow",
-        "application_sdk.storage",
-        "application_sdk.storage.ops",
+        # The obstore extra, which storage's read and write path needs.
+        "obstore",
+        "obstore.store",
+        "application_sdk.storage.binding",
         "application_sdk.infrastructure",
         "application_sdk.infrastructure.context",
         "application_sdk.observability",
@@ -59,6 +61,10 @@ def test_a_worker_only_module_takes_the_fallback_on_the_host(name: str) -> None:
         "application_sdk.storage_helpers",
         "application_sdk.handler.base",  # shipped by the api distribution
         "application_sdk.contracts.storage",
+        # Shipped by the api distribution (the obstore extra's read and write path).
+        "application_sdk.storage",
+        "application_sdk.storage.ops",
+        "obstore_extra",
         "application_sdk",
         None,
     ],
