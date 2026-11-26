@@ -99,6 +99,14 @@ Do NOT add an entry when:
   grep -rE "\"OLD_ENV_VAR_NAME\"" application_sdk/ --include="*.py"
   ```
   If any non-test hit remains, it's still alive — don't add.
+- The SDK no longer reads the env var, but **apps or the SDK's own CI still
+  use it as a contract**. A grep of `application_sdk/` cannot see that, so
+  also grep the shared actions under `.github/actions/`, the templates under
+  `.claude/commands/`, and connector `main.py` files before calling a name dead.
+  - Example: `ATLAN_LOCAL_DEVELOPMENT`. Connector `main.py` files read it to
+    choose the embedded runtime, and `connector-integration-tests` sets it.
+    Listing it as removed and dropping it from that action broke connector
+    integration tests (see `docs/configuration.md`, Local development).
 
 ## What the user sees
 

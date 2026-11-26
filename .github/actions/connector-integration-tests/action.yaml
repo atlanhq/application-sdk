@@ -430,6 +430,13 @@ runs:
     - name: Start app server
       shell: bash
       env:
+        # Read by the connector's main.py, not by the SDK: with it set (and
+        # DAPR_HTTP_PORT unset) main.py boots the embedded daprd + Temporal via
+        # run_dev. Without it main.py expects an external sidecar, which this
+        # action skips on SDK >= 3.13, so the app fails with
+        # DaprNotDetectedError. Pinned by
+        # .github/scripts/tests/test_connector_integration_local_dev_env.py.
+        ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
       run: |
         uv run python main.py &
@@ -449,6 +456,7 @@ runs:
       id: tests
       shell: bash
       env:
+        ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
         # Caller-supplied strings reach the script only through env, never as
         # `${{ }}` text in it: GitHub substitutes that text before bash parses
