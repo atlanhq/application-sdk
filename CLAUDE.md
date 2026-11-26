@@ -8,7 +8,7 @@ Non-standard commands used across the repo:
 - `uv sync --all-extras --all-groups` (full dev/test deps)
 - `uv run poe start-deps` (local Dapr + Temporal)
 - `uv run poe generate-apidocs` (MkDocs + API docs)
-- `uv run mkdocs build --strict` (docs site check; CI runs it on every `docs/` or `mkdocs.yml` change)
+- `uv run --group docs mkdocs build --strict` (docs site check; CI runs it on every `docs/` or `mkdocs.yml` change)
 - `uv run pre-commit run --files <file>` (run pre-commit on specific file)
 - `uv run pre-commit run --all-files` (run pre-commit on all files)
 
