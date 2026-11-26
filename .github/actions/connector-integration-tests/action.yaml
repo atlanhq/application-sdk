@@ -430,7 +430,6 @@ runs:
     - name: Start app server
       shell: bash
       env:
-        ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
       run: |
         uv run python main.py &
@@ -450,7 +449,6 @@ runs:
       id: tests
       shell: bash
       env:
-        ATLAN_LOCAL_DEVELOPMENT: "true"
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
         # Caller-supplied strings reach the script only through env, never as
         # `${{ }}` text in it: GitHub substitutes that text before bash parses
