@@ -103,7 +103,7 @@ SIDECAR_SUFFIX = _storage_classify.SIDECAR_SUFFIX
 #: Suffix of the resumable-download checkpoint written by ``storage.chunked``.
 #: Listed here so the sidecar lookup can skip keys that are themselves
 #: SDK-internal bookkeeping rather than user artifacts.
-_TRANSFER_STATE_SUFFIX = ".transfer-state"
+_TRANSFER_STATE_SUFFIX = _storage_classify.TRANSFER_STATE_SUFFIX
 
 
 sidecar_key = _storage_classify.sidecar_key
@@ -120,9 +120,10 @@ def _is_internal_key(key: str) -> bool:
 
     Looking up ``{key}.sha256.sha256`` would be a guaranteed-miss round trip on
     every sidecar write, and the transfer-state checkpoint is local-only
-    bookkeeping whose content is rewritten in place.
+    bookkeeping whose content is rewritten in place. The rule is the shared
+    one (:func:`application_sdk._storage_classify.is_internal_key`).
     """
-    return key.endswith((SIDECAR_SUFFIX, _TRANSFER_STATE_SUFFIX))
+    return _storage_classify.is_internal_key(key)
 
 
 def verification_enabled(verify: bool | None) -> bool:

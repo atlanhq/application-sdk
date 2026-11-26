@@ -59,6 +59,21 @@ def is_sidecar_key(key: str) -> bool:
     return key.endswith(SIDECAR_SUFFIX)
 
 
+#: Suffix of the resumable-download checkpoint written by ``storage.chunked``.
+TRANSFER_STATE_SUFFIX = ".transfer-state"
+
+
+def is_internal_key(key: str) -> bool:
+    """Return ``True`` for SDK bookkeeping objects that never carry a sidecar.
+
+    A sidecar's own key and a transfer-state checkpoint end in these suffixes.
+    The worker neither writes nor reads a sidecar for such a key, and its
+    listing helpers drop it as bookkeeping, so a data object must never be
+    stored under one: the file upload route keeps its keys clear of them.
+    """
+    return key.endswith((SIDECAR_SUFFIX, TRANSFER_STATE_SUFFIX))
+
+
 # --- evidence parsed from a failure -------------------------------------------
 
 # ``object_store`` formats every backend HTTP failure as

@@ -68,7 +68,7 @@ from typing_extensions import deprecated
 
 from application_sdk import _env, _obstore_config, _storage_classify
 from application_sdk._logging import get_logger
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk._storage_classify import (
     StorageFailureKind,
     classify_storage_failure,
@@ -547,6 +547,12 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
                 detail="prefix must not start with a reserved object-store root",
             )
         stored_name = f"{file_id}.{extension}" if extension else file_id
+        if _storage_classify.is_internal_key(stored_name):
+            # An extension such as ``sha256`` would put the upload under an
+            # SDK-bookkeeping suffix: the worker would never verify it and its
+            # listings would drop it as a sidecar. Keep the bare id; the
+            # response still reports the extension.
+            stored_name = file_id
         key = f"{effective_prefix}/{stored_name}"
         if source.stored_key(key) != key:
             # The store would write somewhere else (a staging-path alias such
@@ -934,18 +940,21 @@ class HostObjectStore:
         import obstore  # noqa: PLC0415 — the obstore extra
 
         stored = _normalize_key(key)
+        # As the worker's write_digest_sidecar: no sidecar for a bookkeeping
+        # key, which nothing would read (the upload route keeps data off them).
+        write_sidecar = _env.env_bool(
+            _storage_classify.WRITE_SIDECARS_ENV, True, report=_report_env
+        ) and not _storage_classify.is_internal_key(stored)
         # The route drained the upload to this file itself, so nothing writes
-        # it while it is hashed or read.
-        digest = await run_in_thread(_sha256_file, local_path)
+        # it while it is hashed or read. Hashed only when the digest is used.
+        digest = await run_in_thread(_sha256_file, local_path) if write_sidecar else ""
         # obstore streams the file from disk, in parts when it is large.
         await _past_gateway_no_route(
             "put",
             stored,
             lambda: obstore.put_async(self._store, stored, Path(local_path)),
         )
-        if not _env.env_bool(
-            _storage_classify.WRITE_SIDECARS_ENV, True, report=_report_env
-        ):
+        if not write_sidecar:
             return
         sidecar = _storage_classify.sidecar_key(stored)
         try:
@@ -954,13 +963,22 @@ class HostObjectStore:
                 sidecar,
                 lambda: obstore.put_async(self._store, sidecar, digest.encode()),
             )
-        # conformance: ignore[E002] best-effort sidecar, as on the worker; the object itself is stored and the failure is logged with its cause
-        except Exception:
+        # conformance: ignore[E002] best-effort sidecar, as on the worker; the object itself is stored and the failure is logged with its classified cause
+        except Exception as exc:  # noqa: BLE001 — best-effort sidecar; logged at WARNING with the classified cause
+            failure = classify_storage_failure(exc)
+            # Only the classified evidence and the exception type: obstore's
+            # message and traceback can quote the request's signed URL or the
+            # store's credential.
+            # conformance: ignore[L004] exc_info would log that message, and the credential with it.
             logger.warning(
-                "Integrity sidecar write failed for key '%s': the object was "
-                "stored, but downstream readers cannot verify it",
+                "Integrity sidecar write failed for key '%s' (%s: %s, "
+                "http_status=%s, provider_code=%s): the object was stored, but "
+                "downstream readers cannot verify it",
                 stored,
-                exc_info=True,
+                type(exc).__name__,
+                failure.kind.value,
+                failure.http_status,
+                failure.provider_code,
             )
 
 
@@ -969,6 +987,9 @@ def _sha256_file(path: str) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
+            # Per 1 MiB read: a request cancelled mid-hash stops here instead
+            # of holding the app's blocking slot for the rest of the file.
+            raise_if_offload_abandoned()
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -1070,15 +1091,19 @@ def _host_store_failure(
     the worker's ``StorageError`` leaves carry, not a raw obstore exception.
     """
     failure = classify_storage_failure(exc)
+    # Only the classified evidence and the exception type, as from_env logs a
+    # store it could not build: obstore's message and traceback can quote the
+    # request's signed URL or the store's credential.
+    # conformance: ignore[L004] exc_info would log that message, and the credential with it.
     logger.warning(
-        "Object-store %s failed for app=%s key=%s: %s (http_status=%s, provider_code=%s)",
+        "Object-store %s failed for app=%s key=%s: %s (%s, http_status=%s, provider_code=%s)",
         op,
         app_name,
         key,
         failure.kind.value,
+        type(exc).__name__,
         failure.http_status,
         failure.provider_code,
-        exc_info=True,
     )
     detail = _HOST_STORE_FAILURE_DETAIL.get(failure.kind, _HOST_STORE_UNAVAILABLE)
     return HTTPException(status_code=503, detail=detail)

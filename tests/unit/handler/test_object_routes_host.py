@@ -41,6 +41,12 @@ def _stored(store: MemoryStore) -> dict[str, bytes]:
     return {key: bytes(obstore.get(store, key).bytes()) for key in keys}
 
 
+@pytest.fixture(autouse=True)
+def _sidecars_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sidecar emission at its default, whatever the runner's env says."""
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
+
+
 @pytest.fixture
 def memory() -> MemoryStore:
     return MemoryStore()
@@ -881,3 +887,111 @@ def test_a_failed_write_is_a_classified_503(
     for response in (config, upload):
         assert response.status_code == 503
         assert response.json()["detail"] == detail
+
+
+def test_an_upload_named_like_a_sidecar_is_stored_as_data(
+    host: TestClient, memory: MemoryStore, tmp_path: Path
+) -> None:
+    """An ``x.sha256`` upload must not take a bookkeeping key: the worker would
+    neither verify it nor list it as data."""
+    from application_sdk.storage import ops
+
+    payload = b"not a digest\n"
+    response = host.post("/workflows/v1/file", files={"file": ("x.sha256", payload)})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["extension"] == "sha256"
+    key = data["key"]
+    assert not key.endswith(".sha256")
+    assert _stored(memory)[key + ".sha256"] == (
+        hashlib.sha256(payload).hexdigest().encode()
+    )
+    obstore.put(memory, key, b"tampered\n")
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    with pytest.raises(StorageIntegrityError):
+        asyncio.run(ops.download_file(key, tmp_path / "x", memory))
+
+
+def test_with_sidecars_off_the_upload_is_not_hashed(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "false")
+
+    def _no_hash(_path: str) -> str:
+        raise AssertionError("hashed although no sidecar is written")
+
+    monkeypatch.setattr(object_routes, "_sha256_file", _no_hash)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    assert response.status_code == 200
+
+
+def test_the_hash_stops_once_its_request_is_abandoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    big = tmp_path / "big"
+    big.write_bytes(b"x" * (3 << 20))
+    checks: list[int] = []
+
+    def _abandoned() -> None:
+        checks.append(1)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(object_routes, "raise_if_offload_abandoned", _abandoned)
+    with pytest.raises(asyncio.CancelledError):
+        object_routes._sha256_file(str(big))
+    assert checks == [1]
+
+
+def test_a_store_failure_logs_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """obstore's message can quote a signed URL or the store's credential: the
+    host logs the classified evidence and the type, never the text or traceback."""
+    from unittest.mock import MagicMock
+
+    secret = "https://b.example.invalid/k?X-Amz-Signature=deadbeef"
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(f"Server returned non-2xx status code: 403 {secret}")
+
+    log = MagicMock()
+    monkeypatch.setattr(object_routes, "logger", log)
+    monkeypatch.setattr(obstore, "put_async", _put)
+    assert (
+        host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
+        == 503
+    )
+    assert (
+        host.post("/workflows/v1/config/g?type=credentials", json={}).status_code == 503
+    )
+    assert log.warning.call_count == 2
+    for call in log.warning.call_args_list:
+        assert "exc_info" not in call.kwargs
+        assert all(secret not in str(arg) for arg in call.args)
+        assert 403 in call.args
+
+
+def test_a_failed_sidecar_write_logs_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    secret = "account_key=c2VjcmV0"
+    real_put = obstore.put_async
+
+    async def _put(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if key.endswith(".sha256"):
+            raise RuntimeError(secret)
+        return await real_put(store, key, *args, **kwargs)
+
+    log = MagicMock()
+    monkeypatch.setattr(object_routes, "logger", log)
+    monkeypatch.setattr(obstore, "put_async", _put)
+    assert (
+        host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
+        == 200
+    )
+    (call,) = log.warning.call_args_list
+    assert "exc_info" not in call.kwargs
+    assert all(secret not in str(arg) for arg in call.args)

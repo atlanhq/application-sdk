@@ -162,7 +162,11 @@ def test_a_missing_bucket_or_container_is_503_not_404(cloud: str) -> None:
 
 
 @pytest.mark.parametrize("cloud", sorted(_STORES))
-def test_an_upload_lands_under_the_apps_namespace(cloud: str) -> None:
+def test_an_upload_lands_under_the_apps_namespace(
+    cloud: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The sidecar assertion needs emission on, whatever the runner's env says.
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
     make, existing = _STORES[cloud]
     store = make(existing)
     response = _host(store).post(

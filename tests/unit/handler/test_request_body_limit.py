@@ -203,8 +203,13 @@ def test_an_oversize_upload_stores_nothing(
 
 
 def test_an_upload_gets_its_own_larger_cap(
-    host: TestClient, memory: MemoryStore, _small_caps: Path
+    host: TestClient,
+    memory: MemoryStore,
+    _small_caps: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The count below includes the integrity sidecar, whatever the env says.
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
     """Over the JSON cap, under the upload cap: stored, and the temp file is gone."""
     response = host.post(
         "/workflows/v1/file", files={"file": ("a.csv", b"a" * (_BODY_CAP * 4))}

@@ -133,6 +133,8 @@ def _env(**values):
         del os.environ[name]
     os.environ.update(values)
 
+# The sidecar check below expects the default; the caller's env may say otherwise.
+os.environ["ATLAN_STORAGE_WRITE_SIDECARS"] = "true"
 if sys.argv[3] == "core":
     # No obstore: a configured bucket must degrade to 503, never crash.
     _env(ATLAN_S3_BUCKET="probe-bucket", ATLAN_S3_REGION="us-east-1")
