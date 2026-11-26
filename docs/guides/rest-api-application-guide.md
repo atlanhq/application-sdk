@@ -337,22 +337,25 @@ Never import from `temporalio` directly — use `self.task_context.heartbeat()` 
 
 ## Error Handling
 
-Raise `NonRetryableError` for failures that should permanently fail the task in Temporal (no retries):
+Raise a typed `AppError` leaf from `application_sdk.errors`. Whether Temporal retries the task follows from the leaf: `AuthError`, `AppPermissionDeniedError`, `NotFoundError` and `InternalError` fail it permanently, while `SourceUnavailableError` and `RateLimitedError` are retried. `classify_http_exception` picks the leaf for an httpx failure, so the connector keeps no status table of its own:
 
 ```python
-from application_sdk.app import NonRetryableError
+from application_sdk.errors import InternalError, classify_http_exception
 
 @task(timeout_seconds=3600)
 async def fetch_entities(self, input: FetchEntitiesInput) -> FetchEntitiesOutput:
     try:
         ...
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (400, 401, 403, 404):
-            raise NonRetryableError(
-                f"API request failed permanently: {e.response.status_code}"
-            ) from e
-        raise  # let Temporal retry transient errors (5xx, network)
+    except httpx.HTTPError as e:
+        # A 400 is unmapped by default; for this API it means the connector
+        # built a bad request, so fail fast instead of retrying it.
+        leaf = classify_http_exception(e, overrides={400: InternalError})
+        if leaf is None:
+            raise  # unmapped: Temporal retries it as an untyped failure
+        raise leaf(message="API request failed", cause=e) from e
 ```
+
+`NonRetryableError` from `application_sdk.app` is deprecated (removal in v4.0.0). See [Map an HTTP failure to a leaf](../concepts/common.md#map-an-http-failure-to-a-leaf) for overriding a status the source uses differently.
 
 ## Testing
 

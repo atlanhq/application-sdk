@@ -336,7 +336,9 @@ consumer's upgrade. Prefer the alias.
    python3 .github/scripts/check_symbol_removals.py check --repo .
    ```
 6. Update any docs that reference the old name, and mention the deprecation in
-   the PR description so it lands in the changelog.
+   the PR description so it lands in the changelog. Once the manifest lists the
+   name, the `check-docs-deprecated-imports` pre-commit hook fails every
+   Markdown code example that still uses it (`docs/standards/documentation.md`).
 7. When the removal version arrives, delete the alias and its manifest entry in
    one PR.
 

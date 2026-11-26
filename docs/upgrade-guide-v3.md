@@ -151,8 +151,8 @@ than the `large_string` pandas 3 converts to by default. Two exceptions:
 | App type | Install command |
 |----------|----------------|
 | Custom `App` / `BaseMetadataExtractor` (API-based) | `pip install atlan-application-sdk` |
-| `SqlMetadataExtractor` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
-| `IncrementalSqlMetadataExtractor` | `pip install atlan-application-sdk[incremental]` |
+| `SqlApp` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
+| `SqlApp` with an incremental `run()` | `pip install atlan-application-sdk[incremental]` |
 
 ### Dockerfile examples
 
@@ -248,6 +248,12 @@ class MyQueryWorkflow(SQLQueryExtractionWorkflow):
 
 ### v3
 
+`SqlQueryExtractor` is deprecated (removal in v4.0.0), but it is still the
+target for query-log connectors: `SqlApp` has no query-log capability yet
+(FND-4313). Migrate onto it as below; when `SqlApp` gains that capability,
+this step and the import rewriter move to it.
+
+<!-- legacy-example: SqlQueryExtractor stays the query-log target until SqlApp has a query-log capability (FND-4313) -->
 ```python
 from application_sdk.templates import SqlQueryExtractor
 from application_sdk.templates.contracts import (
@@ -338,6 +344,7 @@ SQL connectors use `SqlApp` (Step 1) and the templated-query pattern.
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 blocks below replace it -->
 ```python
 # app/transformer.py
 from application_sdk.transformers.atlas import AtlasTransformer

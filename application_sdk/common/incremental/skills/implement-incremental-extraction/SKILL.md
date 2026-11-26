@@ -131,6 +131,7 @@ See the reference files for detailed implementation of each step:
 
 ## Quick Start: Minimal Implementation
 
+<!-- legacy-example: IncrementalSqlMetadataExtractor is deprecated but still the SDK's only built-in incremental orchestration -->
 ```python
 # connector/app.py
 
