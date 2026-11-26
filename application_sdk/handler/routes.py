@@ -139,10 +139,11 @@ def _route_failure(
 
     - ``HandlerError`` keeps its own ``http_status`` (unless
       ``honor_handler_error_status`` is false; ``/warmup`` never honoured it).
-      TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+      TODO(E013): Deprecated path — HandlerError is an
       AppError subclass, so it is matched first to preserve http_status.
       Remove once all connector subclasses raise typed AppError leaves.
-      See typed-error-prescription.md §5 (HandlerError row).
+      See .claude/skills/typed-failures/references/typed-error-prescription.md
+      §5 (HandlerError row).
     - Any other ``AppError`` maps through its ``category``
       (:data:`_CATEGORY_TO_HTTP`).
     - Anything else is unexpected: 500.

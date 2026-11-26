@@ -305,7 +305,7 @@ The check resolves inheritance transitively: an intermediate class with no `code
 'pass-through' subclass between a leaf and a concrete leaf) is also flagged so failures
 don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P003]
 <reason>` at the declaration when an intermediate is genuinely abstract — see
-typed-error-prescription §4 and BLDX-1431.
+`.claude/skills/typed-failures/references/typed-error-prescription.md` §4 and BLDX-1431.
 
 Exempt: classes whose own MRO overrides `to_failure_details()` — usually via a shared
 connector error mixin.  Those build the wire envelope themselves, so `code` is not what
