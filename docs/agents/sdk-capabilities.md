@@ -18,17 +18,17 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 75 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 54 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 235 |
-| `application_sdk.constants` | _(no description)_ | 146 |
+| `application_sdk.constants` | Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup) | 146 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 69 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 81 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 11 |
-| `application_sdk.discovery` | _(no description)_ | 4 |
+| `application_sdk.discovery` | Dynamic App and Handler loading from "module.path:ClassName" strings at container startup | 4 |
 | `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 45 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 69 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 119 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 47 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.main_errors` | _(no description)_ | 4 |
+| `application_sdk.main_errors` | Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection | 4 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 144 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 44 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 128 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 19 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 465 |
-| `application_sdk.tools` | _(no description)_ | 1 |
+| `application_sdk.tools` | Developer command-line tools — provision-credentials for local development | 1 |
 | `application_sdk.transformers` | Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). | 27 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 95 |
 
@@ -2677,6 +2677,8 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 ## `application_sdk.constants`
 
+Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup)
+
 ### Classes
 
 #### `ShutdownBudget`
@@ -4934,6 +4936,8 @@ Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SD
 
 ## `application_sdk.discovery`
 
+Dynamic App and Handler loading from "module.path:ClassName" strings at container startup
+
 ### Classes
 
 #### `DiscoveryError`
@@ -7076,6 +7080,8 @@ Dev entry point — run_dev_combined() and AppConfig for local execution and con
 - **Defined in:** `application_sdk/dev/_runner.py`
 
 ## `application_sdk.main_errors`
+
+Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection
 
 ### Classes
 
@@ -13183,6 +13189,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Defined in:** `application_sdk/testing/warming.py`
 
 ## `application_sdk.tools`
+
+Developer command-line tools — provision-credentials for local development
 
 ### Functions
 

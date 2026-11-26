@@ -22,3 +22,7 @@ templates: SQL metadata extractor templates and their contracts
 testing: Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
 validation: Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call
 transformers: "Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md)."
+constants: Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup)
+discovery: Dynamic App and Handler loading from "module.path:ClassName" strings at container startup
+main_errors: Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection
+tools: Developer command-line tools — provision-credentials for local development
