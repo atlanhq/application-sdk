@@ -44,15 +44,22 @@ To list every test-harness variable in use:
 `tests/unit/test_env_var_docs_coverage.py` collects every env-var name
 `application_sdk/` reads (outside `testing/`) from the source by AST, and fails when:
 
-- a name is not mentioned in `docs/configuration.md`, is not in
+- a name appears in no table row of `docs/configuration.md` (its own row, or a
+  fallback named in another row; a mention in prose does not count), is not in
   `_REMOVED_ENV_VARS`, and is not on the test's short third-party allowlist
   (`AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `HOSTNAME`);
 - `.env.example` sets a name the SDK does not read, or one listed as removed.
 
 A name built with an f-string (`f"ATLAN_POOL_{pool}_QUEUE"`) is documented with a
-placeholder: `ATLAN_POOL_<POOL>_QUEUE`. The test finds reads through the stdlib
-(`os.getenv`, `os.environ`) and through any helper that forwards its parameter to
-one (`env_bool`, `env_int`, a local `_bool`), so a new reader needs no change to it.
+placeholder: `ATLAN_POOL_<POOL>_QUEUE`.
+
+The test finds reads through the stdlib (`os.getenv`, `os.environ`, including
+`from os import getenv as …` and `from os import environ as …`) and through any
+helper that forwards a named parameter to one (`env_bool`, `env_int`, a local
+`_bool`). Keys are matched by position or by keyword (`os.getenv(key=…)`,
+`env_bool(key=…)`), so a new helper of that shape needs no change to the test.
+It does not follow a key passed through `*args` / `**kwargs`, or a reader
+reached through a plain assignment (`read = os.getenv`).
 
 ## The registry
 
