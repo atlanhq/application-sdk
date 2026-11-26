@@ -460,6 +460,9 @@ jobs:
       # in this workflow.
       - name: Start app server
         env:
+          # main.py reads this to boot the embedded runtime (run_dev); without
+          # it the app expects an external Dapr sidecar and fails to start.
+          ATLAN_LOCAL_DEVELOPMENT: "true"
           ATLAN_APPLICATION_NAME: {APP_NAME}  # <-- CHANGE THIS
         run: |
           uv run python main.py &
@@ -485,6 +488,7 @@ jobs:
           E2E_{APP_NAME}_USERNAME: ${{ secrets.{APP_NAME}_USERNAME }}
           E2E_{APP_NAME}_PASSWORD: ${{ secrets.{APP_NAME}_PASSWORD }}
           E2E_{APP_NAME}_DATABASE: "default"
+          ATLAN_LOCAL_DEVELOPMENT: "true"
           ATLAN_APPLICATION_NAME: {APP_NAME}
         run: |
           mkdir -p results

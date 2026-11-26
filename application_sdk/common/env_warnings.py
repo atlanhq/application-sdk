@@ -64,8 +64,9 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         "ATLAN_SQL_SERVER_MIN_VERSION",
         "ATLAN_WORKFLOW_UI_HOST",
         "ATLAN_WORKFLOW_UI_PORT",
-        # Local development is inferred from the registered components (#641).
-        "ATLAN_LOCAL_DEVELOPMENT",
+        # ATLAN_LOCAL_DEVELOPMENT is deliberately absent: the SDK stopped reading
+        # it (#641), but connector main.py files still do, and the shared
+        # connector-integration-tests action sets it. See docs/configuration.md.
     }
 )
 

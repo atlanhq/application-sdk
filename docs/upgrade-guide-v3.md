@@ -445,8 +445,8 @@ class MyConnector(App):
 > customer-owned `objectstore`. `App.upload()` = **app-to-app** hand-off, Atlan-owned
 > `atlan-objectstore` in SDR. These are two distinct stores. Forgetting `App.upload()` is a
 > silent failure — all activities succeed but Atlan's publish app sees nothing. See
-> [ADR-0014](../adr/0014-two-store-storage-architecture.md) and
-> [file-reference.md](../concepts/file-reference.md).
+> [ADR-0014](adr/0014-two-store-storage-architecture.md) and
+> [file-reference.md](concepts/file-reference.md).
 
 ### Rules for mapper functions
 
@@ -1202,7 +1202,7 @@ The one consequence to be aware of is on the other side of the trade: a *wedged*
 is no longer killed by a small ceiling, so while your app is in `warn` its containment is
 the `AtlanAppTaskStalled` alert plus a human rather than an automatic kill. Detection
 improves — a wedge is now visible one budget in, where before it was only ever killed by
-luck. See [ADR-0018 → Migration](adr/0018-progress-aware-heartbeat.md#migration--backward-compatibility--what-if-i-do-nothing)
+luck. See [ADR-0018](adr/0018-progress-aware-heartbeat.md) ("Migration & backward compatibility")
 for why that trade is the one being made.
 
 **`SqlApp` apps get the backstop without editing anything.** `SqlApp`'s twelve

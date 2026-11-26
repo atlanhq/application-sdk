@@ -1,6 +1,6 @@
 # Transformers (Legacy)
 
-> **Deprecation notice:** The `application_sdk.transformers` stack — `TransformerInterface`, `AtlasTransformer`, and `QueryBasedTransformer` — is a **legacy, back-compat-only** subsystem. New connectors should use the typed-record + pyatlan_v9 mapper pattern described in the [v3 migration guide](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction). No public `__all__` is exposed; import from the submodules directly and treat them as internal.
+> **Deprecation notice:** The `application_sdk.transformers` stack — `TransformerInterface`, `AtlasTransformer`, and `QueryBasedTransformer` — is a **legacy, back-compat-only** subsystem. New connectors should use the typed-record + pyatlan_v9 mapper pattern described in the [v3 migration guide](../upgrade-guide-v3.md#step-1-upgrade-sql-metadata-extraction). No public `__all__` is exposed; import from the submodules directly and treat them as internal.
 
 ## Background
 
@@ -25,7 +25,7 @@ This pipeline is used internally by `SqlMetadataExtractor.transform_data()`. If 
 
 For new connectors, and when upgrading existing ones, use the simpler pattern documented in the upgrade guide:
 
-- [Step 2: Upgrade SQL Metadata Extraction](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — replace `AtlasTransformer` with typed records → pure mapper functions → `pyatlan_v9` Asset instances
+- [Step 1: Upgrade SQL Metadata Extraction](../upgrade-guide-v3.md#step-1-upgrade-sql-metadata-extraction) — replace `AtlasTransformer` with typed records → pure mapper functions → `pyatlan_v9` Asset instances
 - Reference implementations: `atlan-openapi-app`, `atlan-azure-event-hub-app`
 
 The import rewriter (`tools/migrate_v3/rewrite_imports.py`) will leave `# TODO(upgrade-v3)` markers on transformer code because it cannot auto-convert this pattern; apply the migration manually.
@@ -87,6 +87,6 @@ Both transformers use pyarrow and DuckDB internally (already included in the `sq
 
 ## See Also
 
-- [v3 Migration Guide — Step 2](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — the recommended migration path
+- [v3 Migration Guide — Step 1](../upgrade-guide-v3.md#step-1-upgrade-sql-metadata-extraction) — the recommended migration path
 - [Apps](apps.md) — `SqlApp`, whose `map_*` methods replace the transformer
 - [REST API Application Guide](../guides/rest-api-application-guide.md) — non-SQL connector without transformers

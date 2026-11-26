@@ -428,7 +428,7 @@ is a relationship, not a role — `MEMBER` is any org member, even one with only
 Read). In application-sdk, `/gate-check` needs the Admin role: it gates an SDK
 release (`--gate-check-requires-admin` in `test-commands.yml`); bots and fork PRs are
 refused. The decision is in
-[`pr_test_command.py`](../../.github/scripts/pr_test_command.py), wired by
+[`pr_test_command.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/pr_test_command.py), wired by
 `test-commands.yml` here and by the scaffolded `test-commands.yaml` (calling
 `test-commands-reusable.yaml`) in connector repos (FND-3839).
 
@@ -509,7 +509,7 @@ contains(github.event.pull_request.labels.*.name, 'e2e') &&
 (github.event.action != 'labeled' || github.event.label.name == 'e2e')
 ```
 
-[`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py)
+[`test_label_trigger_gates.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/tests/test_label_trigger_gates.py)
 enforces that term and fails any workflow or scaffold that subscribes to
 `labeled`. Both the gates and the input go once the fleet has resynced.
 
@@ -588,7 +588,7 @@ The same rule covers Renovate: the fleet preset applies no labels (FND-2201),
 and classifies its PRs by branch slug instead.
 
 Enforced by
-[`test_no_bot_pr_labels.py`](../../.github/scripts/tests/test_no_bot_pr_labels.py),
+[`test_no_bot_pr_labels.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/tests/test_no_bot_pr_labels.py),
 which sweeps `.github/`, `renovate-config/` and the conformance bootstrap
 templates for every way code adds a PR label, and parses each Renovate config
 for `labels` / `addLabels` / `:label` presets. Sites that predate it are
@@ -2214,7 +2214,7 @@ On a real PR ref the shared group is the point (supersede the previous commit);
 everywhere else the run must be independent.
 
 **For a shared resource, take a lease instead.** The `(app, cloud)` tenant lease
-in [`e2e_tenant_lease.py`](../../.github/scripts/e2e_tenant_lease.py) is the worked
+in [`e2e_tenant_lease.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/e2e_tenant_lease.py) is the worked
 example (FND-250). It needs no lock server:
 
 * One ref per resource, with a **fixed** name:

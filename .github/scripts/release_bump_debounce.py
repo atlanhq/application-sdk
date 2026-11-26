@@ -64,6 +64,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from _changelog import find_section
+
 # `version = "1.2.3"` in pyproject.toml, `__version__ = "1.2.3"` in version.py.
 _VERSION_LINE_RE = re.compile(
     r"""^(?:version|__version__)\s*=\s*["']([^"']+)["']""", re.MULTILINE
@@ -110,13 +112,12 @@ def read_version(text: str) -> str | None:
 def changelog_section(text: str, version: str) -> str | None:
     """Return the ``## v<version>`` section with its heading date removed.
 
-    Same section boundary as ``extract_release_notes.py`` — the heading up to
-    the next ``## v`` — so "the notes" here means exactly what tag-and-release
+    Same reader as ``extract_release_notes.py`` (``_changelog.find_section``),
+    so "the notes" here means exactly what tag-and-release
     would publish, minus the date.
     """
-    pattern = rf"^## v{re.escape(version)} \([^)]*\)(.*?)(?=^## v|\Z)"
-    match = re.search(pattern, text, re.DOTALL | re.MULTILINE)
-    return match.group(1).strip() if match else None
+    section = find_section(text, version)
+    return section.body.strip() if section is not None else None
 
 
 def rev_parse(ref: str) -> str | None:

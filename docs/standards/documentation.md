@@ -54,6 +54,16 @@ The check sees only Python blocks; a deprecated name in prose or in a table is
 on the author. Run it on its own with
 `uv run --frozen python .github/scripts/check_docs_deprecated_imports.py [FILE.md ...]`.
 
+## Site build (`mkdocs build --strict`)
+
+CI builds the docs site with `mkdocs build --strict` on every PR that touches `docs/` or `mkdocs.yml` (the Docs area of the SDK Gate, `.github/workflows/docs.yaml`). The `validation:` block in `mkdocs.yml` makes each of these a failure:
+
+- **A page not in `nav`.** Add every new page under `docs/` to `nav` in `mkdocs.yml`. Working notes that are not site pages go under an `exclude_docs` path instead.
+- **A link to a file outside `docs/`.** The site serves `docs/` only, so `../../application_sdk/main.py` is a 404 there. Link repo source with a full URL: `https://github.com/atlanhq/application-sdk/blob/main/application_sdk/main.py`.
+- **An anchor the target page lacks.** MkDocs and GitHub slug headings differently: a heading with `&` or `—` gets a double hyphen on GitHub and a single one in MkDocs. Avoid punctuation in headings you link to, so both renderers agree.
+
+Run `uv run --group docs mkdocs build --strict` locally before pushing a docs change.
+
 ## Python examples parse and import real symbols
 
 Every `python` code block under `docs/` must parse, and its `application_sdk` imports must name modules and symbols that exist in the source tree. The `check-doc-examples` pre-commit hook (`.github/scripts/check_doc_examples.py`) enforces both. It runs on docs changes and on SDK changes, since renaming a symbol breaks the docs that import it.

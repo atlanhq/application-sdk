@@ -1,0 +1,38 @@
+name: Docs (reusable)
+
+# Builds the MkDocs site with --strict (FND-4271). mkdocs.yml's `validation:`
+# block turns a page missing from `nav`, a relative link to a file that is not
+# a doc page, and an anchor the target page lacks into warnings, and --strict
+# fails the build on any of them. Before this job nothing built the site in
+# CI, so 23 pages had dropped out of the nav and links had rotted unseen.
+#
+# Called from sdk-gate.yaml as the `docs` area, so the single required
+# "SDK Gate" check covers it; runs only when a docs input changed. Only the
+# locked `docs` dependency group is installed: the build reads docs/ and
+# mkdocs.yml, never application_sdk/.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build docs (mkdocs --strict)
+    runs-on: ubuntu-latest
+    # The build takes seconds; the cap only bounds a hung install.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+
+      - name: Build the site with mkdocs --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: uv run --frozen --only-group docs mkdocs build --strict --site-dir "$RUNNER_TEMP/site"

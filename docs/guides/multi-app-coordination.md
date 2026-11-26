@@ -102,7 +102,7 @@ This pattern works well when both entry points share the same credentials, handl
 
 For Apps that process data in pages or checkpoints and need to avoid Temporal history-size limits, `App.continue_with(new_input)` restarts the current App with a fresh workflow run while preserving correlation context. This is a within-app pattern — not cross-app coordination — but it is relevant when a single App drives a long multi-cycle extraction.
 
-See [Apps — `continue_with()`](../concepts/apps.md#app-lifecycle) for usage details.
+See [Apps — `continue_with()`](../concepts/apps.md#continuing-with-new-input) for usage details.
 
 ---
 

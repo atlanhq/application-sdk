@@ -8,8 +8,9 @@ for use in GitHub releases.
 Usage: python extract_release_notes.py <version>
 """
 
-import re
 import sys
+
+from _changelog import find_section
 
 
 def extract_release_notes(version, changelog_file="CHANGELOG.md"):
@@ -21,19 +22,21 @@ def extract_release_notes(version, changelog_file="CHANGELOG.md"):
         changelog_file (str): Path to the changelog file
 
     Returns:
-        str: Release notes for the specified version
+        str: The ``## v<version>`` section, heading included, or a one-line
+        ``Release v<version>`` placeholder when the changelog has none.
+
+    The version is matched exactly (``3.1.0`` never selects ``3.1.0rc1`` or
+    ``301.0``), and the section ends at the next ``## `` heading line. When a
+    version has two headings, the first (newest) one wins;
+    ``lint_changelog.py`` stops the release workflow from writing a second.
     """
-    with open(changelog_file, "r") as f:
+    with open(changelog_file, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Look for the section for this specific version
-    pattern = rf"## v{version} \([^)]+\).*?(?=## v|\Z)"
-    match = re.search(pattern, content, re.DOTALL)
-
-    if match:
-        return match.group(0).strip()
-    else:
+    section = find_section(content, version)
+    if section is None:
         return f"Release v{version}"
+    return section.text.strip()
 
 
 def main():

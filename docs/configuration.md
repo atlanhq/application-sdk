@@ -1,6 +1,6 @@
 # Configuration Reference
 
-The Application SDK reads configuration from environment variables at startup. Variables are grouped below by subsystem. The canonical source of truth is [`application_sdk/constants.py`](../application_sdk/constants.py) (import-time constants) and [`application_sdk/main.py`](../application_sdk/main.py) (`AppConfig` runtime values).
+The Application SDK reads configuration from environment variables at startup. Variables are grouped below by subsystem. The canonical source of truth is [`application_sdk/constants.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/constants.py) (import-time constants) and [`application_sdk/main.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/main.py) (`AppConfig` runtime values).
 
 Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 
@@ -539,6 +539,12 @@ ATLAN_APP_MODULE=app.app:MyExtractor
 ATLAN_APPLICATION_NAME=my-extractor
 ATLAN_LOG_LEVEL=DEBUG
 ```
+
+#### `ATLAN_LOCAL_DEVELOPMENT` (app-level, not read by the SDK)
+
+The SDK itself does not read `ATLAN_LOCAL_DEVELOPMENT`; it infers local development from the registered components. Many connector `main.py` files still read it, as a contract between the app and the SDK's CI: when it is `true` and `DAPR_HTTP_PORT` is unset, `main.py` calls `app.run_dev`, which boots an embedded daprd and an in-process Temporal. Otherwise it calls `application_sdk.main.main()`, which expects an external Dapr sidecar.
+
+The shared `connector-integration-tests` action sets `ATLAN_LOCAL_DEVELOPMENT: "true"` on its "Start app server" and test steps, and on SDK 3.13+ it starts no external daprd or Temporal. Removing the variable from the action leaves those apps with no sidecar, and they fail at startup with `DaprNotDetectedError`. `.github/scripts/tests/test_connector_integration_local_dev_env.py` pins it. Because apps still read it, it is **not** in `_REMOVED_ENV_VARS`, and setting it does not trigger the removed-variable warning.
 
 ### Production deployment
 
