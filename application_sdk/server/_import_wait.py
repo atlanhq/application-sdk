@@ -33,8 +33,10 @@ another shape, the watch fails open: it reports nothing and logs one warning.
 from __future__ import annotations
 
 import importlib._bootstrap as _bootstrap
+import sys
 import threading
 import time
+import traceback
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -42,6 +44,15 @@ from dataclasses import dataclass
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Frames that belong to the import machinery rather than to the code that
+# asked for the import: CPython's importlib, and Temporal's sandbox importer,
+# which replaces ``__import__`` inside workflow code.
+_IMPORT_MACHINERY_MARKERS = (
+    "<frozen importlib.",
+    "/importlib/",
+    "/temporalio/worker/workflow_sandbox/",
+)
 
 
 @dataclass(frozen=True)
@@ -54,11 +65,36 @@ class StuckImport:
         waited_seconds: How long the wait has been observed. It is measured
             from the first liveness check that saw it, so the real wait is at
             least this long.
+        import_site: ``file:line in function`` of the code that started the
+            import chain the thread is stuck in: the outermost frame that
+            called into the import machinery. For a wedge caused by a
+            function-local import in workflow code, this is the line to move
+            to module level. ``None`` when the thread's stack is unavailable
+            or holds no import machinery.
     """
 
     module: str
     thread: str
     waited_seconds: float
+    import_site: str | None = None
+
+
+def _import_site(stack: traceback.StackSummary) -> str | None:
+    """Return the outermost frame that called into the import machinery."""
+    for caller, callee in zip(stack, stack[1:]):
+        if any(m in callee.filename for m in _IMPORT_MACHINERY_MARKERS) and not any(
+            m in caller.filename for m in _IMPORT_MACHINERY_MARKERS
+        ):
+            return f"{caller.filename}:{caller.lineno} in {caller.name}"
+    return None
+
+
+def _thread_stack(ident: int) -> traceback.StackSummary | None:
+    frame = sys._current_frames().get(ident)
+    if frame is None:
+        return None
+    # Source lines only, never locals: this goes to the logs.
+    return traceback.extract_stack(frame)
 
 
 @dataclass(frozen=True)
@@ -74,6 +110,7 @@ class _Sighting:
     first_seen: float
     lock_ref: weakref.ref[object]
     reported: bool = False
+    import_site: str | None = None
 
 
 def _module_lock_waits() -> list[_ImportWait] | None:
@@ -169,13 +206,24 @@ class ImportWaitWatch:
         waited, wait, sighting = oldest
         if not sighting.reported:
             sighting.reported = True
+            stack = _thread_stack(wait.thread_ident)
+            sighting.import_site = _import_site(stack) if stack else None
             logger.error(
-                "Thread %s has waited %.0fs on the import lock for module %s; "
-                "the import system is wedged and /live will fail",
+                "Import system wedged, /live will fail: thread %s has waited "
+                "%.0fs on the import lock for module %s. The import was started "
+                "at %s. If that is inside workflow code (a function-local "
+                "import), move it to module level: Temporal's deadlock "
+                "interrupt (TMPRL1101) can strand an import that runs during an "
+                "activation. Stack of the waiting thread:\n%s",
                 wait.thread_name,
                 waited,
                 wait.module,
+                sighting.import_site or "an unknown site",
+                "".join(stack.format()) if stack else "unavailable",
             )
         return StuckImport(
-            module=wait.module, thread=wait.thread_name, waited_seconds=waited
+            module=wait.module,
+            thread=wait.thread_name,
+            waited_seconds=waited,
+            import_site=sighting.import_site,
         )

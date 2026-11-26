@@ -397,6 +397,7 @@ class WorkerHealthServer:
                     "stuck_import_module": stuck_import.module,
                     "stuck_import_thread": stuck_import.thread,
                     "stuck_import_waited_seconds": stuck_import.waited_seconds,
+                    "stuck_import_site": stuck_import.import_site,
                     "max_import_wait_seconds": self._max_import_wait_seconds,
                     **self._poll_diagnostics(),
                 },

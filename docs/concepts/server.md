@@ -76,7 +76,11 @@ The check reads CPython's own record of which thread waits on which import lock
 (`importlib._bootstrap._blocking_on`). It starts no thread and imports nothing.
 A wait is timed from the first `/live` request that sees it. A healthy import,
 even a slow cold one, never waits this long. The 503 body names the module and
-the waiting thread. If a future Python changes that private table, the check
+the waiting thread, and the ERROR log adds where the stuck import chain was
+started (the outermost line that called into the import machinery) plus the
+thread's full stack. When that line is a function-local import in workflow
+code, the fix is to move it to module level; restarting the pod only stops
+the bleeding, and a cold, busy replacement can hit the same wedge. If a future Python changes that private table, the check
 logs one warning and stays healthy. Set the variable to `0` to disable it.
 
 #### Idle window (off by default)

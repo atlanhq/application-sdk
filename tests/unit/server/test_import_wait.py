@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import types
 import uuid
 from collections.abc import Iterator
@@ -21,7 +22,11 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.server import _import_wait
-from application_sdk.server._import_wait import ImportWaitWatch, _module_lock_waits
+from application_sdk.server._import_wait import (
+    ImportWaitWatch,
+    _import_site,
+    _module_lock_waits,
+)
 from application_sdk.server.health import WorkerHealthServer
 
 
@@ -108,6 +113,33 @@ class TestModuleLockWaits:
             assert _module_lock_waits() is None
 
 
+def _frame(filename: str, name: str) -> traceback.FrameSummary:
+    return traceback.FrameSummary(filename, 10, name, lookup_line=False)
+
+
+class TestImportSite:
+    def test_skips_temporal_sandbox_importer_to_reach_workflow_code(self):
+        stack = traceback.StackSummary.from_list(
+            [
+                _frame("/app/worker.py", "activate"),
+                _frame("/app/workflows/extract.py", "run"),
+                _frame(
+                    "/venv/temporalio/worker/workflow_sandbox/_importer.py", "_import"
+                ),
+                _frame("<frozen importlib._bootstrap>", "_find_and_load"),
+                _frame("/app/heavy/__init__.py", "<module>"),
+                _frame("<frozen importlib._bootstrap>", "_find_and_load"),
+            ]
+        )
+
+        assert _import_site(stack) == "/app/workflows/extract.py:10 in run"
+
+    def test_stack_without_import_machinery_has_no_site(self):
+        stack = traceback.StackSummary.from_list([_frame("/app/a.py", "f")])
+
+        assert _import_site(stack) is None
+
+
 class TestImportWaitWatch:
     def test_no_waits_is_healthy(self):
         clock = _Clock()
@@ -136,6 +168,10 @@ class TestImportWaitWatch:
         assert stuck.module == blocked_import.module
         assert stuck.thread == "waiter"
         assert stuck.waited_seconds == 11
+        # The import was started by ``do_import`` in this file's fixture.
+        assert stuck.import_site is not None
+        assert stuck.import_site.startswith(f"{__file__}:")
+        assert stuck.import_site.endswith(" in do_import")
 
     def test_first_sighting_starts_the_clock(self, blocked_import):
         """A wait is timed from the first check that sees it, not from an
@@ -167,6 +203,13 @@ class TestImportWaitWatch:
             watch.check()
 
         assert logger.error.call_count == 1
+        # The log names the import site and carries the waiting thread's stack,
+        # so the culprit line can be found from the log alone.
+        args = logger.error.call_args.args
+        rendered = args[0] % args[1:]
+        assert f"started at {__file__}:" in rendered
+        assert "in do_import" in rendered
+        assert "Stack of the waiting thread:" in rendered
 
     def test_unsupported_interpreter_fails_open_and_warns_once(self):
         watch = ImportWaitWatch(10, clock=_Clock())
@@ -198,6 +241,7 @@ class TestCheckLiveImportWait:
         assert status.details["stuck_import_thread"] == "waiter"
         assert status.details["stuck_import_waited_seconds"] == 11
         assert status.details["max_import_wait_seconds"] == 10
+        assert status.details["stuck_import_site"].endswith(" in do_import")
         assert "poller_counts" in status.details
 
     @pytest.mark.parametrize("bad", [0, -1, float("inf"), float("nan")])
@@ -256,7 +300,12 @@ class TestDeadlockInterruptWedge:
         # First sighting starts the clock; past the bound /live fails.
         assert result["first_live"]["healthy"] is True
         assert result["second_live"]["healthy"] is False
-        assert result["second_live"]["details"]["stuck_import_module"] == "m"
+        details = result["second_live"]["details"]
+        assert details["stuck_import_module"] == "m"
+        # The import chain was started by the script's ``run`` (the stand-in
+        # for workflow code), not by ``p/__init__.py`` deeper in the chain.
+        assert "_wedge_import_script.py:" in details["stuck_import_site"]
+        assert details["stuck_import_site"].endswith(" in run")
 
     def test_same_sequence_without_interrupt_stays_live(self, tmp_path: Path):
         result = _run_wedge_script("control", tmp_path)
