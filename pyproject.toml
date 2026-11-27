@@ -7,7 +7,7 @@ authors = [
     {name = "Atlan App Team", email = "connect@atlan.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -116,7 +116,7 @@ workflows = [
 sql = [
     "pandas>=2.2.3,<4.0.0",
     "pyarrow>=23.0.1,<27.0.0",
-    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "sqlalchemy[asyncio]>=2.0.42,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
 ]
 # Deprecated shim: alias for [sql], removed in v4.0.0. Install [sql] (or
@@ -210,7 +210,7 @@ scale_data_generator = [
 ]
 # Deprecated shim, removed in v4.0.0: a subset of [sql]. Use [sql] instead.
 sqlalchemy = [
-    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "sqlalchemy[asyncio]>=2.0.42,<3.0.0",
 ]
 # Deprecated shim, removed in v4.0.0: a subset of [sql]. Use [sql] instead.
 pandas = [
@@ -524,6 +524,7 @@ reportInvalidTypeForm = "warning"
 # mark. Do not add `@pytest.mark.asyncio`; only a non-default argument such as
 # `@pytest.mark.asyncio(loop_scope="session")` needs one.
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
 # --dist loadgroup: ungrouped tests distribute exactly as under the default
@@ -535,6 +536,32 @@ pythonpath = ["."]
 # as `@pytest.mark.integraton` cannot slip past the -m filter and run a
 # Temporal-bound test in the unit legs. Register new marks in `markers` below.
 addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load and not perf' --dist loadgroup --strict-markers"
+# A DeprecationWarning attributed to an application_sdk module (the usual
+# stacklevel=2 attribution when SDK code calls a deprecated third-party or
+# stdlib API) fails the test, so a deprecation lands on the PR that reaches it,
+# not on a forced upgrade (FND-5474). The regex is matched against the module
+# name; `(\.|$)` keeps `application_sdk_*` lookalikes out. Fix the call site
+# rather than adding an `ignore` here. tests/unit/test_pytest_config.py pins it.
+filterwarnings = [
+    "error::DeprecationWarning:application_sdk(\\.|$)",
+    # Known debt, not a policy: the SDK's own v4 deprecations that other SDK
+    # code still reaches (a deprecated client raising a deprecated error, a
+    # deprecated package importing its deprecated names). They stay warnings.
+    # Remove an entry with the call site that reaches it; add one only for an
+    # SDK notice whose internal caller is itself deprecated, never for a
+    # third-party message.
+    # application_sdk.testing.full_dag is itself deprecated (FND-4659) and
+    # imports its deprecated names; exempt the package, not each name.
+    "default::DeprecationWarning:application_sdk\\.testing\\.full_dag(\\.|$)",
+    "default:NonRetryableError is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+    "default:PreflightStatus\\.PARTIAL is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+    "default:the error_code= keyword of an SDK error is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+    # The message starts "App <name>: ..."; pytest splits entries on ":", so
+    # `.+?` stands in for the name and its colon.
+    "default:App .+? 'workflow_type' body field is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+    "default:application_sdk\\.clients\\.redis_errors\\.\\w+ is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+    "default:application_sdk\\.execution\\._temporal\\._lock_errors\\.\\w+ is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+]
 markers = [
     "perf: throughput comparisons and large-scale probes (≥10s each); excluded from the unit matrix, run once in the `Unit Perf Tests` job via `pytest tests/unit -m perf`",
     "load: opt-in large-file storage load tests — real bytes at ATLAN_LOAD_TEST_SIZE_MIB (50 GiB-class); run via `poe load-test-storage`; CI runs them only as a 64 MiB nightly smoke (schedule.yaml)",

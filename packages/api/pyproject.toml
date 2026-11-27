@@ -7,7 +7,7 @@ authors = [
     {name = "Atlan App Team", email = "connect@atlan.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 keywords = ["atlan", "sdk", "handler", "api"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -43,7 +43,7 @@ dependencies = [
 # atlan-application-sdk. A handler that uses the SQL client base or the AWS
 # helpers declares the extra, exactly as it does on the worker.
 sql = [
-    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "sqlalchemy[asyncio]>=2.0.42,<3.0.0",
     "httpx>=0.27.0,<0.29.0",
     "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684
 ]

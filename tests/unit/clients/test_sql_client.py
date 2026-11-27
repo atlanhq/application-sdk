@@ -863,68 +863,6 @@ def test_execute_query_requires_engine(sql_client: BaseSQLClient):
         sql_client._execute_query("SELECT 1", chunksize=None)
 
 
-def test_execute_pandas_query_with_sqlalchemy_available(sql_client: BaseSQLClient):
-    """When sqlalchemy is import-resolvable, _execute_pandas_query must call
-    pd.read_sql_query with text(query) and the connection object directly."""
-    fake_pandas = MagicMock()
-    fake_pandas.read_sql_query.return_value = "df"
-    fake_compat = MagicMock()
-    fake_compat.import_optional_dependency.return_value = MagicMock()  # truthy
-    fake_pandas.compat = MagicMock()
-    fake_pandas.compat._optional = fake_compat
-
-    fake_text = MagicMock(side_effect=lambda q: f"text({q})")
-    fake_sqlalchemy = MagicMock()
-    fake_sqlalchemy.text = fake_text
-
-    conn = MagicMock()
-    with patch.dict(
-        "sys.modules",
-        {
-            "pandas": fake_pandas,
-            "pandas.compat": fake_pandas.compat,
-            "pandas.compat._optional": fake_compat,
-            "sqlalchemy": fake_sqlalchemy,
-        },
-    ):
-        out = sql_client._execute_pandas_query(conn, "SELECT 1", chunksize=10)
-    assert out == "df"
-    fake_pandas.read_sql_query.assert_called_once_with(
-        "text(SELECT 1)", conn, chunksize=10
-    )
-
-
-def test_execute_pandas_query_falls_back_to_dbapi(sql_client: BaseSQLClient):
-    """When sqlalchemy is NOT import-resolvable for pandas, fall back to the
-    underlying DBAPI connection (Redshift connector path)."""
-    fake_pandas = MagicMock()
-    fake_pandas.read_sql_query.return_value = "df-dbapi"
-    fake_compat = MagicMock()
-    fake_compat.import_optional_dependency.return_value = None  # falsy
-    fake_pandas.compat = MagicMock()
-    fake_pandas.compat._optional = fake_compat
-
-    fake_sqlalchemy = MagicMock()
-    fake_sqlalchemy.text = MagicMock(side_effect=lambda q: q)
-
-    conn = MagicMock()
-    conn.connection = "dbapi-conn"
-    with patch.dict(
-        "sys.modules",
-        {
-            "pandas": fake_pandas,
-            "pandas.compat": fake_pandas.compat,
-            "pandas.compat._optional": fake_compat,
-            "sqlalchemy": fake_sqlalchemy,
-        },
-    ):
-        out = sql_client._execute_pandas_query(conn, "SELECT 1", chunksize=None)
-    assert out == "df-dbapi"
-    fake_pandas.read_sql_query.assert_called_once_with(
-        "SELECT 1", "dbapi-conn", chunksize=None
-    )
-
-
 def test_read_sql_query_uses_session_connection(sql_client: BaseSQLClient):
     """_read_sql_query delegates to _execute_pandas_query with session.connection()."""
     fake_session = MagicMock()
@@ -1033,16 +971,13 @@ def test_execute_pandas_query_no_colon_unchanged(sql_client: BaseSQLClient):
 def test_execute_pandas_query_escapes_colons_before_text(sql_client: BaseSQLClient):
     """The read path hands text() the colon-escaped string, never the raw one."""
     import pandas
-    from pandas.compat import _optional
 
     conn = MagicMock()
-    # Patch sqlalchemy.text and the two pandas call sites the method uses, rather
-    # than swapping whole modules in sys.modules (which is fragile across pandas
-    # versions). The method imports these locally, so the patched attributes are
-    # what it resolves at call time.
+    # Patch sqlalchemy.text and pandas.read_sql_query rather than swapping whole
+    # modules in sys.modules. The method imports these locally, so the patched
+    # attributes are what it resolves at call time.
     with (
         patch("sqlalchemy.text", side_effect=lambda q: f"text({q})") as mock_text,
-        patch.object(_optional, "import_optional_dependency", return_value=object()),
         patch.object(pandas, "read_sql_query", return_value="df"),
     ):
         sql_client._execute_pandas_query(conn, "RLIKE '^(?:cdl)'", chunksize=None)
