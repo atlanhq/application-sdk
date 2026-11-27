@@ -18,6 +18,13 @@ description: |
   Whoever pushes does not matter either: the App token or the PAT still pushes
   and opens the PR exactly as before.
 
+  Renovate is the exception that reads the committer. It treats a branch as
+  human-edited, and stops rebasing it, when any commit's author OR committer
+  email is neither its own nor in `gitIgnoredAuthors`. So the committer email
+  below must stay in the fleet preset's `gitIgnoredAuthors`
+  (renovate-config/default.json), or every bot fix-up commit on a Renovate
+  branch wedges that branch (FND-5471). test_renovate_branch_fixup.py pins it.
+
   Signing is local. It adds no API calls, so unlike committing through the API
   it costs nothing against GitHub's secondary write limits (80 per minute,
   500 per hour), which fleet-wide jobs would otherwise run into.

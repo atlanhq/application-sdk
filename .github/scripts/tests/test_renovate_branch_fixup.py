@@ -13,7 +13,9 @@ not red anywhere.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +24,12 @@ import pytest
 import renovate_approval_conditions as approval
 import renovate_pyatlan_table_sync
 import yaml
+from _workflows import ACTIONS, load_workflow
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 REUSABLE = WORKFLOWS / "renovate-branch-fixup.yaml"
+FLEET_PRESET = REPO_ROOT / "renovate-config" / "default.json"
 
 #: caller file -> (its job id, the driver module it names)
 CALLERS: dict[str, tuple[str, Any]] = {
@@ -198,3 +202,64 @@ class TestCallers:
             if f.is_file()
         }
         assert staged == set(driver.OUTPUT_PATHS)
+
+
+class TestRenovateRecognisesTheFixupCommit:
+    """Renovate must read the fix-up commit as its own, or it stops rebasing.
+
+    Renovate marks a branch human-edited when any commit's author OR committer
+    email is neither its own nor in ``gitIgnoredAuthors``. Once a branch reads
+    as edited, Renovate never rebases it again and the lane stops with no red
+    anywhere. That is what held application-sdk's lock refresh for weeks after
+    sign-bot-commits made atlan-ci the committer of every bot commit (FND-5471):
+    the author was still ignored, the committer was not.
+
+    The commit is made the way ``publish`` makes it, through the driver's own
+    ``stage_and_commit`` with the committer sign-bot-commits exports, and its
+    identities are read back from git. Not a comparison of two constants: a
+    driver that set its identity some other way would still be caught.
+    """
+
+    @staticmethod
+    def _ignored() -> list[str]:
+        return json.loads(FLEET_PRESET.read_text())["gitIgnoredAuthors"]
+
+    @staticmethod
+    def _signing_committer() -> tuple[str, str]:
+        inputs = load_workflow(ACTIONS / "sign-bot-commits" / "action.yaml")["inputs"]
+        return (
+            inputs["committer-name"]["default"],
+            inputs["committer-email"]["default"],
+        )
+
+    def test_publish_signs_with_the_actions_default_committer(self):
+        # The check below reads the action's defaults, so a `with:` that
+        # overrode them here would make it test the wrong identity.
+        step = _step("publish", uses="sign-bot-commits")
+        assert set(step.get("with") or {}) == {"signing-key"}
+
+    def test_the_fixup_commit_identities_are_all_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        name, email = self._signing_committer()
+        monkeypatch.setenv("GIT_COMMITTER_NAME", name)
+        monkeypatch.setenv("GIT_COMMITTER_EMAIL", email)
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        (tmp_path / "uv.lock").write_text("bounded\n")
+
+        assert bound_lock_branch.stage_and_commit(tmp_path, ["uv.lock"])
+
+        identities = subprocess.run(
+            ["git", "log", "-1", "--format=%ae%n%ce"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        assert identities == [bound_lock_branch.BOT_AUTHOR_EMAIL, email]
+        missing = [i for i in identities if i not in self._ignored()]
+        assert not missing, (
+            f"{missing} would make Renovate read the fix-up commit as a human "
+            "edit and stop rebasing the branch; add it to gitIgnoredAuthors in "
+            "renovate-config/default.json"
+        )
