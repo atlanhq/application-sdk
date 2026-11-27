@@ -7,10 +7,16 @@ that emits OpenLineage events, a DataForge-provisioned Airflow, instead of
 posting recorded events. That instance sends every event to the tenants in its
 lineage-target list. The e2e tenants come from the tenant-matrix org secrets and
 get rotated, so the list cannot be typed in once at provision time: this step
-upserts each tenant of the pool this run uses, with the API key that tenant's
-matrix entry already carries for the harness (``api_key``, the same
-``service-account-apikey`` key the tenant's events gateway accepts), through
-DataForge's ``PUT /api/v1/resources/{id}/lineage-targets``.
+upserts each tenant of the pool this run uses, with that tenant's
+``lineage_api_key`` from its matrix entry, through DataForge's
+``PUT /api/v1/resources/{id}/lineage-targets``.
+
+Never the harness ``api_key``: that one is realm-admin (Automation Engine needs
+it), and a lineage target's key ends up readable by any code running on the
+source, e.g. every DAG on a DataForge Airflow. ``lineage_api_key`` is a separate,
+least-privilege API key per tenant whose only use is the events gateway, which
+accepts any valid, unexpired ``service-account-apikey`` key. A cloud whose entry
+has none is skipped with a warning, never registered with the harness key.
 
 DataForge merges by tenant under a per-resource lock, so concurrent runs on
 other tenants never overwrite each other, and prunes CI entries a run has not
@@ -54,6 +60,8 @@ DEFAULT_BASE_URL = "https://api.dataforge.atlan.dev"
 # Upserting a lineage target changes the resource's runtime config, the same
 # authority as pause/resume.
 SCOPE = "resource:lifecycle"
+# The matrix entry field holding the least-privilege, lineage-only API key.
+LINEAGE_KEY_FIELD = "lineage_api_key"
 
 
 class LineageTargetError(RuntimeError):
@@ -85,12 +93,19 @@ def tenants_from_matrix(
             raise LineageTargetError(f"{secret_name}[{cloud!r}] must be an object")
         entry = cast("dict[str, object]", raw_entry)
         tenant = str(entry.get("tenant", "") or "").strip()
-        api_key = str(entry.get("api_key", "") or "").strip()
-        missing = [n for n, v in (("tenant", tenant), ("api_key", api_key)) if not v]
-        if missing:
+        api_key = str(entry.get(LINEAGE_KEY_FIELD, "") or "").strip()
+        if not tenant:
             raise LineageTargetError(
-                f"{secret_name}[{cloud!r}] is missing or blank for: {', '.join(missing)}"
+                f"{secret_name}[{cloud!r}] is missing or blank for: tenant"
             )
+        if not api_key:
+            # Deliberately not the harness api_key; see the module docstring.
+            print(
+                f"::warning::{secret_name}[{cloud!r}] has no {LINEAGE_KEY_FIELD}; "
+                "its tenant is not registered as a lineage target, so a suite that "
+                "needs the source's events on this cloud will not get them."
+            )
+            continue
         # Same derivation as resolve_e2e_tenant.resolve(): ATLAN_BASE_URL is
         # https://<tenant>, so the registered tenant is the one the legs use.
         out.append((cloud, f"https://{tenant}", api_key))
@@ -163,6 +178,11 @@ def register(
         raise LineageTargetError("DATAFORGE_RESOURCE_ID is not set")
     matrix_json, secret_name = pick_matrix(environ)
     tenants = tenants_from_matrix(matrix_json, secret_name)
+    if not tenants:
+        raise LineageTargetError(
+            f"no cloud in {secret_name} has a {LINEAGE_KEY_FIELD}; add one per "
+            "tenant (a least-privilege API key, never the harness api_key)"
+        )
     mask(
         [v for _, url, key in tenants for v in (url, url.removeprefix("https://"), key)]
     )

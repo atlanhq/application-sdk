@@ -441,8 +441,10 @@ on:
           pinned DataForge source, after it is woken (FND-5375). For a lineage
           connector whose e2e drives a real emitting source (openlineage on a
           DataForge Airflow): the source sends its OpenLineage events to each
-          registered tenant, with the same API key the harness already uses for
-          that tenant from the tenant-matrix secret. DataForge merges by tenant
+          registered tenant, with that tenant's `lineage_api_key` from the
+          tenant-matrix secret: a least-privilege key, never the harness's
+          realm-admin `api_key`, because code running on the source can read
+          it. A cloud without one is skipped with a warning. DataForge merges by tenant
           and prunes entries not refreshed in a week, so concurrent runs and
           rotated tenants need no hand edits. Needs dataforge-lifecycle (it rides
           the wake job's VPN tunnel and resource:lifecycle token) and a source

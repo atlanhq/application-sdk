@@ -19,13 +19,15 @@ _SYSTEM = json.dumps(
     {
         "azure": {
             "tenant": "sys-az.example.invalid",
-            "api_key": "KEY-AZ",
+            "api_key": "ADMIN-AZ",
+            "lineage_api_key": "KEY-AZ",
             "client_id": "c",
             "client_secret": "s",
         },
         "aws": {
             "tenant": "sys-aws.example.invalid",
-            "api_key": "KEY-AWS",
+            "api_key": "ADMIN-AWS",
+            "lineage_api_key": "KEY-AWS",
             "client_id": "c",
             "client_secret": "s",
         },
@@ -35,7 +37,8 @@ _CONNECTOR = json.dumps(
     {
         "aws": {
             "tenant": "con-aws.example.invalid",
-            "api_key": "KEY-CON",
+            "api_key": "ADMIN-CON",
+            "lineage_api_key": "KEY-CON",
             "client_id": "c",
             "client_secret": "s",
         }
@@ -107,11 +110,11 @@ def test_no_resource_id_is_an_error() -> None:
 
 
 def test_an_entry_without_a_key_names_the_cloud_not_the_value() -> None:
-    bad = json.dumps({"gcp": {"tenant": "secret-host.example.invalid", "api_key": ""}})
+    bad = json.dumps({"gcp": {"tenant": "", "lineage_api_key": "K"}})
     with pytest.raises(LineageTargetError) as exc:
         tenants_from_matrix(bad, "E2E_TENANT_MATRIX_JSON")
-    assert "gcp" in str(exc.value) and "api_key" in str(exc.value)
-    assert "secret-host" not in str(exc.value)
+    assert "gcp" in str(exc.value) and "tenant" in str(exc.value)
+    assert "K" not in str(exc.value).replace("E2E_TENANT_MATRIX_JSON", "")
 
 
 def test_one_failed_cloud_fails_the_step_but_the_others_are_still_tried(
@@ -195,3 +198,52 @@ def test_the_wake_job_registers_targets_after_the_wake_and_only_on_opt_in() -> N
         "E2E_SYSTEM_TENANT_MATRIX_JSON",
     }
     assert "dataforge_lineage_targets.py" in step["run"]
+
+
+def test_the_harness_api_key_is_never_registered(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls, put = _recorder()
+    register(
+        _env(E2E_SYSTEM_TENANT_MATRIX_JSON=_SYSTEM),
+        base_url="b",
+        token_for=lambda: "t",
+        put=put,
+    )
+    assert all(not key.startswith("ADMIN-") for *_, key in calls)
+
+
+def test_a_cloud_without_a_lineage_key_is_skipped_with_a_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    matrix = json.dumps(
+        {
+            "aws": {
+                "tenant": "a.example.invalid",
+                "api_key": "ADMIN",
+                "lineage_api_key": "L",
+            },
+            "gcp": {"tenant": "g.example.invalid", "api_key": "ADMIN"},
+        }
+    )
+    calls, put = _recorder()
+    assert register(
+        _env(E2E_TENANT_MATRIX_JSON=matrix),
+        base_url="b",
+        token_for=lambda: "t",
+        put=put,
+    ) == ["aws"]
+    assert [c[4] for c in calls] == ["L"]
+    out = capsys.readouterr().out
+    assert "::warning::E2E_TENANT_MATRIX_JSON['gcp'] has no lineage_api_key" in out
+
+
+def test_no_lineage_key_anywhere_is_an_error() -> None:
+    matrix = json.dumps({"aws": {"tenant": "a.example.invalid", "api_key": "ADMIN"}})
+    with pytest.raises(LineageTargetError, match="no cloud .* has a lineage_api_key"):
+        register(
+            _env(E2E_TENANT_MATRIX_JSON=matrix),
+            base_url="b",
+            token_for=lambda: "t",
+            put=_noop_put,
+        )
