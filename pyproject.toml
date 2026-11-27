@@ -548,6 +548,9 @@ filterwarnings = [
     "default:NonRetryableError is deprecated:DeprecationWarning:application_sdk(\\.|$)",
     "default:PreflightStatus\\.PARTIAL is deprecated:DeprecationWarning:application_sdk(\\.|$)",
     "default:the error_code= keyword of an SDK error is deprecated:DeprecationWarning:application_sdk(\\.|$)",
+    # The message starts "App <name>: ..."; pytest splits entries on ":", so
+    # `.+?` stands in for the name and its colon.
+    "default:App .+? 'workflow_type' body field is deprecated:DeprecationWarning:application_sdk(\\.|$)",
     "default:application_sdk\\.clients\\.redis_errors\\.\\w+ is deprecated:DeprecationWarning:application_sdk(\\.|$)",
     "default:application_sdk\\.execution\\._temporal\\._lock_errors\\.\\w+ is deprecated:DeprecationWarning:application_sdk(\\.|$)",
 ]
