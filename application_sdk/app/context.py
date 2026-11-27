@@ -46,6 +46,7 @@ __all__ = [
     "AppMetadata",
     "ChildAppContext",
     "TaskExecutionContext",
+    "get_correlation_context",
 ]
 
 
@@ -833,6 +834,11 @@ class TaskExecutionContext:
         """
         return holding_progress(label, timeout=timeout)
 
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.observability.correlation import get_correlation_context
 
 #: name -> (replacement, why). Importable from here only as a side effect
 #: of an import; served once more, with a warning naming their home.

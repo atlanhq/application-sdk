@@ -677,3 +677,27 @@ def test_contract_members_fall_back_to_own_members_without_an_mro() -> None:
             raise ValueError("cannot compute the MRO")
 
     assert extractor._contract_members(_NoMro()) == [("own", "member")]
+
+
+def test_a_leaf_module_does_not_offer_a_name_only_its_deprecation_shim_serves(
+    tmp_path: Path,
+) -> None:
+    # A leaf module lists a deprecated alias in __all__ so a star import keeps
+    # it until removal; the manifest must not name that path as the import.
+    leaf = tmp_path / "leaf.py"
+    leaf.write_text(
+        "__all__ = ['go', 'Old']\n"
+        "def go(): ...\n"
+        "_DEPRECATED_CONSTANTS = {'Old': ('application_sdk.home.Old', 'moved')}\n"
+    )
+    assert extractor.extract_all_from_init(leaf) == ["go"]
+
+
+def test_a_package_keeps_the_deprecated_names_its_all_lists(tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        "__all__ = ['go', 'Old']\n"
+        "_DEPRECATED_CONSTANTS = {'Old': ('application_sdk.home.Old', 'moved')}\n"
+    )
+    assert extractor.extract_all_from_init(pkg) == ["go", "Old"]

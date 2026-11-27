@@ -78,7 +78,11 @@ from application_sdk.errors import AppError, sanitize_cause_repr
 __all__ = [
     "AsyncBaseSQLClient",
     "BaseSQLClient",
+    "EngineNotInitializedError",
+    "SqlBindParameterError",
     "SqlBindValue",
+    "SqlPandasResultError",
+    "UnsupportedSqlCursorError",
 ]
 
 
@@ -1744,6 +1748,16 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
         logger.info("Query execution completed")
 
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.clients.sql_errors import (
+        EngineNotInitializedError,
+        SqlBindParameterError,
+        SqlPandasResultError,
+        UnsupportedSqlCursorError,
+    )
 
 #: name -> (replacement, why). Importable from here only as a side effect
 #: of an import; served once more, with a warning naming their home.

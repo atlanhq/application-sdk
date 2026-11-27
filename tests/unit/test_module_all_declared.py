@@ -91,11 +91,23 @@ def test_an_imported_name_apps_used_is_a_deprecated_alias_of_its_home(
     module: str, name: str, home: str
 ) -> None:
     mod = importlib.import_module(module)
-    assert name not in mod.__all__
     with pytest.warns(DeprecationWarning, match=r"v4\.0\.0") as record:
         value = getattr(mod, name)
     assert value is getattr(importlib.import_module(home), name)
     assert any(f"{home}.{name}" in str(w.message) for w in record)
+
+
+@pytest.mark.parametrize(("module", "name", "home"), _ALIASES)
+def test_a_star_import_still_gets_the_deprecated_alias(
+    module: str, name: str, home: str
+) -> None:
+    """Before ``__all__``, ``from module import *`` bound every public name,
+    this one included. Listing the alias keeps it there, through the
+    deprecation warning, until its removal in v4.0.0."""
+    namespace: dict[str, object] = {}
+    with pytest.warns(DeprecationWarning, match=name):
+        exec(f"from {module} import *", namespace)
+    assert namespace[name] is getattr(importlib.import_module(home), name)
 
 
 @pytest.mark.parametrize(

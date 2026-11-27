@@ -1,6 +1,6 @@
 import logging
 from time import time
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
@@ -35,6 +35,7 @@ from application_sdk.observability.utils import (
 
 __all__ = [
     "AtlanMetricsAdapter",
+    "MetricType",
     "get_metrics",
 ]
 
@@ -364,6 +365,11 @@ def get_metrics() -> AtlanMetricsAdapter:
         _metrics_instance = AtlanMetricsAdapter()
     return _metrics_instance
 
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.observability.models import MetricType
 
 #: Names this module used to re-export (the retention-sweep constants from
 #: ``application_sdk.constants``, and ``MetricType`` from its import); served

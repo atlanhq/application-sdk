@@ -221,8 +221,12 @@ class Snapshot:
 
     package: str
     symbols: dict[str, Symbol] = field(default_factory=dict)
-    declared_modules: set[str] = field(default_factory=set)
-    """Modules that declare ``__all__``; their surface is what it lists."""
+    declared_modules: set[str] | None = field(default_factory=set)
+    """Modules that declare ``__all__``; their surface is what it lists.
+
+    ``None`` when unknown: a snapshot written before this field existed did not
+    record it, and an empty set there would read as "no module declared
+    ``__all__``", waiving the narrowing of one that did."""
     undeclared: set[str] = field(default_factory=set)
     """``module:name`` keys for intra-package imports a module still binds at
     module scope but leaves out of its ``__all__``. Importable, but not surface."""
@@ -231,7 +235,9 @@ class Snapshot:
         payload = {
             "package": self.package,
             "symbols": {k: asdict(v) for k, v in sorted(self.symbols.items())},
-            "declared_modules": sorted(self.declared_modules),
+            "declared_modules": (
+                None if self.declared_modules is None else sorted(self.declared_modules)
+            ),
             "undeclared": sorted(self.undeclared),
         }
         return json.dumps(payload, indent=2, sort_keys=True)
@@ -254,7 +260,11 @@ class Snapshot:
         return cls(
             package=raw["package"],
             symbols=symbols,
-            declared_modules=set(raw.get("declared_modules", ())),
+            declared_modules=(
+                None
+                if raw.get("declared_modules") is None
+                else set(raw["declared_modules"])
+            ),
             undeclared=set(raw.get("undeclared", ())),
         )
 
@@ -479,6 +489,42 @@ def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
     return served
 
 
+def _alias_targets(tree: ast.Module, package: str) -> dict[str, tuple[str, str]]:
+    """``{alias: (module, name)}`` for shim entries whose replacement is in *package*.
+
+    Reads the dotted replacement path of each ``_DEPRECATED_CONSTANTS`` entry
+    (``"Name": ("application_sdk.home.Name", "why")``). Following it gives the
+    alias the members of the object it serves, so a deprecated alias of a
+    class keeps exactly the methods its target has, no more.
+    """
+    if _module_getattr(tree) is None:
+        return {}
+    targets: dict[str, tuple[str, str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names = [node.target.id]
+        else:
+            continue
+        if ALIAS_MAPPING_NAME not in names or not isinstance(node.value, ast.Dict):
+            continue
+        for k, v in zip(node.value.keys, node.value.values):
+            if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                continue
+            if not (
+                isinstance(v, ast.Tuple)
+                and v.elts
+                and isinstance(v.elts[0], ast.Constant)
+                and isinstance(v.elts[0].value, str)
+            ):
+                continue
+            src_module, _, src_name = v.elts[0].value.rpartition(".")
+            if src_module == package or src_module.startswith(package + "."):
+                targets[k.value] = (src_module, src_name)
+    return targets
+
+
 def reexport_sources(
     tree: ast.Module, module: str, package: str = DEFAULT_PACKAGE
 ) -> dict[str, tuple[str, str]]:
@@ -506,6 +552,8 @@ def reexport_sources(
         for alias in node.names:
             if alias.name != "*":
                 sources.setdefault(alias.asname or alias.name, (src, alias.name))
+    for name, target in _alias_targets(tree, package).items():
+        sources.setdefault(name, target)
     return sources
 
 
@@ -806,6 +854,8 @@ def record_module(
         snapshot.symbols[symbol.key] = symbol
     declared_all = _declared_all(tree)
     if declared_all is not None:
+        if snapshot.declared_modules is None:
+            snapshot.declared_modules = set()
         snapshot.declared_modules.add(module)
     snapshot.undeclared.update(
         f"{module}:{name}" for name in _undeclared_imports(tree, declared_all, package)
@@ -987,10 +1037,12 @@ def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) 
     module's surface, and narrowing a re-exported function's signature would go
     unseen. Following each re-export (through chains) to its definition makes
     the old path carry exactly what the definition carries, in both snapshots.
+    A deprecated alias is followed the same way, to the replacement its
+    ``_DEPRECATED_CONSTANTS`` entry names, and stays deprecated.
     """
     for key, (src_module, src_name) in sorted(sources.items()):
         symbol = snapshot.symbols.get(key)
-        if symbol is None or symbol.kind != SymbolKind.REEXPORT:
+        if symbol is None or symbol.kind not in (SymbolKind.REEXPORT, SymbolKind.ALIAS):
             continue
         target_module, target_name, seen = src_module, src_name, set()
         target = snapshot.symbols.get(f"{target_module}:{target_name}")
@@ -1136,6 +1188,8 @@ def _newly_undeclared(base_symbol: Symbol, base: Snapshot, head: Snapshot) -> bo
     removal like any other, or the two-step "unlist, then delete" would skip
     the deprecation cycle.
     """
+    if base.declared_modules is None or head.declared_modules is None:
+        return False  # no record of which base modules declared __all__: stay strict
     return (
         base_symbol.module not in base.declared_modules
         and base_symbol.module in head.declared_modules
@@ -1161,13 +1215,6 @@ def compare(
         if head_symbol is None:
             if base_symbol.deprecated:
                 continue  # shipped deprecated in the base release — deletion is earned
-            owner = head.symbols.get(_owner_key(base_symbol))
-            if (
-                owner is not None
-                and owner.kind == SymbolKind.ALIAS
-                and owner.deprecated
-            ):
-                continue  # the deprecated alias serves the whole object, members too
             if _newly_undeclared(base_symbol, base, head):
                 findings.append(
                     Finding(

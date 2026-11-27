@@ -172,6 +172,8 @@ if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
 
 __all__ = [
+    "TEMPORARY_PATH",
+    "ExtractionOutput",
     "SqlApp",
 ]
 
@@ -2030,6 +2032,12 @@ class SqlApp(App):
             transformed_file=transformed_ref,
         )
 
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.constants import TEMPORARY_PATH
+    from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
 
 # ── Deprecated re-exports ────────────────────────────────────────────────────
 #: name -> (replacement, why). This module imported ``legacy_credential_ref``

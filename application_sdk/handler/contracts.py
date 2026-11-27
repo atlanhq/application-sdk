@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Collection
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import (
     AliasChoices,
@@ -42,9 +42,11 @@ from application_sdk.errors.wire import FailureDetails
 
 __all__ = [
     "ALL_CHECK_TIERS",
+    "AUTH_STATUS_HTTP_CODES",
+    "UNVERIFIABLE_CHECK_NAME",
+    "AgentCredentialSpec",
     "ApiMetadataObject",
     "ApiMetadataOutput",
-    "AUTH_STATUS_HTTP_CODES",
     "AuthInput",
     "AuthOutput",
     "AuthStatus",
@@ -55,12 +57,10 @@ __all__ = [
     "EventFilterRule",
     "EventTriggerConfig",
     "FileUploadResponse",
-    "flatten_credentials_to_pairs",
     "HandlerCredential",
     "ManifestInput",
     "MetadataInput",
     "MetadataOutput",
-    "normalize_credentials",
     "PreflightCheck",
     "PreflightGateMode",
     "PreflightInput",
@@ -69,11 +69,12 @@ __all__ = [
     "SqlMetadataObject",
     "SqlMetadataOutput",
     "SubscriptionConfig",
-    "UNVERIFIABLE_CHECK_NAME",
-    "unverifiable_preflight_result",
     "WarmupInput",
     "WarmupObservation",
     "WarmupState",
+    "flatten_credentials_to_pairs",
+    "normalize_credentials",
+    "unverifiable_preflight_result",
 ]
 
 
@@ -1172,6 +1173,11 @@ class FileUploadResponse(BaseModel):
     is_uploaded: bool = False
     uploaded_at: str = ""
 
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.credentials.spec import AgentCredentialSpec
 
 #: name -> (replacement, why). Importable from here only as a side effect
 #: of an import; served once more, with a warning naming their home.

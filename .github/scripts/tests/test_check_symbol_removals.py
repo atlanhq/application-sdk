@@ -643,12 +643,25 @@ def test_snapshot_roundtrips_its_all_facts_through_json():
 
 
 def test_a_snapshot_from_before_the_all_facts_still_loads():
-    """A base snapshot written before these fields existed reads as "no module
-    declared ``__all__``", which is what it recorded."""
+    """A base snapshot written before these fields existed did not record which
+    modules declared ``__all__``: that is unknown, not "none did"."""
     text = '{"package": "application_sdk", "symbols": {}}'
     restored = mod.Snapshot.from_json(text)
-    assert restored.declared_modules == set()
+    assert restored.declared_modules is None
     assert restored.undeclared == set()
+
+
+def test_a_legacy_base_cannot_waive_narrowing_an_existing_all():
+    """The base module already declared ``__all__`` with the import listed, but
+    an old-format snapshot did not record that. Reading the missing field as
+    "no module declared ``__all__``" would turn this narrowing advisory."""
+    full = snap(_LEAF_BASE + "__all__ = ['handler', 'DEPLOYMENT_NAME']\n")
+    raw = json.loads(full.to_json())
+    del raw["declared_modules"], raw["undeclared"]
+    base = mod.Snapshot.from_json(json.dumps(raw))
+    head = snap(_LEAF_BASE + "__all__ = ['handler']\n")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.thing:DEPLOYMENT_NAME"}
 
 
 def test_build_snapshot_walks_the_package(tmp_path: Path):
@@ -1175,6 +1188,28 @@ def test_a_deprecated_alias_of_a_class_covers_its_members(tmp_path: Path):
         "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0'\n)\n",
     )
     assert mod.compare(base, head) == []
+
+
+def test_an_alias_of_a_different_class_does_not_cover_the_old_members(
+    tmp_path: Path,
+):
+    """The alias keeps only what its target has. Pointing ``Thing`` at a class
+    with no ``go`` removes ``Thing.go``, however deprecated the alias is."""
+    base = _class_tree(tmp_path / "base", "from application_sdk.home import Thing\n")
+    head = _class_tree(
+        tmp_path / "head",
+        "from application_sdk import _deprecation\n"
+        "__all__: list[str] = []\n"
+        "_DEPRECATED_CONSTANTS = {'Thing': ('application_sdk.other.Other', 'moved')}\n"
+        "__getattr__ = _deprecation.deprecated_module_getattr(\n"
+        "    __name__, _DEPRECATED_CONSTANTS, remove_in='4.0.0'\n)\n",
+    )
+    (tmp_path / "head" / "application_sdk" / "other.py").write_text(
+        "class Other:\n    def stop(self): ...\n"
+    )
+    head = mod.build_snapshot(tmp_path / "head")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.user:Thing.go"}
 
 
 def test_the_report_lists_undeclared_names_in_their_own_section():

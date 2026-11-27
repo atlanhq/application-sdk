@@ -91,6 +91,13 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
     # were parsed on Linux; every public module is parsed now, on every platform
     # the unit suite runs (FND-439).
     tree = ast.parse(source_file.read_text(encoding="utf-8"))
+    # A leaf module's shim serves a name that merely used to be importable there;
+    # a package ``__init__`` listing a deprecated name is its documented home.
+    shimmed = (
+        frozenset()
+        if source_file.name == "__init__.py"
+        else _deprecated_constant_names(tree)
+    )
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -101,8 +108,34 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
                             for elt in node.value.elts
                             if isinstance(elt, ast.Constant)
                             and isinstance(elt.value, str)
+                            and elt.value not in shimmed
                         ]
     return []
+
+
+def _deprecated_constant_names(tree: ast.Module) -> frozenset[str]:
+    """Keys of the module's ``_DEPRECATED_CONSTANTS`` table.
+
+    A leaf module lists such a name in ``__all__`` so ``from module import *`` keeps
+    serving it, with its warning, until removal. The manifest must not offer it:
+    it would name the deprecated path as the place to import from.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if any(
+            isinstance(t, ast.Name) and t.id == "_DEPRECATED_CONSTANTS" for t in targets
+        ) and isinstance(node.value, ast.Dict):
+            return frozenset(
+                k.value
+                for k in node.value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            )
+    return frozenset()
 
 
 def discover_public_modules() -> list[tuple[str, str, list[str]]]:

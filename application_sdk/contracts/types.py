@@ -44,15 +44,13 @@ if TYPE_CHECKING:
     from pyatlan_v9.model.assets import Connection
 
 __all__ = [
-    "asset_artifact_fields",
-    "asset_artifact_marker",
+    "CONNECTION_QN_MIN_SEGMENTS",
     "AssetArtifact",
     "BoundedDict",
     "BoundedList",
-    "CONNECTION_QN_MIN_SEGMENTS",
-    "connection_qualified_name_defect",
     "ConnectionAttributes",
     "ConnectionRef",
+    "CredentialRef",
     "FileReference",
     "GitReference",
     "Lazy",
@@ -60,6 +58,9 @@ __all__ = [
     "StorageTier",
     "StoreTarget",
     "TreeSelection",
+    "asset_artifact_fields",
+    "asset_artifact_marker",
+    "connection_qualified_name_defect",
 ]
 
 
@@ -827,6 +828,11 @@ class ConnectionRef(BaseModel, frozen=True):
 
         return Connection.from_json(self.model_dump_json(by_alias=True))
 
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.credentials.ref import CredentialRef
 
 #: name -> (replacement, why). Importable from here only as a side effect
 #: of an import; served once more, with a warning naming their home.

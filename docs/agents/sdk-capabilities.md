@@ -17,7 +17,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 75 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 54 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 235 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 234 |
 | `application_sdk.constants` | Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup) | 146 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 69 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 81 |
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 29 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 128 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 19 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 465 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 427 |
 | `application_sdk.tools` | Developer command-line tools — provision-credentials for local development | 1 |
 | `application_sdk.transformers` | Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). | 27 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 95 |
@@ -1964,12 +1964,6 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `fetch_str_set(result: DuckDBResult) -> set[str]`
 - **Summary:** Collect the first column of every row as a set of strings, skipping NULLs.
 - **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
-
-#### `file_converter_registry`
-
-- **Import:** `from application_sdk.common.file_converter import file_converter_registry`
-- **Signature:** `file_converter_registry(...)`
-- **Summary:** _(no docstring)_
 
 #### `filter_matches`
 
@@ -9845,7 +9839,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AEWorkflowClient`
 
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
 - **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
@@ -9885,13 +9879,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, ...)`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `AppIdentity`
-
-- **Import:** `from application_sdk.testing.setup_routes import AppIdentity`
-- **Signature:** `class AppIdentity(name: str, display_name: str = '')`
-- **Summary:** The committed names a marketplace card may be listed under.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `AppNotReadyError`
 
@@ -10077,13 +10064,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The outbound call shapes a run makes, as profile keys.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
 
-#### `Card`
-
-- **Import:** `from application_sdk.testing.setup_routes import Card`
-- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '')`
-- **Summary:** One marketplace card, trimmed to the fields the check reads.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `CategoryResult`
 
 - **Import:** `from application_sdk.testing.parity import CategoryResult`
@@ -10104,14 +10084,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class ClusterReadFailedError(*, ...)`
 - **Summary:** A cluster read reached the API server and did not come back with data.
 - **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
-
-#### `ConfigLoader`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ConfigLoader`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`, `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `class ConfigLoader(config_path: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `ConnectionDeletePlan`
 
@@ -10147,14 +10119,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class CoreReads`
 - **Summary:** The read verbs this backend uses from ``CoreV1Api``.
 - **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
-
-#### `CsvFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import CsvFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`
-- **Signature:** `class CsvFormatHandler(output_dir: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/csv_handler.py`
 
 #### `CursorPage`
 
@@ -10195,7 +10159,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGNodeResult`
 
 - **Import:** `from application_sdk.testing.e2e.client import DAGNodeResult`
-- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeResult(name: str, ...)`
 - **Summary:** One row of the per-node breakdown returned by ``native-status``.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -10203,7 +10167,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGNodeStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGNodeStatus`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeStatus`
 - **Summary:** Status values returned by ``native-status`` per DAG node.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -10218,7 +10182,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunResult`
 
 - **Import:** `from application_sdk.testing.e2e.client import DAGRunResult`
-- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunResult(run_id: str, ...)`
 - **Summary:** Full result of one ``native-status`` read.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -10226,7 +10190,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGRunStatus`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunStatus`
 - **Summary:** Top-level status of an AE workflow run.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -10253,14 +10217,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The integration source's credential fields, read uniformly from env.
 - **Defined in:** `application_sdk/testing/integration/source.py`
 
-#### `DataGenerator`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import DataGenerator`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `class DataGenerator(config_loader: ConfigLoader)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/data_generator.py`
-
 #### `DeleteType`
 
 - **Import:** `from application_sdk.testing.harness.teardown import DeleteType`
@@ -10283,13 +10239,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How strictly a typename's diff is gated.
 - **Defined in:** `application_sdk/testing/golden.py`
 
-#### `DriverArgs`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import DriverArgs`
-- **Signature:** `class DriverArgs(config_path: str, output_format: str, output_dir: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
-
 #### `DuplicateKeyPolicy`
 
 - **Import:** `from application_sdk.testing import DuplicateKeyPolicy`
@@ -10297,13 +10246,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class DuplicateKeyPolicy`
 - **Summary:** What a non-unique join key on either side does to the comparison.
 - **Defined in:** `application_sdk/testing/golden.py`
-
-#### `Entrypoint`
-
-- **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
-- **Signature:** `class Entrypoint(name: str, ...)`
-- **Summary:** One entry point, as the committed artifacts describe it.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `EvidenceBundle`
 
@@ -10408,13 +10350,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class FixtureNotConfiguredError(*, ...)`
 - **Summary:** A composer requested a harness fixture without declaring what it needs.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
-
-#### `FormStep`
-
-- **Import:** `from application_sdk.testing.setup_routes import FormStep`
-- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset())`
-- **Summary:** One panel of the setup wizard, as the served schema describes it.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `FullDAGOutcome`
 
@@ -10559,21 +10494,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
-
-#### `InvalidInputError`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import InvalidInputError`
-- **Signature:** `class InvalidInputError(*, ...)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/leaves.py`
-
-#### `JsonFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import JsonFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.json_handler`
-- **Signature:** `class JsonFormatHandler`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/json_handler.py`
 
 #### `KitOptions`
 
@@ -10755,22 +10675,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** No worker started any DAG node while the AE run was live.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
-#### `OutputFormat`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import OutputFormat`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`
-- **Signature:** `class OutputFormat`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
-
-#### `OutputFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.output_handler.base import OutputFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`, `application_sdk.testing.scale_data_generator.output_handler.json_handler`, `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
-- **Signature:** `class OutputFormatHandler(output_dir: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/base.py`
-
 #### `OutputSchema`
 
 - **Import:** `from application_sdk.testing.integration.output_schema import OutputSchema`
@@ -10791,14 +10695,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class OutputViolation(rule: RuleKind, field: str, message: str, file: str = '', line: int = 0) -> None`
 - **Summary:** One example of a broken rule.
 - **Defined in:** `application_sdk/testing/integration/output_schema.py`
-
-#### `ParquetFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import ParquetFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
-- **Signature:** `class ParquetFormatHandler`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/parquet_handler.py`
 
 #### `PodPhase`
 
@@ -10946,20 +10842,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
-#### `RouteCheckSkipped`
-
-- **Import:** `from application_sdk.testing.setup_routes import RouteCheckSkipped`
-- **Signature:** `class RouteCheckSkipped`
-- **Summary:** There is no setup route to check, and that is not a failure.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `RouteReader`
-
-- **Import:** `from application_sdk.testing.setup_routes import RouteReader`
-- **Signature:** `class RouteReader`
-- **Summary:** The two reads :func:`verify` needs from a tenant.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `RunLookup`
 
 - **Import:** `from application_sdk.testing.e2e.client import RunLookup`
@@ -10975,13 +10857,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class RunMode`
 - **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
 - **Defined in:** `application_sdk/testing/e2e/payload.py`
-
-#### `ScaleDataConfigError`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ScaleDataConfigError`
-- **Signature:** `class ScaleDataConfigError(*, ...)`
-- **Summary:** Scale-data generator YAML config is missing or malformed.
-- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `Scenario`
 
@@ -11088,13 +10963,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Reads back how many assets a seed actually landed under its connection.
 - **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
 
-#### `ServedForm`
-
-- **Import:** `from application_sdk.testing.setup_routes import ServedForm`
-- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ())`
-- **Summary:** The setup form a tenant serves, in the two parts the UI renders from.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `ServiceTarget`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ServiceTarget`
@@ -11109,13 +10977,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Settled(*, label: str, attempts: int, elapsed: timedelta, value: T)`
 - **Summary:** The probe reached the settled state inside its budget.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
-
-#### `SetupRouteError`
-
-- **Import:** `from application_sdk.testing.setup_routes import SetupRouteError`
-- **Signature:** `class SetupRouteError`
-- **Summary:** A setup route is broken, or the tenant could not be asked.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `SQLAppE2EFullTest`
 
@@ -11280,20 +11141,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantPool`
 - **Summary:** A pool of e2e tenants.
 - **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
-
-#### `TenantRoutes`
-
-- **Import:** `from application_sdk.testing.setup_routes import TenantRoutes`
-- **Signature:** `class TenantRoutes(base_url: str, bearer: str)`
-- **Summary:** Reads the two routes the setup page walks, with one bearer credential.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `TenantUnreachable`
-
-- **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
-- **Signature:** `class TenantUnreachable`
-- **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `TypenameDiff`
 
@@ -11666,7 +11513,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `cold_start_submit_kwargs`
 
 - **Import:** `from application_sdk.testing.e2e.client import cold_start_submit_kwargs`
-- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
 - **Summary:** Re-size the AE submit's retry to a cold start.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
@@ -11784,13 +11631,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
-#### `declared_inputs`
-
-- **Import:** `from application_sdk.testing.setup_routes import declared_inputs`
-- **Signature:** `declared_inputs(workflow_config: dict[str, Any])`
-- **Summary:** Return the input names a generated workflow config declares.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `delete_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import delete_connection`
@@ -11812,13 +11652,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `discover_categories(baseline_dir: Path, candidate_dir: Path)`
 - **Summary:** Find all category subdirectories across both dirs.
 - **Defined in:** `application_sdk/testing/parity/comparator.py`
-
-#### `driver`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import driver`
-- **Signature:** `driver(args: DriverArgs)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
 
 #### `embedded_temporal`
 
@@ -11904,20 +11737,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
-#### `foreign_form`
-
-- **Import:** `from application_sdk.testing.setup_routes import foreign_form`
-- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object)`
-- **Summary:** Whether the tenant served a DIFFERENT entry point's form, or ``None``.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `form_shortfall`
-
-- **Import:** `from application_sdk.testing.setup_routes import form_shortfall`
-- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm)`
-- **Summary:** Why this entry point's setup form will not render, or ``None``.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `format_validation_report`
 
 - **Import:** `from application_sdk.testing.integration import format_validation_report`
@@ -11953,14 +11772,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `generate_test_methods(test_class: type[BaseIntegrationTest])`
 - **Summary:** Generate individual test methods for each scenario.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
-
-#### `get_logger`
-
-- **Import:** `from application_sdk.testing.full_dag.base import get_logger`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `get_logger(name: str | None = None)`
-- **Summary:** Get or create an instance of AtlanLoggerAdapter.
-- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `get_normalised_dataframe`
 
@@ -12337,13 +12148,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Read a directory of pandera YAML schemas into :class:`OutputSchema` values.
 - **Defined in:** `application_sdk/testing/integration/output_schema.py`
 
-#### `locate_cards`
-
-- **Import:** `from application_sdk.testing.setup_routes import locate_cards`
-- **Signature:** `locate_cards(identity: AppIdentity, entrypoints: Sequence[Entrypoint], payloads: list[dict[str, Any]])`
-- **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `matches`
 
 - **Import:** `from application_sdk.testing.integration import matches`
@@ -12515,33 +12319,12 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
-#### `read_app_identity`
-
-- **Import:** `from application_sdk.testing.setup_routes import read_app_identity`
-- **Signature:** `read_app_identity(repo_root: Path)`
-- **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `read_asset_attributes`
 
 - **Import:** `from application_sdk.testing.harness.atlas import read_asset_attributes`
 - **Signature:** `read_asset_attributes(client: AsyncAtlanClient, ...)`
 - **Summary:** Read named attributes off individually addressed assets.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
-
-#### `read_entrypoint_names`
-
-- **Import:** `from application_sdk.testing.setup_routes import read_entrypoint_names`
-- **Signature:** `read_entrypoint_names(repo_root: Path)`
-- **Summary:** Return the ``entrypoints[].name`` values that should have a setup page.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `read_entrypoints`
-
-- **Import:** `from application_sdk.testing.setup_routes import read_entrypoints`
-- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated')`
-- **Summary:** Read every entry point's committed workflow config.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `read_records`
 
@@ -12593,13 +12376,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `restore_logger_init_flags()`
 - **Summary:** Stop a test that reset the logger's init state from leaking it forward.
 - **Defined in:** `application_sdk/testing/fixtures.py`
-
-#### `route_mismatch`
-
-- **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
-- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card)`
-- **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `run_comparison`
 
@@ -12686,13 +12462,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `seed_prefix_root(*, app_name: str, qualified_name: str)`
 - **Summary:** Compose the object-store root for one seeded connection.
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
-
-#### `served_form`
-
-- **Import:** `from application_sdk.testing.setup_routes import served_form`
-- **Signature:** `served_form(body: dict[str, Any])`
-- **Summary:** Unwrap a ConfigMap response into the form the tenant serves.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `single_outcome`
 
@@ -12806,13 +12575,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Validate extracted output against pandera YAML schemas.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
 
-#### `verify`
-
-- **Import:** `from application_sdk.testing.setup_routes import verify`
-- **Signature:** `verify(repo_root: Path, *, ...)`
-- **Summary:** Check every entry point's setup route. Returns the lines to report.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `wait_for_workflow`
 
 - **Import:** `from application_sdk.testing.e2e import wait_for_workflow`
@@ -12901,20 +12663,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
-#### `CONFIGMAP_PATH`
-
-- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_PATH`
-- **Signature:** `CONFIGMAP_PATH`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `CONFIGMAP_SOURCE_APP_QUERY`
-
-- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_SOURCE_APP_QUERY`
-- **Signature:** `CONFIGMAP_SOURCE_APP_QUERY`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `CONNECTION_DELETE_APP_NAME`
 
 - **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_APP_NAME`
@@ -12950,20 +12698,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `CountRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
-
-#### `DEFAULT_CATALOG_WAIT_SECONDS`
-
-- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
-- **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
-
-- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
-- **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `DEFAULT_TYPE_NAMES`
 
@@ -13025,21 +12759,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `LineageEdgeRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
-
-#### `logger`
-
-- **Import:** `from application_sdk.testing.full_dag.base import logger`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `logger: AtlanLoggerAdapter`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/full_dag/base.py`
-
-#### `MARKETPLACE_APPS_PATH`
-
-- **Import:** `from application_sdk.testing.setup_routes import MARKETPLACE_APPS_PATH`
-- **Signature:** `MARKETPLACE_APPS_PATH`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `NO_TYPENAME`
 
@@ -14407,6 +14126,26 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 ### `application_sdk.handler.contracts`
+
+#### `AgentCredentialSpec`
+
+- **Import:** `from application_sdk.handler.contracts import AgentCredentialSpec`
+- **Summary:** Typed envelope for an agent-shape credential payload.
+- **Fields:**
+  - `agent_name: str` `= Field(default='', alias='agent-name')` — Name of the Secure Agent instance. Used by ``is_populated()`` to
+  - `secret_manager: str` `= Field(default='', alias='secret-manager')` — Secret store backend: ``awssecretmanager``, ``azurekeyvault``,
+  - `secret_path: str` `= Field(default='', alias='secret-path')` — Path / ARN / name of the secret in the external secret manager.
+  - `auth_type: str` `= Field(default='', alias='auth-type')` — Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
+  - `host: str` `= ''` — Database / service hostname. Required for JDBC connectors.
+  - `port: int` `= 0` — Database / service port.
+  - `connect_by: str` `= Field(default='', alias='connectBy')` — Connection method hint (``host``, ``url``, etc.).
+  - `agent_type: str` `= Field(default='', alias='agent-type')` — Agent framework version. ``new-app-framework`` for SA 2.0 agents.
+  - `key_type: str` `= Field(default='', alias='key-type')` — Secret key layout: ``multi-key``, ``single-key``, etc.
+  - `aws_region: str` `= Field(default='', alias='aws-region')` — AWS region for the secret manager.
+  - `aws_auth_method: str` `= Field(default='', alias='aws-auth-method')` — AWS auth method: ``iam``, ``iam-assume-role``, ``access-key``.
+  - `azure_auth_method: str` `= Field(default='', alias='azure-auth-method')` — Azure auth method: ``managed_identity``, ``service_principal``.
+  - `value_sources: dict[str, dict[str, str]] | None` `= Field(default=None, alias=VALUE_SOURCES_KEY)` — Declared ``secretKeyRef`` sources, ``{field: {"name", "key"}}``, of a
+- **Defined in:** `application_sdk/credentials/spec.py`
 
 #### `ApiMetadataObject`
 
