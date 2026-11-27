@@ -79,6 +79,14 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: uv run --frozen python .github/scripts/check_ann401_baseline.py --base-sha "$BASE_SHA"
 
+      # Over-limit functions (C901 / PLR0915) in application_sdk are named in a
+      # baseline that only shrinks (FND-4266). --base-sha also fails a PR that
+      # adds a function to the baseline instead of splitting it.
+      - name: Check function size against the base revision's baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen python .github/scripts/check_complexity_baseline.py --base-sha "$BASE_SHA"
+
   pyright:
     name: pyright .github/scripts
     # Same reasoning as the pytest job: a bump-version PR never touches

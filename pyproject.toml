@@ -642,6 +642,12 @@ extend-select = [
 # that file is the only suppression: the check runs ruff --isolated, so an
 # ignore or per-file-ignores entry for ANN401 here would have no effect
 # (FND-4301, docs/standards/ci.md).
+# C901 (McCabe complexity > 10) and PLR0915 (> 50 statements) are not selected
+# either: application_sdk/ had 126 over-limit functions when they were enabled.
+# .github/scripts/check_complexity_baseline.py names each one in
+# .github/scripts/complexity_baseline.json, which only shrinks. It also runs
+# ruff --isolated, so a select, ignore, per-file-ignores entry or raised
+# max-complexity / max-statements here would have no effect (FND-4266).
 
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]

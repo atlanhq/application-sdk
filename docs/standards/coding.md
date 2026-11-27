@@ -26,6 +26,10 @@ This document outlines the development standards for the Application SDK, includ
     - Each function should do exactly one thing
     - Functions should be small and focused
     - If a function needs a comment to explain what it does, it should be split
+    - In `application_sdk/`, a function must stay under ruff's C901 (McCabe
+      complexity 10) and PLR0915 (50 statements). The functions already over
+      either limit are named in a baseline that only shrinks
+      (see [ci.md](ci.md)); a new or grown one fails pre-commit. Split it.
 
 - **DRY (Don't Repeat Yourself)**
     - Extract repeated code into reusable functions

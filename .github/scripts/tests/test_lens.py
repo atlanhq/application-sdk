@@ -4810,14 +4810,16 @@ def test_a_plain_rerun_with_nothing_excluded_still_skips(repo: Path):
 
 
 def test_generated_baselines_are_excluded_from_review():
-    """Their consistency is proven by check_pyright_baseline.py and
-    check_ann401_baseline.py on every PR; a line review of their counts after a
-    base merge sees a totals line move without the per-file counts that moved it."""
+    """Their consistency is proven by check_pyright_baseline.py,
+    check_ann401_baseline.py and check_complexity_baseline.py on every PR; a line
+    review of their counts after a base merge sees a totals line move without the
+    per-file counts that moved it."""
     cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
     patterns = review_mod.exclude_patterns(cfg)
     for path in (
         ".github/scripts/pyright_baseline.json",
         ".github/scripts/ann401_baseline.json",
+        ".github/scripts/complexity_baseline.json",
     ):
         assert select_mod.excluded(path, patterns), path
     assert not select_mod.excluded(
