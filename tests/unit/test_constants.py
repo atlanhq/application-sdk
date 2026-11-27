@@ -646,3 +646,13 @@ class TestDeprecatedApplicationMode:
     def test_unknown_name_still_raises_attribute_error(self):
         with pytest.raises(AttributeError):
             constants.NOT_A_CONSTANT  # noqa: B018 — the access is the test
+
+
+def test_deployment_name_identity_default_is_local_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``DEPLOYMENT_NAME``'s default is the one ``_env.deployment_name`` reads."""
+    from application_sdk import _env
+
+    monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+    assert _env.deployment_name() == constants.LOCAL_ENVIRONMENT == "local"

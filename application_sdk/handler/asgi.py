@@ -28,7 +28,6 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import importlib
-import os
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
@@ -39,7 +38,10 @@ from fastapi import FastAPI
 from application_sdk._env import env_str
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import blocking_executor, offload_owner
-from application_sdk.common.task_queue import derive_task_queue
+from application_sdk.common.task_queue import (
+    deployment_name_from_env,
+    derive_task_queue,
+)
 from application_sdk.handler.base import Handler
 from application_sdk.handler.metadata_routes import (
     MetadataSource,
@@ -152,8 +154,7 @@ def _deployment_name(app_name: str) -> str:
     cloud-side nodes, which use the tenant's deployment name.
     """
     return (
-        app_env(app_name, "ATLAN_DEPLOYMENT_NAME").strip()
-        or os.environ.get("ATLAN_DEPLOYMENT_NAME", "").strip()
+        app_env(app_name, "ATLAN_DEPLOYMENT_NAME").strip() or deployment_name_from_env()
     )
 
 

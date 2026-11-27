@@ -319,8 +319,11 @@ def env_duration(key: str, default: str, *, report: Reporter | None = None) -> s
 
 __all__ = [
     "FALSE_VALUES",
+    "LOCAL_DEPLOYMENT_NAME",
     "Reporter",
     "TRUE_VALUES",
+    "dapr_components_path",
+    "deployment_name",
     "env_bool",
     "env_choice",
     "env_duration",
@@ -328,6 +331,7 @@ __all__ = [
     "env_int",
     "env_str",
     "is_duration",
+    "pod_name",
 ]
 
 
@@ -365,3 +369,41 @@ def temporary_path() -> str:
     return sdk_constant(
         "TEMPORARY_PATH", lambda: env_str("ATLAN_TEMPORARY_PATH", "./local/tmp/")
     )
+
+
+#: The identity a process carries when ``ATLAN_DEPLOYMENT_NAME`` is unset:
+#: local development. ``application_sdk.constants.LOCAL_ENVIRONMENT`` is this
+#: value.
+LOCAL_DEPLOYMENT_NAME = "local"
+
+
+def deployment_name() -> str:
+    """``ATLAN_DEPLOYMENT_NAME`` as an identity, ``"local"`` when unset or empty.
+
+    The one default for the variable wherever it names this process: object-store
+    prefixes, log tagging, the worker-start and token-refresh events. Temporal
+    queue derivation does not default it: it reads the raw value through
+    :func:`application_sdk.common.task_queue.deployment_name_from_env`, where
+    unset means "no deployment prefix", not ``"local"``.
+    """
+    return env_str("ATLAN_DEPLOYMENT_NAME", LOCAL_DEPLOYMENT_NAME)
+
+
+def dapr_components_path() -> str:
+    """The directory of Dapr component YAMLs (``DAPR_COMPONENTS_PATH``, default ``./components``).
+
+    The shipped image's ``entrypoint.sh`` always exports the variable
+    (``/app/components``, the image's working directory), and
+    ``application_sdk.dev.embedded_dapr`` sets it for local runs, so the default
+    applies only to a process started some other way from the app's root.
+    """
+    return env_str("DAPR_COMPONENTS_PATH", "./components")
+
+
+def pod_name() -> str:
+    """This process's pod name: ``K8S_POD_NAME``, else ``HOSTNAME``, else ``""``.
+
+    ``HOSTNAME`` is the kubelet's own pod-name variable, so a pod without the
+    downward-API ``K8S_POD_NAME`` still names itself the same way everywhere.
+    """
+    return env_str("K8S_POD_NAME", "") or env_str("HOSTNAME", "")

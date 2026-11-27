@@ -38,7 +38,8 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.common._env import env_str
+from application_sdk import _deprecation
+from application_sdk._env import dapr_components_path
 from application_sdk.contracts.events import (
     ApplicationEventNames,
     Event,
@@ -50,6 +51,21 @@ from application_sdk.execution._temporal.run_flags import current_run_flags
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+#: name -> (replacement, why). The shared sentence and the removal version live
+#: in __getattr__ below.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "env_str": (
+        "application_sdk.common._env.env_str",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 activity.logger = logger
 workflow.logger = logger
 
@@ -748,8 +764,9 @@ def _resolve_event_ingress_url() -> str | None:
 
     Taken only from the ``bindings.http`` component on disk — the same file
     daprd loaded — so the fallback hits exactly the endpoint the binding would
-    have and nothing else. Looks in ``DAPR_COMPONENTS_PATH`` (the entrypoint
-    sets it; ``/app/components`` in the shipped image), then ``./components``.
+    have and nothing else. Looks in ``DAPR_COMPONENTS_PATH`` (see
+    :func:`application_sdk._env.dapr_components_path`; the shipped image's
+    entrypoint sets it to ``/app/components``).
     There is deliberately no guess from ``ATLAN_BASE_URL``: a component that is
     not HTTP, or that cannot be read, means no fallback. A positive result is
     cached for the life of the process; a miss is re-tried after the backoff.
@@ -759,18 +776,10 @@ def _resolve_event_ingress_url() -> str | None:
         return _resolved_ingress_url
 
     name = _event_store_name()
-    for components_dir in (
-        env_str("DAPR_COMPONENTS_PATH", "/app/components"),
-        "./components",
-    ):
-        url = _read_http_binding_url(components_dir, name)
-        if url:
-            _resolved_ingress_url = url
-            _ingress_url_resolved = True
-            return url
+    url = _read_http_binding_url(dapr_components_path(), name)
     _ingress_url_resolved = True
-    _resolved_ingress_url = None
-    return None
+    _resolved_ingress_url = url
+    return url
 
 
 async def _publish_event_direct(

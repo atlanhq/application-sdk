@@ -61,6 +61,8 @@ from dotenv import load_dotenv
 
 from application_sdk import _deprecation
 from application_sdk._env import (
+    LOCAL_DEPLOYMENT_NAME,
+    deployment_name,
     env_bool,
     env_choice,
     env_float,
@@ -236,7 +238,7 @@ def _silently(message: str) -> None:
 
 
 # Static Constants
-LOCAL_ENVIRONMENT = "local"
+LOCAL_ENVIRONMENT = LOCAL_DEPLOYMENT_NAME
 LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
@@ -256,7 +258,7 @@ APPLICATION_NAME = env_str("ATLAN_APPLICATION_NAME", "default")
 #: ``LOCAL_ENVIRONMENT`` fallback is an identity default, and the worker treats an
 #: unset deployment name as "drop the ``atlan-`` prefix entirely", so queue
 #: derivation must read the raw env via :mod:`application_sdk.common.task_queue`.
-DEPLOYMENT_NAME = env_str("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
+DEPLOYMENT_NAME = deployment_name()
 # REMOVED: APP_HOST, APP_PORT — use AppConfig.handler_host / handler_port
 #: Tenant ID for multi-tenant applications
 APP_TENANT_ID = env_str("ATLAN_TENANT_ID", "default")

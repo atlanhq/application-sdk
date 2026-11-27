@@ -1540,6 +1540,24 @@
       "symbol": "WORKFLOW_OUTPUT_PATH_TEMPLATE"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "env_str is deprecated; use application_sdk.common._env.env_str \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.auth",
+      "removal_version": "4.0.0",
+      "symbol": "env_str"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "env_str is deprecated; use application_sdk.common._env.env_str \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.interceptors.events",
+      "removal_version": "4.0.0",
+      "symbol": "env_str"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.interceptors.lock.RedisLockInterceptor has no effect: create_worker never registers it, nor the lock activities it schedules, so needs_lock does nothing in v3. Will be removed in v4.0.0.",
@@ -1682,6 +1700,15 @@
       "module": "application_sdk.execution._temporal.worker",
       "removal_version": "3.40.0",
       "symbol": "_resolve_gate_enforcement"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "env_str is deprecated; use application_sdk.common._env.env_str \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.worker",
+      "removal_version": "4.0.0",
+      "symbol": "env_str"
     },
     {
       "kind": "function",
@@ -1844,6 +1871,15 @@
       "module": "application_sdk.infrastructure._dapr.credential_vault",
       "removal_version": "4.0.0",
       "symbol": "create_dapr_credential_vault"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "env_str is deprecated; use application_sdk.common._env.env_str \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.credential_vault",
+      "removal_version": "4.0.0",
+      "symbol": "env_str"
     },
     {
       "kind": "class",
@@ -2168,6 +2204,15 @@
       "module": "application_sdk.observability.metrics_adaptor",
       "removal_version": "4.0.0",
       "symbol": "MetricType"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "env_str is deprecated; use application_sdk.common._env.env_str \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.observability",
+      "removal_version": "4.0.0",
+      "symbol": "env_str"
     },
     {
       "kind": "function",

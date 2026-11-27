@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -19,6 +18,7 @@ from temporalio.worker import (
     Interceptor,
 )
 
+from application_sdk._env import pod_name
 from application_sdk._runtime.offload import blocking_executor, run_in_thread
 from application_sdk.observability.cgroup import ContainerTrace, track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
@@ -38,7 +38,7 @@ def _pod_name() -> str | None:
     """Pod name — the join key for overlapping executions. Same source as the OTel
     resource attributes, so rows and metrics agree.
     """
-    return os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME") or None
+    return pod_name() or None
 
 
 #: Most time the input walk after the activity returns may take. The walk is
