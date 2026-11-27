@@ -34,33 +34,23 @@ import inspect
 import json
 import os
 import tempfile
-import warnings
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import orjson
-import temporalio.service
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import ValidationError
-from temporalio.client import (
-    WorkflowExecutionDescription,
-    WorkflowFailureError,
-    WorkflowHandle,
-)
 
 from application_sdk import _deprecation
 from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
     run_in_thread,
 )
 from application_sdk.app.entrypoint import (
-    _resolve_default_entrypoint,
     entrypoint_module_segment,
 )
 from application_sdk.app.registry import AppNotRegisteredError, AppRegistry
@@ -73,10 +63,6 @@ from application_sdk.common._generated_tree import (  # noqa: F401 — MANIFEST_
 from application_sdk.common.build_identity import (  # noqa: F401 — re-exported (served here before metadata_routes)
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
-)
-from application_sdk.common.dispatch import (
-    canonical_workflow_type,
-    resolve_dispatch_workflow_id,
 )
 from application_sdk.common.task_queue import (  # noqa: F401 — resolve_manifest_tokens re-exported (served here before metadata_routes)
     resolve_manifest_tokens,
@@ -173,13 +159,13 @@ from application_sdk.handler.contracts import (  # noqa: E402
     normalize_credentials as _contracts_normalize_credentials,
 )
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
-from application_sdk.handler.request_contract import (  # noqa: E402 — re-exported
+from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
     RequestContractError as _RequestContractError,
 )
-from application_sdk.handler.request_contract import (  # noqa: E402
+from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
     read_json_object as _read_json_object,
 )
-from application_sdk.handler.request_contract import (  # noqa: E402 — re-exported
+from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
     validate_request as _validate_request,
 )
 from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
@@ -386,87 +372,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-async def _get_workflow_result(
-    client: Client,
-    *,
-    workflow_id: str,
-    run_id: str,
-    output_type: type | None,
-) -> dict[str, Any]:
-    """Fetch and normalise a completed workflow result.
-
-    *run_id* pins the read to the run whose ownership the caller checked. A
-    handle resolved by ID alone follows whichever run holds the ID now, which
-    after a failed run can be a different app's workflow started under the
-    same ID (FND-5215).
-
-    Attempts typed deserialization first (so the OutputContract dataclass is
-    reconstructed properly). Falls back to untyped if that fails, logging a
-    warning so the mismatch is visible.
-
-    ``result_type`` is a parameter of ``get_workflow_handle``, not of
-    ``handle.result()`` — the Temporal SDK bakes the return type into the
-    handle at construction time.
-
-    Returns a plain dict suitable for JSON serialisation.
-    """
-    try:
-        result = await client.get_workflow_handle(
-            workflow_id, run_id=run_id, result_type=output_type
-        ).result()
-    except Exception:
-        logger.warning(
-            "Typed deserialization failed for workflow %s (output_type=%s), falling back to untyped result",
-            workflow_id,
-            output_type,
-            exc_info=True,
-        )
-        result = await client.get_workflow_handle(workflow_id, run_id=run_id).result()
-
-    if isinstance(result, PydanticBaseModel):
-        return result.model_dump()
-    if isinstance(result, dict):
-        return result
-    return {}
-
-
 def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
-    """Resolve the correct Output type for a workflow from its Temporal type name.
+    """The declared output type of *workflow_type_name* for the configured app.
 
-    Looks the type up in the app's ``workflow_types`` index — the same index the
-    worker registers from — and returns the entry point's declared
-    ``output_type`` so the caller can pass it to
-    ``get_workflow_handle(result_type=…)`` for typed deserialisation.  Because
-    both sides read one index, a ``legacy_workflow_types`` alias resolves here
-    as readily as a convention-derived name.
-
-    Returns ``None`` when the type is not one this app registers (e.g. another
-    app's workflow, or an external one); the caller falls back to untyped
-    deserialisation via ``_get_workflow_result``'s own fallback path.
+    Reads this module's ``_workflow_config``; ``None`` when the type is not one
+    the app registers. See :func:`~application_sdk.handler.workflow_routes._output_type_for`.
     """
-    workflow_types = _registered_workflow_types(_workflow_config)
-    ep = workflow_types.get(workflow_type_name)
-    return ep.output_type if ep else None
-
-
-def _registered_workflow_types(
-    workflow_config: WorkflowClientConfig,
-) -> Mapping[str, EntryPointMetadata]:
-    """Every Temporal workflow type the configured app registers, or an empty
-    mapping when no app is configured or it is not in the registry."""
-    if workflow_config.app_class is None or not workflow_config.app_name:
-        return {}
-
-    try:
-        app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
-    except AppNotRegisteredError:
-        logger.warning(
-            "App %r not found in registry; no workflow types resolved",
-            workflow_config.app_name,
-            exc_info=True,
-        )
-        return {}
-    return app_meta.workflow_types
+    return _output_type_for(_workflow_config, workflow_type_name)
 
 
 # ---------------------------------------------------------------------------
@@ -516,49 +428,6 @@ _workflow_config: WorkflowClientConfig = WorkflowClientConfig()
 _handler_auth_manager: Any | None = None
 _secret_store: SecretStore | None = None
 _storage: ObjectStore | None = None
-
-
-def _workflow_not_found(workflow_id: str) -> HTTPException:
-    """The 404 every workflow-lifecycle route answers for an ID it will not act on."""
-    return HTTPException(status_code=404, detail=f"Workflow not found: {workflow_id}")
-
-
-async def _describe_owned_workflow(
-    handle: WorkflowHandle[Any, Any],
-    workflow_config: WorkflowClientConfig,
-    workflow_id: str,
-) -> WorkflowExecutionDescription:
-    """Describe *handle*, refusing a workflow that does not belong to this app.
-
-    The Temporal namespace is shared across apps, so a bare workflow ID can
-    name another app's run. A run is this app's only when both hold:
-
-    - it is on ``workflow_config.task_queue``, where ``/start`` dispatches
-      every workflow (``continue_as_new`` keeps the queue, and worker pools
-      route activities, not workflows);
-    - its type is one this app registers. Workflow types carry the app name,
-      so this separates two apps that were configured onto the same queue.
-
-    Any other run gets the same 404 as a missing workflow, so the route does
-    not confirm that the ID exists elsewhere. Callers act on ``desc.run_id``
-    (or a handle already pinned to a run) so that the run checked here is
-    the run acted on.
-    """
-    desc = await handle.describe()
-    if (
-        not workflow_config.task_queue
-        or desc.task_queue != workflow_config.task_queue
-        or desc.workflow_type not in _registered_workflow_types(workflow_config)
-    ):
-        logger.warning(
-            "Refusing workflow %s: type %s on task queue %s is not this app's (queue %s)",
-            workflow_id,
-            desc.workflow_type,
-            desc.task_queue,
-            workflow_config.task_queue,
-        )
-        raise _workflow_not_found(workflow_id)
-    return desc
 
 
 # Directory where generated contract JSON files are stored
@@ -681,6 +550,10 @@ def warn_on_warmup_flag_drift(
 
 # ``decode_fe_inputs`` has no caller here; it stays imported so the name remains
 # importable from this module.
+from application_sdk.handler.event_routes import (  # noqa: E402
+    EventRoutesSource,
+    register_event_routes,
+)
 from application_sdk.handler.metadata_routes import (  # noqa: E402,F401
     MAX_FE_INPUTS_BYTES,
     MetadataSource,
@@ -701,6 +574,12 @@ from application_sdk.handler.object_routes import (  # noqa: E402
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
 from application_sdk.handler.routes import _ENTRYPOINT_NAME_RE  # noqa: E402
+from application_sdk.handler.workflow_routes import (  # noqa: E402
+    WorkflowRoutesSource,
+    _output_type_for,
+    _resolve_app_entrypoint,
+    register_workflow_routes,
+)
 
 # Per-entry-point hook signatures resolved by the discovery helpers below.
 # ``HandlerFn`` is the per-entry-point handler convention
@@ -848,105 +727,6 @@ async def _get_temporal_client() -> Client:
         logger.info("Background token refresh started for handler")
 
     return _temporal_client
-
-
-# ---------------------------------------------------------------------------
-# Entry-point resolution helper (shared by /start and /input-contract)
-# ---------------------------------------------------------------------------
-
-
-def _resolve_app_entrypoint(
-    app_name: str,
-    selected_entrypoint: str | None,
-    *,
-    unknown_ep_status: int = 400,
-    allow_workflow_type: bool = False,
-) -> tuple[Any, Any]:
-    """Look up the app in the registry and resolve the target entry point.
-
-    Raises ``HTTPException`` for all failure modes so callers can tail-call
-    this function without additional try/except.
-
-    Args:
-        app_name: Registered app name (from WorkflowClientConfig).
-        selected_entrypoint: An entry-point selector, or ``None`` to use the
-            default. Resolved as an entry-point name; a miss is a hard error
-            unless ``allow_workflow_type`` widens the namespace. The order is
-            never ambiguous — registration keeps names and types disjoint.
-        unknown_ep_status: HTTP status to use when an explicitly named
-            entrypoint does not exist.  ``400`` for /start (bad request),
-            ``404`` for /input-contract (resource not found).
-        allow_workflow_type: On a name miss, also try the selector against the
-            app's registered Temporal workflow types (canonical and
-            ``legacy_workflow_types`` aliases). Only the deprecated request-body
-            ``workflow_type`` field passes ``True`` — that field exists for a
-            legacy caller who genuinely holds a workflow type. The canonical
-            ``?entrypoint=`` selector resolves entry-point names only, on every
-            route, so an alias never becomes a second permanent name on the
-            SDK's own HTTP surface.
-
-    Returns:
-        ``(app_meta, ep)`` — the :class:`AppMetadata` and the resolved
-        :class:`EntryPointMetadata`.
-
-    Raises:
-        HTTPException 404: App not registered in the registry.
-        HTTPException unknown_ep_status: Named entrypoint not found.
-        HTTPException 400: Entrypoint required but not provided (multi-ep app
-            with no marked default).
-        HTTPException 500: App has no registered entry points at all.
-    """
-    try:
-        app_meta = AppRegistry.get_instance().get(app_name)
-    except AppNotRegisteredError:
-        raise HTTPException(
-            status_code=404, detail=f"App {app_name!r} not registered"
-        ) from None
-
-    entry_points = app_meta.entry_points
-
-    if selected_entrypoint:
-        if selected_entrypoint not in entry_points:
-            by_workflow_type = (
-                app_meta.workflow_types.get(selected_entrypoint)
-                if allow_workflow_type
-                else None
-            )
-            if by_workflow_type is not None:
-                return app_meta, by_workflow_type
-            logger.warning(
-                "Unknown entrypoint '%s' for app %s; available: %s",
-                selected_entrypoint,
-                app_name,
-                sorted(entry_points.keys()),
-            )
-            detail = (
-                "Invalid entrypoint."
-                if unknown_ep_status == 400
-                else f"No input contract for entrypoint {selected_entrypoint!r}"
-            )
-            raise HTTPException(status_code=unknown_ep_status, detail=detail)
-        return app_meta, entry_points[selected_entrypoint]
-
-    ep = _resolve_default_entrypoint(entry_points)
-    if ep is None:
-        if entry_points:
-            logger.warning(
-                "entrypoint required but not provided for multi-entry-point "
-                "app %s with no default; available: %s",
-                app_name,
-                sorted(entry_points.keys()),
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="entrypoint is required for this app.",
-            )
-        raise HTTPException(
-            status_code=500,
-            detail="App has no registered entry points.",
-        )
-
-    return app_meta, ep
 
 
 def _published_input_contract(ep: EntryPointMetadata) -> type[PydanticBaseModel]:
@@ -1191,102 +971,145 @@ async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONRespons
     )
 
 
-class _StartRequest(NamedTuple):
-    """A ``/start`` body resolved to its entry point and validated input."""
-
-    ep: Any
-    workflow_name: str
-    input_data: Any
-    explicit_workflow_id: str | None
+# ---------------------------------------------------------------------------
+# Route wiring: the worker's lookups for the shared route modules
+# ---------------------------------------------------------------------------
 
 
-async def _parse_start_request(
-    request: Request,
+async def _service_temporal_client() -> Client:
+    """The Temporal client, looked up through this module on every call.
+
+    The route modules call this rather than holding ``_get_temporal_client``,
+    so a process (or a test) that rebinds ``service._get_temporal_client`` is
+    seen by every route.
+    """
+    return await _get_temporal_client()
+
+
+async def _upload_to_storage(key: str, local_path: str) -> None:
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
+        upload_file as _upload_file,
+    )
+
+    await _upload_file(key, local_path, _storage)
+
+
+def _worker_object_routes_source() -> ObjectRoutesSource:
+    """The config and file-upload routes over this module's ``_storage``, read per request."""
+    return ObjectRoutesSource(
+        configured=lambda: _storage is not None,
+        load_config=lambda config_id, config_type: _config_load_from_objectstore(
+            config_id, config_type=config_type
+        ),
+        save_config=lambda config_id, body, config_type: _config_save_to_objectstore(
+            config_id, body, config_type=config_type
+        ),
+        upload_file=_upload_to_storage,
+        stored_key=normalize_key,
+    )
+
+
+def _registry_default_entrypoint(workflow_config: WorkflowClientConfig) -> str:
+    _, ep = _resolve_app_entrypoint(
+        workflow_config.app_name, None, unknown_ep_status=404
+    )
+    return ep.name
+
+
+def _registry_explicit_entrypoints(workflow_config: WorkflowClientConfig) -> list[str]:
+    # Resolved INDEPENDENTLY of the default: a servable multi-entrypoint app
+    # must not 404 just because the builder marked no default. A connector that
+    # implements run() AND declares explicit @entrypoints gets run() forced as
+    # its default, but run() has no generated manifest dir — so the explicit
+    # ones, alphabetically, are the fallback.
+    try:
+        app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
+    except AppNotRegisteredError:
+        return []
+    return [
+        ep.name
+        for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+        if not ep.implicit
+    ]
+
+
+def _registry_input_contract(
+    workflow_config: WorkflowClientConfig, entrypoint: str | None
+) -> type[PydanticBaseModel]:
+    try:
+        _, ep = _resolve_app_entrypoint(
+            workflow_config.app_name, entrypoint, unknown_ep_status=404
+        )
+    except HTTPException as exc:
+        # Registry miss — the entry point may be a *marketplace* (bundle) entry
+        # point that exists only as a generated contract dir on disk.
+        # Filesystem-resolve it like the manifest and configmap routes do;
+        # re-raise when it isn't one.
+        if exc.status_code != 404 or not entrypoint:
+            raise
+        contract = _marketplace_entrypoint_contract(entrypoint)
+        if contract is None:
+            raise
+        return contract
+    # Prefer the generated AppInputContract over the entry point's thin runtime
+    # input_type. See _published_input_contract.
+    input_type = _published_input_contract(ep)
+    if input_type is None:
+        raise HTTPException(status_code=500, detail="Entry point has no input type.")
+    return input_type
+
+
+def _worker_metadata_source(
+    *,
     app_name: str,
+    handler: Handler,
+    manifest: AppManifest | None,
     workflow_config: WorkflowClientConfig,
     normalize: _RequestNormalizer,
-) -> _StartRequest:
-    """Resolve and validate a ``/start`` body against its entry point's input type.
+) -> MetadataSource:
+    """The metadata routes over the app registry and this module's globals.
 
-    Submission-time validation is ``/workflows/v1/validate`` (in
-    :mod:`application_sdk.handler.metadata_routes`, served by the API host as
-    well); this is ``/start``'s own last line, answering the same 422 shape.
-
-    Raises ``HTTPException`` for a missing app class or an unknown entry point,
-    and :class:`~application_sdk.handler.request_contract.RequestContractError`
-    (answered as a 422 naming the field) when the body is not a JSON object or
-    does not fit the entry point's input contract.
-
-    *workflow_config* is the one captured when this service's routes were
-    registered, never the module global: a second service built in the same
-    process rebinds the global, and must not change which app this one
-    resolves against.
+    Every lookup reads this module's globals per request, so a process
+    reconfigured after startup (and a test that repoints them) is seen.
     """
-    app_cls = workflow_config.app_class
-    if app_cls is None:
-        raise HTTPException(status_code=503, detail="App class not provided.")
-
-    body = await _read_json_object(request)
-    explicit_workflow_id: str | None = body.pop("workflow_id", None)
-    # ?entrypoint= query param is the canonical selector; fall back to the
-    # legacy body field 'workflow_type' for backward compatibility.
-    entrypoint_param: str | None = request.query_params.get("entrypoint")
-    legacy_workflow_type: str | None = body.pop("workflow_type", None)
-    selected_entrypoint: str | None = entrypoint_param or legacy_workflow_type
-
-    if legacy_workflow_type is not None and entrypoint_param is None:
-        warnings.warn(
-            f"App {app_name}: 'workflow_type' body field is deprecated. "
-            "Use ?entrypoint=<name> query param instead. "
-            "Will be removed in v4.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        logger.warning(
-            "App %s: 'workflow_type' body field is deprecated; "
-            "use ?entrypoint=<name> query param instead.",
-            app_name,
-        )
-
-    # Migration note (BLDX-1354): On a multi-entry-point app that has no
-    # explicit @entrypoint(default=True), omitting ?entrypoint= dispatches the
-    # alphabetically-first entry point by name instead of returning 400.
-    _, ep = _resolve_app_entrypoint(
-        workflow_config.app_name,
-        selected_entrypoint,
-        allow_workflow_type=(
-            entrypoint_param is None and legacy_workflow_type is not None
+    # A core.py hook wins over the handler's method, as module hooks do for
+    # the other handler operations.
+    handler_manifest = handler_compute_manifest(
+        handler,
+        lambda: workflow_config.app_name or app_name,
+        secret_store=_secret_store,
+    )
+    return MetadataSource(
+        generated_dir=lambda: CONTRACT_GENERATED_DIR,
+        app_name=lambda: workflow_config.app_name,
+        fallback_app_name=app_name,
+        task_queue=lambda: workflow_config.task_queue,
+        deployment_name=lambda: DEPLOYMENT_NAME,
+        default_entrypoint=lambda: _registry_default_entrypoint(workflow_config),
+        explicit_entrypoints=lambda: _registry_explicit_entrypoints(workflow_config),
+        input_contract=lambda ep: _registry_input_contract(workflow_config, ep),
+        compute_manifest=lambda ep: (
+            _discover_compute_manifest(ep) or handler_manifest(ep)
         ),
-    )
-
-    input_type = ep.input_type
-    if input_type is None:
-        raise HTTPException(
-            status_code=500,
-            detail=f"App class {app_cls.__name__} entry point has no input type.",
-        )
-
-    body = normalize(body)
-    if "credentials" in body:
-        # Always strip raw credentials — never pass through to Temporal
-        # history. Credentials are resolved at runtime via DaprCredentialVault
-        # using credential_guid.
-        del body["credentials"]
-        logger.debug("Stripped inline credentials from /start request body")
-
-    # The body is the caller's workflow configuration: a misfit is the
-    # caller's to fix and never succeeds on retry, so it answers 422 naming
-    # the field (FND-501) rather than a 5xx.
-    input_data = _validate_request(input_type, body)
-    return _StartRequest(
-        ep=ep,
-        workflow_name=canonical_workflow_type(workflow_config.app_name, ep),
-        input_data=input_data,
-        explicit_workflow_id=explicit_workflow_id,
+        programmatic_manifest=manifest,
+        log=lambda: logger,
+        max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
+        normalize_body=normalize,
     )
 
 
-def _register_workflow_routes(
+def _register_local_vault_route(app: FastAPI) -> None:
+    """The dev-only ``/workflows/v1/dev/local-vault`` credential provisioning route."""
+
+    @app.post("/workflows/v1/dev/local-vault")
+    async def provision_local_vault(request: Request) -> JSONResponse:
+        """Provision credentials for local development (auto-generates GUID)."""
+        body: dict[str, Any] = await request.json()
+        guid = uuid4().hex
+        return await _provision_local_vault(guid, body)
+
+
+def _register_worker_routes(
     app: FastAPI,
     *,
     app_name: str,
@@ -1296,8 +1119,7 @@ def _register_workflow_routes(
     subscriptions: list[SubscriptionConfig],
     normalize: _RequestNormalizer,
 ) -> None:
-    """Register workflow lifecycle, manifest, input-contract, config, file,
-    event, and dev-only routes on *app*.
+    """Register the workflow, config/file, event, metadata and dev routes on *app*.
 
     *normalize* is the service's one request normalization, shared with the
     auth / check / metadata routes.
@@ -1306,711 +1128,37 @@ def _register_workflow_routes(
     # service, so reading it per request would resolve against whichever
     # service was built last.
     workflow_config = _workflow_config
-
-    @app.post("/workflows/v1/start")
-    async def start_workflow(request: Request) -> JSONResponse:
-        if not workflow_config.is_configured():
-            raise HTTPException(
-                status_code=503,
-                detail="Workflow execution not configured. Set ATLAN_TEMPORAL_HOST.",
-            )
-
-        workflow_id = "(unknown)"
-        try:
-            # Validated before the Temporal client is touched, so a malformed
-            # configuration is rejected even when Temporal is unreachable.
-            parsed = await _parse_start_request(
-                request, app_name, workflow_config, normalize
-            )
-            input_data = parsed.input_data
-            explicit_workflow_id = parsed.explicit_workflow_id
-            workflow_name = parsed.workflow_name
-            workflow_id = explicit_workflow_id or workflow_id
-
-            client = await _get_temporal_client()
-
-            # Populate framework-managed fields on input_data before Temporal dispatch.
-            # These fields are declared on Input (contracts/base.py) but the /start
-            # handler constructs input_data before generating them — so they must be
-            # injected after the fact.
-            #
-            # workflow_id: resolved and stamped by the shared dispatch helper —
-            #   the same body the executor backend uses, so the two dispatch
-            #   paths cannot drift. The caller value is popped from the body
-            #   before validation and used only if explicitly provided.
-            # correlation_id: respect caller-supplied value if present (docstring:
-            #   "Caller-supplied correlation ID for tracing across systems"), only
-            #   generate a UUID when the caller didn't provide one.
-            workflow_id = resolve_dispatch_workflow_id(
-                input_data, app_name, explicit_workflow_id=explicit_workflow_id or ""
-            )
-
-            correlation_id = input_data.correlation_id or str(uuid4())
-            input_data.correlation_id = correlation_id
-            input_data._correlation_id = correlation_id
-
-            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
-                CorrelationContext,
-                set_correlation_context,
-            )
-
-            set_correlation_context(CorrelationContext(correlation_id=correlation_id))
-            corr_ctx = CorrelationContext(correlation_id=correlation_id)
-
-            logger.info(
-                "Starting workflow: app=%s workflow_id=%s queue=%s",
-                app_name,
-                workflow_id,
-                workflow_config.task_queue,
-            )
-
-            handle = await client.start_workflow(
-                workflow_name,
-                args=[input_data],
-                id=workflow_id,
-                task_queue=workflow_config.task_queue,
-                memo=corr_ctx.to_temporal_memo(),
-                execution_timeout=(
-                    timedelta(hours=workflow_config.workflow_max_timeout_hours)
-                    if workflow_config.workflow_max_timeout_hours
-                    else None
-                ),
-            )
-
-            logger.info(
-                "Workflow started: app=%s workflow_id=%s run_id=%s correlation_id=%s",
-                app_name,
-                handle.id,
-                handle.result_run_id,
-                correlation_id,
-            )
-
-            return JSONResponse(
-                content={
-                    "success": True,
-                    "message": "Workflow started successfully",
-                    "data": {"workflow_id": handle.id, "run_id": handle.result_run_id},
-                    "correlation_id": correlation_id,
-                }
-            )
-
-        except (HTTPException, _RequestContractError):
-            # A body that does not fit the entry point's input contract
-            # escapes as _RequestContractError, which the app-level handler
-            # answers as a 422 naming the field.
-            raise
-        except ValidationError as e:
-            # Any other ValidationError is raised past body validation — by
-            # the SDK's own stamping or a model it builds — so it is an
-            # internal failure, not a malformed request: a sanitized 500 with
-            # the real cause in the log.
-            logger.error(
-                "Internal validation failure starting workflow for app %s: %s",
-                app_name,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Failed to start workflow"
-            ) from None
-        except TypeError as e:
-            logger.error(
-                "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
-            )
-            raise HTTPException(status_code=400, detail="Invalid input") from None
-        except Exception as e:
-            logger.error(
-                "Failed to start workflow %s for app %s: %s",
-                workflow_id,
-                app_name,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Failed to start workflow"
-            ) from None
-
-    @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")
-    async def stop_workflow(workflow_id: str, run_id: str) -> JSONResponse:
-        if not workflow_config.is_configured():
-            raise HTTPException(
-                status_code=503, detail="Workflow execution not configured."
-            )
-
-        client = await _get_temporal_client()
-        try:
-            handle = client.get_workflow_handle(workflow_id, run_id=run_id)
-            await _describe_owned_workflow(handle, workflow_config, workflow_id)
-            await handle.terminate(reason="Stopped via handler API")
-            return JSONResponse(
-                content={"success": True, "message": "Workflow terminated successfully"}
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            if (
-                isinstance(e, temporalio.service.RPCError)
-                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
-            ):
-                raise _workflow_not_found(workflow_id) from None
-            logger.error(
-                "Failed to stop workflow %s run %s: %s",
-                workflow_id,
-                run_id,
-                str(e),
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Failed to stop workflow"
-            ) from None
-
-    @app.get("/workflows/v1/result/{workflow_id}")
-    async def get_result(workflow_id: str, wait: bool = False) -> JSONResponse:
-        if not workflow_config.is_configured():
-            raise HTTPException(
-                status_code=503, detail="Workflow execution not configured."
-            )
-
-        client = await _get_temporal_client()
-        try:
-            handle = client.get_workflow_handle(workflow_id)
-            desc = await _describe_owned_workflow(handle, workflow_config, workflow_id)
-
-            if wait:
-                try:
-                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
-                    if output_type is None:
-                        logger.warning(
-                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
-                            workflow_id,
-                            desc.workflow_type,
-                        )
-                    result_data = await _get_workflow_result(
-                        client,
-                        workflow_id=workflow_id,
-                        run_id=desc.run_id,
-                        output_type=output_type,
-                    )
-                    return JSONResponse(
-                        content=_wrap_response(
-                            {
-                                "status": "completed",
-                                "workflow_id": workflow_id,
-                                "result": result_data,
-                            },
-                            message="Workflow completed",
-                        )
-                    )
-                except WorkflowFailureError as exc:
-                    logger.warning(
-                        "Workflow execution failed for workflow_id=%s error_type=%s",
-                        workflow_id,
-                        type(exc).__name__,
-                        exc_info=True,
-                    )
-                    return JSONResponse(
-                        content=_wrap_response(
-                            {
-                                "status": "failed",
-                                "workflow_id": workflow_id,
-                                "error": "Workflow execution failed.",
-                            },
-                            message="Workflow failed",
-                            success=False,
-                        )
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Workflow result decode failed for workflow_id=%s error_type=%s",
-                        workflow_id,
-                        type(exc).__name__,
-                        exc_info=True,
-                    )
-                    return JSONResponse(
-                        content=_wrap_response(
-                            {
-                                "status": "result_decode_failed",
-                                "workflow_id": workflow_id,
-                                "error_type": type(exc).__name__,
-                            },
-                            message="Workflow result could not be decoded",
-                            success=False,
-                        )
-                    )
-
-            status = desc.status.name if desc.status else "UNKNOWN"
-
-            if status == "RUNNING":
-                return JSONResponse(
-                    content=_wrap_response(
-                        {
-                            "status": "running",
-                            "workflow_id": workflow_id,
-                            "message": "Workflow is still running",
-                        },
-                        message="Workflow is still running",
-                    )
-                )
-            elif status == "COMPLETED":
-                try:
-                    output_type = _resolve_output_type_for_workflow(desc.workflow_type)
-                    if output_type is None:
-                        logger.warning(
-                            "No output_type resolved for workflow_id=%s workflow_type=%s; using untyped deserialization",
-                            workflow_id,
-                            desc.workflow_type,
-                        )
-                    result_data = await _get_workflow_result(
-                        client,
-                        workflow_id=workflow_id,
-                        run_id=desc.run_id,
-                        output_type=output_type,
-                    )
-                    return JSONResponse(
-                        content=_wrap_response(
-                            {
-                                "status": "completed",
-                                "workflow_id": workflow_id,
-                                "result": result_data,
-                            },
-                            message="Workflow completed",
-                        )
-                    )
-                except WorkflowFailureError as exc:
-                    logger.warning(
-                        "Workflow execution failed for workflow_id=%s error_type=%s",
-                        workflow_id,
-                        type(exc).__name__,
-                        exc_info=True,
-                    )
-                    return JSONResponse(
-                        content=_wrap_response(
-                            {
-                                "status": "failed",
-                                "workflow_id": workflow_id,
-                                "error": "Workflow execution failed.",
-                            },
-                            message="Workflow failed",
-                            success=False,
-                        )
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Workflow result decode failed for workflow_id=%s error_type=%s",
-                        workflow_id,
-                        type(exc).__name__,
-                        exc_info=True,
-                    )
-                    return JSONResponse(
-                        content=_wrap_response(
-                            {
-                                "status": "result_decode_failed",
-                                "workflow_id": workflow_id,
-                                "error_type": type(exc).__name__,
-                            },
-                            message="Workflow result could not be decoded",
-                            success=False,
-                        )
-                    )
-            elif status in ("FAILED", "TERMINATED", "CANCELED", "TIMED_OUT"):
-                return JSONResponse(
-                    content=_wrap_response(
-                        {
-                            "status": "failed",
-                            "workflow_id": workflow_id,
-                            "error": f"Workflow {status.lower()}",
-                        },
-                        message="Workflow failed",
-                        success=False,
-                    )
-                )
-            else:
-                return JSONResponse(
-                    content=_wrap_response(
-                        {
-                            "status": status.lower(),
-                            "workflow_id": workflow_id,
-                            "message": f"Workflow status: {status}",
-                        },
-                        message=f"Workflow status: {status}",
-                    )
-                )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            if (
-                isinstance(e, temporalio.service.RPCError)
-                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
-            ):
-                raise _workflow_not_found(workflow_id) from None
-            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
-            logger.error(
-                "Failed to get workflow result for %s: %s",
-                workflow_id,
-                str(e),
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Failed to get workflow result"
-            ) from None
-
-    @app.get("/workflows/v1/status/{workflow_id}/{run_id:path}")
-    async def get_workflow_status(workflow_id: str, run_id: str) -> JSONResponse:
-        if not workflow_config.is_configured():
-            raise HTTPException(
-                status_code=503, detail="Workflow execution not configured."
-            )
-
-        client = await _get_temporal_client()
-        try:
-            handle = client.get_workflow_handle(workflow_id, run_id=run_id)
-            desc = await _describe_owned_workflow(handle, workflow_config, workflow_id)
-            status = desc.status.name if desc.status else "UNKNOWN"
-
-            execution_duration_seconds = 0
-            if desc.execution_time and desc.close_time:
-                execution_duration_seconds = int(
-                    (desc.close_time - desc.execution_time).total_seconds()
-                )
-            elif desc.execution_time:
-                execution_duration_seconds = int(
-                    (datetime.now(UTC) - desc.execution_time).total_seconds()
-                )
-
-            return JSONResponse(
-                content=_wrap_response(
-                    {
-                        "workflow_id": workflow_id,
-                        "run_id": run_id,
-                        "status": status,
-                        "execution_duration_seconds": execution_duration_seconds,
-                    },
-                    message=f"Workflow status: {status}",
-                )
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            if (
-                isinstance(e, temporalio.service.RPCError)
-                and e.status == temporalio.service.RPCStatusCode.NOT_FOUND
-            ):
-                raise _workflow_not_found(workflow_id) from None
-            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
-            logger.error(
-                "Failed to get workflow status for %s run %s: %s",
-                workflow_id,
-                run_id,
-                str(e),
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Failed to get workflow status"
-            ) from None
-
-    # ------------------------------------------------------------------
-    # Config (object store) and file upload (shared with the host)
-    # ------------------------------------------------------------------
-
-    async def _upload_to_storage(key: str, local_path: str) -> None:
-        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
-            upload_file as _upload_file,
-        )
-
-        await _upload_file(key, local_path, _storage)
-
-    def _stored_upload_key(key: str) -> str:
-        return normalize_key(key)
-
-    # Every operation reads this module's _storage per request.
-    register_object_routes(
+    register_workflow_routes(
         app,
-        ObjectRoutesSource(
-            configured=lambda: _storage is not None,
-            load_config=lambda config_id, config_type: _config_load_from_objectstore(
-                config_id, config_type=config_type
-            ),
-            save_config=lambda config_id, body, config_type: (
-                _config_save_to_objectstore(config_id, body, config_type=config_type)
-            ),
-            upload_file=_upload_to_storage,
-            stored_key=_stored_upload_key,
+        WorkflowRoutesSource(
+            app_name=app_name,
+            workflow_config=workflow_config,
+            temporal_client=_service_temporal_client,
+            normalize=normalize,
         ),
     )
-
-    # ------------------------------------------------------------------
-    # Dapr pub/sub and event-triggered workflow endpoints
-    # ------------------------------------------------------------------
-
-    @app.get("/dapr/subscribe")
-    async def get_dapr_subscriptions() -> JSONResponse:
-        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when emitting events
-            EVENT_STORE_NAME,
-        )
-
-        result: list[dict[str, Any]] = []
-
-        for sub in subscriptions:
-            sub_dict: dict[str, Any] = {
-                "pubsubname": sub.component_name,
-                "topic": sub.topic,
-                "route": f"/subscriptions/v1/{sub.route}",
-            }
-            if sub.bulk_enabled:
-                sub_dict["bulkSubscribe"] = {
-                    "enabled": sub.bulk_enabled,
-                    "maxMessagesCount": sub.bulk_max_messages,
-                    "maxAwaitDurationMs": sub.bulk_max_await_ms,
-                }
-            if sub.dead_letter_topic:
-                sub_dict["deadLetterTopic"] = sub.dead_letter_topic
-            result.append(sub_dict)
-
-        for trigger in event_triggers:
-            filters = [
-                f"({f.path} {f.operator} '{f.value}')" for f in trigger.event_filters
-            ]
-            filters.append(f"event.data.event_name == '{trigger.event_name}'")
-            filters.append(f"event.data.event_type == '{trigger.event_type}'")
-
-            result.append(
-                {
-                    "pubsubname": EVENT_STORE_NAME,
-                    "topic": trigger.event_type,
-                    "routes": {
-                        "rules": [
-                            {
-                                "match": " && ".join(filters),
-                                "path": f"/events/v1/event/{trigger.event_id}",
-                            }
-                        ],
-                        "default": "/events/v1/drop",
-                    },
-                }
-            )
-
-        return JSONResponse(content=result)
-
-    @app.post("/events/v1/event/{event_id}")
-    async def handle_event(event_id: str, request: Request) -> JSONResponse:
-        if not _workflow_config.is_configured():
-            raise HTTPException(
-                status_code=503, detail="Workflow execution not configured."
-            )
-
-        trigger = next((t for t in event_triggers if t.event_id == event_id), None)
-        if trigger is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No trigger registered for event_id: {event_id}",
-            )
-
-        app_cls = _workflow_config.app_class
-        if app_cls is None:
-            raise HTTPException(status_code=503, detail="App class not provided.")
-
-        try:
-            body = await request.json()
-        except HTTPException:
-            # The body-size cap's 413: already the answer, nothing to log.
-            raise
-        except Exception:
-            # Log details server-side; the HTTPException intentionally hides the
-            # parse internals from the client (avoid leaking file/line/offset).
-            # conformance: ignore[L009] the log is the only server-side record; the raised HTTPException deliberately withholds the parse internals.
-            logger.warning("Failed to parse JSON request body", exc_info=True)
-            raise HTTPException(status_code=400, detail="Invalid JSON body") from None
-
-        try:
-            client = await _get_temporal_client()
-
-            from application_sdk.app.entrypoint import (  # noqa: PLC0415 — _resolve_default_entrypoint is private to app.entrypoint
-                _resolve_default_entrypoint,
-            )
-
-            ep = _resolve_default_entrypoint(
-                getattr(getattr(app_cls, "_app_metadata", None), "entry_points", {})
-            )
-            input_type = (
-                ep.input_type
-                if ep is not None
-                else getattr(app_cls, "_input_type", None)
-            )
-            if input_type is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"App class {app_cls.__name__} does not define _input_type.",
-                )
-
-            event_data: dict[str, Any] = body.get("data", body)
-            input_data = (
-                input_type(**event_data)
-                if isinstance(event_data, dict)
-                else input_type()
-            )
-
-            workflow_id = f"{app_name}-event-{event_id}-{uuid4().hex[:8]}"
-
-            # Inject workflow_id so run() can access it via input.workflow_id
-            input_data.workflow_id = workflow_id
-
-            # Correlation memo (CNCT-104): event-triggered starts previously
-            # passed no memo, so the LogInterceptor fell back to a value the
-            # run page never queries and the run's logs were unfindable.
-            # Respect an event-supplied correlation_id; otherwise mint one —
-            # the same contract as the /workflows/v1/start path above — and
-            # return it to the caller so the run's logs are addressable.
-            correlation_id = getattr(input_data, "correlation_id", "") or str(uuid4())
-            input_data.correlation_id = correlation_id
-            input_data._correlation_id = correlation_id
-
-            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: handler.service is the FastAPI entry point — execution/server modules load app.base which loads handler
-                CorrelationContext,
-                set_correlation_context,
-            )
-
-            # Mirror the /workflows/v1/start path: bind the ContextVar so every
-            # handler-side line for this request — including the except branch on
-            # a failed dispatch — carries the correlation_id we just returned to
-            # the caller, keeping the run addressable even when the start fails.
-            set_correlation_context(CorrelationContext(correlation_id=correlation_id))
-
-            handle = await client.start_workflow(
-                canonical_workflow_type(app_cls._app_name, ep)
-                if ep is not None
-                else _workflow_config.app_name,
-                args=[input_data],
-                id=workflow_id,
-                task_queue=_workflow_config.task_queue,
-                memo=CorrelationContext(
-                    correlation_id=correlation_id
-                ).to_temporal_memo(),
-                execution_timeout=(
-                    timedelta(hours=_workflow_config.workflow_max_timeout_hours)
-                    if _workflow_config.workflow_max_timeout_hours
-                    else None
-                ),
-            )
-            return JSONResponse(
-                content={
-                    "status": "SUCCESS",
-                    "workflow_id": handle.id,
-                    "run_id": handle.result_run_id,
-                    "correlation_id": correlation_id,
-                }
-            )
-        except Exception as e:
-            logger.error(
-                "Failed to start event-triggered workflow for event %s: %s",
-                event_id,
-                e,
-                exc_info=True,
-            )
-            return JSONResponse(content={"status": "RETRY"}, status_code=500)
-
-    @app.post("/events/v1/drop")
-    async def drop_event() -> JSONResponse:
-        return JSONResponse(content={"success": False, "status": "DROP"})
-
-    # Register dynamic subscription routes
-    for _sub in subscriptions:
-        _sub_route = f"/subscriptions/v1/{_sub.route}"
-        app.add_api_route(_sub_route, _sub.handler, methods=["POST"])
-
-    # ------------------------------------------------------------------
-    # ConfigMaps, manifest and input contract (shared with the host)
-    # ------------------------------------------------------------------
-
-    def _registry_default_entrypoint() -> str:
-        _, ep = _resolve_app_entrypoint(
-            workflow_config.app_name, None, unknown_ep_status=404
-        )
-        return ep.name
-
-    def _registry_explicit_entrypoints() -> list[str]:
-        # Resolved INDEPENDENTLY of the default: a servable multi-entrypoint
-        # app must not 404 just because the builder marked no default. A
-        # connector that implements run() AND declares explicit @entrypoints
-        # gets run() forced as its default, but run() has no generated manifest
-        # dir — so the explicit ones, alphabetically, are the fallback.
-
-        try:
-            app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
-        except AppNotRegisteredError:
-            return []
-        return [
-            ep.name
-            for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
-            if not ep.implicit
-        ]
-
-    def _registry_input_contract(entrypoint: str | None) -> type[PydanticBaseModel]:
-        try:
-            _, ep = _resolve_app_entrypoint(
-                workflow_config.app_name, entrypoint, unknown_ep_status=404
-            )
-        except HTTPException as exc:
-            # Registry miss — the entry point may be a *marketplace* (bundle)
-            # entry point that exists only as a generated contract dir on disk.
-            # Filesystem-resolve it like the manifest and configmap routes do;
-            # re-raise when it isn't one.
-            if exc.status_code != 404 or not entrypoint:
-                raise
-            contract = _marketplace_entrypoint_contract(entrypoint)
-            if contract is None:
-                raise
-            return contract
-        # Prefer the generated AppInputContract over the entry point's thin
-        # runtime input_type. See _published_input_contract.
-        input_type = _published_input_contract(ep)
-        if input_type is None:
-            raise HTTPException(
-                status_code=500, detail="Entry point has no input type."
-            )
-        return input_type
-
-    # A core.py hook wins over the handler's method, as module hooks do for
-    # the other handler operations.
-    handler_manifest = handler_compute_manifest(
-        handler,
-        lambda: workflow_config.app_name or app_name,
-        secret_store=_secret_store,
+    register_object_routes(app, _worker_object_routes_source())
+    register_event_routes(
+        app,
+        EventRoutesSource(
+            app_name=app_name,
+            workflow_config=workflow_config,
+            temporal_client=_service_temporal_client,
+            event_triggers=event_triggers,
+            subscriptions=subscriptions,
+        ),
     )
-
-    # Every lookup reads this module's globals per request, so a process
-    # reconfigured after startup (and a test that repoints them) is seen.
     register_metadata_routes(
         app,
-        MetadataSource(
-            generated_dir=lambda: CONTRACT_GENERATED_DIR,
-            app_name=lambda: workflow_config.app_name,
-            fallback_app_name=app_name,
-            task_queue=lambda: workflow_config.task_queue,
-            deployment_name=lambda: DEPLOYMENT_NAME,
-            default_entrypoint=_registry_default_entrypoint,
-            explicit_entrypoints=_registry_explicit_entrypoints,
-            input_contract=_registry_input_contract,
-            compute_manifest=lambda ep: (
-                _discover_compute_manifest(ep) or handler_manifest(ep)
-            ),
-            programmatic_manifest=manifest,
-            log=lambda: logger,
-            max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
-            normalize_body=normalize,
+        _worker_metadata_source(
+            app_name=app_name,
+            handler=handler,
+            manifest=manifest,
+            workflow_config=workflow_config,
+            normalize=normalize,
         ),
     )
-
-    # ------------------------------------------------------------------
-    # Dev-only: local credential provisioning
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/dev/local-vault")
-    async def provision_local_vault(request: Request) -> JSONResponse:
-        """Provision credentials for local development (auto-generates GUID)."""
-        body: dict[str, Any] = await request.json()
-        guid = uuid4().hex
-        return await _provision_local_vault(guid, body)
+    _register_local_vault_route(app)
 
 
 # ---------------------------------------------------------------------------
@@ -2267,7 +1415,7 @@ def create_app_handler_service(
         ),
     )
 
-    _register_workflow_routes(
+    _register_worker_routes(
         app,
         app_name=app_name,
         handler=handler,

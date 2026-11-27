@@ -34,6 +34,8 @@ _HANDLER_MODULES = (
     "application_sdk.handler.base",
     "application_sdk.handler.source_probes",
     "application_sdk.handler.service",
+    "application_sdk.handler.workflow_routes",
+    "application_sdk.handler.event_routes",
     "application_sdk._runtime.offload",
 )
 
@@ -48,7 +50,7 @@ _FORBIDDEN_PREFIXES = (
 #: ``temporalio.activity``) are excused, because the ``/workflows/v1/start``
 #: route uses the client to start workflows. That route is expected to be
 #: removed entirely in the shared-server migration; delete this allowance, and
-#: ``temporalio.client`` from ``handler/service.py``, together with the route.
+#: ``temporalio.client`` from ``handler/workflow_routes.py``, together with the route.
 _ALLOWED_FOR_START_ROUTE = "temporalio.client"
 
 
