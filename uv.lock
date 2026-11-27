@@ -459,7 +459,7 @@ requires-dist = [
     { name = "protobuf", specifier = ">=6.33.5,<8" },
     { name = "pyarrow", marker = "extra == 'pandas'", specifier = ">=23.0.1,<27.0.0" },
     { name = "pyarrow", marker = "extra == 'sql'", specifier = ">=23.0.1,<27.0.0" },
-    { name = "pyatlan", specifier = ">=11.8.0,<12" },
+    { name = "pyatlan", specifier = ">=11.9.0,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pyjwt", specifier = ">=2.12.0,<3" },
     { name = "pytest", marker = "extra == 'tests'", specifier = ">=8.3.3,<10.0.0" },
@@ -540,7 +540,7 @@ requires-dist = [
     { name = "obstore", marker = "extra == 'obstore'", specifier = ">=0.12.0,<0.13.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<4.0.0" },
-    { name = "pyatlan", marker = "extra == 'pyatlan'", specifier = ">=11.8.0,<12" },
+    { name = "pyatlan", marker = "extra == 'pyatlan'", specifier = ">=11.9.0,<12" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "python-dotenv", marker = "extra == 'aws'", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.2.2,<2.0.0" },
@@ -4262,7 +4262,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "11.8.0"
+version = "11.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -4278,9 +4278,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/b2/08552cd51f2079effde8a7c9a4899369be2c13e3fb5d12b4d95860570bdd/pyatlan-11.8.0.tar.gz", hash = "sha256:ad0fccddf6204bbff2d435b889725c460a5fd8ba43ec35646ed0220f722ffb72", size = 4323239, upload-time = "2026-11-23T14:42:32.139Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/1e/a2b3cf685bdb6a1a56223018b188bf5796ec0f4976523da78411bfd3735e/pyatlan-11.9.0.tar.gz", hash = "sha256:540755250604ecea6240440e73f9b592b345b18120d32bf2b5ca6daac34f1588", size = 4322893, upload-time = "2026-11-27T05:42:46.031Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/1b/e94ed51bd2bff83bde166a71c5e449553aa310104599272af2e8b03f7f80/pyatlan-11.8.0-py3-none-any.whl", hash = "sha256:68fa3159f0fbc8bc82241ea037398b4e43fb654f416d58b1d0b1039e110f086a", size = 6307668, upload-time = "2026-11-23T14:42:30.288Z" },
+    { url = "https://files.pythonhosted.org/packages/da/7c/cf6cd9268a72b24335921e4d47c3fecf6ccf2022aab608f15c2426ea3899/pyatlan-11.9.0-py3-none-any.whl", hash = "sha256:d26ec0c8e38b3289c9811c1d183f198a749a3ec254542b3d2795916e9c3bceae", size = 6307806, upload-time = "2026-11-27T05:42:43.278Z" },
 ]
 
 [[package]]
