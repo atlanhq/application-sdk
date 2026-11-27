@@ -48,11 +48,17 @@ from application_sdk.testing.e2e._base_teardown import _E2ETeardownMixin
 from application_sdk.testing.e2e._base_types import (
     _DEFAULT_SEED_COMPONENTS_DIR,
     _DEFAULT_SEED_STORE_BINDING,
-    DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION,
     _SeedProbeReading,
 )
 
 logger = get_logger(__name__)
+
+# Version that drops the deprecated ``DatabaseSpec.connector_config_name``
+# fallback in :meth:`BaseE2ETest.resolved_connector_config_name`. Every
+# deprecation in this SDK names its removal version; this is the one for that
+# field. Defined in the module that formats the notice, so the
+# deprecation checks (B002) can read the version off it.
+DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION = "4.0"
 
 
 class _E2ESeedMixin(_E2ETeardownMixin):

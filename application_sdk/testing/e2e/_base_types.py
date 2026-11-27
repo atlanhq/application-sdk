@@ -50,12 +50,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
 _DEFAULT_SEED_COMPONENTS_DIR = "ci-deploy/components"
 _DEFAULT_SEED_STORE_BINDING = "atlan-objectstore"
 
-# Version that drops the deprecated ``DatabaseSpec.connector_config_name``
-# fallback in :meth:`BaseE2ETest.resolved_connector_config_name`. Every
-# deprecation in this SDK names its removal version; this is the one for that
-# field.
-DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION = "4.0"
-
 # The mustache key the toolkit's ``ConnectionSelector`` input fills — the
 # connection a utility DAG (connection-delete, a miner) acts on rather than
 # creates. Teardown reads it to tell a submit against another connection from

@@ -111,6 +111,9 @@ from application_sdk.testing._mustache import apply_mustache_subs
 # Split out of this module (FND-4267); re-exported so every name it defined
 # still imports from here.
 from application_sdk.testing.e2e._base_assets import _E2EAssetsMixin
+from application_sdk.testing.e2e._base_seed import (  # noqa: F401
+    DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION,
+)
 from application_sdk.testing.e2e._base_types import (  # noqa: F401
     _ATLAS_NOT_FOUND_ATTEMPTS,
     _CONNECTION_SELECTOR_SUBSTITUTION,
@@ -122,7 +125,6 @@ from application_sdk.testing.e2e._base_types import (  # noqa: F401
     _PROGRESS_STALL_CEILING_DIVISOR,
     _PROGRESS_STALL_MAX_SECONDS,
     _PROGRESS_STALL_MIN_SECONDS,
-    DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION,
     DAGSpec,
     FullDAGOutcome,
     NodeDispatch,
