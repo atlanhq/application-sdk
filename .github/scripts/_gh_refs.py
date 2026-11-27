@@ -95,6 +95,9 @@ class Holder:
     run_id: int
     attempt: int
     acquired_at: float | None
+    #: The repo the holding run belongs to, when it is not the repo the ref
+    #: lives in: a lease shared by several repos' runs (FND-5377).
+    repo: str = ""
 
     def is_me(self, run_id: int, attempt: int) -> bool:
         return self.run_id == run_id and self.attempt == attempt
@@ -102,7 +105,7 @@ class Holder:
     def run_url(self, repo: str) -> str:
         """Where to look at the holding run. Derived from its identity, so it is
         a property of the holder rather than of what a caller does with it."""
-        return f"https://github.com/{repo}/actions/runs/{self.run_id}"
+        return f"https://github.com/{self.repo or repo}/actions/runs/{self.run_id}"
 
 
 @dataclass(frozen=True)
@@ -190,6 +193,7 @@ def gh_request(
     *,
     headers: dict[str, str] | None = None,
     sleep=None,
+    token: str | None = None,
 ) -> Response:
     """Call the GitHub API, returning the status rather than raising on 4xx.
 
@@ -208,6 +212,9 @@ def gh_request(
     ``sleep`` resolves from ``time`` at call time, not as a default argument: a
     default is bound once at import, so a test that stubs ``time.sleep`` would
     still back off for real.
+
+    ``token`` replaces ``GH_TOKEN`` for this one call, for a read in another
+    repo than the one the job's token is scoped to.
     """
     sleep = sleep or time.sleep
     extra_headers = dict(headers or {})
@@ -216,7 +223,7 @@ def gh_request(
             "gh_request sends the token itself, on stdin; an Authorization "
             "header in `headers` would put a credential on argv"
         )
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise TransportError("GH_TOKEN (or GITHUB_TOKEN) must be set")
 
@@ -467,13 +474,31 @@ def holder_is_live(
     Errs towards True: reading a transient API failure as 'dead' would break a
     live holder's lease, whereas erring live only costs the waiter/pauser one more
     cycle. A completed run, a deleted run, or a hold past the TTL backstop is dead.
+
+    A holder from another repo (``holder.repo``) is read with
+    ``GH_RUNS_TOKEN``, which can read that repo's runs. Without it the run is
+    unreadable, and an unreadable run is treated as live: a 404 from a token
+    that cannot see the repo would otherwise read as a deleted run and break a
+    live holder's lease.
     """
-    response = gh_request("GET", f"repos/{repo}/actions/runs/{holder.run_id}")
+    runs_repo, token = repo, None
+    if holder.repo and holder.repo != repo:
+        runs_repo, token = holder.repo, os.environ.get("GH_RUNS_TOKEN")
+        if not token:
+            print(
+                f"::warning::run {holder.run_id} holds this lease from "
+                f"{holder.repo}, and GH_RUNS_TOKEN is not set to read it; "
+                "treating its lease as still held."
+            )
+            return True
+    response = gh_request(
+        "GET", f"repos/{runs_repo}/actions/runs/{holder.run_id}", token=token
+    )
     if response.status == 404:
         return False
     if response.status >= 400 or not isinstance(response.body, dict):
         print(
-            f"::warning::could not read run {holder.run_id} in {repo} "
+            f"::warning::could not read run {holder.run_id} in {runs_repo} "
             f"(HTTP {response.status}); treating its lease as still held."
         )
         return True

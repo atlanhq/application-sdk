@@ -20,6 +20,7 @@ import ast
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from _gh_refs import (
@@ -187,7 +188,7 @@ class _FakeHTTP:
     def __init__(self, routes: dict[str, tuple[int, object]]) -> None:
         self.routes = routes
 
-    def __call__(self, cmd: list[str], **kwargs):
+    def __call__(self, cmd: list[str], **kwargs: Any) -> "_Completed":
         url = cmd[-1]
         for fragment, (status, body) in self.routes.items():
             if fragment in url:
@@ -247,6 +248,77 @@ def test_an_acquisition_before_its_own_run_is_not_trusted(http) -> None:
     )
     holder = Holder(run_id=7, attempt=1, acquired_at=0.0)
     assert holder_is_live(REPO, holder, ttl_seconds=1, now=1e9) is True
+
+
+class _RecordingHTTP(_FakeHTTP):
+    """Also records each request's URL and the token it was sent with."""
+
+    def __init__(self, routes: dict[str, tuple[int, object]]) -> None:
+        super().__init__(routes)
+        self.sent: list[tuple[str, str]] = []
+
+    def __call__(self, cmd: list[str], **kwargs: Any) -> Any:
+        self.sent.append((cmd[-1], str(kwargs.get("input", ""))))
+        return super().__call__(cmd)
+
+
+def test_a_holder_from_another_repo_is_read_there_with_the_runs_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FND-5377: a lease shared by several repos' runs."""
+    monkeypatch.setenv("GH_TOKEN", "lease-token")
+    monkeypatch.setenv("GH_RUNS_TOKEN", "runs-token")
+    fake = _RecordingHTTP({"/actions/runs/": (200, {"status": "completed"})})
+    monkeypatch.setattr("_gh_refs.run", fake)
+    holder = Holder(run_id=7, attempt=1, acquired_at=None, repo="atlanhq/other-app")
+
+    assert holder_is_live(REPO, holder, ttl_seconds=0, now=0.0) is False
+    [(url, config)] = fake.sent
+    assert url.endswith("repos/atlanhq/other-app/actions/runs/7")
+    assert "runs-token" in config
+    assert "lease-token" not in config
+
+
+def test_a_holder_from_another_repo_without_the_runs_token_is_held(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A token that cannot see the repo would get a 404, which reads as a
+    deleted run, and would break a live holder's lease."""
+    monkeypatch.setenv("GH_TOKEN", "lease-token")
+    monkeypatch.delenv("GH_RUNS_TOKEN", raising=False)
+    fake = _RecordingHTTP({})
+    monkeypatch.setattr("_gh_refs.run", fake)
+    holder = Holder(run_id=7, attempt=1, acquired_at=0.0, repo="atlanhq/other-app")
+
+    assert holder_is_live(REPO, holder, ttl_seconds=1, now=1e9) is True
+    assert fake.sent == []
+    assert "GH_RUNS_TOKEN is not set" in capsys.readouterr().out
+
+
+def test_a_holder_from_this_repo_keeps_the_jobs_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "lease-token")
+    monkeypatch.setenv("GH_RUNS_TOKEN", "runs-token")
+    fake = _RecordingHTTP({"/actions/runs/": (404, {"message": "Not Found"})})
+    monkeypatch.setattr("_gh_refs.run", fake)
+    for holder in (
+        Holder(run_id=7, attempt=1, acquired_at=None),
+        Holder(run_id=7, attempt=1, acquired_at=None, repo=REPO),
+    ):
+        assert holder_is_live(REPO, holder, ttl_seconds=0, now=0.0) is False
+    assert all(
+        f"repos/{REPO}/" in url and "lease-token" in config for url, config in fake.sent
+    )
+
+
+def test_the_run_url_names_the_holders_own_repo() -> None:
+    assert Holder(7, 1, None, repo="atlanhq/other-app").run_url(REPO) == (
+        "https://github.com/atlanhq/other-app/actions/runs/7"
+    )
+    assert (
+        Holder(7, 1, None).run_url(REPO) == f"https://github.com/{REPO}/actions/runs/7"
+    )
 
 
 def test_read_ref_target_reports_an_absent_ref_as_unheld(http) -> None:

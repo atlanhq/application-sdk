@@ -634,3 +634,19 @@ marker rather than dispatching it: an older file would publish an e2e-only run
 under the required `tests / …` checks and override the PR's real results
 (FND-3839). Renaming a context or the dispatch inputs needs the old name
 accepted until every repo has resynced.
+
+## The e2e routing key (`routeToCommonAPIServerOnTargetedRelease`)
+
+| | |
+|---|---|
+| **Produced by** | `with_common_host_route()` in `.github/scripts/e2e_tenant_app.py`, on the e2e install of a hosted api app (`--route-to-common-host`) |
+| **Sent as** | A top-level key of the deploy config the e2e registration publishes to GM, beside `routeToCommonAPIServer`, set to `common-api-server-e2e` |
+| **Read by** | local-marketplace's `route_target()` (`src/commons/common_api_server.py`): on a `specific`-channel release, with that exact value, and only when the e2e host is installed, the app is aliased to the e2e-only host; the shared host never claims it |
+| **Pinned by** | `test_the_route_key_and_host_match_what_local_marketplace_reads` in `.github/scripts/tests/test_e2e_tenant_app.py` |
+
+Only the e2e install sets it, and only for an app that already sets
+`routeToCommonAPIServer: true`. Renaming the host on one side fails the install:
+LM refuses any value but `common-api-server-e2e`. Renaming the key on one side
+is silent: LM sees no key, treats the release as an ordinary canary and serves
+the app from its own pods, which tests the PR code but not on a host. The
+contract test above is what guards the key.

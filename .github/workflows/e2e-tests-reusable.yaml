@@ -362,6 +362,328 @@ jobs:
           IMAGE: ${{ needs.build-e2e-image.outputs.image-base }}
         run: echo "tag=${IMAGE##*:}" >> "$GITHUB_OUTPUT"
 
+  # ── common-app-server build for a hosted api app (FND-5377) ──────────────
+  # A hosted api app (deploy.routeToCommonAPIServer: true) serves its routes
+  # from common-app-server. Its e2e runs them on a host carrying this commit's
+  # code without touching the shared host: the image built here is installed
+  # as the e2e-only host (common-api-server-e2e) under a lease every hosted app
+  # shares, and the app is installed with routeToCommonAPIServerOnTargetedRelease
+  # naming that host, so LM routes only this app to it. For any other app this
+  # job only reads atlan.yaml and the jobs after it are skipped.
+  prepare-host-image:
+    name: Prepare common-app-server build
+    if: inputs.install-app-to-tenant
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      hosted: ${{ steps.detect.outputs.hosted }}
+      host-rev: ${{ steps.host-rev.outputs.sha }}
+      host-app-id: ${{ steps.e2e-host.outputs.app_id }}
+      host-deploy-config: ${{ steps.host_yaml.outputs.deploy_config }}
+      host-sdk-version: ${{ steps.host_yaml.outputs.sdk_version }}
+      host-entrypoints: ${{ steps.host_yaml.outputs.entrypoints }}
+      host-release-model: ${{ steps.host_yaml.outputs.release_model }}
+      host-enable-sdr: ${{ steps.host_yaml.outputs.enable_sdr }}
+      hosted-repos: ${{ steps.hosted-repos.outputs.repos }}
+      image: ${{ steps.image.outputs.image }}
+      version: ${{ steps.image.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      - name: Is this a hosted api app?
+        id: detect
+        run: python3 application-sdk-scripts/.github/scripts/common_host_e2e.py detect >> "$GITHUB_OUTPUT"
+
+      - name: Mint a read token for common-app-server
+        id: host-token
+        if: steps.detect.outputs.hosted == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: common-app-server
+          permission-contents: read
+
+      - name: Check out common-app-server at main
+        if: steps.detect.outputs.hosted == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/common-app-server
+          ref: main
+          path: common-app-server
+          token: ${{ steps.host-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Read the host commit
+        id: host-rev
+        if: steps.detect.outputs.hosted == 'true'
+        working-directory: common-app-server
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Read the e2e host's app id
+        id: e2e-host
+        if: steps.detect.outputs.hosted == 'true'
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/common_host_e2e.py e2e-host \
+            --file common-app-server/e2e-host.toml \
+            --shared-atlan-yaml common-app-server/atlan.yaml >> "$GITHUB_OUTPUT"
+
+      - name: List the hosted apps' repos
+        id: hosted-repos
+        if: steps.detect.outputs.hosted == 'true'
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/common_host_e2e.py hosted-repos \
+            --pins common-app-server/hosted-api-apps.toml >> "$GITHUB_OUTPUT"
+
+      # The stage step clones every hosted app and application-sdk; uv clones the
+      # lock's private git sources. Logic: common-app-server's token_repos.py.
+      - name: List the repos the host build clones
+        id: build-repos
+        if: steps.detect.outputs.hosted == 'true'
+        working-directory: common-app-server
+        run: |
+          set -euo pipefail
+          python3 scripts/token_repos.py >> "$GITHUB_OUTPUT"
+
+      - name: Mint a read token for those repos
+        id: build-token
+        if: steps.detect.outputs.hosted == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ steps.build-repos.outputs.list }}
+          permission-contents: read
+
+      - name: Authenticate git for those repos
+        if: steps.detect.outputs.hosted == 'true'
+        env:
+          TOKEN: ${{ steps.build-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${TOKEN}@github.com/atlanhq/".insteadOf \
+            "https://github.com/atlanhq/"
+
+      - name: Install uv
+        if: steps.detect.outputs.hosted == 'true'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+
+      # Writes hosted-api-apps.overrides.toml for this app only, then re-stages,
+      # re-locks and re-syncs atlan.yaml (common-app-server's e2e_host_build.py).
+      # The same commit the app's own e2e image is built from.
+      - name: Prepare the host build for this commit
+        id: prepare
+        if: steps.detect.outputs.hosted == 'true'
+        working-directory: common-app-server
+        env:
+          APP_REPO: ${{ github.repository }}
+          APP_REV: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/e2e_host_build.py --app-repo "$APP_REPO" --rev "$APP_REV" >> "$GITHUB_OUTPUT"
+
+      # After the re-sync, so the deploy config carries this app's env as it
+      # is at this commit. prepare-tenant installs from these outputs.
+      - name: Read the prepared host's atlan.yaml
+        id: host_yaml
+        if: steps.detect.outputs.hosted == 'true'
+        working-directory: common-app-server
+        run: python3 ../application-sdk-scripts/.github/scripts/parse_atlan_yaml.py
+
+      - name: Name the host image
+        id: image
+        if: steps.detect.outputs.hosted == 'true'
+        env:
+          APP_KEY: ${{ steps.prepare.outputs.app }}
+          APP_REV: ${{ github.sha }}
+          HOST_REV: ${{ steps.host-rev.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/common_host_e2e.py image \
+            --app-key "$APP_KEY" --app-rev "$APP_REV" --host-rev "$HOST_REV" >> "$GITHUB_OUTPUT"
+
+      # The prepared files, so both arch builds and the install use ONE re-lock
+      # (its release-age window is relative to now).
+      # Consumers read it by `common-host-build*`, so the retry's own name
+      # (a same-named retry 409s, see conformance-*.yaml) is found as well.
+      - name: Keep the prepared host files
+        if: steps.detect.outputs.hosted == 'true'
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+        with:
+          name: common-host-build
+          path: |
+            common-app-server/hosted-api-apps.overrides.toml
+            common-app-server/uv.lock
+            common-app-server/atlan.yaml
+          retention-days: 1
+          if-no-files-found: error
+
+  build-host-image:
+    name: Build common-app-server image (${{ matrix.arch }})
+    needs: prepare-host-image
+    if: needs.prepare-host-image.outputs.hosted == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Mint a read token for common-app-server
+        id: host-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: common-app-server
+          permission-contents: read
+
+      - name: Check out common-app-server at the prepared commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/common-app-server
+          ref: ${{ needs.prepare-host-image.outputs.host-rev }}
+          path: common-app-server
+          token: ${{ steps.host-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Lay the prepared host files over it
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+        with:
+          pattern: common-host-build*
+          path: common-app-server
+
+      # A pattern that matches nothing downloads nothing and still succeeds (an
+      # expired artifact on a re-run, say). The build would then stage the
+      # release pins under this commit's e2e tag and test the wrong code.
+      - name: Require the prepared overrides file
+        run: test -s common-app-server/hosted-api-apps.overrides.toml
+
+      - name: List the repos the host build clones
+        id: build-repos
+        working-directory: common-app-server
+        run: |
+          set -euo pipefail
+          python3 scripts/token_repos.py >> "$GITHUB_OUTPUT"
+
+      - name: Mint a read token for those repos
+        id: build-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ steps.build-repos.outputs.list }}
+          permission-contents: read
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      # Non-production by construction: the override build arg is what lets the
+      # Dockerfile stage the overrides file, and this image is installed on the
+      # e2e tenant only (allowed_tenants).
+      - name: Build and push the host image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: common-app-server
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: ${{ needs.prepare-host-image.outputs.image }}-${{ matrix.arch }}
+          build-args: |
+            ATLAN_API_APPS_ALLOW_OVERRIDES=1
+          secrets: |
+            git_token=${{ steps.build-token.outputs.token }}
+          cache-from: type=gha,scope=common-host-e2e-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=common-host-e2e-${{ matrix.arch }},ignore-error=true
+          provenance: false
+
+  merge-host-image:
+    name: Merge common-app-server image manifest
+    needs: [prepare-host-image, build-host-image]
+    if: needs.build-host-image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Fetch SDK CI scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Create the multi-arch manifest
+        env:
+          IMAGE: ${{ needs.prepare-host-image.outputs.image }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "$IMAGE" \
+            "${IMAGE}-amd64" "${IMAGE}-arm64"
+
+      - name: Assert the manifest serves both architectures
+        env:
+          IMAGE: ${{ needs.prepare-host-image.outputs.image }}
+        run: |
+          set -euo pipefail
+          RAW=$(application-sdk-scripts/.github/scripts/with-retry.sh \
+            docker buildx imagetools inspect --raw "$IMAGE")
+          printf '%s' "$RAW" \
+            | python3 application-sdk-scripts/.github/scripts/assert_image_platforms.py \
+                --expected linux/amd64,linux/arm64
+
   # ── Is the SDK commit under test still the one under review? ─────────────
   # The SDK-side dispatch guard drops a fan-out whose SHA has already been
   # superseded (e2e_dispatch_guard.py, FND-696), but it can only see the window
@@ -496,7 +818,7 @@ jobs:
   # changes the version under them.
   lease-tenant:
     name: Tenant lease
-    needs: [merge-e2e-image, sdk-head-recheck]
+    needs: [merge-e2e-image, sdk-head-recheck, prepare-host-image, merge-host-image]
     # `always()` here is load-bearing and is what makes the recheck fail-open. A
     # job's `needs` gate is evaluated separately from its `if:`, and without a
     # status-check function GitHub applies an implicit success() over every need
@@ -513,13 +835,17 @@ jobs:
       always() &&
       inputs.install-app-to-tenant &&
       needs.merge-e2e-image.result == 'success' &&
-      needs.sdk-head-recheck.outputs.superseded != 'true'
+      needs.sdk-head-recheck.outputs.superseded != 'true' &&
+      needs.prepare-host-image.result == 'success' &&
+      (needs.prepare-host-image.outputs.hosted != 'true' || needs.merge-host-image.result == 'success')
     runs-on: ubuntu-latest
     # Above the action's own 90-minute wait budget, which is now a budget for the
     # WHOLE ordered set rather than per cloud — so this still bounds the job, and
     # a run that queues for the full budget still reaches the script's own error
     # (which names the holding run) instead of a bare "job cancelled after Nm".
-    timeout-minutes: 100
+    # A hosted api app waits twice in a row, for its own lease and then the
+    # common-app-server one (FND-5377), so the ceiling clears two budgets.
+    timeout-minutes: 190
     permissions:
       # Ref writes create and delete the lease ticket. Scoped to THIS job on
       # purpose: the long-running e2e legs below keep read-only contents, so the
@@ -586,6 +912,50 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT"
 
+      # FND-5377. One common-app-server per tenant, so one hosted api app's e2e
+      # per tenant at a time: a second lease, shared by every hosted app's runs,
+      # living in common-app-server's repo. Always taken AFTER the app's own
+      # lease, so the order is the same for every run. A waiter reads the holding
+      # run in that run's own repo, hence the second, read-only token.
+      - name: Mint the common-app-server lease token
+        id: host-lease-token
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: common-app-server
+          permission-contents: write
+
+      - name: Mint a token to read the hosted apps' runs
+        id: host-runs-token
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ needs.prepare-host-image.outputs.hosted-repos }}
+          permission-actions: read
+
+      - name: Acquire the common-app-server leases
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        env:
+          CLOUDS: ${{ inputs.e2e-cloud-list }}
+          GH_TOKEN: ${{ steps.host-lease-token.outputs.token }}
+          GH_RUNS_TOKEN: ${{ steps.host-runs-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
+            --mode acquire \
+            --repo atlanhq/common-app-server \
+            --holder-repo "$GITHUB_REPOSITORY" \
+            --app common-app-server \
+            --clouds "$CLOUDS" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
   # ── Install the app under test onto each cloud's tenant ──────────────────
   # One leg per CLOUD, not per suite × cloud: the installation is tenant-scoped
   # (one per app per tenant), so installing once per cloud is both sufficient and
@@ -596,7 +966,7 @@ jobs:
   # legs can never disagree about which clouds are in play.
   prepare-tenant:
     name: Prepare tenant (${{ matrix.cloud || 'default' }})
-    needs: [merge-e2e-image, lease-tenant]
+    needs: [merge-e2e-image, lease-tenant, prepare-host-image]
     # Gated on lease-tenant having RUN, not on it having succeeded, and then each
     # leg confirms its OWN cloud's lease in its first step.
     #
@@ -672,7 +1042,11 @@ jobs:
     # 50 → 65 for the 15-min "Restore the previous version" step, which runs
     # only after a failed install and so sits on top of the install budget, not
     # inside it. The lease TTL rose to 16800s with it (1.5 × (65 + 120) min).
-    timeout-minutes: 65
+    #
+    # 65 → 115 for a hosted api app's common-app-server install (FND-5377), a
+    # second install of the same shape before the app's own. The lease TTL rose
+    # to 21600s with it (1.5 × (115 + 120) min).
+    timeout-minutes: 115
     concurrency:
       # Run-unique, i.e. deliberately NOT a serialising group. Tenant exclusion
       # is the lease's job now (lease-tenant above), and the lease is strictly
@@ -810,6 +1184,80 @@ jobs:
       # atlan.yaml, which parse_atlan_yaml.py already reads for the release path.
       # Reused rather than re-parsed so the e2e registration and the release
       # registration cannot disagree about what the app declares.
+      # ── common-app-server, for a hosted api app (FND-5377) ─────────────────
+      # The build prepare-host-image made for this commit is installed as the
+      # e2e-only host, BEFORE the app and under the lease every hosted app
+      # shares. Its deploy config comes from the host's atlan.yaml, re-synced
+      # with this app's env, as prepare-host-image read it; --app-id makes it
+      # the e2e host, never the shared one that atlan.yaml names.
+      - name: Mint a read token for common-app-server
+        id: host-token
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: common-app-server
+          permission-contents: read
+
+      - name: Confirm this run holds the common-app-server lease
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          GH_TOKEN: ${{ steps.host-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
+            --mode verify \
+            --repo atlanhq/common-app-server \
+            --app common-app-server \
+            --cloud "$CLOUD" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      # GitHub drops a job output that holds a masked value, which would install
+      # the host with chart defaults. Refuse that rather than install it.
+      - name: Require the host deploy config
+        if: needs.prepare-host-image.outputs.hosted == 'true' && needs.prepare-host-image.outputs.host-deploy-config == ''
+        run: |
+          echo "::error::prepare-host-image passed no host deploy config (an empty output, or one GitHub dropped because it held a masked value); the e2e host would install with chart defaults."
+          exit 1
+
+      # --records-only: the build-identity route answers for an app pod, never
+      # for the host, so any build it reports belongs to something else.
+      - name: Install the common-app-server build as the e2e host
+        id: host-install
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        timeout-minutes: 45
+        env:
+          HOST_APP_ID: ${{ needs.prepare-host-image.outputs.host-app-id }}
+          IMAGE: ${{ needs.prepare-host-image.outputs.image }}
+          VERSION: ${{ needs.prepare-host-image.outputs.version }}
+          DEPLOY_CONFIG: ${{ needs.prepare-host-image.outputs.host-deploy-config }}
+          SDK_VERSION: ${{ needs.prepare-host-image.outputs.host-sdk-version }}
+          ENTRYPOINTS: ${{ needs.prepare-host-image.outputs.host-entrypoints }}
+          RELEASE_MODEL: ${{ needs.prepare-host-image.outputs.host-release-model }}
+          ENABLE_SDR: ${{ needs.prepare-host-image.outputs.host-enable-sdr }}
+          CREATED_BY: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py install \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-id "$HOST_APP_ID" \
+            --image "$IMAGE" \
+            --version "$VERSION" \
+            --branch main \
+            --tenant "${E2E_TENANT_ID:-}" \
+            --repo-url https://github.com/atlanhq/common-app-server \
+            --deploy-config "$DEPLOY_CONFIG" \
+            --sdk-version "$SDK_VERSION" \
+            --entrypoints "$ENTRYPOINTS" \
+            --release-model "$RELEASE_MODEL" \
+            --self-deployed-runtime "$ENABLE_SDR" \
+            --created-by "$CREATED_BY" \
+            --records-only true
+
       - name: Read atlan.yaml
         id: atlan_yaml
         run: python3 application-sdk-scripts/.github/scripts/parse_atlan_yaml.py
@@ -863,6 +1311,9 @@ jobs:
           ENABLE_SDR: ${{ steps.atlan_yaml.outputs.enable_sdr }}
           APP_CONFIGS: ${{ steps.app_configs.outputs.app_configs }}
           CREATED_BY: ${{ github.triggering_actor }}
+          # FND-5377: a hosted api app's routes are served by the e2e host
+          # installed above; LM routes only this app to it.
+          ROUTE_TO_COMMON_HOST: ${{ needs.prepare-host-image.outputs.hosted == 'true' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py install \
@@ -878,7 +1329,8 @@ jobs:
             --release-model "$RELEASE_MODEL" \
             --self-deployed-runtime "$ENABLE_SDR" \
             --app-configs "$APP_CONFIGS" \
-            --created-by "$CREATED_BY"
+            --created-by "$CREATED_BY" \
+            --route-to-common-host "$ROUTE_TO_COMMON_HOST"
         # --install-retry-seconds is left at its default (600). A freshly
         # published release is not immediately installable: LM resolves the
         # install against its tenant-catalog snapshot, which excludes a release
@@ -1008,6 +1460,10 @@ jobs:
         sdk-head-recheck,
         lease-tenant,
         prepare-tenant,
+        # Outputs only (FND-5377): whether this is a hosted api app, and the
+        # common-app-server build each leg verifies. lease-tenant already
+        # requires it, and a failed lease stops the legs.
+        prepare-host-image,
       ]
     # The superseded clause is gated on the OUTPUT, never on the job result, and
     # it has to be: a skipped lease-tenant is the benign value in the clauses
@@ -1184,6 +1640,23 @@ jobs:
             --fallback-client-secret "$FALLBACK_SDR_CLIENT_SECRET" \
             --fallback-api-key "$FALLBACK_ATLAN_API_KEY" \
             >> "$GITHUB_ENV"
+
+      # FND-5377: a hosted api app's routes are served by the common-app-server
+      # build this run installed, so that is checked too, before every leg, for
+      # the same reason as the app's own check: a tenant is shared. Records
+      # only: the build-identity route never answers for the host.
+      - name: Verify the tenant runs this run's common-app-server build
+        if: needs.prepare-host-image.outputs.hosted == 'true'
+        env:
+          HOST_APP_ID: ${{ needs.prepare-host-image.outputs.host-app-id }}
+          EXPECTED: ${{ needs.prepare-host-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_app.py verify \
+            --base-url "$ATLAN_BASE_URL" \
+            --app-id "$HOST_APP_ID" \
+            --expected "$EXPECTED" \
+            --records-only true
 
       # See the integration job above for why this is two invocations, why the
       # `--mask-only` pass has to come first, and why `set -e` is explicit.
@@ -1385,7 +1858,7 @@ jobs:
   # there to delete, so a release hiccup cannot redden a run whose tests passed.
   release-tenant:
     name: Release tenant lease (${{ matrix.cloud || 'default' }})
-    needs: [lease-tenant, prepare-tenant, e2e]
+    needs: [lease-tenant, prepare-tenant, e2e, prepare-host-image]
     # Still a per-cloud MATRIX while the acquire is one ordered job (FND-646), and
     # deliberately so: release cannot block, is ownership-checked, and is
     # idempotent, so there is no hold-and-wait to remove here — and one leg per
@@ -1435,6 +1908,33 @@ jobs:
             --mode release \
             --repo "$GITHUB_REPOSITORY" \
             --app "$APP" \
+            --cloud "$CLOUD" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      # FND-5377: hand back the lease on the e2e host however the legs ended.
+      - name: Mint the common-app-server lease token
+        id: host-lease-token
+        if: always() && needs.prepare-host-image.outputs.hosted == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: common-app-server
+          permission-contents: write
+
+      - name: Release the common-app-server lease
+        if: always() && needs.prepare-host-image.outputs.hosted == 'true'
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          GH_TOKEN: ${{ steps.host-lease-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/e2e_tenant_lease.py \
+            --mode release \
+            --repo atlanhq/common-app-server \
+            --app common-app-server \
             --cloud "$CLOUD" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT"

@@ -374,6 +374,116 @@ def test_store_assert_override_refuses_a_malformed_deploy_config(
         app.with_store_assert_override(deploy_config, "t1")
 
 
+# ── common-app-server route (FND-5377) ───────────────────────────────────────
+
+
+def test_common_host_route_sets_the_targeted_release_flag() -> None:
+    yaml = pytest.importorskip("yaml")
+    merged = app.with_common_host_route(
+        "routeToCommonAPIServer: true\nenv:\n  A: '1'\n"
+    )
+    assert yaml.safe_load(merged) == {
+        "routeToCommonAPIServer": True,
+        "env": {"A": "1"},
+        "routeToCommonAPIServerOnTargetedRelease": "common-api-server-e2e",
+    }
+
+
+@pytest.mark.parametrize(
+    "deploy_config",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("- a\n", id="not-a-mapping"),
+        pytest.param("env: {}\n", id="no-route-flag"),
+        pytest.param("routeToCommonAPIServer: false\n", id="route-flag-off"),
+        pytest.param("routeToCommonAPIServer: 'true'\n", id="route-flag-a-string"),
+    ],
+)
+def test_common_host_route_refuses_an_app_that_does_not_route_there(
+    deploy_config: str,
+) -> None:
+    pytest.importorskip("yaml")
+    with pytest.raises(app.TenantAppError):
+        app.with_common_host_route(deploy_config)
+
+
+@pytest.mark.parametrize("route", [True, False])
+def test_the_install_adds_the_route_flag_only_when_asked(route: bool) -> None:
+    yaml = pytest.importorskip("yaml")
+    args = argparse.Namespace(
+        deploy_config="routeToCommonAPIServer: true\n", route_to_common_host=route
+    )
+    merged = yaml.safe_load(app._install_deploy_config(args, "t1"))
+    assert merged["env_overrides"] == {"t1": {"ATLAN_STORE_ASSERT_ENABLED": "true"}}
+    assert ("routeToCommonAPIServerOnTargetedRelease" in merged) is route
+
+
+def test_the_route_key_and_host_match_what_local_marketplace_reads() -> None:
+    # Cross-repo contract: local-marketplace's route_target() reads this key and
+    # accepts only this host name.
+    assert (
+        app.COMMON_HOST_TARGETED_ROUTE_FLAG == "routeToCommonAPIServerOnTargetedRelease"
+    )
+    assert app.COMMON_HOST_E2E == "common-api-server-e2e"
+
+
+def test_the_cli_parses_records_only_for_install_and_verify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[argparse.Namespace] = []
+    monkeypatch.setattr(
+        app, "install", lambda a: seen.append(a) or app.InstallOutcome(version="v")
+    )
+    monkeypatch.setattr(app, "verify", lambda a: seen.append(a) or "v")
+    monkeypatch.setattr(app, "set_outputs", lambda *args, **kwargs: None)
+    assert (
+        app.main(
+            [
+                "install",
+                "--base-url",
+                _TENANT,
+                "--image",
+                "i",
+                "--version",
+                "v",
+                "--branch",
+                "b",
+                "--tenant",
+                "t1",
+                "--records-only",
+                "true",
+            ]
+        )
+        == 0
+    )
+    assert app.main(["verify", "--base-url", _TENANT, "--expected", "v"]) == 0
+    assert [a.records_only for a in seen] == [True, False]
+
+
+def test_the_cli_parses_the_route_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[argparse.Namespace] = []
+    monkeypatch.setattr(
+        app, "install", lambda a: seen.append(a) or app.InstallOutcome(version="v")
+    )
+    monkeypatch.setattr(app, "set_outputs", lambda *args, **kwargs: None)
+    base = [
+        "install",
+        "--base-url",
+        _TENANT,
+        "--image",
+        "i",
+        "--version",
+        "v",
+        "--branch",
+        "b",
+        "--tenant",
+        "t1",
+    ]
+    assert app.main(base) == 0
+    assert app.main([*base, "--route-to-common-host", "true"]) == 0
+    assert [a.route_to_common_host for a in seen] == [False, True]
+
+
 def _publish_route_stub() -> StubTransport:
     return StubTransport(
         routes=[
@@ -981,6 +1091,48 @@ def test_verify_passes_on_the_pod_layer_without_reading_the_record(
         "a pod that reports the build under test settles it; reading the "
         "install record as well could only weaken the answer"
     )
+
+
+def test_verify_records_only_never_asks_the_pod(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FND-5377: the build-identity route answers for an app pod, so for
+    common-app-server any build it reports belongs to something else."""
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[],
+            sticky=[
+                StubRoute(
+                    "GET",
+                    f"/configmaps/{app.BUILD_IDENTITY_CONFIGMAP_ID}",
+                    _pod_identity("some-app-build"),
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+        ),
+    )
+    args = _verify_args(_VERSION)
+    args.records_only = True
+    assert app.verify(args) == _VERSION
+    assert not [
+        p for p in transport.paths("GET") if p.endswith(app.BUILD_IDENTITY_CONFIGMAP_ID)
+    ]
+
+
+def test_verify_records_only_still_fails_on_the_wrong_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[], sticky=[StubRoute("GET", "/info", _ok({"version": "other"}))]
+        ),
+    )
+    args = _verify_args(_VERSION)
+    args.records_only = True
+    with pytest.raises(app.TenantAppError, match="other"):
+        app.verify(args)
 
 
 def test_verify_says_which_layer_decided(

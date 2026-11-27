@@ -122,6 +122,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from _gha import set_outputs
 from e2e_tenant_api import (
@@ -823,6 +824,15 @@ def parse_pod_identity(payload: dict[str, object]) -> PodIdentity:
         build_id=str(fields.get("build_id") or "").strip(),
         app_name=str(fields.get("app_name") or "").strip(),
     )
+
+
+#: What ``--records-only`` answers instead of asking a pod (FND-5377): the
+#: build-identity route reaches an app pod, never a host, so for a host there
+#: is nothing to ask and the records decide.
+RECORDS_ONLY_IDENTITY = PodIdentity(
+    reachable=False,
+    detail="--records-only: the build-identity route does not reach this app",
+)
 
 
 def read_pod_build_identity(client: TenantClient) -> PodIdentity:
@@ -2586,6 +2596,54 @@ def with_store_assert_override(deploy_config: str, tenant: str) -> str:
     return yaml.safe_dump(parsed, default_flow_style=False, sort_keys=False)
 
 
+#: The flag a hosted api app sets to serve its routes from common-app-server.
+COMMON_HOST_ROUTE_FLAG = "routeToCommonAPIServer"
+#: Read by local-marketplace (``route_target``): a tenant-targeted release
+#: carrying it, set to :data:`COMMON_HOST_E2E`, serves from the e2e-only host
+#: instead of the app's own pods. Only this install sets it (FND-5377).
+COMMON_HOST_TARGETED_ROUTE_FLAG = "routeToCommonAPIServerOnTargetedRelease"
+#: The e2e-only common-app-server: the only value local-marketplace accepts.
+COMMON_HOST_E2E = "common-api-server-e2e"
+
+
+def with_common_host_route(deploy_config: str) -> str:
+    """Return *deploy_config* routing the app to the e2e-only host.
+
+    The run installs a common-app-server build carrying this PR's code as the
+    e2e host, so the app's routes must be served there even though its release
+    is targeted at one tenant. GM strips the ``deploy:`` wrapper, so the key
+    sits at the top level of the block, beside ``routeToCommonAPIServer``.
+
+    Raises:
+        TenantAppError: *deploy_config* is not a YAML mapping, or the app does
+            not route to common-app-server at all.
+    """
+    try:
+        import yaml  # noqa: PLC0415 — lazy: see resolve_app_id
+    except ModuleNotFoundError as exc:
+        raise TenantAppError(
+            "PyYAML is needed to add the common-host route flag; run the "
+            "install on the runner's system Python, which has it."
+        ) from exc
+    parsed = yaml.safe_load(deploy_config) if deploy_config.strip() else None
+    if not isinstance(parsed, dict):
+        raise TenantAppError("deploy config is not a YAML mapping")
+    if cast("dict[str, object]", parsed).get(COMMON_HOST_ROUTE_FLAG) is not True:
+        raise TenantAppError(
+            f"--route-to-common-host needs deploy.{COMMON_HOST_ROUTE_FLAG}: true "
+            "in atlan.yaml; this app does not serve from common-app-server"
+        )
+    parsed[COMMON_HOST_TARGETED_ROUTE_FLAG] = COMMON_HOST_E2E
+    return yaml.safe_dump(parsed, default_flow_style=False, sort_keys=False)
+
+
+def _install_deploy_config(args: argparse.Namespace, tenant: str) -> str:
+    deploy_config = with_store_assert_override(args.deploy_config, tenant)
+    if getattr(args, "route_to_common_host", False):
+        deploy_config = with_common_host_route(deploy_config)
+    return deploy_config
+
+
 def install(args: argparse.Namespace) -> InstallOutcome:
     """Register + install + wait, converging by version."""
     # app_id is a free-text workflow input that lands in request paths; the
@@ -2689,7 +2747,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         # Every publish carries the override. The converged early return above
         # skips it; see the comment there for why that cannot reach a suite
         # with store expectations, and why it fails closed if it does.
-        deploy_config=with_store_assert_override(args.deploy_config, tenant),
+        deploy_config=_install_deploy_config(args, tenant),
         self_deployed_runtime=args.self_deployed_runtime,
         sdk_version=args.sdk_version,
         entrypoints=args.entrypoints,
@@ -2858,7 +2916,10 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # and is where the race actually costs a leg. If the reconcile window is ever
     # measured to outlast a leg's own wait, this is the place to spend it, and
     # raising the job's ceiling is the price.
-    pod = read_pod_build_identity(read_client)
+    if getattr(args, "records_only", False):
+        pod = RECORDS_ONLY_IDENTITY
+    else:
+        pod = read_pod_build_identity(read_client)
     if pod.reachable and pod.build_id and pod.build_id != args.version:
         raise TenantAppError(
             f"the tenant's install record and deployment both report "
@@ -3078,7 +3139,10 @@ def verify(args: argparse.Namespace) -> str:
     _, read_client = _clients(base_url)
 
     pod_wait = int(getattr(args, "pod_wait_seconds", DEFAULT_POD_WAIT_SECONDS))
-    pod = await_pod_build_identity(read_client, pod_wait, _progress)
+    if getattr(args, "records_only", False):
+        pod = RECORDS_ONLY_IDENTITY
+    else:
+        pod = await_pod_build_identity(read_client, pod_wait, _progress)
     if pod.reachable and pod.build_id:
         if pod.build_id != args.expected:
             raise TenantAppError(
@@ -3217,6 +3281,31 @@ def main(argv: list[str] | None = None) -> int:
     p_install.add_argument("--release-model", default="")
     p_install.add_argument("--created-by", default="")
     p_install.add_argument(
+        "--route-to-common-host",
+        type=_true_false,
+        nargs="?",
+        const=True,
+        default=False,
+        help=(
+            "'true' for a hosted api app whose e2e runs through common-app-server "
+            f"(FND-5377): sets {COMMON_HOST_TARGETED_ROUTE_FLAG} in the deploy "
+            "config, so LM serves the app's routes from the host this run "
+            "installed. 'false' (the default) changes nothing."
+        ),
+    )
+    p_install.add_argument(
+        "--records-only",
+        type=_true_false,
+        nargs="?",
+        const=True,
+        default=False,
+        help=(
+            "Skip the pod read and settle on LM's records. For common-app-server "
+            "(FND-5377): the build-identity route answers for an app pod, never "
+            "for the host."
+        ),
+    )
+    p_install.add_argument(
         "--scan-wait-seconds",
         type=int,
         default=0,
@@ -3273,6 +3362,18 @@ def main(argv: list[str] | None = None) -> int:
     p_verify = sub.add_parser("verify", help="assert the installed version")
     _add_common(p_verify)
     p_verify.add_argument("--expected", required=True)
+    p_verify.add_argument(
+        "--records-only",
+        type=_true_false,
+        nargs="?",
+        const=True,
+        default=False,
+        help=(
+            "Skip the pod layer and decide on LM's records. For common-app-server "
+            "(FND-5377): the build-identity route answers for an app pod, never "
+            "for the host."
+        ),
+    )
     p_verify.add_argument(
         "--pod-wait-seconds",
         type=int,

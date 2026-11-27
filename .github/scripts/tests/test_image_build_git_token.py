@@ -46,10 +46,16 @@ GITHUB = REPO_ROOT / ".github"
 MINT_ID = "image-git-token"
 #: e2e mints once for the image build and the host-side ``uv sync`` (FND-4901).
 SHARED_MINT = {("e2e-tests-reusable.yaml", "e2e"): "git-deps-token"}
+#: The common-app-server e2e build (FND-5377) is the host's Dockerfile, not the
+#: app's: its stage step clones every hosted app and application-sdk, which no
+#: app's uv.lock names. So it is scoped by the host's own list
+#: (common-app-server's scripts/token_repos.py), the one its PR image probe uses.
+HOST_MINT = {("e2e-tests-reusable.yaml", "build-host-image"): "build-token"}
 
 
 def _mint_id(workflow_file: str, job_id: str) -> str:
-    return SHARED_MINT.get((workflow_file, job_id), MINT_ID)
+    key = (workflow_file, job_id)
+    return SHARED_MINT.get(key) or HOST_MINT.get(key) or MINT_ID
 
 
 def _token_ref(workflow_file: str, job_id: str) -> str:
@@ -68,6 +74,7 @@ SITES = [
     ("build-and-publish-app.yaml", "build", "Build and push arch image"),
     ("build-and-scan.yaml", "build", "build-image"),
     ("build-and-scan.yaml", "build", "build-image-retry"),
+    ("e2e-tests-reusable.yaml", "build-host-image", "Build and push the host image"),
 ]
 SITE_IDS = [f"{wf}:{job}:{loc}" for wf, job, loc in SITES]
 JOBS = sorted({(wf, job) for wf, job, _ in SITES})
@@ -158,6 +165,9 @@ def test_mint_is_scoped_to_the_apps_private_deps(
     build at all" may gate it."""
     job_steps = steps(job(load_workflow(workflow_file), job_id))
     mint_id = _mint_id(workflow_file, job_id)
+    if (workflow_file, job_id) in HOST_MINT:
+        _assert_host_scoped_mint(job_steps, mint_id)
+        return
     cond = next(s for s in job_steps if s.get("id") == mint_id).get("if")
     assert cond in (None, "inputs.image == ''")
     if (workflow_file, job_id) in SHARED_MINT:
@@ -166,6 +176,23 @@ def test_mint_is_scoped_to_the_apps_private_deps(
         assert (workflow_file, job_id, mint_id) in NOT_REQUIRED
         require = "false"
     assert_scoped_mint(job_steps, mint_id=mint_id, cond=cond, require=require)
+
+
+def _assert_host_scoped_mint(job_steps: list[Step], mint_id: str) -> None:
+    """Read-only, scoped to the host's own list, never unscoped."""
+    ids = [s.get("id") for s in job_steps]
+    mint = job_steps[ids.index(mint_id)]
+    assert str(mint["uses"]).startswith("actions/create-github-app-token@")
+    with_ = _map(mint.get("with"))
+    assert with_["permission-contents"] == "read"
+    assert with_["repositories"] == "${{ steps.build-repos.outputs.list }}"
+    assert not any(
+        k.startswith("permission-") and k != "permission-contents" for k in with_
+    )
+    lister = job_steps[ids.index("build-repos")]
+    assert "scripts/token_repos.py" in lister["run"]
+    assert "pipefail" in lister["run"], "a refused scope must fail, not mint unscoped"
+    assert ids.index("build-repos") < ids.index(mint_id)
 
 
 @pytest.mark.parametrize(("workflow_file", "job_id"), JOBS, ids=JOB_IDS)
