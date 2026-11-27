@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import psycopg2
+import psycopg2.errors
 import pytest
 from sqlalchemy import exc as sa_exc
 
@@ -86,6 +87,24 @@ _CASES: list[tuple[str, Any, type[AppError], FailureCategory]] = [
         lambda: psycopg2.OperationalError(
             'connection to server at "db.example.invalid" (10.0.0.5), port 5432 '
             "failed: Connection refused"
+        ),
+        SqlClientSourceUnavailableError,
+        FailureCategory.SOURCE_UNAVAILABLE,
+    ),
+    (
+        # The server is shutting down (SQLSTATE 57P01): psycopg raises a
+        # subclass of OperationalError whose own name matches no hint.
+        "psycopg2-admin-shutdown",
+        lambda: psycopg2.errors.AdminShutdown(
+            "terminating connection due to administrator command"
+        ),
+        SqlClientSourceUnavailableError,
+        FailureCategory.SOURCE_UNAVAILABLE,
+    ),
+    (
+        "psycopg2-cannot-connect-now",
+        lambda: psycopg2.errors.CannotConnectNow(
+            "FATAL:  the database system is shutting down"
         ),
         SqlClientSourceUnavailableError,
         FailureCategory.SOURCE_UNAVAILABLE,

@@ -118,6 +118,19 @@ class SQLClientWrapperError(Exception):
     """A wrapper whose own name and message say nothing about the cause."""
 
 
+class AdminShutdown(OperationalError):
+    """A per-SQLSTATE driver subclass, the way psycopg raises 57P01: its own
+    name matches no hint, only its base class does."""
+
+
+class ProgrammingError(Exception):
+    """Stands in for a DBAPI ``ProgrammingError``."""
+
+
+class UndefinedTable(ProgrammingError):
+    """A per-SQLSTATE subclass of a base that is not a connection failure."""
+
+
 def test_root_cause_of_a_bare_exception_is_itself() -> None:
     exc = ValueError("x")
     assert root_cause(exc) is exc
@@ -173,6 +186,23 @@ def test_root_cause_stops_on_a_cycle() -> None:
             UNCLASSIFIED,
         ),
         (SQLClientWrapperError("load failed"), UNCLASSIFIED),
+        # A driver subclass is classified by its base classes too: a source
+        # shutting down mid-run raises a subclass of OperationalError.
+        (
+            _chain(
+                SQLClientWrapperError("load failed"),
+                AdminShutdown("terminating connection due to administrator command"),
+            ),
+            UNAVAILABLE,
+        ),
+        # The message still decides an overloaded base class.
+        (AdminShutdown("password authentication failed for user"), AUTH),
+        (AdminShutdown("connection timed out"), TIMEOUT),
+        # A subclass of a base that is no hint stays unclassified.
+        (UndefinedTable('relation "t" does not exist'), UNCLASSIFIED),
+        # A builtin base is not read: a missing local file is no unreachable
+        # source, although FileNotFoundError is an OSError.
+        (FileNotFoundError("sslrootcert file not found"), UNCLASSIFIED),
     ],
 )
 def test_classify_sql_exception(exc: BaseException, expected: SqlFailureKind) -> None:

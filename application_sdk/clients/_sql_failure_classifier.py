@@ -106,7 +106,24 @@ def classify_sql_failure(error_type: str, error_message: str) -> SqlFailureKind:
     return SqlFailureKind.UNCLASSIFIED
 
 
+def _class_names(exc_type: type[BaseException]) -> str:
+    """The class's own name and the names of its non-builtin base classes.
+
+    Drivers raise one subclass per server error code (psycopg's
+    ``AdminShutdown`` for a server shutting down is an ``OperationalError``),
+    so the class's own name often matches no hint while its DBAPI base does.
+    Builtin bases are left out: ``OSError`` would otherwise mark every local
+    file error, such as a missing certificate file, as an unreachable source.
+    Space-separated, so no hint can match across two names.
+    """
+    return " ".join(
+        cls.__name__
+        for cls in exc_type.__mro__
+        if cls is exc_type or cls.__module__ != "builtins"
+    )
+
+
 def classify_sql_exception(exc: BaseException) -> SqlFailureKind:
-    """Classify a live exception by its root cause's class name and message."""
+    """Classify a live exception by its root cause's class names and message."""
     root = root_cause(exc)
-    return classify_sql_failure(type(root).__name__, str(root))
+    return classify_sql_failure(_class_names(type(root)), str(root))
