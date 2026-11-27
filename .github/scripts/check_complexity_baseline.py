@@ -57,7 +57,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Sequence, cast
 
 # Run as a script, so its own directory is sys.path[0] and this resolves. The
@@ -246,12 +246,31 @@ def render_baseline(baseline: Mapping[str, Mapping[str, Sequence[str]]]) -> str:
     return json.dumps(canonical(baseline), indent=2) + "\n"
 
 
+def is_source_key(file: str) -> bool:
+    """Whether ``file`` is a normalised ``application_sdk/**.py`` repo path.
+
+    Baseline keys come from the PR, and the base check reads the files they
+    name: no absolute path, no ``..``, nothing outside the source directory.
+    """
+    path = PurePosixPath(file)
+    return (
+        path.as_posix() == file
+        and not path.is_absolute()
+        and path.parts[:1] == (SOURCE_DIR,)
+        and len(path.parts) > 1
+        and ".." not in path.parts
+        and path.suffix == ".py"
+    )
+
+
 def parse_baseline(text: str) -> Baseline:
     loaded: object = json.loads(text)
     if not isinstance(loaded, dict):
         raise ValueError("baseline is not a JSON object")
     for file, rules in cast("dict[object, object]", loaded).items():
-        if not isinstance(file, str) or not isinstance(rules, dict) or not rules:
+        if not isinstance(file, str) or not is_source_key(file):
+            raise ValueError(f"{file!r} is not an {SOURCE_DIR}/**.py path")
+        if not isinstance(rules, dict) or not rules:
             raise ValueError(f"{file!r} does not map to a non-empty rule table")
         for rule, names in cast("dict[object, object]", rules).items():
             if rule not in RULES:
@@ -282,11 +301,21 @@ def compare(baseline: Baseline, actual: Baseline) -> tuple[list[str], list[str]]
 
 
 def tree_source(tree: Path = REPO_ROOT) -> SourceOf:
-    """Read a file from a working tree."""
+    """Read a source file from a working tree.
+
+    Only a regular file that resolves inside ``tree`` is read: a key that
+    escapes it (by path or symlink), or names a device or FIFO, reads as absent.
+    """
+    root = tree.resolve()
 
     def source(file: str) -> str | None:
+        if not is_source_key(file):
+            return None
         try:
-            return (tree / file).read_text(encoding="utf-8")
+            path = (root / file).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                return None
+            return path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             return None
 
@@ -341,18 +370,16 @@ def raised_since_base(
         return cache[(side, file)]
 
     def moved_here(old: str, new: str, name: str) -> bool:
-        old_head, old_base, new_head = (
-            prints("head", old),
-            prints("base", old),
-            prints("head", new),
-        )
+        old_head = prints("head", old)
         if old_head is None and head_source(old) is not None:
             return False  # the old file is there but unreadable: fail closed
         if old_head is not None and name in old_head:
             return False  # still defined where it was: paid down, not moved
-        if old_base is None or new_head is None:
+        old_base = prints("base", old)
+        if not old_base or name not in old_base:
             return False
-        return bool(old_base.get(name, set()) & new_head.get(name, set()))
+        new_head = prints("head", new)
+        return new_head is not None and bool(old_base[name] & new_head.get(name, set()))
 
     raised: list[str] = []
     for file, rule, name in unmatched:
@@ -496,7 +523,11 @@ def main(
         print("::error::ruff no longer reports C901/PLR0915, even on a canary")
         return 2
 
-    baseline = parse_baseline(baseline_path.read_text(encoding="utf-8"))
+    try:
+        baseline = parse_baseline(baseline_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        print(f"::error::{baseline_path.name} is not a baseline: {exc}")
+        return 2
     above, below = compare(baseline, actual)
 
     if args.update:

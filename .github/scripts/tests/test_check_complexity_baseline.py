@@ -9,6 +9,7 @@ finding is tried against a throwaway tree, to prove ``--isolated`` ignores it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tomllib
@@ -203,34 +204,45 @@ class TestParseReport:
 class TestCompare:
     def test_new_function_is_above(self) -> None:
         assert ccb.compare(
-            {"a.py": {"C901": ["f"]}}, {"a.py": {"C901": ["f", "g"]}}
+            {"application_sdk/a.py": {"C901": ["f"]}},
+            {"application_sdk/a.py": {"C901": ["f", "g"]}},
         ) == (
-            ["a.py C901 g"],
+            ["application_sdk/a.py C901 g"],
             [],
         )
 
     def test_paid_down_function_is_below(self) -> None:
-        assert ccb.compare({"a.py": {"C901": ["f"]}}, {}) == ([], ["a.py C901 f"])
+        assert ccb.compare({"application_sdk/a.py": {"C901": ["f"]}}, {}) == (
+            [],
+            ["application_sdk/a.py C901 f"],
+        )
 
     def test_swapping_one_function_for_another_fails_both_ways(self) -> None:
         # A per-file count would net this to zero; names do not.
-        assert ccb.compare({"a.py": {"C901": ["f"]}}, {"a.py": {"C901": ["g"]}}) == (
-            ["a.py C901 g"],
-            ["a.py C901 f"],
+        assert ccb.compare(
+            {"application_sdk/a.py": {"C901": ["f"]}},
+            {"application_sdk/a.py": {"C901": ["g"]}},
+        ) == (
+            ["application_sdk/a.py C901 g"],
+            ["application_sdk/a.py C901 f"],
         )
 
     def test_one_rule_paying_down_does_not_buy_the_other(self) -> None:
         above, below = ccb.compare(
-            {"a.py": {"C901": ["f"]}}, {"a.py": {"PLR0915": ["f"]}}
+            {"application_sdk/a.py": {"C901": ["f"]}},
+            {"application_sdk/a.py": {"PLR0915": ["f"]}},
         )
-        assert above == ["a.py PLR0915 f"] and below == ["a.py C901 f"]
+        assert above == ["application_sdk/a.py PLR0915 f"] and below == [
+            "application_sdk/a.py C901 f"
+        ]
 
     def test_duplicate_names_are_counted(self) -> None:
         # Two over-limit functions sharing a qualname (e.g. overloads).
         above, _ = ccb.compare(
-            {"a.py": {"C901": ["f"]}}, {"a.py": {"C901": ["f", "f"]}}
+            {"application_sdk/a.py": {"C901": ["f"]}},
+            {"application_sdk/a.py": {"C901": ["f", "f"]}},
         )
-        assert above == ["a.py C901 f"]
+        assert above == ["application_sdk/a.py C901 f"]
 
 
 class TestParseBaseline:
@@ -238,28 +250,38 @@ class TestParseBaseline:
         "text",
         [
             "[]",
-            '{"a.py": {}}',
-            '{"a.py": {"E501": ["f"]}}',
-            '{"a.py": {"C901": []}}',
-            '{"a.py": {"C901": "f"}}',
-            '{"a.py": {"C901": [1]}}',
-            '{"a.py": {"C901": 1}}',
+            '{"application_sdk/a.py": {}}',
+            '{"application_sdk/a.py": {"E501": ["f"]}}',
+            '{"application_sdk/a.py": {"C901": []}}',
+            '{"application_sdk/a.py": {"C901": "f"}}',
+            '{"application_sdk/a.py": {"C901": [1]}}',
+            '{"application_sdk/a.py": {"C901": 1}}',
         ],
     )
     def test_rejects_malformed(self, text: str) -> None:
         with pytest.raises(ValueError):
             ccb.parse_baseline(text)
 
+    @pytest.mark.parametrize(
+        "key", ["/dev/zero", "application_sdk/../x.py", "a.py", "application_sdk/x.txt"]
+    )
+    def test_rejects_a_key_outside_the_source_dir(self, key: str) -> None:
+        with pytest.raises(ValueError, match="is not an"):
+            ccb.parse_baseline(json.dumps({key: {"C901": ["f"]}}))
+
     def test_round_trips_sorted(self) -> None:
         baseline = {
-            "b.py": {"PLR0915": ["z", "a"], "C901": ["q"]},
-            "a.py": {"C901": ["f"]},
+            "application_sdk/b.py": {"PLR0915": ["z", "a"], "C901": ["q"]},
+            "application_sdk/a.py": {"C901": ["f"]},
         }
         rendered = ccb.render_baseline(baseline)
-        assert list(json.loads(rendered)) == ["a.py", "b.py"]
+        assert list(json.loads(rendered)) == [
+            "application_sdk/a.py",
+            "application_sdk/b.py",
+        ]
         assert ccb.parse_baseline(rendered) == {
-            "a.py": {"C901": ["f"]},
-            "b.py": {"C901": ["q"], "PLR0915": ["a", "z"]},
+            "application_sdk/a.py": {"C901": ["f"]},
+            "application_sdk/b.py": {"C901": ["q"], "PLR0915": ["a", "z"]},
         }
 
 
@@ -282,75 +304,122 @@ _EMPTY = _src({})
 
 class TestRaisedSinceBase:
     def test_unchanged_and_lowered_pass(self) -> None:
-        base = {"a.py": {"C901": ["f", "g"]}}
+        base = {"application_sdk/a.py": {"C901": ["f", "g"]}}
         assert ccb.raised_since_base(base, base, _EMPTY, _EMPTY) == []
-        lowered = {"a.py": {"C901": ["f"]}}
+        lowered = {"application_sdk/a.py": {"C901": ["f"]}}
         assert ccb.raised_since_base(base, lowered, _EMPTY, _EMPTY) == []
 
     def test_new_function_fails(self) -> None:
-        head = {"b.py": {"PLR0915": ["h"]}}
-        assert ccb.raised_since_base({}, head, _EMPTY, _EMPTY) == ["b.py PLR0915 h"]
+        head = {"application_sdk/b.py": {"PLR0915": ["h"]}}
+        assert ccb.raised_since_base({}, head, _EMPTY, _EMPTY) == [
+            "application_sdk/b.py PLR0915 h"
+        ]
 
     def test_a_module_split_carries_the_function(self) -> None:
-        base = {"big.py": {"C901": ["A.run"], "PLR0915": ["A.run"]}}
-        head = {"big/_runner.py": {"C901": ["A.run"], "PLR0915": ["A.run"]}}
-        before = _src({"big.py": _RUN})
-        after = _src({"big.py": "", "big/_runner.py": _RUN_REFORMATTED})
+        base = {"application_sdk/big.py": {"C901": ["A.run"], "PLR0915": ["A.run"]}}
+        head = {
+            "application_sdk/big/_runner.py": {"C901": ["A.run"], "PLR0915": ["A.run"]}
+        }
+        before = _src({"application_sdk/big.py": _RUN})
+        after = _src(
+            {
+                "application_sdk/big.py": "",
+                "application_sdk/big/_runner.py": _RUN_REFORMATTED,
+            }
+        )
         assert ccb.raised_since_base(base, head, before, after) == []
 
     def test_paid_down_in_place_does_not_carry_to_a_new_function(self) -> None:
         # F-54b3eb: old.py still defines A.run (now under the limit), so the
         # over-limit A.run in new.py is a different function, not a move.
-        base = {"old.py": {"C901": ["A.run"]}}
-        head = {"new.py": {"C901": ["A.run"]}}
-        before = _src({"old.py": _RUN})
-        after = _src({"old.py": _RUN_OTHER, "new.py": _RUN})
-        assert ccb.raised_since_base(base, head, before, after) == ["new.py C901 A.run"]
+        base = {"application_sdk/old.py": {"C901": ["A.run"]}}
+        head = {"application_sdk/new.py": {"C901": ["A.run"]}}
+        before = _src({"application_sdk/old.py": _RUN})
+        after = _src(
+            {"application_sdk/old.py": _RUN_OTHER, "application_sdk/new.py": _RUN}
+        )
+        assert ccb.raised_since_base(base, head, before, after) == [
+            "application_sdk/new.py C901 A.run"
+        ]
 
     @pytest.mark.parametrize("old_file", ["", None], ids=["emptied", "deleted"])
     def test_same_named_replacement_does_not_inherit(
         self, old_file: str | None
     ) -> None:
         # F-47389d: A.run is gone from old.py, but new.py's A.run is not it.
-        base = {"old.py": {"C901": ["A.run"]}}
-        head = {"new.py": {"C901": ["A.run"]}}
-        before = _src({"old.py": _RUN})
-        after_files = {"new.py": _RUN_OTHER}
+        base = {"application_sdk/old.py": {"C901": ["A.run"]}}
+        head = {"application_sdk/new.py": {"C901": ["A.run"]}}
+        before = _src({"application_sdk/old.py": _RUN})
+        after_files = {"application_sdk/new.py": _RUN_OTHER}
         if old_file is not None:
-            after_files["old.py"] = old_file
+            after_files["application_sdk/old.py"] = old_file
         assert ccb.raised_since_base(base, head, before, _src(after_files)) == [
-            "new.py C901 A.run"
+            "application_sdk/new.py C901 A.run"
         ]
 
     def test_unparsable_old_file_does_not_release_its_entry(self) -> None:
-        base = {"old.py": {"C901": ["A.run"]}}
-        head = {"new.py": {"C901": ["A.run"]}}
-        before = _src({"old.py": _RUN})
-        after = _src({"old.py": "def (:\n", "new.py": _RUN})
-        assert ccb.raised_since_base(base, head, before, after) == ["new.py C901 A.run"]
+        base = {"application_sdk/old.py": {"C901": ["A.run"]}}
+        head = {"application_sdk/new.py": {"C901": ["A.run"]}}
+        before = _src({"application_sdk/old.py": _RUN})
+        after = _src(
+            {"application_sdk/old.py": "def (:\n", "application_sdk/new.py": _RUN}
+        )
+        assert ccb.raised_since_base(base, head, before, after) == [
+            "application_sdk/new.py C901 A.run"
+        ]
 
     def test_same_file_matches_before_a_move(self) -> None:
-        base = {"a.py": {"C901": ["A.run"]}, "b.py": {"C901": ["A.run"]}}
-        head = {"b.py": {"C901": ["A.run"]}, "c.py": {"C901": ["A.run"]}}
-        before = _src({"a.py": _RUN, "b.py": _RUN_OTHER})
+        base = {
+            "application_sdk/a.py": {"C901": ["A.run"]},
+            "application_sdk/b.py": {"C901": ["A.run"]},
+        }
+        head = {
+            "application_sdk/b.py": {"C901": ["A.run"]},
+            "application_sdk/c.py": {"C901": ["A.run"]},
+        }
+        before = _src(
+            {"application_sdk/a.py": _RUN, "application_sdk/b.py": _RUN_OTHER}
+        )
         # a.py's A.run moved to c.py; b.py's stayed.
-        after = _src({"a.py": "", "b.py": _RUN_OTHER, "c.py": _RUN})
+        after = _src(
+            {
+                "application_sdk/a.py": "",
+                "application_sdk/b.py": _RUN_OTHER,
+                "application_sdk/c.py": _RUN,
+            }
+        )
         assert ccb.raised_since_base(base, head, before, after) == []
         # a.py still has its A.run: c.py's is new.
-        after = _src({"a.py": _RUN, "b.py": _RUN_OTHER, "c.py": _RUN})
-        assert ccb.raised_since_base(base, head, before, after) == ["c.py C901 A.run"]
+        after = _src(
+            {
+                "application_sdk/a.py": _RUN,
+                "application_sdk/b.py": _RUN_OTHER,
+                "application_sdk/c.py": _RUN,
+            }
+        )
+        assert ccb.raised_since_base(base, head, before, after) == [
+            "application_sdk/c.py C901 A.run"
+        ]
 
     def test_one_base_entry_carries_only_one_head_entry(self) -> None:
-        base = {"a.py": {"C901": ["A.run"]}}
-        head = {"b.py": {"C901": ["A.run"]}, "c.py": {"C901": ["A.run"]}}
-        before = _src({"a.py": _RUN})
-        after = _src({"b.py": _RUN, "c.py": _RUN})
-        assert ccb.raised_since_base(base, head, before, after) == ["c.py C901 A.run"]
+        base = {"application_sdk/a.py": {"C901": ["A.run"]}}
+        head = {
+            "application_sdk/b.py": {"C901": ["A.run"]},
+            "application_sdk/c.py": {"C901": ["A.run"]},
+        }
+        before = _src({"application_sdk/a.py": _RUN})
+        after = _src({"application_sdk/b.py": _RUN, "application_sdk/c.py": _RUN})
+        assert ccb.raised_since_base(base, head, before, after) == [
+            "application_sdk/c.py C901 A.run"
+        ]
 
     def test_renamed_function_fails(self) -> None:
         assert ccb.raised_since_base(
-            {"a.py": {"C901": ["f"]}}, {"a.py": {"C901": ["g"]}}, _EMPTY, _EMPTY
-        ) == ["a.py C901 g"]
+            {"application_sdk/a.py": {"C901": ["f"]}},
+            {"application_sdk/a.py": {"C901": ["g"]}},
+            _EMPTY,
+            _EMPTY,
+        ) == ["application_sdk/a.py C901 g"]
 
 
 class TestSources:
@@ -368,12 +437,46 @@ class TestSources:
         assert ccb.tree_source(tmp_path)(_M) == _RUN
         assert ccb.tree_source(tmp_path)("gone.py") is None
 
+    @pytest.mark.parametrize(
+        "file",
+        [
+            "/dev/zero",
+            "application_sdk/../../etc/passwd",
+            "application_sdk/./m.py",
+            "tests/m.py",
+            "application_sdk/m.txt",
+            "application_sdk",
+        ],
+    )
+    def test_tree_source_refuses_keys_outside_the_source_dir(
+        self, tmp_path: Path, file: str
+    ) -> None:
+        # F-6cc6a1: baseline keys come from the PR; none may read outside it.
+        _tree(tmp_path, _RUN)
+        assert not ccb.is_source_key(file)
+        assert ccb.tree_source(tmp_path)(file) is None
+
+    def test_tree_source_refuses_a_symlink_out_of_the_tree(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside.py"
+        outside.write_text(_RUN)
+        tree = tmp_path / "tree"
+        (tree / ccb.SOURCE_DIR).mkdir(parents=True)
+        (tree / _M).symlink_to(outside)
+        assert ccb.tree_source(tree)(_M) is None
+
+    def test_tree_source_refuses_a_non_regular_file(self, tmp_path: Path) -> None:
+        (tmp_path / ccb.SOURCE_DIR).mkdir()
+        os.mkfifo(tmp_path / _M)
+        assert ccb.tree_source(tmp_path)(_M) is None
+
     def test_git_source_reads_the_base(self) -> None:
         git = _Git({"show": _git_result(stdout=_RUN)})
-        assert ccb.git_source("abc", git)("old.py") == _RUN
-        assert ["show", "abc:old.py"] in git.calls
+        assert ccb.git_source("abc", git)("application_sdk/old.py") == _RUN
+        assert ["show", "abc:application_sdk/old.py"] in git.calls
         missing = _Git({"show": _git_result(returncode=128)})
-        assert ccb.git_source("abc", missing)("old.py") is None
+        assert ccb.git_source("abc", missing)("application_sdk/old.py") is None
 
 
 class TestReadBaseBaseline:
@@ -385,7 +488,7 @@ class TestReadBaseBaseline:
         assert ccb.read_base_baseline("abc", _Git({"ls-tree": _git_result()})) is None
 
     def test_reads_the_base_file(self) -> None:
-        base = {"a.py": {"C901": ["f"]}}
+        base = {"application_sdk/a.py": {"C901": ["f"]}}
         assert ccb.read_base_baseline("abc", _base_has(base)) == base
 
     def test_unfetchable_base_fails_closed(self) -> None:
@@ -417,9 +520,12 @@ class TestReadBaseBaseline:
 
 class TestCheckBase:
     def test_added_function_fails(self, capsys: pytest.CaptureFixture[str]) -> None:
-        git = _base_has({"a.py": {"C901": ["f"]}})
-        assert ccb.check_base("abc", {"a.py": {"C901": ["f", "g"]}}, git) is True
-        assert "a.py C901 g" in capsys.readouterr().out
+        git = _base_has({"application_sdk/a.py": {"C901": ["f"]}})
+        assert (
+            ccb.check_base("abc", {"application_sdk/a.py": {"C901": ["f", "g"]}}, git)
+            is True
+        )
+        assert "application_sdk/a.py C901 g" in capsys.readouterr().out
 
     def test_introducing_pr_is_held_to_the_base_tree(self) -> None:
         # No baseline at base: ruff's findings on the base tree stand in, so
@@ -429,10 +535,14 @@ class TestCheckBase:
 
         def fake_measure(tree: Path) -> tuple[ccb.Baseline, list[ccb.Violation]]:
             measured_trees.append(tree)
-            return {"a.py": {"C901": ["f"]}}, []
+            return {"application_sdk/a.py": {"C901": ["f"]}}, []
 
-        assert ccb.check_base("abc", {"a.py": {"C901": ["f", "g"]}}, git, fake_measure)
-        assert not ccb.check_base("abc", {"a.py": {"C901": ["f"]}}, git, fake_measure)
+        assert ccb.check_base(
+            "abc", {"application_sdk/a.py": {"C901": ["f", "g"]}}, git, fake_measure
+        )
+        assert not ccb.check_base(
+            "abc", {"application_sdk/a.py": {"C901": ["f"]}}, git, fake_measure
+        )
         assert measured_trees and all(t.name == "base" for t in measured_trees)
         adds = [c for c in git.calls if c[:2] == ["worktree", "add"]]
         removes = [c for c in git.calls if c[:2] == ["worktree", "remove"]]
@@ -445,7 +555,10 @@ class TestCheckBase:
                 "worktree": _git_result(returncode=128, stderr="nope"),
             }
         )
-        assert ccb.check_base("abc", {"a.py": {"C901": ["f"]}}, git) is True
+        assert (
+            ccb.check_base("abc", {"application_sdk/a.py": {"C901": ["f"]}}, git)
+            is True
+        )
 
 
 # ── the CLI ─────────────────────────────────────────────────────────────────
@@ -470,20 +583,26 @@ class TestMain:
         return path
 
     def test_equal_passes(self, tmp_path: Path) -> None:
-        found = {"a.py": {"C901": ["f"]}}
+        found = {"application_sdk/a.py": {"C901": ["f"]}}
         assert ccb.main([], self._baseline(tmp_path, found), _fake(found)) == 0
 
     def test_above_fails(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        path = self._baseline(tmp_path, {"a.py": {"C901": ["f"]}})
-        assert ccb.main([], path, _fake({"a.py": {"C901": ["f", "g"]}})) == 1
+        path = self._baseline(tmp_path, {"application_sdk/a.py": {"C901": ["f"]}})
+        assert (
+            ccb.main([], path, _fake({"application_sdk/a.py": {"C901": ["f", "g"]}}))
+            == 1
+        )
         out = capsys.readouterr().out
-        assert "a.py C901 g" in out and "a.py:1 g: m" in out
+        assert (
+            "application_sdk/a.py C901 g" in out
+            and "application_sdk/a.py:1 g: m" in out
+        )
 
     def test_below_fails(self, tmp_path: Path) -> None:
-        path = self._baseline(tmp_path, {"a.py": {"C901": ["f", "g"]}})
-        assert ccb.main([], path, _fake({"a.py": {"C901": ["f"]}})) == 1
+        path = self._baseline(tmp_path, {"application_sdk/a.py": {"C901": ["f", "g"]}})
+        assert ccb.main([], path, _fake({"application_sdk/a.py": {"C901": ["f"]}})) == 1
 
     def test_a_paid_down_tree_passes(self, tmp_path: Path) -> None:
         # Nothing measured, and the canary proves ruff still reports both
@@ -502,24 +621,33 @@ class TestMain:
         assert ccb.ruff_reports_both_rules()
 
     def test_update_locks_in_a_reduction(self, tmp_path: Path) -> None:
-        path = self._baseline(tmp_path, {"a.py": {"C901": ["f", "g"]}})
-        assert ccb.main(["--update"], path, _fake({"a.py": {"C901": ["f"]}})) == 0
-        assert ccb.parse_baseline(path.read_text()) == {"a.py": {"C901": ["f"]}}
+        path = self._baseline(tmp_path, {"application_sdk/a.py": {"C901": ["f", "g"]}})
+        assert (
+            ccb.main(
+                ["--update"], path, _fake({"application_sdk/a.py": {"C901": ["f"]}})
+            )
+            == 0
+        )
+        assert ccb.parse_baseline(path.read_text()) == {
+            "application_sdk/a.py": {"C901": ["f"]}
+        }
 
     def test_update_refuses_to_add_a_function(self, tmp_path: Path) -> None:
-        before = {"a.py": {"C901": ["f"]}}
+        before = {"application_sdk/a.py": {"C901": ["f"]}}
         path = self._baseline(tmp_path, before)
-        grown = _fake({"a.py": {"C901": ["f", "g"]}})
+        grown = _fake({"application_sdk/a.py": {"C901": ["f", "g"]}})
         assert ccb.main(["--update"], path, grown) == 1
         assert ccb.parse_baseline(path.read_text()) == before
         assert ccb.main(["--update", "--allow-increase"], path, grown) == 0
-        assert ccb.parse_baseline(path.read_text()) == {"a.py": {"C901": ["f", "g"]}}
+        assert ccb.parse_baseline(path.read_text()) == {
+            "application_sdk/a.py": {"C901": ["f", "g"]}
+        }
 
     def test_base_sha_add_fails_even_when_the_baseline_matches(
         self, tmp_path: Path
     ) -> None:
-        found = {"a.py": {"C901": ["f", "g"]}}
-        git = _base_has({"a.py": {"C901": ["f"]}})
+        found = {"application_sdk/a.py": {"C901": ["f", "g"]}}
+        git = _base_has({"application_sdk/a.py": {"C901": ["f"]}})
         path = self._baseline(tmp_path, found)
         assert ccb.main(["--base-sha", "abc"], path, _fake(found), git) == 1
 
