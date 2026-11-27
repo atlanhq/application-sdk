@@ -1333,32 +1333,29 @@ class BaseSQLClient(ClientInterface):
     def _execute_pandas_query(
         self, conn, query, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
-        """Helper function to execute SQL query using pandas.
-           The function is responsible for using import_optional_dependency method of the pandas library to import sqlalchemy
-           This function helps pandas in determining weather to use the sqlalchemy connection object and constructs like text()
-           or use the underlying database connection object. This has been done to make sure connectors like the Redshift connector,
-           which do not support the sqlalchemy connection object, can be made compatible with the application-sdk.
+        """Run ``query`` through ``pd.read_sql_query`` on a SQLAlchemy connection.
+
+        The query is colon-escaped and wrapped in ``text()``, and ``conn`` is
+        passed to pandas as is. pandas takes the SQLAlchemy path only when the
+        installed sqlalchemy meets its own minimum, so the ``[sql]`` extra's
+        sqlalchemy floor is kept at or above the minimum of every pandas it
+        allows.
 
         Args:
-            conn: Database connection object.
+            conn: SQLAlchemy connection.
+            query: The SQL query string.
+            chunksize: Rows per frame, or None for a single frame.
 
         Returns:
             Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
         import pandas as pd  # noqa: PLC0415 — optional dep: pandas
-        from pandas.compat._optional import (  # noqa: PLC0415 — optional dep: pandas
-            import_optional_dependency,
-        )
         from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-        if import_optional_dependency("sqlalchemy", errors="ignore"):
-            return pd.read_sql_query(
-                text(_escape_colons_for_text(query)), conn, chunksize=chunksize
-            )
-        else:
-            dbapi_conn = getattr(conn, "connection", None)
-            return pd.read_sql_query(query, dbapi_conn, chunksize=chunksize)
+        return pd.read_sql_query(
+            text(_escape_colons_for_text(query)), conn, chunksize=chunksize
+        )
 
     def _read_sql_query(
         self, session: "Session", query: str, chunksize: int | None

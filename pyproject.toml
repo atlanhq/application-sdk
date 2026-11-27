@@ -116,7 +116,7 @@ workflows = [
 sql = [
     "pandas>=2.2.3,<4.0.0",
     "pyarrow>=23.0.1,<27.0.0",
-    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "sqlalchemy[asyncio]>=2.0.42,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
 ]
 # Deprecated shim: alias for [sql], removed in v4.0.0. Install [sql] (or
@@ -210,7 +210,7 @@ scale_data_generator = [
 ]
 # Deprecated shim, removed in v4.0.0: a subset of [sql]. Use [sql] instead.
 sqlalchemy = [
-    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "sqlalchemy[asyncio]>=2.0.42,<3.0.0",
 ]
 # Deprecated shim, removed in v4.0.0: a subset of [sql]. Use [sql] instead.
 pandas = [
