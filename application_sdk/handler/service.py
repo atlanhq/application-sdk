@@ -2040,6 +2040,13 @@ def _register_workflow_routes(
 # ---------------------------------------------------------------------------
 
 
+# The docstring deprecates this def for apps, in favour of
+# server_sdk.build_asgi_app. No def-level marker fits: application_sdk/main.py
+# calls this function on every app boot, so @deprecated (or an opening
+# DeprecationWarning) would warn in every app, and pyright's reportDeprecated
+# would flag the SDK's own boot path. Remove this suppression when main.py stops
+# calling the function.
+# conformance: ignore[B004] deprecated for apps; the SDK boot path still calls it
 def create_app_handler_service(
     handler: Handler,
     *,

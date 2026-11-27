@@ -957,6 +957,297 @@ def test_narrowing_a_moved_class_method_is_still_caught(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Deprecated parameters (FND-5542)
+#
+# A parameter cannot carry @deprecated; docs/standards/symbols.md deprecates it
+# with a DeprecationWarning raised when a caller passes it. Deleting a parameter
+# the base release deprecated that way is the removal the deprecation bought.
+# ---------------------------------------------------------------------------
+
+#: The base-release shape of ``create_app_handler_service(state_store=)``, the
+#: removal that FND-4094's #5178 was blocked on.
+_STATE_STORE_BASE = """
+import warnings
+
+def create_app_handler_service(handler, *, title="x", state_store=None):
+    \"\"\"Create the app.\"\"\"
+    global _x
+    if state_store is not None:
+        warnings.warn(
+            "state_store parameter is deprecated and ignored. "
+            "Use DaprCredentialVault. Will be removed in v3.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    return handler
+"""
+
+_STATE_STORE_HEAD = """
+def create_app_handler_service(handler, *, title="x"):
+    return handler
+"""
+
+
+def test_removing_a_parameter_the_base_deprecated_is_clean():
+    base = snap(_STATE_STORE_BASE)
+    assert base.symbols[
+        "application_sdk.thing:create_app_handler_service"
+    ].deprecated_params == ("state_store",)
+    assert mod.compare(base, snap(_STATE_STORE_HEAD)) == []
+
+
+def test_removing_a_parameter_the_base_did_not_deprecate_still_blocks():
+    """Only the named parameter is excused, never the rest of the signature."""
+    base = snap(_STATE_STORE_BASE)
+    head = snap("def create_app_handler_service(handler, *, state_store=None): ...")
+    findings = mod.compare(base, head)
+    assert blocking(findings) == {"application_sdk.thing:create_app_handler_service"}
+    assert "title" in findings[0].detail
+    assert "state_store" not in findings[0].detail
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "_deprecation.warn_deprecated('f(old=...)', 'f(new=...)', '4.0.0')",
+        "warn_deprecated(name='f(old=...)', replacement='new', remove_in='4.0.0')",
+        "warnings.warn(f'`old` is deprecated: {x}', category=DeprecationWarning)",
+        "warnings.warn('old is deprecated', builtins.DeprecationWarning)",
+    ],
+)
+def test_every_notice_shape_marks_the_parameter(notice: str):
+    base = snap(
+        f"def f(new=None, old=None):\n    if old is not None:\n        {notice}\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ("old",)
+    assert mod.compare(base, snap("def f(new=None): ...")) == []
+
+
+@pytest.mark.parametrize(
+    ("default", "guard"),
+    [
+        ("None", "old is not None"),
+        ("_UNSET", "old is not _UNSET"),
+        ("None", "old"),
+        ("False", "old"),
+        ("0", "old"),
+    ],
+)
+def test_every_presence_check_marks_the_parameter(default: str, guard: str):
+    base = snap(
+        f"def f(*, old={default}):\n    if {guard}:\n"
+        "        warn_deprecated('f(old=...)', 'nothing', '4.0.0')\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ("old",)
+
+
+@pytest.mark.parametrize(
+    ("signature", "guard"),
+    [
+        # Omitting ``old`` leaves it None, which ``is not _UNSET`` lets through.
+        ("old=None", "old is not _UNSET"),
+        # Omitting ``old`` leaves it _UNSET, which ``is not None`` lets through.
+        ("old=_UNSET", "old is not None"),
+        # A non-literal default may be truthy: the bare test passes on omission.
+        ("old=_UNSET", "old"),
+        # A truthy literal default: the bare test passes on omission.
+        ("old=True", "old"),
+        # No default: the parameter is always passed, so no test proves anything.
+        ("old", "old is not None"),
+    ],
+)
+def test_a_guard_that_omitting_the_parameter_passes_marks_nothing(
+    signature: str, guard: str
+):
+    """The guard must be false at the parameter's own default (lens F-7735be)."""
+    base = snap(
+        f"def f({signature}):\n    if {guard}:\n"
+        "        warn_deprecated('f(old=...)', 'nothing', '4.0.0')\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+@pytest.mark.parametrize(
+    "deferred",
+    [
+        "callback = lambda: warnings.warn('old is deprecated', DeprecationWarning)",
+        "pending = (warnings.warn('old is deprecated', DeprecationWarning) for _ in x)",
+    ],
+)
+def test_a_notice_that_only_runs_if_called_later_marks_nothing(deferred: str):
+    """A deferred notice is not emitted on the caller's path (lens F-6bba81)."""
+    base = snap(f"def f(old=None):\n    if old is not None:\n        {deferred}\n")
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+def test_a_notice_under_is_none_deprecates_the_default_not_the_parameter():
+    """The symbols.md example: warning when ``raise_on_error`` is *omitted*.
+
+    Its notice names the parameter, but deleting it would remove the very
+    thing callers were told to start passing.
+    """
+    base = snap(
+        "def get(key, raise_on_error=None):\n"
+        "    if raise_on_error is None:\n"
+        "        _deprecation.warn_deprecated(\n"
+        "            'get() without raise_on_error',\n"
+        "            'raise_on_error=True for a typed error',\n"
+        "            '4.0.0',\n"
+        "        )\n"
+    )
+    assert base.symbols["application_sdk.thing:get"].deprecated_params == ()
+    assert blocking(mod.compare(base, snap("def get(key): ..."))) == {
+        "application_sdk.thing:get"
+    }
+
+
+def test_a_notice_about_one_form_of_the_value_keeps_the_parameter():
+    """``resolve_credential_file(dest_dir=<str>)``: only a plain string is deprecated."""
+    base = snap(
+        "def resolve(dest_dir=None):\n"
+        "    if dest_dir is not None and not isinstance(dest_dir, Dir):\n"
+        "        warnings.warn('a plain-string dest_dir is deprecated', DeprecationWarning)\n"
+    )
+    assert base.symbols["application_sdk.thing:resolve"].deprecated_params == ()
+
+
+def test_a_notice_that_does_not_name_the_guarded_parameter_marks_nothing():
+    base = snap(
+        "def f(strict=False):\n"
+        "    if strict:\n"
+        "        warnings.warn('lenient mode is deprecated', DeprecationWarning)\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+def test_the_replacement_named_in_warn_deprecated_is_not_marked():
+    """Only ``name`` says what is deprecated; ``replacement`` names what to use."""
+    base = snap(
+        "def f(new=None, old=None):\n"
+        "    if old is not None:\n"
+        "        if new is not None:\n"
+        "            warn_deprecated('f(old=...)', 'f(new=...)', '4.0.0')\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ("old",)
+
+
+def test_a_whole_word_match_is_required():
+    base = snap(
+        "def f(store=None):\n"
+        "    if store is not None:\n"
+        "        warnings.warn('state_store is deprecated', DeprecationWarning)\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+def test_a_user_warning_does_not_mark_the_parameter():
+    base = snap(
+        "def f(old=None):\n"
+        "    if old is not None:\n"
+        "        warnings.warn('old is ignored', UserWarning)\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+def test_a_notice_in_a_nested_def_belongs_to_it():
+    base = snap(
+        "def f(old=None):\n"
+        "    if old is not None:\n"
+        "        def inner():\n"
+        "            warnings.warn('old is deprecated', DeprecationWarning)\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+def test_a_notice_in_the_else_branch_is_not_guarded_by_the_presence_check():
+    base = snap(
+        "def f(old=None):\n"
+        "    if old is not None:\n"
+        "        pass\n"
+        "    else:\n"
+        "        warnings.warn('omitting old is deprecated', DeprecationWarning)\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+def test_a_notice_nested_under_other_blocks_still_counts():
+    base = snap(
+        "def f(old=None):\n"
+        "    try:\n"
+        "        if old is not None:\n"
+        "            for _ in range(1):\n"
+        "                warnings.warn('old is deprecated', DeprecationWarning)\n"
+        "    finally:\n"
+        "        pass\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ("old",)
+
+
+def test_a_deprecated_method_parameter_may_be_removed():
+    base = snap(
+        "class C:\n"
+        "    def run(self, old=None):\n"
+        "        if old is not None:\n"
+        "            warn_deprecated('C.run(old=...)', 'nothing', '4.0.0')\n"
+    )
+    head = snap("class C:\n    def run(self): ...\n")
+    assert mod.compare(base, head) == []
+
+
+def test_a_deprecated_parameter_hardened_rather_than_removed_still_blocks():
+    """Only deletion is excused: until then, existing calls must keep working."""
+    base = snap(
+        "def f(old=None):\n"
+        "    if old is not None:\n"
+        "        warn_deprecated('f(old=...)', 'nothing', '4.0.0')\n"
+    )
+    head = snap("def f(*, old=None): ...")
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:f"}
+
+
+def test_a_reexport_inherits_the_deprecated_parameters(tmp_path: Path):
+    """#5178 failed twice: at the defining module and at the package re-export."""
+    init = "from application_sdk.handler.service import create_app_handler_service\n"
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/handler/__init__.py": init,
+            "application_sdk/handler/service.py": _STATE_STORE_BASE,
+        },
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/handler/__init__.py": init,
+            "application_sdk/handler/service.py": _STATE_STORE_HEAD,
+        },
+    )
+    assert base.symbols[
+        "application_sdk.handler:create_app_handler_service"
+    ].deprecated_params == ("state_store",)
+    assert mod.compare(base, head) == []
+
+
+def test_deprecated_parameters_roundtrip_through_json():
+    original = snap(_STATE_STORE_BASE)
+    restored = mod.Snapshot.from_json(original.to_json())
+    assert restored.symbols == original.symbols
+
+
+def test_a_snapshot_without_deprecated_parameters_stays_strict():
+    """A base snapshot from before FND-5542 has no field: excuse nothing."""
+    raw = json.loads(snap(_STATE_STORE_BASE).to_json())
+    for rec in raw["symbols"].values():
+        del rec["deprecated_params"]
+    base = mod.Snapshot.from_json(json.dumps(raw))
+    assert blocking(mod.compare(base, snap(_STATE_STORE_HEAD))) == {
+        "application_sdk.thing:create_app_handler_service"
+    }
+
+
+# ---------------------------------------------------------------------------
 # Inherited methods (FND-4917)
 # ---------------------------------------------------------------------------
 
