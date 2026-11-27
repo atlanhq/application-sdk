@@ -842,3 +842,30 @@ def test_normalize_sorts_deprecated_symbols_after_the_rest(tmp_path: Path) -> No
     ).stdout
     names = [s["name"] for s in json.loads(out)["subpackages"]["a"]["symbols"]]
     assert names == ["Bnew", "Aold"]
+
+
+def test_deprecated_names_by_subpackage_keeps_public_modules_shortest_first() -> None:
+    deprecations = {
+        "application_sdk.testing.fake_source:Handler": "a",
+        "application_sdk.testing:Handler": "b",
+        "application_sdk._private:Gone": "c",
+        "application_sdk.execution._temporal.x:Gone": "d",
+    }
+    assert extractor.deprecated_names_by_subpackage(deprecations) == {
+        "testing": [
+            ("application_sdk.testing", "Handler", "b"),
+            ("application_sdk.testing.fake_source", "Handler", "a"),
+        ]
+    }
+
+
+def test_committed_manifest_lists_aliases_kept_out_of_all() -> None:
+    """``testing.Handler`` is out of ``__all__`` but still imports; the manifest says so."""
+    manifest = (
+        Path(__file__).resolve().parents[3] / "docs" / "agents" / "sdk-capabilities.md"
+    ).read_text(encoding="utf-8")
+    after_heading = manifest.split("#### `Handler` (deprecated)\n\n", 1)[1]
+    entry = after_heading.split("\n\n", 1)[0]
+    assert "use application_sdk.testing.FakeSourceHandler" in entry
+    assert "- **Import:** `from application_sdk.testing import Handler`" in entry
+    assert "`application_sdk.testing.fake_source`" in entry

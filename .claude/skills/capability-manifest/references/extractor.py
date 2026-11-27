@@ -190,6 +190,33 @@ def deprecation_for(
     return None
 
 
+def deprecated_names_by_subpackage(
+    deprecations: dict[str, str],
+) -> dict[str, list[tuple[str, str, str]]]:
+    """Every deprecated name at a public module, as ``subpkg -> [(module, name, notice)]``.
+
+    A deprecated alias is often kept out of its module's ``__all__`` (a
+    star-import must not export it, or it is a leaf-module shim the manifest
+    must not offer as the import path), so the ``__all__`` walk never sees it.
+    It still imports, with a warning, so the manifest lists it as deprecated:
+    someone reading code that uses the old name finds its replacement. A name
+    in a private module (any ``_`` component) is not public and is skipped.
+    """
+    found: dict[str, list[tuple[str, str, str]]] = {}
+    # Shortest module path first, so a package path wins the entry over a leaf.
+    for key, notice in sorted(
+        deprecations.items(), key=lambda kv: (kv[0].count("."), kv[0])
+    ):
+        module, _, name = key.partition(":")
+        parts = module.split(".")
+        if parts[0] != "application_sdk" or len(parts) < 2:
+            continue
+        if any(part.startswith("_") for part in parts[1:]):
+            continue
+        found.setdefault(parts[1], []).append((module, name, notice))
+    return found
+
+
 def discover_public_modules() -> list[tuple[str, str, list[str]]]:
     """Find every public module under ``application_sdk`` that declares ``__all__``.
 
@@ -805,6 +832,9 @@ def cmd_dump() -> None:
     modules_by_subpkg: dict[str, list[tuple[str, list[str]]]] = {}
     for subpkg_name, dotted, all_names in discover_public_modules():
         modules_by_subpkg.setdefault(subpkg_name, []).append((dotted, all_names))
+    deprecated_by_subpkg = deprecated_names_by_subpackage(deprecations)
+    for subpkg_name in deprecated_by_subpkg:
+        modules_by_subpkg.setdefault(subpkg_name, [])
 
     for subpkg_name, modules in sorted(modules_by_subpkg.items()):
         root_path = "application_sdk." + subpkg_name
@@ -862,6 +892,48 @@ def cmd_dump() -> None:
             )
             if notice:
                 symbol["deprecated"] = notice
+
+        # name -> its deprecated entry, which is not always ``by_name[name]``: a
+        # name can be current at one path and a deprecated alias at others.
+        deprecated_entries = {
+            sym["name"]: sym for sym in symbols if "deprecated" in sym
+        }
+        for module, name, notice in deprecated_by_subpkg.get(subpkg_name, []):
+            current = by_name.get(name)
+            if current is not None and module in (
+                current["module"],
+                *current["also_exported_from"],
+            ):
+                continue  # already listed at this path from ``__all__``
+            existing = deprecated_entries.get(name)
+            if existing is not None:
+                # The same deprecated name at a second path: name the path on it.
+                existing["also_exported_from"].append(module)
+                continue
+            griffe_mod = _navigate_module(pkg, module)
+            member = (
+                griffe_mod.members.get(name)
+                if griffe_mod is not None and hasattr(griffe_mod, "members")
+                else None
+            )
+            if member is not None:
+                symbol = _symbol_for(name, member)
+                if symbol["summary"] == "_(no docstring)_":
+                    symbol["summary"] = "Deprecated alias, served with a warning."
+            else:
+                symbol = {
+                    "name": name,
+                    "kind": KIND_CONSTANT,
+                    "signature": name,
+                    "summary": "Deprecated alias, served with a warning.",
+                    "filepath": "",
+                }
+            symbol["module"] = module
+            symbol["also_exported_from"] = []
+            symbol["deprecated"] = notice
+            deprecated_entries[name] = symbol
+            by_name.setdefault(name, symbol)
+            symbols.append(symbol)
 
         if not symbols:
             continue

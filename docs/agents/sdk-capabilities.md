@@ -17,29 +17,29 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 75 |
-| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 54 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 234 |
-| `application_sdk.constants` | Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup) | 146 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 69 |
-| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 81 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 85 |
+| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 58 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 239 |
+| `application_sdk.constants` | Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup) | 163 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 72 |
+| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 88 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 11 |
-| `application_sdk.discovery` | Dynamic App and Handler loading from "module.path:ClassName" strings at container startup | 4 |
-| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 45 |
+| `application_sdk.discovery` | Dynamic App and Handler loading from "module.path:ClassName" strings at container startup | 5 |
+| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 85 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 69 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 119 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 47 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 123 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 55 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.main_errors` | Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection | 4 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 144 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 44 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 155 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 45 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
-| `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 29 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 128 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 21 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 428 |
+| `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 30 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 143 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 38 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 517 |
 | `application_sdk.tools` | Developer command-line tools — provision-credentials for local development | 1 |
-| `application_sdk.transformers` | Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). | 27 |
+| `application_sdk.transformers` | Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). | 31 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 95 |
 
 ## Subpackage Details
@@ -518,6 +518,14 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Convert a Temporal workflow type into its generated-class name segment.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
+#### `get_correlation_context` (deprecated)
+
+- **Deprecated:** get_correlation_context is deprecated; use application_sdk.observability.correlation.get_correlation_context — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.context import get_correlation_context`
+- **Signature:** `get_correlation_context()`
+- **Summary:** Get the current correlation context.
+- **Defined in:** `application_sdk/observability/correlation.py`
+
 ### Constants and Enums
 
 #### `_app_state`
@@ -603,6 +611,70 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `wait_condition`
 - **Summary:** Suspend ``run()`` or a runtime interaction until a predicate becomes ``True``.
 - **Defined in:** `application_sdk/app/__init__.py`
+
+#### `APP_ALREADY_REGISTERED` (deprecated)
+
+- **Deprecated:** APP_ALREADY_REGISTERED is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.registry import APP_ALREADY_REGISTERED`
+- **Signature:** `APP_ALREADY_REGISTERED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `APP_NOT_FOUND` (deprecated)
+
+- **Deprecated:** APP_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.registry import APP_NOT_FOUND`
+- **Signature:** `APP_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `BUILD_ID_ENV` (deprecated)
+
+- **Deprecated:** BUILD_ID_ENV is deprecated; use application_sdk.common.build_identity.BUILD_ID_ENV — the implementation moved to common (FND-3280). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.build_identity import BUILD_ID_ENV`
+- **Signature:** `BUILD_ID_ENV`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `build_identity` (deprecated)
+
+- **Deprecated:** build_identity is deprecated; use application_sdk.common.build_identity.build_identity — the implementation moved to common (FND-3280). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.build_identity import build_identity`
+- **Signature:** `build_identity`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `BUILD_IDENTITY_CONFIGMAP_ID` (deprecated)
+
+- **Deprecated:** BUILD_IDENTITY_CONFIGMAP_ID is deprecated; use application_sdk.common.build_identity.BUILD_IDENTITY_CONFIGMAP_ID — the implementation moved to common (FND-3280). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
+- **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `BUILD_INFO_BUILD_ID_KEY` (deprecated)
+
+- **Deprecated:** BUILD_INFO_BUILD_ID_KEY is deprecated; use application_sdk.common.build_identity.BUILD_INFO_BUILD_ID_KEY — the implementation moved to common (FND-3280). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
+- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CONTRACT_VALIDATION` (deprecated)
+
+- **Deprecated:** CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.entrypoint import CONTRACT_VALIDATION`
+- **Also importable from:** `application_sdk.app.task`
+- **Signature:** `CONTRACT_VALIDATION`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `get_all_versions` (deprecated)
+
+- **Deprecated:** AppRegistry.get_all_versions is deprecated; use AppRegistry.get(name, version) for a known version or AppRegistry.get(name) for the latest. No replacement enumerates every version, and it has no caller in the SDK. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.registry import get_all_versions`
+- **Signature:** `get_all_versions`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `TASK_NOT_FOUND` (deprecated)
+
+- **Deprecated:** TASK_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.registry import TASK_NOT_FOUND`
+- **Signature:** `TASK_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
 
 ## `application_sdk.clients`
 
@@ -850,6 +922,14 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Summary:** Base Redis client with common functionality.
 - **Defined in:** `application_sdk/clients/redis.py`
 
+#### `EngineNotInitializedError` (deprecated)
+
+- **Deprecated:** EngineNotInitializedError is deprecated; use application_sdk.clients.sql_errors.EngineNotInitializedError — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.clients.sql import EngineNotInitializedError`
+- **Signature:** `class EngineNotInitializedError(*, ...)`
+- **Summary:** SQL engine is not initialized; call load() before running queries.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
 #### `LockReleaseResult` (deprecated)
 
 - **Deprecated:** application_sdk.clients.redis.LockReleaseResult is deprecated and will be removed in v4.0.0. It keeps working until then. Use redis-py (redis / redis.asyncio) directly; the SDK's distributed lock it was built for is not wired in v3. Do not use in new code.
@@ -907,6 +987,30 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Signature:** `class RedisTimeoutError(*, ...)`
 - **Summary:** Redis operation timed out.
 - **Defined in:** `application_sdk/clients/redis_errors.py`
+
+#### `SqlBindParameterError` (deprecated)
+
+- **Deprecated:** SqlBindParameterError is deprecated; use application_sdk.clients.sql_errors.SqlBindParameterError — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.clients.sql import SqlBindParameterError`
+- **Signature:** `class SqlBindParameterError(*, ...)`
+- **Summary:** ``run_query`` was given bind parameters it cannot apply.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlPandasResultError` (deprecated)
+
+- **Deprecated:** SqlPandasResultError is deprecated; use application_sdk.clients.sql_errors.SqlPandasResultError — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.clients.sql import SqlPandasResultError`
+- **Signature:** `class SqlPandasResultError(*, ...)`
+- **Summary:** A SQL read operation failed to produce a valid pandas DataFrame result.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `UnsupportedSqlCursorError` (deprecated)
+
+- **Deprecated:** UnsupportedSqlCursorError is deprecated; use application_sdk.clients.sql_errors.UnsupportedSqlCursorError — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.clients.sql import UnsupportedSqlCursorError`
+- **Signature:** `class UnsupportedSqlCursorError(*, ...)`
+- **Summary:** The current SQL engine or connection does not support cursors.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
 
 ### Functions
 
@@ -2721,6 +2825,41 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/common/path.py`
 
+#### `file_converter_registry` (deprecated)
+
+- **Deprecated:** file_converter_registry is deprecated; use pyarrow.json.read_json and pyarrow.parquet.write_table — the file_converter module has no callers and hides conversion errors. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.common.file_converter import file_converter_registry`
+- **Signature:** `file_converter_registry`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `FileUploadResponse` (deprecated)
+
+- **Deprecated:** FileUploadResponse is deprecated; use application_sdk.handler.contracts.FileUploadResponse — this module only ever re-exported the v2 application_sdk.server.fastapi.models.FileUploadResponse, which is itself deprecated. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.common.utils import FileUploadResponse`
+- **Signature:** `FileUploadResponse`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `StorageError` (deprecated)
+
+- **Deprecated:** StorageError is deprecated; use application_sdk.storage.errors.StorageError — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.common.incremental.state.state_reader import StorageError`
+- **Signature:** `StorageError`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `StorageNotFoundError` (deprecated)
+
+- **Deprecated:** StorageNotFoundError is deprecated; use application_sdk.storage.errors.StorageNotFoundError — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.common.incremental.helpers import StorageNotFoundError`
+- **Signature:** `StorageNotFoundError`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `upload_file_from_bytes` (deprecated)
+
+- **Deprecated:** upload_file_from_bytes is deprecated; use application_sdk.storage.batch.upload_file_from_bytes — it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.common.incremental.marker import upload_file_from_bytes`
+- **Signature:** `upload_file_from_bytes`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.constants`
 
 Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup)
@@ -3753,6 +3892,125 @@ Import-time configuration read from env vars once at import — paths, Dapr comp
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/constants.py`
 
+#### `APPLICATION_MODE` (deprecated)
+
+- **Deprecated:** APPLICATION_MODE is deprecated; use the ATLAN_APP_MODE env var (application_sdk.main.AppConfig.mode) — the SDK no longer reads this constant; the run mode is resolved at startup. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import APPLICATION_MODE`
+- **Signature:** `APPLICATION_MODE`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `ApplicationMode` (deprecated)
+
+- **Deprecated:** ApplicationMode is deprecated; use the v3 run modes 'worker', 'handler' and 'combined' (application_sdk.main.AppConfig.mode) — the v2 mode enum has no reader in the SDK. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import ApplicationMode`
+- **Signature:** `ApplicationMode`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `DAPR_BINDING_OPERATION_CREATE` (deprecated)
+
+- **Deprecated:** DAPR_BINDING_OPERATION_CREATE is deprecated; use the literal "create" — the SDK never read this constant. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import DAPR_BINDING_OPERATION_CREATE`
+- **Signature:** `DAPR_BINDING_OPERATION_CREATE`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `IS_LOCKING_DISABLED` (deprecated)
+
+- **Deprecated:** IS_LOCKING_DISABLED is deprecated: it only guards the deprecated RedisClient / RedisClientAsync connection. Read the IS_LOCKING_DISABLED environment variable instead; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import IS_LOCKING_DISABLED`
+- **Signature:** `IS_LOCKING_DISABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `LOCK_METADATA_KEY` (deprecated)
+
+- **Deprecated:** LOCK_METADATA_KEY is deprecated and has no effect: needs_lock does nothing in v3 because create_worker registers no lock interceptor. Remove the import; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import LOCK_METADATA_KEY`
+- **Signature:** `LOCK_METADATA_KEY`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `LOCK_RETRY_INTERVAL_SECONDS` (deprecated)
+
+- **Deprecated:** LOCK_RETRY_INTERVAL_SECONDS is deprecated and has no effect: the lock interceptor that reads it is never registered by create_worker. Remove the import; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import LOCK_RETRY_INTERVAL_SECONDS`
+- **Signature:** `LOCK_RETRY_INTERVAL_SECONDS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `LOG_CLEANUP_ENABLED` (deprecated)
+
+- **Deprecated:** LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import LOG_CLEANUP_ENABLED`
+- **Signature:** `LOG_CLEANUP_ENABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `LOG_RETENTION_DAYS` (deprecated)
+
+- **Deprecated:** LOG_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import LOG_RETENTION_DAYS`
+- **Signature:** `LOG_RETENTION_DAYS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `METRICS_CLEANUP_ENABLED` (deprecated)
+
+- **Deprecated:** METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import METRICS_CLEANUP_ENABLED`
+- **Signature:** `METRICS_CLEANUP_ENABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `METRICS_RETENTION_DAYS` (deprecated)
+
+- **Deprecated:** METRICS_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import METRICS_RETENTION_DAYS`
+- **Signature:** `METRICS_RETENTION_DAYS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `REDIS_HOST` (deprecated)
+
+- **Deprecated:** REDIS_HOST is deprecated: it only configures the deprecated RedisClient. Read the REDIS_HOST environment variable instead; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import REDIS_HOST`
+- **Signature:** `REDIS_HOST`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `REDIS_PASSWORD` (deprecated)
+
+- **Deprecated:** REDIS_PASSWORD is deprecated: it only configures the deprecated RedisClient. Read the REDIS_PASSWORD environment variable instead; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import REDIS_PASSWORD`
+- **Signature:** `REDIS_PASSWORD`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `REDIS_PORT` (deprecated)
+
+- **Deprecated:** REDIS_PORT is deprecated: it only configures the deprecated RedisClient. Read the REDIS_PORT environment variable instead; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import REDIS_PORT`
+- **Signature:** `REDIS_PORT`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `REDIS_SENTINEL_HOSTS` (deprecated)
+
+- **Deprecated:** REDIS_SENTINEL_HOSTS is deprecated: it only configures the deprecated RedisClient. Read the REDIS_SENTINEL_HOSTS environment variable instead; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import REDIS_SENTINEL_HOSTS`
+- **Signature:** `REDIS_SENTINEL_HOSTS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `REDIS_SENTINEL_SERVICE_NAME` (deprecated)
+
+- **Deprecated:** REDIS_SENTINEL_SERVICE_NAME is deprecated: it only configures the deprecated RedisClient. Read the REDIS_SENTINEL_SERVICE_NAME environment variable instead; it will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import REDIS_SENTINEL_SERVICE_NAME`
+- **Signature:** `REDIS_SENTINEL_SERVICE_NAME`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `SIZING_CLEANUP_ENABLED` (deprecated)
+
+- **Deprecated:** SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import SIZING_CLEANUP_ENABLED`
+- **Signature:** `SIZING_CLEANUP_ENABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `SIZING_RETENTION_DAYS` (deprecated)
+
+- **Deprecated:** SIZING_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.constants import SIZING_RETENTION_DAYS`
+- **Signature:** `SIZING_RETENTION_DAYS`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.contracts`
 
 Typed Pydantic Input/Output base classes, payload safety, storage and type helpers
@@ -4117,9 +4375,18 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 
 - **Deprecated:** ContractValidationError is deprecated; use application_sdk.contracts.ContractDeclarationError — will be removed in v4.0. Do not use in new code.
 - **Import:** `from application_sdk.contracts import ContractValidationError`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `class ContractValidationError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.contracts.ContractDeclarationError`` — removed in v4.0.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `CredentialRef` (deprecated)
+
+- **Deprecated:** CredentialRef is deprecated; use application_sdk.credentials.ref.CredentialRef — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.contracts.types import CredentialRef`
+- **Signature:** `class CredentialRef`
+- **Summary:** A reference to a credential in the secret store.
+- **Defined in:** `application_sdk/credentials/ref.py`
 
 #### `EventFilter` (deprecated)
 
@@ -4273,6 +4540,20 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Signature:** `TreeSelection`
 - **Summary:** A selection from a tree widget, in the nested shape the widget emits.
 - **Defined in:** `application_sdk/contracts/types.py`
+
+#### `CONTRACT_VALIDATION` (deprecated)
+
+- **Deprecated:** CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.contracts.base import CONTRACT_VALIDATION`
+- **Signature:** `CONTRACT_VALIDATION`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `PAYLOAD_SAFETY` (deprecated)
+
+- **Deprecated:** PAYLOAD_SAFETY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.contracts.base import PAYLOAD_SAFETY`
+- **Signature:** `PAYLOAD_SAFETY`
+- **Summary:** Deprecated alias, served with a warning.
 
 ## `application_sdk.credentials`
 
@@ -4901,6 +5182,55 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/credentials/spec.py`
 
+#### `build_token_request_data` (deprecated)
+
+- **Deprecated:** AtlanOAuthClient.build_token_request_data is deprecated and will be removed in v4.0.0. No SDK token exchange sends this payload (OAuthTokenService always form-encodes, and the Atlan OAuth exchange runs in pyatlan's token manager), so ATLAN_INTERNAL_HERACLES_URL has no effect through it. Use create_async_atlan_client(). Do not use in new code.
+- **Import:** `from application_sdk.credentials.atlan import build_token_request_data`
+- **Signature:** `build_token_request_data`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CREDENTIAL_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.credentials.errors import CREDENTIAL_ERROR`
+- **Signature:** `CREDENTIAL_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CREDENTIAL_NOT_FOUND` (deprecated)
+
+- **Deprecated:** CREDENTIAL_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.credentials.errors import CREDENTIAL_NOT_FOUND`
+- **Signature:** `CREDENTIAL_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CREDENTIAL_PARSE_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_PARSE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.credentials.errors import CREDENTIAL_PARSE_ERROR`
+- **Signature:** `CREDENTIAL_PARSE_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CREDENTIAL_VALIDATION_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_VALIDATION_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.credentials.errors import CREDENTIAL_VALIDATION_ERROR`
+- **Signature:** `CREDENTIAL_VALIDATION_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `effective_token_url` (deprecated)
+
+- **Deprecated:** AtlanOAuthClient.effective_token_url is deprecated and will be removed in v4.0.0. Nothing in the SDK exchanges an AtlanOAuthClient against this URL: create_async_atlan_client() hands client_id/client_secret to pyatlan's AsyncAtlanClient, whose token manager resolves the token endpoint itself. Use create_async_atlan_client(). Do not use in new code.
+- **Import:** `from application_sdk.credentials.atlan import effective_token_url`
+- **Signature:** `effective_token_url`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `from_workflow_args` (deprecated)
+
+- **Deprecated:** CredentialRef.from_workflow_args is deprecated; use CredentialRef.resolve(input) instead, passing the typed Input itself (a dict-only caller validates it first: CredentialRef.resolve(ExtractionInput.model_validate(workflow_args))) — resolve routes on extraction_method, where this falls through to the GUID. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.credentials.ref import from_workflow_args`
+- **Signature:** `from_workflow_args`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.dev`
 
 Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed
@@ -5022,6 +5352,15 @@ Dynamic App and Handler loading from "module.path:ClassName" strings at containe
 - **Signature:** `validate_app_class(cls: type[App]) -> None`
 - **Summary:** Validate that an App class is properly registered.
 - **Defined in:** `application_sdk/discovery.py`
+
+### Constants and Enums
+
+#### `DISCOVERY_ERROR` (deprecated)
+
+- **Deprecated:** DISCOVERY_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.discovery import DISCOVERY_ERROR`
+- **Signature:** `DISCOVERY_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
 
 ## `application_sdk.errors`
 
@@ -5387,6 +5726,325 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 - **Signature:** `WORKER_EVICTED_TYPE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `APP_ALREADY_REGISTERED` (deprecated)
+
+- **Deprecated:** APP_ALREADY_REGISTERED is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import APP_ALREADY_REGISTERED`
+- **Signature:** `APP_ALREADY_REGISTERED`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `APP_CONTEXT_ERROR` (deprecated)
+
+- **Deprecated:** APP_CONTEXT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import APP_CONTEXT_ERROR`
+- **Signature:** `APP_CONTEXT_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `APP_ERROR` (deprecated)
+
+- **Deprecated:** APP_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import APP_ERROR`
+- **Signature:** `APP_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `APP_NON_RETRYABLE` (deprecated)
+
+- **Deprecated:** APP_NON_RETRYABLE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
+- **Signature:** `APP_NON_RETRYABLE`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `APP_NOT_FOUND` (deprecated)
+
+- **Deprecated:** APP_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import APP_NOT_FOUND`
+- **Signature:** `APP_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `BINDING_ERROR` (deprecated)
+
+- **Deprecated:** BINDING_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import BINDING_ERROR`
+- **Signature:** `BINDING_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `CONTRACT_VALIDATION` (deprecated)
+
+- **Deprecated:** CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
+- **Signature:** `CONTRACT_VALIDATION`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `CREDENTIAL_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
+- **Signature:** `CREDENTIAL_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `CREDENTIAL_NOT_FOUND` (deprecated)
+
+- **Deprecated:** CREDENTIAL_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
+- **Signature:** `CREDENTIAL_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `CREDENTIAL_PARSE_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_PARSE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import CREDENTIAL_PARSE_ERROR`
+- **Signature:** `CREDENTIAL_PARSE_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `CREDENTIAL_VALIDATION_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_VALIDATION_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import CREDENTIAL_VALIDATION_ERROR`
+- **Signature:** `CREDENTIAL_VALIDATION_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `CREDENTIAL_VAULT_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_VAULT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import CREDENTIAL_VAULT_ERROR`
+- **Signature:** `CREDENTIAL_VAULT_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `DISCOVERY_ERROR` (deprecated)
+
+- **Deprecated:** DISCOVERY_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import DISCOVERY_ERROR`
+- **Signature:** `DISCOVERY_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `error_code` (deprecated)
+
+- **Deprecated:** error_code is deprecated; use the error's code (or qualified_code) instead — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors.base import error_code`
+- **Signature:** `error_code`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `EVENT_BUS` (deprecated)
+
+- **Deprecated:** EVENT_BUS is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import EVENT_BUS`
+- **Signature:** `EVENT_BUS`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `EVENT_PUBLISH` (deprecated)
+
+- **Deprecated:** EVENT_PUBLISH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import EVENT_PUBLISH`
+- **Signature:** `EVENT_PUBLISH`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `EXECUTION_ACTIVITY_ERROR` (deprecated)
+
+- **Deprecated:** EXECUTION_ACTIVITY_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import EXECUTION_ACTIVITY_ERROR`
+- **Signature:** `EXECUTION_ACTIVITY_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `EXECUTION_ERROR` (deprecated)
+
+- **Deprecated:** EXECUTION_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import EXECUTION_ERROR`
+- **Signature:** `EXECUTION_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `EXECUTION_WORKER_ERROR` (deprecated)
+
+- **Deprecated:** EXECUTION_WORKER_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import EXECUTION_WORKER_ERROR`
+- **Signature:** `EXECUTION_WORKER_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `HANDLER_ERROR` (deprecated)
+
+- **Deprecated:** HANDLER_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import HANDLER_ERROR`
+- **Signature:** `HANDLER_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `PAYLOAD_SAFETY` (deprecated)
+
+- **Deprecated:** PAYLOAD_SAFETY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
+- **Signature:** `PAYLOAD_SAFETY`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `PUBSUB_ERROR` (deprecated)
+
+- **Deprecated:** PUBSUB_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import PUBSUB_ERROR`
+- **Signature:** `PUBSUB_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `SECRET_NOT_FOUND` (deprecated)
+
+- **Deprecated:** SECRET_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
+- **Signature:** `SECRET_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `SECRET_STORE_ERROR` (deprecated)
+
+- **Deprecated:** SECRET_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import SECRET_STORE_ERROR`
+- **Signature:** `SECRET_STORE_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `SEGMENT_ERROR` (deprecated)
+
+- **Deprecated:** SEGMENT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import SEGMENT_ERROR`
+- **Signature:** `SEGMENT_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STATE_STORE_ERROR` (deprecated)
+
+- **Deprecated:** STATE_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STATE_STORE_ERROR`
+- **Signature:** `STATE_STORE_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_AUTH` (deprecated)
+
+- **Deprecated:** STORAGE_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_AUTH`
+- **Signature:** `STORAGE_AUTH`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_CONFIG` (deprecated)
+
+- **Deprecated:** STORAGE_CONFIG is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_CONFIG`
+- **Signature:** `STORAGE_CONFIG`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_DISK_FULL` (deprecated)
+
+- **Deprecated:** STORAGE_DISK_FULL is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_DISK_FULL`
+- **Signature:** `STORAGE_DISK_FULL`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_EMPTY_UPLOAD` (deprecated)
+
+- **Deprecated:** STORAGE_EMPTY_UPLOAD is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
+- **Signature:** `STORAGE_EMPTY_UPLOAD`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_GATEWAY_AUTH` (deprecated)
+
+- **Deprecated:** STORAGE_GATEWAY_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_AUTH`
+- **Signature:** `STORAGE_GATEWAY_AUTH`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_GATEWAY_NO_ROUTE` (deprecated)
+
+- **Deprecated:** STORAGE_GATEWAY_NO_ROUTE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE`
+- **Signature:** `STORAGE_GATEWAY_NO_ROUTE`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_HANDOFF_INCOMPLETE` (deprecated)
+
+- **Deprecated:** STORAGE_HANDOFF_INCOMPLETE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
+- **Signature:** `STORAGE_HANDOFF_INCOMPLETE`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_INTEGRITY` (deprecated)
+
+- **Deprecated:** STORAGE_INTEGRITY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_INTEGRITY`
+- **Signature:** `STORAGE_INTEGRITY`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_NOT_FOUND` (deprecated)
+
+- **Deprecated:** STORAGE_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
+- **Signature:** `STORAGE_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_OPERATION` (deprecated)
+
+- **Deprecated:** STORAGE_OPERATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_OPERATION`
+- **Signature:** `STORAGE_OPERATION`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_PERMISSION` (deprecated)
+
+- **Deprecated:** STORAGE_PERMISSION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
+- **Signature:** `STORAGE_PERMISSION`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_PREFLIGHT` (deprecated)
+
+- **Deprecated:** STORAGE_PREFLIGHT is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
+- **Signature:** `STORAGE_PREFLIGHT`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `STORAGE_RELOCATION` (deprecated)
+
+- **Deprecated:** STORAGE_RELOCATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import STORAGE_RELOCATION`
+- **Signature:** `STORAGE_RELOCATION`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
+
+#### `TASK_NOT_FOUND` (deprecated)
+
+- **Deprecated:** TASK_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
+- **Signature:** `TASK_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/_legacy_codes.py`
 
 ## `application_sdk.execution`
 
@@ -6304,6 +6962,14 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Configuration for the Temporal client used by the /start endpoint.
 - **Defined in:** `application_sdk/handler/service.py`
 
+#### `AgentCredentialSpec` (deprecated)
+
+- **Deprecated:** AgentCredentialSpec is deprecated; use application_sdk.credentials.spec.AgentCredentialSpec — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.handler.contracts import AgentCredentialSpec`
+- **Signature:** `class AgentCredentialSpec`
+- **Summary:** Typed envelope for an agent-shape credential payload.
+- **Defined in:** `application_sdk/credentials/spec.py`
+
 #### `HandlerError` (deprecated)
 
 - **Deprecated:** HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass — will be removed in v4.0. Do not use in new code.
@@ -6742,6 +7408,27 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/handler/object_routes.py`
 
+#### `_CREDENTIAL_KEYS` (deprecated)
+
+- **Deprecated:** _CREDENTIAL_KEYS is deprecated; use the app's generated credential form (contract/app.pkl) — every top-level field the form declares is now a credential key on every surface, so drop the rebind. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.handler.service import _CREDENTIAL_KEYS`
+- **Signature:** `_CREDENTIAL_KEYS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_normalize_credentials` (deprecated)
+
+- **Deprecated:** _normalize_credentials is deprecated; use a field the entry point's input contract declares — send the field the input reads; a legacy request shape the contract cannot express is a gap to raise with the SDK, not a request to rewrite. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.handler.service import _normalize_credentials`
+- **Signature:** `_normalize_credentials`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `HANDLER_ERROR` (deprecated)
+
+- **Deprecated:** HANDLER_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.handler.base import HANDLER_ERROR`
+- **Signature:** `HANDLER_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.infrastructure`
 
 Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool)
@@ -7128,6 +7815,63 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
+#### `BINDING_ERROR` (deprecated)
+
+- **Deprecated:** BINDING_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.bindings import BINDING_ERROR`
+- **Signature:** `BINDING_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CREDENTIAL_VAULT_ERROR` (deprecated)
+
+- **Deprecated:** CREDENTIAL_VAULT_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.credential_vault import CREDENTIAL_VAULT_ERROR`
+- **Signature:** `CREDENTIAL_VAULT_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `MessageHandler` (deprecated)
+
+- **Deprecated:** MessageHandler is deprecated; use SubscriptionConfig.handler in application_sdk.handler.contracts — it typed PubSub.subscribe handlers, which DaprPubSub never called. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure import MessageHandler`
+- **Also importable from:** `application_sdk.infrastructure.pubsub`
+- **Signature:** `MessageHandler`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `PUBSUB_ERROR` (deprecated)
+
+- **Deprecated:** PUBSUB_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.pubsub import PUBSUB_ERROR`
+- **Signature:** `PUBSUB_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `SECRET_NOT_FOUND` (deprecated)
+
+- **Deprecated:** SECRET_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.secrets import SECRET_NOT_FOUND`
+- **Signature:** `SECRET_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `SECRET_STORE_ERROR` (deprecated)
+
+- **Deprecated:** SECRET_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.secrets import SECRET_STORE_ERROR`
+- **Signature:** `SECRET_STORE_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STATE_STORE_ERROR` (deprecated)
+
+- **Deprecated:** STATE_STORE_ERROR is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.state import STATE_STORE_ERROR`
+- **Signature:** `STATE_STORE_ERROR`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `subscribe` (deprecated)
+
+- **Deprecated:** PubSub.subscribe is deprecated and will be removed in v4.0.0. DaprPubSub.subscribe never delivered a message to its handler; declare a SubscriptionConfig (application_sdk.handler.contracts) and pass it to create_app_handler_service(subscriptions=...) instead. Do not use in new code.
+- **Import:** `from application_sdk.infrastructure.pubsub import subscribe`
+- **Signature:** `subscribe`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.main`
 
 Dev entry point — run_dev_combined() and AppConfig for local execution and container startup
@@ -7417,6 +8161,14 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `class UnsupportedLogRecordError(*, ...)`
 - **Summary:** The log record format passed to the adaptor is not recognised.
 - **Defined in:** `application_sdk/observability/logger_adaptor_errors.py`
+
+#### `MetricType` (deprecated)
+
+- **Deprecated:** MetricType is deprecated; use application_sdk.observability.models.MetricType — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.metrics_adaptor import MetricType`
+- **Signature:** `class MetricType`
+- **Summary:** Enum for metric types.
+- **Defined in:** `application_sdk/observability/models.py`
 
 ### Functions
 
@@ -8215,6 +8967,76 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
+#### `activity` (deprecated)
+
+- **Deprecated:** AtlanLoggerAdapter.activity is deprecated; use AtlanLoggerAdapter.info and pass log_type='activity' if a reader needs the tag — it has no caller in the SDK. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.logger_adaptor import activity`
+- **Signature:** `activity`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `env_str` (deprecated)
+
+- **Deprecated:** env_str is deprecated; use application_sdk.common._env.env_str — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.observability import env_str`
+- **Signature:** `env_str`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `LOG_CLEANUP_ENABLED` (deprecated)
+
+- **Deprecated:** LOG_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.logger_adaptor import LOG_CLEANUP_ENABLED`
+- **Signature:** `LOG_CLEANUP_ENABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `LOG_RETENTION_DAYS` (deprecated)
+
+- **Deprecated:** LOG_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported log files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.logger_adaptor import LOG_RETENTION_DAYS`
+- **Signature:** `LOG_RETENTION_DAYS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `METRICS_CLEANUP_ENABLED` (deprecated)
+
+- **Deprecated:** METRICS_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.metrics_adaptor import METRICS_CLEANUP_ENABLED`
+- **Signature:** `METRICS_CLEANUP_ENABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `METRICS_RETENTION_DAYS` (deprecated)
+
+- **Deprecated:** METRICS_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported metric files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.metrics_adaptor import METRICS_RETENTION_DAYS`
+- **Signature:** `METRICS_RETENTION_DAYS`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `objectstore_sink` (deprecated)
+
+- **Deprecated:** AtlanLoggerAdapter.objectstore_sink is deprecated; use AtlanLoggerAdapter.add_record — the SDK registers no sink by this name, so a record routed here skips the path production uses. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.logger_adaptor import objectstore_sink`
+- **Signature:** `objectstore_sink`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `otlp_sink` (deprecated)
+
+- **Deprecated:** AtlanLoggerAdapter.otlp_sink is deprecated; use AtlanLoggerAdapter.add_record for the object store, and leave OTLP export to the SDK — no sink by this name is registered. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.logger_adaptor import otlp_sink`
+- **Signature:** `otlp_sink`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `SIZING_CLEANUP_ENABLED` (deprecated)
+
+- **Deprecated:** SIZING_CLEANUP_ENABLED is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.sizing_sink import SIZING_CLEANUP_ENABLED`
+- **Signature:** `SIZING_CLEANUP_ENABLED`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `SIZING_RETENTION_DAYS` (deprecated)
+
+- **Deprecated:** SIZING_RETENTION_DAYS is deprecated; use an object-store bucket lifecycle rule — the SDK retention sweep never deleted exported sizing files. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.observability.sizing_sink import SIZING_RETENTION_DAYS`
+- **Signature:** `SIZING_RETENTION_DAYS`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.outputs`
 
 Output collectors and record models for Automation Engine
@@ -8547,6 +9369,13 @@ Output collectors and record models for Automation Engine
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
+#### `_current_outputs` (deprecated)
+
+- **Deprecated:** _current_outputs is deprecated; use application_sdk.outputs.current_outputs — the same ContextVar under a public name (FND-4661). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.outputs import _current_outputs`
+- **Signature:** `_current_outputs`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.pkl_version`
 
 The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate
@@ -8795,6 +9624,13 @@ FastAPI server, MCP integration, middleware, health endpoint
 - **Signature:** `EXCLUDED_LOG_PATHS: frozenset[str]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/server/middleware/_constants.py`
+
+#### `upload_file_from_bytes` (deprecated)
+
+- **Deprecated:** upload_file_from_bytes is deprecated; use application_sdk.storage.batch.upload_file_from_bytes — it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.server.fastapi.utils import upload_file_from_bytes`
+- **Signature:** `upload_file_from_bytes`
+- **Summary:** Deprecated alias, served with a warning.
 
 ## `application_sdk.storage`
 
@@ -9757,6 +10593,111 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/storage/rolling.py`
 
+#### `prune_internal_dirs` (deprecated)
+
+- **Deprecated:** prune_internal_dirs is deprecated; use application_sdk.common._listing.prune_internal_dirs — it was only ever re-exported here by an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.cloud import prune_internal_dirs`
+- **Signature:** `prune_internal_dirs`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `run_in_thread` (deprecated)
+
+- **Deprecated:** run_in_thread is deprecated; use application_sdk._runtime.offload.run_in_thread — it was only ever re-exported here by an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.cloud import run_in_thread`
+- **Signature:** `run_in_thread`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_AUTH` (deprecated)
+
+- **Deprecated:** STORAGE_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_AUTH`
+- **Signature:** `STORAGE_AUTH`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_CONFIG` (deprecated)
+
+- **Deprecated:** STORAGE_CONFIG is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_CONFIG`
+- **Signature:** `STORAGE_CONFIG`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_DISK_FULL` (deprecated)
+
+- **Deprecated:** STORAGE_DISK_FULL is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_DISK_FULL`
+- **Signature:** `STORAGE_DISK_FULL`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_EMPTY_UPLOAD` (deprecated)
+
+- **Deprecated:** STORAGE_EMPTY_UPLOAD is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_EMPTY_UPLOAD`
+- **Signature:** `STORAGE_EMPTY_UPLOAD`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_GATEWAY_AUTH` (deprecated)
+
+- **Deprecated:** STORAGE_GATEWAY_AUTH is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_GATEWAY_AUTH`
+- **Signature:** `STORAGE_GATEWAY_AUTH`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_GATEWAY_NO_ROUTE` (deprecated)
+
+- **Deprecated:** STORAGE_GATEWAY_NO_ROUTE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_GATEWAY_NO_ROUTE`
+- **Signature:** `STORAGE_GATEWAY_NO_ROUTE`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_HANDOFF_INCOMPLETE` (deprecated)
+
+- **Deprecated:** STORAGE_HANDOFF_INCOMPLETE is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_HANDOFF_INCOMPLETE`
+- **Signature:** `STORAGE_HANDOFF_INCOMPLETE`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_INTEGRITY` (deprecated)
+
+- **Deprecated:** STORAGE_INTEGRITY is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_INTEGRITY`
+- **Signature:** `STORAGE_INTEGRITY`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_NOT_FOUND` (deprecated)
+
+- **Deprecated:** STORAGE_NOT_FOUND is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_NOT_FOUND`
+- **Signature:** `STORAGE_NOT_FOUND`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_OPERATION` (deprecated)
+
+- **Deprecated:** STORAGE_OPERATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_OPERATION`
+- **Signature:** `STORAGE_OPERATION`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_PERMISSION` (deprecated)
+
+- **Deprecated:** STORAGE_PERMISSION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_PERMISSION`
+- **Signature:** `STORAGE_PERMISSION`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_PREFLIGHT` (deprecated)
+
+- **Deprecated:** STORAGE_PREFLIGHT is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_PREFLIGHT`
+- **Signature:** `STORAGE_PREFLIGHT`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `STORAGE_RELOCATION` (deprecated)
+
+- **Deprecated:** STORAGE_RELOCATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass — AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.storage.errors import STORAGE_RELOCATION`
+- **Signature:** `STORAGE_RELOCATION`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.templates`
 
 SQL metadata extractor templates and their contracts
@@ -9851,6 +10792,14 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Base App for all metadata extraction connectors.
 - **Defined in:** `application_sdk/templates/base_metadata_extractor.py`
 
+#### `ExtractionOutput` (deprecated)
+
+- **Deprecated:** ExtractionOutput is deprecated; use application_sdk.templates.contracts.sql_metadata.ExtractionOutput — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import ExtractionOutput`
+- **Signature:** `class ExtractionOutput`
+- **Summary:** Top-level output from a SQL metadata extraction run.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
 #### `IncrementalSqlMetadataExtractor` (deprecated)
 
 - **Deprecated:** subclasses IncrementalSqlMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp with a custom run() for incremental orchestration. Will be removed in v4.0.0. Do not use in new code.
@@ -9911,10 +10860,118 @@ SQL metadata extractor templates and their contracts
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/templates/incremental_sql_metadata_extractor.py`
 
+#### `_build_transform_input` (deprecated)
+
+- **Deprecated:** SqlApp._build_transform_input is deprecated; use the public SqlApp.build_transform_input instead. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _build_transform_input`
+- **Signature:** `_build_transform_input`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_error_from_failure_details` (deprecated)
+
+- **Deprecated:** _error_from_failure_details is deprecated; use application_sdk.errors.wire.error_from_failure_details — the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _error_from_failure_details`
+- **Signature:** `_error_from_failure_details`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_extract_entity` (deprecated)
+
+- **Deprecated:** SqlApp._extract_entity is deprecated; use the public SqlApp.extract_entity instead. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _extract_entity`
+- **Signature:** `_extract_entity`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_redacted_validation_reason` (deprecated)
+
+- **Deprecated:** _redacted_validation_reason is deprecated; use application_sdk.errors.wire.redacted_validation_reason — the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _redacted_validation_reason`
+- **Signature:** `_redacted_validation_reason`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_resolve_credential_ref` (deprecated)
+
+- **Deprecated:** SqlApp._resolve_credential_ref is deprecated; use the public SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _resolve_credential_ref`
+- **Signature:** `_resolve_credential_ref`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_resolve_output_path` (deprecated)
+
+- **Deprecated:** SqlApp._resolve_output_path is deprecated; use the public SqlApp.resolve_output_path instead. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _resolve_output_path`
+- **Signature:** `_resolve_output_path`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `_transform_entity` (deprecated)
+
+- **Deprecated:** SqlApp._transform_entity is deprecated; use the public SqlApp.transform_entity instead. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import _transform_entity`
+- **Signature:** `_transform_entity`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `Audience` (deprecated)
+
+- **Deprecated:** Audience is deprecated; use application_sdk.errors.categories.Audience — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import Audience`
+- **Signature:** `Audience`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `FailureCategory` (deprecated)
+
+- **Deprecated:** FailureCategory is deprecated; use application_sdk.errors.categories.FailureCategory — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import FailureCategory`
+- **Signature:** `FailureCategory`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `legacy_credential_ref` (deprecated)
+
+- **Deprecated:** legacy_credential_ref is deprecated; use application_sdk.credentials.ref.legacy_credential_ref — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import legacy_credential_ref`
+- **Also importable from:** `application_sdk.templates.sql_metadata_extractor`, `application_sdk.templates.sql_query_extractor`
+- **Signature:** `legacy_credential_ref`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `redact_wire_value` (deprecated)
+
+- **Deprecated:** redact_wire_value is deprecated; use application_sdk.errors.base.redact_wire_value — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import redact_wire_value`
+- **Signature:** `redact_wire_value`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `sanitize_cause_repr` (deprecated)
+
+- **Deprecated:** sanitize_cause_repr is deprecated; use application_sdk.errors.base.sanitize_cause_repr — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import sanitize_cause_repr`
+- **Signature:** `sanitize_cause_repr`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `secret_named_evidence_keys` (deprecated)
+
+- **Deprecated:** secret_named_evidence_keys is deprecated; use application_sdk.errors.wire.secret_named_evidence_keys — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import secret_named_evidence_keys`
+- **Signature:** `secret_named_evidence_keys`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `TEMPORARY_PATH` (deprecated)
+
+- **Deprecated:** TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import TEMPORARY_PATH`
+- **Signature:** `TEMPORARY_PATH`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/constants.py`
+
+#### `upload_to_atlan` (deprecated)
+
+- **Deprecated:** upload_to_atlan is deprecated and will be removed in v4.0.0. Migrate to App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). See docs/concepts/file-reference.md for migration guidance. Do not use in new code.
+- **Import:** `from application_sdk.templates.base_metadata_extractor import upload_to_atlan`
+- **Signature:** `upload_to_atlan`
+- **Summary:** Deprecated alias, served with a warning.
+
 #### `UploadInput` (deprecated)
 
 - **Deprecated:** UploadInput is deprecated; use application_sdk.templates.contracts.UploadToAtlanInput — the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadInput. Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.templates.contracts import UploadInput`
+- **Also importable from:** `application_sdk.templates.base_metadata_extractor`, `application_sdk.templates.contracts.base_metadata_extraction`
 - **Signature:** `UploadInput`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/templates/contracts/__init__.py`
@@ -9923,9 +10980,17 @@ SQL metadata extractor templates and their contracts
 
 - **Deprecated:** UploadOutput is deprecated; use application_sdk.templates.contracts.UploadToAtlanOutput — the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadOutput. Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.templates.contracts import UploadOutput`
+- **Also importable from:** `application_sdk.templates.base_metadata_extractor`, `application_sdk.templates.contracts.base_metadata_extraction`
 - **Signature:** `UploadOutput`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/templates/contracts/__init__.py`
+
+#### `WORKFLOW_OUTPUT_PATH_TEMPLATE` (deprecated)
+
+- **Deprecated:** WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.templates.sql_app import WORKFLOW_OUTPUT_PATH_TEMPLATE`
+- **Signature:** `WORKFLOW_OUTPUT_PATH_TEMPLATE`
+- **Summary:** Deprecated alias, served with a warning.
 
 ## `application_sdk.testing`
 
@@ -11302,7 +12367,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** AEWorkflowClient is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
 - **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
@@ -11311,6 +12376,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** application_sdk.testing.full_dag.payload.AgentSpec is deprecated; use application_sdk.testing.e2e.payload.AgentSpec — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag.base import AgentSpec`
+- **Also importable from:** `application_sdk.testing.full_dag.payload`
 - **Signature:** `class AgentSpec(agent_name: str, ...)`
 - **Summary:** Optional agent routing (tier 4 only).
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
@@ -11331,6 +12397,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AppConfig(app_name: str = '', ...)`
 - **Summary:** Deprecated (removed in v4.0) — use :class:`AppUnderTest`.
 - **Defined in:** `application_sdk/testing/e2e/config.py`
+
+#### `AppIdentity` (deprecated)
+
+- **Deprecated:** AppIdentity is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import AppIdentity`
+- **Signature:** `class AppIdentity(name: str, display_name: str = '')`
+- **Summary:** The committed names a marketplace card may be listed under.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `AssetDiff` (deprecated)
 
@@ -11362,26 +12436,120 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** application_sdk.testing.sdr.BaseSDRIntegrationTest is deprecated; SDR is a deployment mode, not a test tier, so there is no single replacement class — migrate each concern to where it belongs (auth/preflight: call the handler directly; credential resolution: already covered in application-sdk's tests/unit/credentials; a full DAG: tests/e2e with mode=RunMode.AGENT). See docs/standards/connector-ci-e2e.md — will be removed in v4.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.sdr import BaseSDRIntegrationTest`
+- **Also importable from:** `application_sdk.testing.sdr.base`
 - **Signature:** `class BaseSDRIntegrationTest`
 - **Summary:** Deprecated: migrate per concern — SDR is a deployment mode, not a test tier.
 - **Defined in:** `application_sdk/testing/sdr/base.py`
+
+#### `Card` (deprecated)
+
+- **Deprecated:** Card is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import Card`
+- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '')`
+- **Summary:** One marketplace card, trimmed to the fields the check reads.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `ConfigLoader` (deprecated)
+
+- **Deprecated:** ConfigLoader is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ConfigLoader`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`, `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `class ConfigLoader(config_path: str)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `ConnectionSpec` (deprecated)
 
 - **Deprecated:** application_sdk.testing.full_dag.payload.ConnectionSpec is deprecated; use application_sdk.testing.e2e.payload.ConnectionSpec — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag.base import ConnectionSpec`
+- **Also importable from:** `application_sdk.testing.full_dag.payload`
 - **Signature:** `class ConnectionSpec(name: str, ...)`
 - **Summary:** Identity of the Connection the AE workflow will create.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
+#### `CsvFormatHandler` (deprecated)
+
+- **Deprecated:** CsvFormatHandler is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import CsvFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`
+- **Signature:** `class CsvFormatHandler(output_dir: str)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/csv_handler.py`
+
+#### `DAGNodeResult` (deprecated)
+
+- **Deprecated:** DAGNodeResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGNodeResult — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.client import DAGNodeResult`
+- **Signature:** `class DAGNodeResult(name: str, ...)`
+- **Summary:** One row of the per-node breakdown returned by ``native-status``.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
+
+#### `DAGNodeStatus` (deprecated)
+
+- **Deprecated:** DAGNodeStatus is deprecated; use application_sdk.testing.harness.automation_engine.DAGNodeStatus — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.client import DAGNodeStatus`
+- **Signature:** `class DAGNodeStatus`
+- **Summary:** Status values returned by ``native-status`` per DAG node.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
+
+#### `DAGRunResult` (deprecated)
+
+- **Deprecated:** DAGRunResult is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunResult — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.base import DAGRunResult`
+- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Signature:** `class DAGRunResult(run_id: str, ...)`
+- **Summary:** Full result of one ``native-status`` read.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
+
+#### `DAGRunStatus` (deprecated)
+
+- **Deprecated:** DAGRunStatus is deprecated; use application_sdk.testing.harness.automation_engine.DAGRunStatus — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.client import DAGRunStatus`
+- **Signature:** `class DAGRunStatus`
+- **Summary:** Top-level status of an AE workflow run.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
 
 #### `DatabaseSpec` (deprecated)
 
 - **Deprecated:** application_sdk.testing.full_dag.payload.DatabaseSpec is deprecated; use application_sdk.testing.e2e.payload.DatabaseSpec — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag.base import DatabaseSpec`
-- **Also importable from:** `application_sdk.testing.harness.seed`
+- **Also importable from:** `application_sdk.testing.harness.seed`, `application_sdk.testing.full_dag.payload`
 - **Signature:** `class DatabaseSpec(host: str, ...)`
 - **Summary:** DB connection details for the credential payload.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
+#### `DataGenerator` (deprecated)
+
+- **Deprecated:** DataGenerator is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import DataGenerator`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `class DataGenerator(config_loader: ConfigLoader)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/data_generator.py`
+
+#### `DriverArgs` (deprecated)
+
+- **Deprecated:** DriverArgs is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.driver import DriverArgs`
+- **Signature:** `class DriverArgs(config_path: str, output_format: str, output_dir: str)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+
+#### `Entrypoint` (deprecated)
+
+- **Deprecated:** Entrypoint is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
+- **Signature:** `class Entrypoint(name: str, ...)`
+- **Summary:** One entry point, as the committed artifacts describe it.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `FormStep` (deprecated)
+
+- **Deprecated:** FormStep is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import FormStep`
+- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset())`
+- **Summary:** One panel of the setup wizard, as the served schema describes it.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `FullDAGOutcome` (deprecated)
 
@@ -11404,9 +12572,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** IntegrationTestClient is deprecated; use AppExecutor from application_sdk.testing.integration.fixtures to run the App in process, or BaseE2ETest from application_sdk.testing.e2e for a deployed App — it drives the SDK-owned HTTP routes of a running app server, which the HTTP scenario framework existed to test, and leaves with it (FND-4911). Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.integration import IntegrationTestClient`
+- **Also importable from:** `application_sdk.testing.integration.client`
 - **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
+
+#### `InvalidInputError` (deprecated)
+
+- **Deprecated:** InvalidInputError is deprecated; use application_sdk.errors.leaves.InvalidInputError — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import InvalidInputError`
+- **Signature:** `class InvalidInputError(*, ...)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `JsonFormatHandler` (deprecated)
+
+- **Deprecated:** JsonFormatHandler is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import JsonFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.json_handler`
+- **Signature:** `class JsonFormatHandler`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/json_handler.py`
 
 #### `Lazy` (deprecated)
 
@@ -11420,9 +12606,69 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** LogCollector is deprecated; use application_sdk.testing.harness.evidence, which BaseE2ETest already writes on a failed run — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.e2e import LogCollector`
+- **Also importable from:** `application_sdk.testing.e2e.logs`
 - **Signature:** `class LogCollector(namespace: str, output_dir: Path, *, reader: KubernetesReader | None = None)`
 - **Summary:** Collect container logs, pod descriptions, and events from a namespace.
 - **Defined in:** `application_sdk/testing/e2e/logs.py`
+
+#### `OutputFormat` (deprecated)
+
+- **Deprecated:** OutputFormat is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import OutputFormat`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`
+- **Signature:** `class OutputFormat`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
+
+#### `OutputFormatHandler` (deprecated)
+
+- **Deprecated:** OutputFormatHandler is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.output_handler.base import OutputFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`, `application_sdk.testing.scale_data_generator.output_handler.json_handler`, `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
+- **Signature:** `class OutputFormatHandler(output_dir: str)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/base.py`
+
+#### `ParquetFormatHandler` (deprecated)
+
+- **Deprecated:** ParquetFormatHandler is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import ParquetFormatHandler`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
+- **Signature:** `class ParquetFormatHandler`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/parquet_handler.py`
+
+#### `RouteCheckSkipped` (deprecated)
+
+- **Deprecated:** RouteCheckSkipped is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import RouteCheckSkipped`
+- **Signature:** `class RouteCheckSkipped`
+- **Summary:** There is no setup route to check, and that is not a failure.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `RouteReader` (deprecated)
+
+- **Deprecated:** RouteReader is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import RouteReader`
+- **Signature:** `class RouteReader`
+- **Summary:** The two reads :func:`verify` needs from a tenant.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `RunMode` (deprecated)
+
+- **Deprecated:** application_sdk.testing.full_dag.payload.RunMode is deprecated; use application_sdk.testing.e2e.RunMode — will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.payload import RunMode`
+- **Signature:** `class RunMode`
+- **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
+- **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
+#### `ScaleDataConfigError` (deprecated)
+
+- **Deprecated:** ScaleDataConfigError is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ScaleDataConfigError`
+- **Signature:** `class ScaleDataConfigError(*, ...)`
+- **Summary:** Scale-data generator YAML config is missing or malformed.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `Scenario` (deprecated)
 
@@ -11440,13 +12686,46 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Result of executing a single scenario.
 - **Defined in:** `application_sdk/testing/integration/models.py`
 
+#### `ServedForm` (deprecated)
+
+- **Deprecated:** ServedForm is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import ServedForm`
+- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ())`
+- **Summary:** The setup form a tenant serves, in the two parts the UI renders from.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `SetupRouteError` (deprecated)
+
+- **Deprecated:** SetupRouteError is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import SetupRouteError`
+- **Signature:** `class SetupRouteError`
+- **Summary:** A setup route is broken, or the tenant could not be asked.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
 #### `SQLAppE2EFullTest` (deprecated)
 
 - **Deprecated:** application_sdk.testing.full_dag.SQLAppE2EFullTest is deprecated; use application_sdk.testing.e2e.SQLAppE2ETest — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
+- **Also importable from:** `application_sdk.testing.full_dag.sql_app`
 - **Signature:** `class SQLAppE2EFullTest`
 - **Summary:** Deprecated: SQL full-DAG base — use ``application_sdk.testing.e2e.SQLAppE2ETest``.
 - **Defined in:** `application_sdk/testing/full_dag/sql_app.py`
+
+#### `TenantRoutes` (deprecated)
+
+- **Deprecated:** TenantRoutes is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import TenantRoutes`
+- **Signature:** `class TenantRoutes(base_url: str, bearer: str)`
+- **Summary:** Reads the two routes the setup page walks, with one bearer credential.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `TenantUnreachable` (deprecated)
+
+- **Deprecated:** TenantUnreachable is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
+- **Signature:** `class TenantUnreachable`
+- **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 ### Functions
 
@@ -12438,6 +13717,38 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Write *spec*'s NDJSON under ``root/transformed`` and count what landed.
 - **Defined in:** `application_sdk/testing/harness/seed/_ndjson.py`
 
+#### `_agent_credential_ref_keys` (deprecated)
+
+- **Deprecated:** _agent_credential_ref_keys is deprecated; use agent_credential_ref_keys from application_sdk.testing.e2e.payload, the same function under a public name (FND-4661) — will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.e2e.payload import _agent_credential_ref_keys`
+- **Signature:** `_agent_credential_ref_keys(*, auth_type: str, connector_short_name: str) -> dict[str, str]`
+- **Summary:** Deprecated private alias of :func:`agent_credential_ref_keys`.
+- **Defined in:** `application_sdk/testing/e2e/payload.py`
+
+#### `_artifact_preservation` (deprecated)
+
+- **Deprecated:** _artifact_preservation is deprecated; use artifact_preservation from application_sdk.testing.integration.fixtures, the same context manager under a public name (FND-4661) — will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.integration.fixtures import _artifact_preservation`
+- **Signature:** `_artifact_preservation(options: KitOptions) -> AbstractContextManager[None]`
+- **Summary:** Deprecated private alias of :func:`artifact_preservation`.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
+#### `_auto_discover_credentials` (deprecated)
+
+- **Deprecated:** _auto_discover_credentials is deprecated; use auto_discover_credentials from application_sdk.testing.integration.runner, the same function under a public name (FND-4661) — will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.integration.runner import _auto_discover_credentials`
+- **Signature:** `_auto_discover_credentials(scenario_name: str = '') -> dict[str, Any]`
+- **Summary:** Deprecated private alias of :func:`auto_discover_credentials`.
+- **Defined in:** `application_sdk/testing/integration/runner.py`
+
+#### `_verify_registration` (deprecated)
+
+- **Deprecated:** _verify_registration is deprecated; use verify_registration from application_sdk.testing.integration.fixtures, the same function under a public name (FND-4661) — will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.integration.fixtures import _verify_registration`
+- **Signature:** `_verify_registration(app_cls: type[App]) -> str`
+- **Summary:** Deprecated private alias of :func:`verify_registration`.
+- **Defined in:** `application_sdk/testing/integration/fixtures.py`
+
 #### `all_of` (deprecated)
 
 - **Deprecated:** all_of is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures — it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0. Do not use in new code.
@@ -12466,7 +13777,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** application_sdk.testing.full_dag.payload.build_ae_payload is deprecated; use application_sdk.testing.e2e.payload.build_ae_payload — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag import build_ae_payload`
-- **Also importable from:** `application_sdk.testing.full_dag.base`
+- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.payload`
 - **Signature:** `build_ae_payload(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — AE submit body; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
@@ -12475,10 +13786,19 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** application_sdk.testing.full_dag.payload.build_seed_dag is deprecated; use application_sdk.testing.e2e.payload.build_seed_dag — will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.full_dag import build_seed_dag`
-- **Also importable from:** `application_sdk.testing.full_dag.base`
+- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.payload`
 - **Signature:** `build_seed_dag(*, *, ...)`
 - **Summary:** Deprecated (v4.0) — seed-version DAG; use ``application_sdk.testing.e2e.payload``.
 - **Defined in:** `application_sdk/testing/full_dag/payload.py`
+
+#### `cold_start_submit_kwargs` (deprecated)
+
+- **Deprecated:** cold_start_submit_kwargs is deprecated; use application_sdk.testing.harness.automation_engine.cold_start_submit_kwargs — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.base import cold_start_submit_kwargs`
+- **Also importable from:** `application_sdk.testing.full_dag.client`
+- **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
+- **Summary:** Re-size the AE submit's retry to a cold start.
+- **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
 
 #### `compare_metadata` (deprecated)
 
@@ -12520,6 +13840,30 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `declared_inputs` (deprecated)
+
+- **Deprecated:** declared_inputs is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import declared_inputs`
+- **Signature:** `declared_inputs(workflow_config: dict[str, Any])`
+- **Summary:** Return the input names a generated workflow config declares.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `delete_object` (deprecated)
+
+- **Deprecated:** application_sdk.testing.e2e.base.delete_object is deprecated, does nothing, and will be removed in v4.0. Use application_sdk.storage.ops.delete instead. Do not use in new code.
+- **Import:** `from application_sdk.testing.e2e.base import delete_object`
+- **Signature:** `delete_object(key: str, store: object = None, *, normalize: bool = True) -> bool`
+- **Summary:** Deprecated no-op kept only so the name stays importable until v4.0.
+- **Defined in:** `application_sdk/testing/e2e/base.py`
+
+#### `driver` (deprecated)
+
+- **Deprecated:** driver is deprecated; use faker directly in your own fixture script — the scale data generator has no callers and leaves the package (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.scale_data_generator.driver import driver`
+- **Signature:** `driver(args: DriverArgs)`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
+
 #### `ends_with` (deprecated)
 
 - **Deprecated:** ends_with is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures — it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0. Do not use in new code.
@@ -12552,10 +13896,27 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Assert that the actual value is not None.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
+#### `foreign_form` (deprecated)
+
+- **Deprecated:** foreign_form is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import foreign_form`
+- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object)`
+- **Summary:** Whether the tenant served a DIFFERENT entry point's form, or ``None``.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `form_shortfall` (deprecated)
+
+- **Deprecated:** form_shortfall is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import form_shortfall`
+- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm)`
+- **Summary:** Why this entry point's setup form will not render, or ``None``.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
 #### `format_validation_report` (deprecated)
 
 - **Deprecated:** format_validation_report is deprecated; use application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML — it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.integration import format_validation_report`
+- **Also importable from:** `application_sdk.testing.integration.validation`
 - **Signature:** `format_validation_report(results: list[dict[str, Any]])`
 - **Summary:** Format pandera validation results into a human-readable report.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
@@ -12568,10 +13929,20 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Generate individual test methods for each scenario.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
 
+#### `get_logger` (deprecated)
+
+- **Deprecated:** get_logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.base import get_logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** Get or create an instance of AtlanLoggerAdapter.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
 #### `get_normalised_dataframe` (deprecated)
 
 - **Deprecated:** get_normalised_dataframe is deprecated; use application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML — it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.integration import get_normalised_dataframe`
+- **Also importable from:** `application_sdk.testing.integration.validation`
 - **Signature:** `get_normalised_dataframe(extracted_file_path: str)`
 - **Summary:** Read extracted output files and normalize into a DataFrame.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
@@ -12580,6 +13951,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** get_schema_file_paths is deprecated; use application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML — it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.integration import get_schema_file_paths`
+- **Also importable from:** `application_sdk.testing.integration.validation`
 - **Signature:** `get_schema_file_paths(schema_base_path: str)`
 - **Summary:** Find all pandera YAML schema files in the given directory.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
@@ -12728,6 +14100,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Load expected metadata from a JSON file.
 - **Defined in:** `application_sdk/testing/integration/comparison.py`
 
+#### `locate_cards` (deprecated)
+
+- **Deprecated:** locate_cards is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import locate_cards`
+- **Signature:** `locate_cards(identity: AppIdentity, entrypoints: Sequence[Entrypoint], payloads: list[dict[str, Any]])`
+- **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
 #### `matches` (deprecated)
 
 - **Deprecated:** matches is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures — it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0. Do not use in new code.
@@ -12784,6 +14164,46 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a pytest parametrize decorator for scenarios.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
 
+#### `read_app_identity` (deprecated)
+
+- **Deprecated:** read_app_identity is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import read_app_identity`
+- **Signature:** `read_app_identity(repo_root: Path)`
+- **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `read_entrypoint_names` (deprecated)
+
+- **Deprecated:** read_entrypoint_names is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import read_entrypoint_names`
+- **Signature:** `read_entrypoint_names(repo_root: Path)`
+- **Summary:** Return the ``entrypoints[].name`` values that should have a setup page.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `read_entrypoints` (deprecated)
+
+- **Deprecated:** read_entrypoints is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import read_entrypoints`
+- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated')`
+- **Summary:** Read every entry point's committed workflow config.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `route_mismatch` (deprecated)
+
+- **Deprecated:** route_mismatch is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
+- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card)`
+- **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `served_form` (deprecated)
+
+- **Deprecated:** served_form is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import served_form`
+- **Signature:** `served_form(body: dict[str, Any])`
+- **Summary:** Unwrap a ConfigMap response into the form the tenant serves.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
 #### `starts_with` (deprecated)
 
 - **Deprecated:** starts_with is deprecated; use the in-process fixture kit, application_sdk.testing.integration.fixtures — it exists only to serve the deprecated BaseIntegrationTest HTTP scenario framework and leaves with it (FND-4911). Will be removed in v4.0.0. Do not use in new code.
@@ -12796,9 +14216,18 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Deprecated:** validate_with_pandera is deprecated; use application_sdk.testing.integration.output_schema — assert_output_matches, with load_pandera_schemas to read existing pandera YAML — it checks a run's output without pandas or pandera, and reads the same schema files (FND-5007); the pandera path leaves with the HTTP scenario framework (FND-4911). Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.testing.integration import validate_with_pandera`
+- **Also importable from:** `application_sdk.testing.integration.validation`
 - **Signature:** `validate_with_pandera(schema_base_path: str, extracted_output_path: str, subdirectory: str = 'transformed')`
 - **Summary:** Validate extracted output against pandera YAML schemas.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
+
+#### `verify` (deprecated)
+
+- **Deprecated:** verify is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import verify`
+- **Signature:** `verify(repo_root: Path, *, ...)`
+- **Summary:** Check every entry point's setup route. Returns the lines to report.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 ### Constants and Enums
 
@@ -13104,6 +14533,341 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One entry in a :class:`WarmingSource` script.
 - **Defined in:** `application_sdk/testing/warming.py`
 
+#### `auth_credentials_strategy` (deprecated)
+
+- **Deprecated:** auth_credentials_strategy is deprecated; use a strategy built from your app's own credential model — it generates the v2 server's credential dict. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.server.fastapi import auth_credentials_strategy`
+- **Signature:** `auth_credentials_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `client` (deprecated)
+
+- **Deprecated:** BaseE2ETest.client is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync. Do not use in new code.
+- **Import:** `from application_sdk.testing.e2e.base import client`
+- **Signature:** `client`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `common_credential_keys` (deprecated)
+
+- **Deprecated:** common_credential_keys is deprecated; use a strategy built from your app's own credential model — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import common_credential_keys`
+- **Signature:** `common_credential_keys`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `CONFIGMAP_PATH` (deprecated)
+
+- **Deprecated:** CONFIGMAP_PATH is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_PATH`
+- **Signature:** `CONFIGMAP_PATH`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `CONFIGMAP_SOURCE_APP_QUERY` (deprecated)
+
+- **Deprecated:** CONFIGMAP_SOURCE_APP_QUERY is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_SOURCE_APP_QUERY`
+- **Signature:** `CONFIGMAP_SOURCE_APP_QUERY`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `credential_value_strategy` (deprecated)
+
+- **Deprecated:** credential_value_strategy is deprecated; use a strategy built from your app's own credential model — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import credential_value_strategy`
+- **Signature:** `credential_value_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `database_entry_strategy` (deprecated)
+
+- **Deprecated:** database_entry_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import database_entry_strategy`
+- **Signature:** `database_entry_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `database_list_strategy` (deprecated)
+
+- **Deprecated:** database_list_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import database_list_strategy`
+- **Signature:** `database_list_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `database_name_strategy` (deprecated)
+
+- **Deprecated:** database_name_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import database_name_strategy`
+- **Also importable from:** `application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight`
+- **Signature:** `database_name_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `db_schema_mapping_strategy` (deprecated)
+
+- **Deprecated:** db_schema_mapping_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import db_schema_mapping_strategy`
+- **Signature:** `db_schema_mapping_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `DEFAULT_CATALOG_WAIT_SECONDS` (deprecated)
+
+- **Deprecated:** DEFAULT_CATALOG_WAIT_SECONDS is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
+- **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `DEFAULT_POD_RECONCILE_WAIT_SECONDS` (deprecated)
+
+- **Deprecated:** DEFAULT_POD_RECONCILE_WAIT_SECONDS is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+- **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `event_data_strategy` (deprecated)
+
+- **Deprecated:** event_data_strategy is deprecated; use a strategy built from application_sdk.handler.contracts.CloudEventEnvelope — it generates the v2 server's Dapr event payload. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.server.fastapi import event_data_strategy`
+- **Signature:** `event_data_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `Handler` (deprecated)
+
+- **Deprecated:** Handler is deprecated; use application_sdk.testing.FakeSourceHandler — the same alias, renamed so a star-import no longer rebinds application_sdk.handler.Handler. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing import Handler`
+- **Also importable from:** `application_sdk.testing.fake_source`
+- **Signature:** `Handler`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/__init__.py`
+
+#### `logger` (deprecated)
+
+- **Deprecated:** logger is deprecated; use application_sdk.observability.logger_adaptor.get_logger(__name__) in your own module — application_sdk.testing.full_dag is deprecated in favour of application_sdk.testing.e2e (FND-4659). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.full_dag.base import logger`
+- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
+- **Signature:** `logger: AtlanLoggerAdapter`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/full_dag/base.py`
+
+#### `MARKETPLACE_APPS_PATH` (deprecated)
+
+- **Deprecated:** MARKETPLACE_APPS_PATH is deprecated; use the sdr-e2e composite's workflow-setup route check — the check is SDK CI tooling and leaves the package; that step already runs it against your tenant on every e2e leg (FND-4660). Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.setup_routes import MARKETPLACE_APPS_PATH`
+- **Signature:** `MARKETPLACE_APPS_PATH`
+- **Summary:** Deprecated alias, served with a warning.
+- **Defined in:** `application_sdk/testing/_setup_routes.py`
+
+#### `metadata_entry_strategy` (deprecated)
+
+- **Deprecated:** metadata_entry_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import metadata_entry_strategy`
+- **Signature:** `metadata_entry_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `metadata_entry_tuple_strategy` (deprecated)
+
+- **Deprecated:** metadata_entry_tuple_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import metadata_entry_tuple_strategy`
+- **Signature:** `metadata_entry_tuple_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `metadata_list_strategy` (deprecated)
+
+- **Deprecated:** metadata_list_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import metadata_list_strategy`
+- **Also importable from:** `application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight`
+- **Signature:** `metadata_list_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `metadata_strategy` (deprecated)
+
+- **Deprecated:** metadata_strategy is deprecated; use a strategy built from your app's own metadata model — it generates the v2 server's include/exclude-filter dict. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.server.fastapi import metadata_strategy`
+- **Signature:** `metadata_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `mixed_mapping_strategy` (deprecated)
+
+- **Deprecated:** mixed_mapping_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import mixed_mapping_strategy`
+- **Signature:** `mixed_mapping_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `mock_sql_batch_strategy` (deprecated)
+
+- **Deprecated:** mock_sql_batch_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_batch_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import mock_sql_batch_strategy`
+- **Signature:** `mock_sql_batch_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `mock_sql_column_description_strategy` (deprecated)
+
+- **Deprecated:** mock_sql_column_description_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_column_description_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import mock_sql_column_description_strategy`
+- **Signature:** `mock_sql_column_description_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `mock_sql_query_result_strategy` (deprecated)
+
+- **Deprecated:** mock_sql_query_result_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_query_result_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import mock_sql_query_result_strategy`
+- **Signature:** `mock_sql_query_result_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `mock_sql_row_strategy` (deprecated)
+
+- **Deprecated:** mock_sql_row_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.mock_sql_row_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import mock_sql_row_strategy`
+- **Signature:** `mock_sql_row_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `payload_strategy` (deprecated)
+
+- **Deprecated:** payload_strategy is deprecated; use a strategy built from your app's typed Input contract — it generates the v2 server's credentials+metadata payload. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.server.fastapi import payload_strategy`
+- **Signature:** `payload_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `preflight_check_payload_strategy` (deprecated)
+
+- **Deprecated:** preflight_check_payload_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import preflight_check_payload_strategy`
+- **Signature:** `preflight_check_payload_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `regex_db_schema_mapping_strategy` (deprecated)
+
+- **Deprecated:** regex_db_schema_mapping_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import regex_db_schema_mapping_strategy`
+- **Signature:** `regex_db_schema_mapping_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `safe_string_strategy` (deprecated)
+
+- **Deprecated:** safe_string_strategy is deprecated; use hypothesis.strategies.text() — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import safe_string_strategy`
+- **Signature:** `safe_string_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `schema_entry_strategy` (deprecated)
+
+- **Deprecated:** schema_entry_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import schema_entry_strategy`
+- **Signature:** `schema_entry_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `schema_list_strategy` (deprecated)
+
+- **Deprecated:** schema_list_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import schema_list_strategy`
+- **Also importable from:** `application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight`
+- **Signature:** `schema_list_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `schema_name_strategy` (deprecated)
+
+- **Deprecated:** schema_name_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import schema_name_strategy`
+- **Also importable from:** `application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight`
+- **Signature:** `schema_name_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `schema_selection_strategy` (deprecated)
+
+- **Deprecated:** schema_selection_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import schema_selection_strategy`
+- **Signature:** `schema_selection_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `sql_connection_string_strategy` (deprecated)
+
+- **Deprecated:** sql_connection_string_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.sql_connection_string_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import sql_connection_string_strategy`
+- **Signature:** `sql_connection_string_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `sql_engine_config_strategy` (deprecated)
+
+- **Deprecated:** sql_engine_config_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.sql_engine_config_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import sql_engine_config_strategy`
+- **Signature:** `sql_engine_config_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `sql_error_strategy` (deprecated)
+
+- **Deprecated:** sql_error_strategy is deprecated; use application_sdk.testing.hypothesis.strategies.clients.sql.sql_error_strategy — the SQL client strategies live in one module now. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.sql_client import sql_error_strategy`
+- **Signature:** `sql_error_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `sql_handler_config_strategy` (deprecated)
+
+- **Deprecated:** sql_handler_config_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import sql_handler_config_strategy`
+- **Signature:** `sql_handler_config_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `sql_query_strategy` (deprecated)
+
+- **Deprecated:** sql_query_strategy is deprecated; use a strategy built from your app's own metadata rows — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_metadata import sql_query_strategy`
+- **Signature:** `sql_query_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `state_store_entry_strategy` (deprecated)
+
+- **Deprecated:** state_store_entry_strategy is deprecated; use a strategy built from your app's own credential and config models — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import state_store_entry_strategy`
+- **Signature:** `state_store_entry_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `state_store_key_strategy` (deprecated)
+
+- **Deprecated:** state_store_key_strategy is deprecated; use a strategy built from your app's own state-store keys — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import state_store_key_strategy`
+- **Signature:** `state_store_key_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `subscribe` (deprecated)
+
+- **Deprecated:** MockPubSub.subscribe is deprecated and will be removed in v4.0.0. It delivers published messages, but DaprPubSub.subscribe never did, so a test that passed here received nothing in production. Declare a SubscriptionConfig (application_sdk.handler.contracts) and call its handler directly in the test instead. Do not use in new code.
+- **Import:** `from application_sdk.testing.mocks import subscribe`
+- **Signature:** `subscribe`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `uuid_strategy` (deprecated)
+
+- **Deprecated:** uuid_strategy is deprecated; use hypothesis.strategies.uuids().map(str) — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.outputs.statestore import uuid_strategy`
+- **Signature:** `uuid_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `version_comparison_strategy` (deprecated)
+
+- **Deprecated:** version_comparison_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import version_comparison_strategy`
+- **Signature:** `version_comparison_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `version_tuple_strategy` (deprecated)
+
+- **Deprecated:** version_tuple_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import version_tuple_strategy`
+- **Signature:** `version_tuple_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `wildcard_schema_strategy` (deprecated)
+
+- **Deprecated:** wildcard_schema_strategy is deprecated; use a strategy built from your app's typed preflight Input contract — no SDK code or test uses this module. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.handlers.sql.sql_preflight import wildcard_schema_strategy`
+- **Signature:** `wildcard_schema_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `workflow_event_strategy` (deprecated)
+
+- **Deprecated:** workflow_event_strategy is deprecated; use a strategy built from your app's own event model — it generates the v2 server's workflow-start Event. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.testing.hypothesis.strategies.server.fastapi import workflow_event_strategy`
+- **Signature:** `workflow_event_strategy`
+- **Summary:** Deprecated alias, served with a warning.
+
 ## `application_sdk.tools`
 
 Developer command-line tools — provision-credentials for local development
@@ -13322,6 +15086,36 @@ Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan reco
 - **Signature:** `process_text(text: str, max_length: int = 100000) -> str`
 - **Summary:** Process and sanitize text for storage.
 - **Defined in:** `application_sdk/transformers/common/utils.py`
+
+### Constants and Enums
+
+#### `LastSyncDetails` (deprecated)
+
+- **Deprecated:** LastSyncDetails is deprecated; use application_sdk.common.last_sync.LastSyncDetails — the same class, re-homed out of the deprecated transformers package. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.transformers.common.last_sync import LastSyncDetails`
+- **Signature:** `LastSyncDetails`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `resolve_last_sync_details` (deprecated)
+
+- **Deprecated:** resolve_last_sync_details is deprecated; use application_sdk.common.last_sync.resolve_last_sync_details — the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.transformers.common.last_sync import resolve_last_sync_details`
+- **Signature:** `resolve_last_sync_details`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `set_last_sync_details_on_asset` (deprecated)
+
+- **Deprecated:** set_last_sync_details_on_asset is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_asset — the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.transformers.common.last_sync import set_last_sync_details_on_asset`
+- **Signature:** `set_last_sync_details_on_asset`
+- **Summary:** Deprecated alias, served with a warning.
+
+#### `set_last_sync_details_on_assets_bulk` (deprecated)
+
+- **Deprecated:** set_last_sync_details_on_assets_bulk is deprecated; use application_sdk.common.last_sync.set_last_sync_details_on_assets_bulk — the same function, re-homed out of the deprecated transformers package. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.transformers.common.last_sync import set_last_sync_details_on_assets_bulk`
+- **Signature:** `set_last_sync_details_on_assets_bulk`
+- **Summary:** Deprecated alias, served with a warning.
 
 ## `application_sdk.validation`
 
