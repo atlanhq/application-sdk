@@ -79,7 +79,11 @@ def test_the_three_packages_declare_the_python_versions_ci_tests() -> None:
     ):
         project = _project(ROOT / path)
         assert _python_classifiers(project) == tested, path
-        assert project["requires-python"] == f">={tested[0]}", path
+        # Capped one above the newest tested Python (FND-5476): the next one
+        # cannot install until every binary dependency ships a wheel for it.
+        major, minor = tested[-1].split(".")
+        cap = f"{major}.{int(minor) + 1}"
+        assert project["requires-python"] == f">={tested[0]},<{cap}", path
 
 
 def _name(req: str) -> str:

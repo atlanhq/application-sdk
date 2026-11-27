@@ -11,7 +11,7 @@ authors = [
     {name = "Atlan App Team", email = "connect@atlan.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 keywords = ["atlan", "sdk", "conformance", "linting", "remediation"]
 classifiers = [
     "Intended Audience :: Developers",

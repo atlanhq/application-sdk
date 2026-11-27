@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+import python_support_window as psw
 import unit_test_command as utc
 import yaml
 
@@ -440,7 +441,7 @@ def test_the_floor_job_names_packages_the_sdk_publishes_floors_for() -> None:
 
 def test_the_floor_job_runs_on_the_sdk_python_floor() -> None:
     pyproject = tomllib.loads(utc._PYPROJECT.read_text())
-    floor = pyproject["project"]["requires-python"].removeprefix(">=")
+    floor = psw.parse_window(pyproject["project"]["requires-python"])[0]
     job = yaml.safe_load(_WORKFLOW.read_text())["jobs"]["unit-dependency-floors"]
     (step,) = [
         s for s in job["steps"] if s.get("uses") == "./.github/actions/unit-tests"

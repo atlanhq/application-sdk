@@ -43,7 +43,7 @@ pip install atlan-application-sdk-api
 uv add atlan-application-sdk-api
 ```
 
-Requires Python 3.11 or newer. Add an extra when your handler uses that part of
+Requires Python 3.11 to 3.14. Add an extra when your handler uses that part of
 the SDK:
 
 | Extra | When your handler uses |

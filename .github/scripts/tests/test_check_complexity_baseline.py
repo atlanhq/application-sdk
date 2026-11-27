@@ -18,6 +18,7 @@ from typing import Sequence
 
 import check_complexity_baseline as ccb
 import pytest
+import python_support_window as psw
 import yaml
 from check_pyright_baseline import BaseRevisionError
 
@@ -81,8 +82,8 @@ class TestRepoBaseline:
 
     def test_target_version_is_requires_python(self) -> None:
         project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
-        floor = project["project"]["requires-python"]
-        assert floor == ">=3." + ccb.TARGET_VERSION.removeprefix("py3")
+        floor = psw.parse_window(project["project"]["requires-python"])[0]
+        assert floor == "3." + ccb.TARGET_VERSION.removeprefix("py3")
 
     def test_root_ruff_config_does_not_select_the_rules(self) -> None:
         # The baseline is the only suppression: a select would make every
