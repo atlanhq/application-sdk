@@ -13,10 +13,19 @@ made (``side_effect=AssertionError("listed")``) asserts ``assert_not_called()``,
 which also fails if a broad ``except`` swallowed the ``AssertionError``.
 
 This scans every unit test function for an exception ``side_effect`` (as a
-keyword, an attribute assignment, or an element of a list or tuple of either)
-in its body or decorators, and flags it when the function has no assertion:
-no ``assert`` statement, no call to an ``assert*`` function or method, and no
-``pytest.raises`` / ``pytest.warns`` / ``pytest.fail``.
+keyword, an attribute assignment, or an element of a list or tuple of either;
+directly, or through a name bound to one in the test or at module level) in
+its body or decorators, and flags it when the function has no assertion: no
+``assert`` statement, no call to an ``assert*`` function or method, no
+``raise AssertionError(...)``, and no ``pytest.raises`` / ``pytest.warns`` /
+``pytest.fail``.
+
+It is a floor, not a proof: any assertion satisfies it, including one that
+does not show the fault was reached. Tying the assertion to the faulted mock
+would also flag about 150 tests that prove the reach through the outcome
+instead (a FAILED status, a retried call, a fallback value). Whether an
+assertion proves the reach stays a review question; the shape that cannot
+prove it, asserting nothing at all, is what this fails.
 """
 
 from __future__ import annotations
@@ -58,22 +67,38 @@ def _terminal_name(node: ast.AST) -> str:
     return ""
 
 
-def _is_exception(node: ast.AST) -> bool:
+def _bindings(nodes: list[ast.AST]) -> dict[str, ast.expr]:
+    """``name = value`` for every single-name assignment among *nodes*."""
+    return {
+        node.targets[0].id: node.value
+        for node in nodes
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    }
+
+
+def _is_exception(node: ast.AST, names: dict[str, ast.expr]) -> bool:
     """``RuntimeError``, ``RuntimeError("x")``, ``httpx.ConnectError(...)``,
-    or a list or tuple holding one (a side effect that fails on some call)."""
+    a list or tuple holding one (a side effect that fails on some call), or a
+    name *names* binds to any of those (``outage = StorageError("x")``)."""
     if isinstance(node, ast.List | ast.Tuple):
-        return any(_is_exception(elt) for elt in node.elts)
+        return any(_is_exception(elt, names) for elt in node.elts)
+    if isinstance(node, ast.Name) and node.id in names:
+        # Resolve one level only: ``names`` maps to expressions, and a chain
+        # of aliases is not a shape the suite uses.
+        return _is_exception(names[node.id], {})
     if isinstance(node, ast.Call):
         node = node.func
     return bool(_EXCEPTION_NAME.search(_terminal_name(node)))
 
 
-def _injects_a_failure(nodes: list[ast.AST]) -> bool:
+def _injects_a_failure(nodes: list[ast.AST], names: dict[str, ast.expr]) -> bool:
     for node in nodes:
         if (
             isinstance(node, ast.keyword)
             and node.arg == "side_effect"
-            and _is_exception(node.value)
+            and _is_exception(node.value, names)
         ):
             return True
         if (
@@ -82,7 +107,7 @@ def _injects_a_failure(nodes: list[ast.AST]) -> bool:
                 isinstance(t, ast.Attribute) and t.attr == "side_effect"
                 for t in node.targets
             )
-            and _is_exception(node.value)
+            and _is_exception(node.value, names)
         ):
             return True
     return False
@@ -91,6 +116,15 @@ def _injects_a_failure(nodes: list[ast.AST]) -> bool:
 def _asserts_something(nodes: list[ast.AST]) -> bool:
     for node in nodes:
         if isinstance(node, ast.Assert):
+            return True
+        if (
+            isinstance(node, ast.Raise)
+            and node.exc is not None
+            and _terminal_name(
+                node.exc.func if isinstance(node.exc, ast.Call) else node.exc
+            )
+            == "AssertionError"
+        ):
             return True
         if not isinstance(node, ast.Call):
             continue
@@ -112,14 +146,19 @@ def _scan(path: Path, root: Path = _UNIT_ROOT) -> list[_Finding]:
         return []
     rel = path.relative_to(root).as_posix()
     findings = []
-    for fn in ast.walk(ast.parse(source, filename=str(path))):
+    tree = ast.parse(source, filename=str(path))
+    module_names = _bindings(tree.body)
+    for fn in ast.walk(tree):
         if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         if not fn.name.startswith("test"):
             continue
         body = [n for stmt in fn.body for n in ast.walk(stmt)]
         decorators = [n for d in fn.decorator_list for n in ast.walk(d)]
-        if _injects_a_failure(body + decorators) and not _asserts_something(body):
+        names = {**module_names, **_bindings(body)}
+        if _injects_a_failure(body + decorators, names) and not _asserts_something(
+            body
+        ):
             findings.append(_Finding(rel, fn.lineno, fn.name))
     return findings
 
@@ -173,6 +212,14 @@ def test_no_unit_test_injects_a_failure_and_asserts_nothing() -> None:
         "def test_x():\n"
         "    with patch.object(m, 'f', side_effect=AssertionError('called')):\n"
         "        run()\n",
+        # An exception bound to a name first, in the test.
+        "def test_x():\n"
+        "    outage = StorageError('down')\n"
+        "    with patch.object(m, 'f', AsyncMock(side_effect=outage)):\n"
+        "        run()\n",
+        # ... or at module level, as an attribute assignment.
+        "_BOOM = RuntimeError('boom')\n"
+        "def test_x():\n    m.side_effect = _BOOM\n    run()\n",
     ],
 )
 def test_the_scan_catches_each_shape(tmp_path: Path, snippet: str) -> None:
@@ -192,7 +239,19 @@ def test_the_scan_catches_each_shape(tmp_path: Path, snippet: str) -> None:
         "    m.side_effect = OSError('x')\n"
         "    await run()\n"
         "    m.assert_awaited_once_with()\n",
-        "def test_x():\n    m.side_effect = OSError('x')\n    assert run() is None\n",
+        # Any assertion satisfies the guard (see the module docstring); this
+        # one pins the reach through the mock's call count.
+        "def test_x():\n    m.side_effect = OSError('x')\n    run()\n"
+        "    assert m.call_count == 1\n",
+        # A hand-rolled assertion.
+        "async def test_x():\n"
+        "    outage = StorageError('down')\n"
+        "    with patch.object(m, 'f', AsyncMock(side_effect=outage)):\n"
+        "        try:\n"
+        "            await run()\n"
+        "        except StorageError:\n"
+        "            return\n"
+        "    raise AssertionError('swallowed')\n",
         "def test_x():\n"
         "    m.side_effect = OSError('x')\n"
         "    with pytest.raises(OSError):\n"
@@ -201,6 +260,7 @@ def test_the_scan_catches_each_shape(tmp_path: Path, snippet: str) -> None:
         # A non-exception side effect is not fault injection.
         "def test_x():\n    m.side_effect = fake_sleep\n    run()\n",
         "def test_x():\n    m.side_effect = [1, 2, 3]\n    run()\n",
+        "def test_x():\n    values = [1, 2]\n    m.side_effect = values\n    run()\n",
         # Not a test function.
         "def helper():\n    m.side_effect = OSError('x')\n    run()\n",
     ],
