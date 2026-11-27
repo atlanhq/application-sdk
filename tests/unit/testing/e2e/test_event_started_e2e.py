@@ -290,8 +290,9 @@ async def test_post_event_headers_override_the_default_authorization(
 async def test_post_event_raises_on_a_rejected_event(
     tenant_env: pytest.MonkeyPatch,
 ) -> None:
-    with pytest.raises(EventGatewayRejectedError, match="HTTP 401"):
+    with pytest.raises(EventGatewayRejectedError, match="HTTP 401") as exc:
         await _gateway_suite(lambda _: httpx.Response(401)).post_event("example", {})
+    assert exc.value.status_code == 401
 
 
 async def test_post_event_raises_when_the_gateway_is_unreachable(
@@ -300,5 +301,6 @@ async def test_post_event_raises_when_the_gateway_is_unreachable(
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
-    with pytest.raises(EventGatewayRejectedError, match="did not reach"):
+    with pytest.raises(EventGatewayRejectedError, match="did not reach") as exc:
         await _gateway_suite(handler).post_event("example", {})
+    assert exc.value.status_code is None

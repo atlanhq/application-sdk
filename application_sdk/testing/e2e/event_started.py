@@ -223,6 +223,7 @@ class EventStartedE2ETest(BaseE2ETest):
                     f"{response.status_code}, so the event was not accepted and "
                     "no run can follow from it. Not a verdict on the app."
                 ),
+                status_code=response.status_code,
             )
 
     # ------------------------------------------------------------------

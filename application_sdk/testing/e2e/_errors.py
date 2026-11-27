@@ -383,6 +383,8 @@ class EventGatewayRejectedError(DependencyUnavailableError):
 
     code: ClassVar[str] = "DEPENDENCY_EVENT_GATEWAY_REJECTED"
     component: str | None = "e2e_harness_event_started"
+    #: The gateway's HTTP status, or ``None`` when the request never got an answer.
+    status_code: int | None = None
 
 
 @dataclass(kw_only=True)
