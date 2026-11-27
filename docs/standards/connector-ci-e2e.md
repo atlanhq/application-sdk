@@ -16,6 +16,7 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 | `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no single replacement because SDR is a deployment mode, not a test tier: see [The SDR base class](#the-sdr-base-class). |
+| `RouteE2ETest` | `application_sdk/testing/e2e/route.py` | pytest base for an app whose work is an HTTP route on the tenant. Calls the routes through the tenant ingress with the e2e API key; see [Route suites](#route-suites). |
 | `BaseE2ETest` / `SQLAppE2ETest` | `application_sdk/testing/e2e/` | pytest base for the full-DAG pipeline. `BaseE2ETest` is connector-agnostic and is what the codegen'd `app/generated/_e2e_base.py` subclasses; SQL connectors use `SQLAppE2ETest` on top of it, subclassing with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
 | ~~`SQLAppE2EFullTest` / `BaseFullDAGE2ETest`~~ | `application_sdk/testing/full_dag/` | **Deprecated, removed in v4.0.** The predecessor of the row above; it emits a `DeprecationWarning` on import and its client / error types are already re-exports of the `testing/e2e` ones. Do not start a new suite here — see [Which harness](#which-harness). |
 
@@ -28,6 +29,7 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 | SQL | `application_sdk.testing.e2e.SQLAppE2ETest` |
 | Anything else (BI, API, object-store, agent apps) | the generated `app/generated/_e2e_base.py`, which subclasses `application_sdk.testing.e2e.BaseE2ETest` |
 | A system app (connection-delete, popularity, publish, …) | `application_sdk.testing.e2e.SystemAppE2ETest` — see [System apps](#system-apps) |
+| An app whose work is an HTTP route on the tenant (a request goes in, the answer comes back, no run) | `application_sdk.testing.e2e.RouteE2ETest` — see [Route suites](#route-suites) |
 
 `BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
 
@@ -114,6 +116,42 @@ To move a system app onto the system pool, do these in order:
 A `utility` app that ought to be on the system pool but has never adopted
 `SystemAppE2ETest` looks the same as every other utility, so T026 can't flag it.
 Onboarding one is a human decision.
+
+### Route suites
+
+Some apps do their work in an HTTP route on the tenant: the UI or an agent sends
+a request and the answer comes back, with no workflow run to start or wait for.
+`RouteE2ETest` is the base for those suites. It calls the app's routes through
+the tenant's ingress, the same way the UI does.
+
+- Declare `ingress_path`, the app's ingress prefix on the tenant (for example
+  `"/launchpad-app/api"`). `self.api` is an `httpx.Client` on
+  `<ATLAN_BASE_URL><ingress_path>` that sends the e2e API key as a bearer token.
+  The key is bound to the tenant's origin: a request on `self.api` to any other
+  scheme, host or port raises `OffTenantRequestError` before it is sent.
+  `self.anonymous` is a client on the tenant base URL with no credentials, for
+  pages and for checking that a route refuses anonymous calls.
+- Optionally declare `readiness_path`, a route below `ingress_path` that answers
+  2xx once the app serves. The first test of the class waits for it (up to
+  `readiness_timeout_seconds`, default 300), so a pod still reconciling or
+  waking from zero is not read as a failure. The wait ends at the deadline:
+  each probe's timeout is cut to the time left (never more than
+  `request_timeout_seconds`), and a 2xx that lands after the deadline does not
+  count. If it never answers 2xx in time, the test fails with
+  `RouteNotReadyError`, which carries the last answer seen.
+- Register undo steps with `self.add_cleanup(fn, *args)`. They run after each
+  test, last added first, even when the test failed.
+- `self.assert_status(response, status)` asserts the status with the method,
+  path and body in the failure message, and returns the response.
+- `RouteE2ETest` is not a `BaseE2ETest` subclass: it submits no DAG, creates no
+  Connection and declares no `mode`. Subclassing would break a route suite:
+  pytest would collect the inherited `test_full_dag_runs_end_to_end`,
+  `setup_method` would raise for the unset `argo_package_name` and
+  `argo_template_name`, and teardown would track connections and AE runs that
+  never exist. The shared tenant auth comes from `application_sdk.testing.harness`
+  instead. Put the suite in its own file under
+  `tests/e2e/`; CI runs each file as its own leg, after installing this PR's
+  build on the tenant and checking the running pod's build identity.
 
 ### The SDR base class
 

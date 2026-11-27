@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 29 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 128 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 19 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 427 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 428 |
 | `application_sdk.tools` | Developer command-line tools — provision-credentials for local development | 1 |
 | `application_sdk.transformers` | Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). | 27 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 95 |
@@ -10841,6 +10841,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class ResourceRef(group: str, version: str, plural: str)`
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
+
+#### `RouteE2ETest`
+
+- **Import:** `from application_sdk.testing.e2e import RouteE2ETest`
+- **Also importable from:** `application_sdk.testing.e2e.route`
+- **Signature:** `class RouteE2ETest`
+- **Summary:** Pytest base for an app's route suite on the tenant.
+- **Defined in:** `application_sdk/testing/e2e/route.py`
 
 #### `RunLookup`
 
