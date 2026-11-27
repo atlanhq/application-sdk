@@ -429,8 +429,16 @@ class TestSendMetricEnabled:
         client._loop.call_soon_threadsafe.side_effect = RuntimeError("boom")
         client._queue = mock.MagicMock()
 
-        # Must not raise.
-        client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+        with mock.patch.object(sc_module, "logging") as logging_:
+            # Must not raise.
+            client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+
+        client._loop.call_soon_threadsafe.assert_called_once_with(client._drain_ingress)
+        # Cleared, so the next send_metric tries to schedule a drain again.
+        assert client._drain_scheduled is False
+        logging_.warning.assert_called_once_with(
+            "Failed to queue metric for Segment", exc_info=True
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -491,8 +499,14 @@ class TestSendBatchToSegment:
         async_client = mock.AsyncMock()
         async_client.post = mock.AsyncMock(side_effect=httpx.HTTPError("nope"))
         client._client = async_client
-        # Must not raise — error is logged, not propagated.
-        await client._send_batch_to_segment([_make_record()])
+        with mock.patch.object(sc_module, "logging") as logging_:
+            # Must not raise — error is logged, not propagated.
+            await client._send_batch_to_segment([_make_record()])
+
+        async_client.post.assert_awaited_once()
+        logging_.warning.assert_called_once_with(
+            "HTTP error sending metric to Segment", exc_info=True
+        )
 
     @pytest.mark.timeout(30)
     async def test_unexpected_exception_swallowed(self):
@@ -501,8 +515,14 @@ class TestSendBatchToSegment:
         async_client = mock.AsyncMock()
         async_client.post = mock.AsyncMock(side_effect=ValueError("boom"))
         client._client = async_client
-        # Must not raise.
-        await client._send_batch_to_segment([_make_record()])
+        with mock.patch.object(sc_module, "logging") as logging_:
+            # Must not raise.
+            await client._send_batch_to_segment([_make_record()])
+
+        async_client.post.assert_awaited_once()
+        logging_.warning.assert_called_once_with(
+            "Unexpected error sending metric to Segment", exc_info=True
+        )
 
 
 # ---------------------------------------------------------------------------

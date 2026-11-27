@@ -138,10 +138,16 @@ class TestCleanupPreviousState:
                 private_stdlib(state_writer_mod, "shutil") as local_shutil,
                 patch.object(
                     local_shutil, "rmtree", side_effect=PermissionError("denied")
-                ),
+                ) as rmtree,
+                patch.object(state_writer_mod, "logger") as logger,
             ):
                 # Should not raise
                 cleanup_previous_state(prev_dir)
+
+            rmtree.assert_called_once_with(prev_dir)
+            logger.warning.assert_called_once_with(
+                "Failed to clean up temporary previous state directory", exc_info=True
+            )
 
 
 # ---------------------------------------------------------------------------

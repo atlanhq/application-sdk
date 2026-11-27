@@ -569,11 +569,19 @@ class TestUploadValidation:
         accepts objects but rejects the sidecar (a narrower write policy, a
         transient failure) would otherwise turn every upload into a hard error.
         """
-        with patch(
-            "application_sdk.storage.ops.obstore.put_async",
-            side_effect=RuntimeError("sidecar denied"),
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.put_async",
+                side_effect=RuntimeError("sidecar denied"),
+            ) as put_async,
+            patch.object(integrity, "logger") as logger,
         ):
             await integrity.write_digest_sidecar(store, "w/ok.json", "abc123")
+
+        put_async.assert_called()
+        assert put_async.call_args.args[1] == "w/ok.json.sha256"
+        logger.warning.assert_called_once()
+        assert logger.warning.call_args.args[1] == "w/ok.json"
 
 
 def _async_return(value):
@@ -670,7 +678,7 @@ class TestDownloadValidation:
         art = await _seed(store, tmp_path, "hint/data.json", b'{"a": 1}')
         with patch.object(
             integrity, "read_expected_digest", side_effect=AssertionError("looked up")
-        ):
+        ) as read_expected_digest:
             await download_file(
                 art.key,
                 tmp_path / "o.json",
@@ -678,6 +686,9 @@ class TestDownloadValidation:
                 normalize=False,
                 expected_sha256=art.digest,
             )
+
+        # Also fails if a broad ``except`` swallowed the AssertionError.
+        read_expected_digest.assert_not_called()
 
     async def test_verification_can_be_switched_off(self, store, tmp_path) -> None:
         art = await _seed(store, tmp_path, "off/data.json", b'{"a": 1}')
