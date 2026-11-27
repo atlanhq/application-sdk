@@ -191,6 +191,31 @@ jobs:
           VERSION=$(python3 .github/scripts/container_python_version.py print-version)
           python3 .github/scripts/container_python_version.py check-matrix --expected "$VERSION" --matrix "3.11,3.12,3.13,3.14"
 
+  # requires-python caps the SDK below the next Python until every binary
+  # dependency ships a wheel for it (FND-5476: on 3.15, rocksdict had no cp315
+  # wheel and no sdist). This job resolves every declared dependency, core and
+  # extras, for the first Python above the cap on the container platform and
+  # lists the ones that cannot install in the job summary, so the day the cap
+  # can be raised is visible. A report, not a gate: the script exits 0 when
+  # something blocks and non-zero only if the probe itself cannot run. Raising
+  # the cap moves the probe to the next Python with no edit here.
+  # test_python_support_window.py keeps the window, classifiers, this file's
+  # unit matrix and the Renovate Python cap in step.
+  next-python-probe:
+    name: Next Python install probe (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+          enable-cache: false
+      - name: Resolve SDK dependencies for the next Python
+        run: python3 .github/scripts/python_support_window.py probe-next
+
   # Collects the test trees no PR job executes: the storage load suite in
   # tests/load (nightly smoke only, schedule.yaml) and the integration example
   # connector authors copy. Collecting is enough to catch the ways these rot

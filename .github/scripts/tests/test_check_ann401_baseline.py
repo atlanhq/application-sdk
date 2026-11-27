@@ -18,6 +18,7 @@ from typing import Callable, Sequence
 
 import check_ann401_baseline as cab
 import pytest
+import python_support_window as psw
 import yaml
 from check_pyright_baseline import BaseRevisionError
 
@@ -70,8 +71,8 @@ class TestRepoBaseline:
     def test_target_version_is_requires_python(self) -> None:
         # --isolated reads no config, so the floor is passed by hand.
         project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
-        floor = project["project"]["requires-python"]
-        assert floor == ">=3." + cab.TARGET_VERSION.removeprefix("py3")
+        floor = psw.parse_window(project["project"]["requires-python"])[0]
+        assert floor == "3." + cab.TARGET_VERSION.removeprefix("py3")
 
 
 #: Every config-file route ruff has to switch ANN401 off for a file. Each is
