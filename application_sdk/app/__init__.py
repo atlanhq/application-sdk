@@ -66,6 +66,19 @@ from temporalio.workflow import wait_condition as _wait_condition
 
 from application_sdk._install import lazy_getattr
 
+# Eager, unlike the rest: these names are also submodules of this package, and
+# importing ``app.task`` or ``app.entrypoint`` (which much of the SDK does)
+# binds the submodule as the package attribute. Served lazily, ``from
+# application_sdk.app import task`` would then return the module, not the
+# decorator. Binding them here, after the submodules load, keeps the functions.
+from application_sdk.app.entrypoint import (
+    EntryPointMetadata,
+    canonical_workflow_type,
+    entrypoint,
+    entrypoint_module_segment,
+)
+from application_sdk.app.task import TaskMetadata, task
+
 if TYPE_CHECKING:
     from application_sdk.app.base import (
         App,
@@ -74,14 +87,7 @@ if TYPE_CHECKING:
         RetryableError,
     )
     from application_sdk.app.context import AppContext
-    from application_sdk.app.entrypoint import (
-        EntryPointMetadata,
-        canonical_workflow_type,
-        entrypoint,
-        entrypoint_module_segment,
-    )
     from application_sdk.app.registry import AppRegistry, TaskRegistry
-    from application_sdk.app.task import TaskMetadata, task
     from application_sdk.contracts.base import Input, Output, OutputStatus
     from application_sdk.credentials.atlan_client import AtlanClientMixin
     from application_sdk.execution.retry import RetryPolicy
@@ -98,20 +104,8 @@ _LAZY: dict[str, tuple[str, str]] = {
     "NonRetryableError": ("application_sdk.app.base", "NonRetryableError"),
     "RetryableError": ("application_sdk.app.base", "RetryableError"),
     "AppContext": ("application_sdk.app.context", "AppContext"),
-    "EntryPointMetadata": ("application_sdk.app.entrypoint", "EntryPointMetadata"),
-    "canonical_workflow_type": (
-        "application_sdk.app.entrypoint",
-        "canonical_workflow_type",
-    ),
-    "entrypoint": ("application_sdk.app.entrypoint", "entrypoint"),
-    "entrypoint_module_segment": (
-        "application_sdk.app.entrypoint",
-        "entrypoint_module_segment",
-    ),
     "AppRegistry": ("application_sdk.app.registry", "AppRegistry"),
     "TaskRegistry": ("application_sdk.app.registry", "TaskRegistry"),
-    "TaskMetadata": ("application_sdk.app.task", "TaskMetadata"),
-    "task": ("application_sdk.app.task", "task"),
     "Input": ("application_sdk.contracts.base", "Input"),
     "Output": ("application_sdk.contracts.base", "Output"),
     "OutputStatus": ("application_sdk.contracts.base", "OutputStatus"),
@@ -127,7 +121,7 @@ _LAZY: dict[str, tuple[str, str]] = {
 
 #: Submodules this package imported eagerly before it went lazy: still
 #: attributes of the package on first access (``app.base``).
-_EAGER_SUBMODULES = frozenset({"base", "context", "entrypoint", "registry", "task"})
+_EAGER_SUBMODULES = frozenset({"base", "context", "registry"})
 
 # ---------------------------------------------------------------------------
 # Runtime interaction decorators — re-exported with SDK-context docstrings.

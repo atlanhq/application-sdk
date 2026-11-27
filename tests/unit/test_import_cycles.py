@@ -62,6 +62,10 @@ _DEFERRED_CYCLE_EDGES: dict[tuple[str, str], str] = {
         "application_sdk.app.registry",
     ): "contract validation looks up the running app; the registry validates contracts from this module",
     (
+        "application_sdk.contracts.base",
+        "application_sdk.app",
+    ): "the same import: app.registry runs the app package __init__, which binds app.task (it imports contracts.base)",
+    (
         "application_sdk.errors.base",
         "application_sdk.errors.wire",
     ): "AppError.to_failure_details builds the wire model, which validates with errors.base's redaction helpers",
@@ -431,3 +435,58 @@ def test_the_graph_sees_a_known_edge() -> None:
     pairs = {(e.importer, e.imported) for e in _EDGES}
     assert ("application_sdk.storage.ops", "application_sdk.storage.errors") in pairs
     assert len(_EDGES) > 1000
+
+
+def _module_level_names(module: str) -> set[str]:
+    """Names a module binds at module level outside ``if TYPE_CHECKING:``."""
+    tree = ast.parse(_MODULES[module].read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom | ast.Import):
+            names.update(a.asname or a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+    return names
+
+
+def test_no_lazy_name_is_shadowed_by_a_submodule() -> None:
+    """A lazily served name that is also a submodule's name must be bound eagerly.
+
+    Importing ``pkg.name`` sets the package attribute ``name`` to the submodule,
+    and an attribute found on the module is never routed through
+    ``__getattr__``. So once anything imports the submodule, ``from pkg import
+    name`` returns the module, not the function: ``@task`` raised "'module'
+    object is not callable" in connector apps (FND-4260).
+    """
+    shadowed = []
+    for package, lazy in _LAZY_MAPS.items():
+        if not lazy:
+            continue
+        eager = _module_level_names(package)
+        for name in sorted(lazy):
+            if f"{package}.{name}" in _MODULES and name not in eager:
+                shadowed.append(f"{package}.{name}")
+    assert not shadowed, (
+        "Bind these at module level in the package __init__ instead of serving "
+        "them lazily; a submodule of the same name shadows them:\n  "
+        + "\n  ".join(shadowed)
+    )
+
+
+def test_app_task_and_entrypoint_are_the_decorators_after_their_submodules_load() -> (
+    None
+):
+    import subprocess
+    import sys
+
+    code = (
+        "import application_sdk.app.task, application_sdk.app.entrypoint\n"
+        "from application_sdk.app import entrypoint, task\n"
+        "assert callable(task) and callable(entrypoint), (task, entrypoint)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
