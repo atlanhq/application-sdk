@@ -233,8 +233,12 @@ A parameter counts as deprecated only when one notice
 both conditions:
 
 1. **It runs only when the caller passed the parameter.** The notice sits under
-   an `if` whose whole test is `<param> is not None`, `<param> is not
-   <sentinel>`, or a bare `<param>`.
+   an `if` whose whole test is false at the parameter's own default: either
+   `<param> is not <default>`, comparing against the same expression as the
+   default (`p=None` with `p is not None`, or `p=_UNSET` with `p is not
+   _UNSET`), or a bare `<param>` whose default is a falsy literal (`None`,
+   `False`, `0`, `""`). A notice inside a `lambda` or generator expression
+   doesn't count, because it runs only if something calls it later.
 2. **It names the parameter as a whole word.** For `warn_deprecated`, that is
    the first argument (`name`). For `warnings.warn`, it is the message. The
    replacement and the note do not count, because they name what to use

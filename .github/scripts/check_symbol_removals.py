@@ -428,25 +428,78 @@ def _deprecation_notice(node: ast.Call) -> ast.expr | None:
     return None
 
 
-def _presence_checks(test: ast.expr) -> set[str]:
-    """The parameter *test* checks was passed, when that is all it checks.
+def _param_defaults(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, ast.expr]:
+    """``{name: default expression}`` for every parameter of *node* that has one."""
+    args = node.args
+    positional = [*args.posonlyargs, *args.args]
+    defaults: dict[str, ast.expr] = {
+        a.arg: d
+        for a, d in zip(
+            positional[len(positional) - len(args.defaults) :], args.defaults
+        )
+    }
+    defaults.update(
+        (a.arg, d) for a, d in zip(args.kwonlyargs, args.kw_defaults) if d is not None
+    )
+    return defaults
 
-    ``p is not None`` / ``p is not _SENTINEL`` or a bare ``p``. The check must
-    be the whole test. ``p is None`` deprecates *omitting* ``p`` (a default),
-    and ``p is not None and not isinstance(p, X)`` deprecates one *form* of
-    the value (``resolve_credential_file(dest_dir=<str>)``); in both, ``p``
-    itself stays.
+
+def _is_falsy_literal(node: ast.expr) -> bool:
+    """``None``, ``False``, ``0``, ``""`` and the like: a literal that tests false."""
+    return isinstance(node, ast.Constant) and not node.value
+
+
+def _presence_checks(test: ast.expr, defaults: dict[str, ast.expr]) -> set[str]:
+    """The parameter *test* proves was passed, when that is all it checks.
+
+    Proof means the test is false at the parameter's own default, so omitting
+    the parameter can never reach the notice:
+
+    * ``p is not <default>`` — the right-hand side is the same expression as
+      ``p``'s default (``p=None`` / ``p is not None``, ``p=_UNSET`` /
+      ``p is not _UNSET``). ``p is not _UNSET`` with ``p=None`` proves
+      nothing: omitting ``p`` passes it.
+    * a bare ``p`` whose default is a falsy literal. A truthy or non-literal
+      default (``p=_UNSET``) makes the bare test true when ``p`` is omitted.
+
+    A parameter with no default is always passed, so no test proves anything
+    about it. The check must be the whole test: ``p is None`` deprecates
+    *omitting* ``p`` (a default), and ``p is not None and not isinstance(p,
+    X)`` deprecates one *form* of the value
+    (``resolve_credential_file(dest_dir=<str>)``); in both, ``p`` stays.
     """
     if isinstance(test, ast.Name):
-        return {test.id}
+        default = defaults.get(test.id)
+        return (
+            {test.id} if default is not None and _is_falsy_literal(default) else set()
+        )
     if (
         isinstance(test, ast.Compare)
         and isinstance(test.left, ast.Name)
         and len(test.ops) == 1
         and isinstance(test.ops[0], ast.IsNot)
     ):
-        return {test.left.id}
+        default = defaults.get(test.left.id)
+        if default is not None and ast.dump(default) == ast.dump(test.comparators[0]):
+            return {test.left.id}
     return set()
+
+
+def _immediate_calls(node: ast.AST) -> Iterator[ast.Call]:
+    """Every call in *node* that runs when *node* does.
+
+    A ``lambda`` or generator expression body runs only if something later
+    calls or iterates it, so a notice inside one is not emitted on the
+    caller's path and does not count.
+    """
+    if isinstance(node, (ast.Lambda, ast.GeneratorExp)):
+        return
+    if isinstance(node, ast.Call):
+        yield node
+    for child in ast.iter_child_nodes(node):
+        yield from _immediate_calls(child)
 
 
 def _deprecated_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...]:
@@ -463,28 +516,32 @@ def _deprecated_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[st
     Both, because either alone over-matches. A notice under ``if p is None:``
     names ``p`` but deprecates leaving it out; a notice under ``if p:`` that
     names only ``q`` says nothing about ``p``. Nested defs and classes are not
-    entered: their notices belong to them.
+    entered: their notices belong to them. A notice inside a ``lambda`` or a
+    generator expression is not counted either (:func:`_immediate_calls`).
     """
     args = node.args
     params = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)} - {
         "self",
         "cls",
     }
+    defaults = _param_defaults(node)
     found: set[str] = set()
 
     def notices(stmt: ast.stmt) -> Iterator[ast.expr]:
-        for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Call):
-                notice = _deprecation_notice(sub)
-                if notice is not None:
-                    yield notice
+        for call in _immediate_calls(stmt):
+            notice = _deprecation_notice(call)
+            if notice is not None:
+                yield notice
 
     def visit(body: Sequence[ast.stmt], guarded: frozenset[str]) -> None:
         for stmt in body:
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                 continue
             if isinstance(stmt, ast.If):
-                visit(stmt.body, guarded | (_presence_checks(stmt.test) & params))
+                visit(
+                    stmt.body,
+                    guarded | (_presence_checks(stmt.test, defaults) & params),
+                )
                 visit(stmt.orelse, guarded)
                 continue
             children = [

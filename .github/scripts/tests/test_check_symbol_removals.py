@@ -1024,15 +1024,60 @@ def test_every_notice_shape_marks_the_parameter(notice: str):
 
 
 @pytest.mark.parametrize(
-    "guard",
-    ["old is not None", "old is not _UNSET", "old"],
+    ("default", "guard"),
+    [
+        ("None", "old is not None"),
+        ("_UNSET", "old is not _UNSET"),
+        ("None", "old"),
+        ("False", "old"),
+        ("0", "old"),
+    ],
 )
-def test_every_presence_check_marks_the_parameter(guard: str):
+def test_every_presence_check_marks_the_parameter(default: str, guard: str):
     base = snap(
-        f"def f(old=_UNSET):\n    if {guard}:\n"
+        f"def f(*, old={default}):\n    if {guard}:\n"
         "        warn_deprecated('f(old=...)', 'nothing', '4.0.0')\n"
     )
     assert base.symbols["application_sdk.thing:f"].deprecated_params == ("old",)
+
+
+@pytest.mark.parametrize(
+    ("signature", "guard"),
+    [
+        # Omitting ``old`` leaves it None, which ``is not _UNSET`` lets through.
+        ("old=None", "old is not _UNSET"),
+        # Omitting ``old`` leaves it _UNSET, which ``is not None`` lets through.
+        ("old=_UNSET", "old is not None"),
+        # A non-literal default may be truthy: the bare test passes on omission.
+        ("old=_UNSET", "old"),
+        # A truthy literal default: the bare test passes on omission.
+        ("old=True", "old"),
+        # No default: the parameter is always passed, so no test proves anything.
+        ("old", "old is not None"),
+    ],
+)
+def test_a_guard_that_omitting_the_parameter_passes_marks_nothing(
+    signature: str, guard: str
+):
+    """The guard must be false at the parameter's own default (lens F-7735be)."""
+    base = snap(
+        f"def f({signature}):\n    if {guard}:\n"
+        "        warn_deprecated('f(old=...)', 'nothing', '4.0.0')\n"
+    )
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
+
+
+@pytest.mark.parametrize(
+    "deferred",
+    [
+        "callback = lambda: warnings.warn('old is deprecated', DeprecationWarning)",
+        "pending = (warnings.warn('old is deprecated', DeprecationWarning) for _ in x)",
+    ],
+)
+def test_a_notice_that_only_runs_if_called_later_marks_nothing(deferred: str):
+    """A deferred notice is not emitted on the caller's path (lens F-6bba81)."""
+    base = snap(f"def f(old=None):\n    if old is not None:\n        {deferred}\n")
+    assert base.symbols["application_sdk.thing:f"].deprecated_params == ()
 
 
 def test_a_notice_under_is_none_deprecates_the_default_not_the_parameter():
