@@ -775,8 +775,18 @@ def _current_run_key() -> tuple[str, str]:
     Raises:
         AppContextError: If called outside a task.
     """
-    workflow_id = _get_execution_id_from_task()
-    run_id = activity.info().workflow_run_id
+    # One guarded probe for both ids: outside an activity, temporalio raises a
+    # bare RuntimeError, which must surface as the AppContextError documented
+    # here and on get_app_state / set_app_state.
+    try:
+        info = activity.info()
+        workflow_id = info.workflow_id
+        run_id = info.workflow_run_id
+    # conformance: ignore[E004] probe for Temporal activity context; broad catch is intentional, exception re-raised as typed AppContextError
+    except Exception as e:
+        raise AppContextError("Cannot access app state outside of task context") from e
+    if not workflow_id:
+        raise AppContextError("activity workflow_id is empty")
     if not run_id:
         raise AppContextError("activity workflow_run_id is empty")
     return workflow_id, run_id
