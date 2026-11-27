@@ -62,22 +62,17 @@ class TestLoadExecutionSettingsFromEnv:
 
     def test_host_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_HOST", "temporal.example.com:7233")
-        with pytest.warns(DeprecationWarning, match="TEMPORAL_HOST is deprecated"):
-            settings = load_execution_settings()
+        settings = load_execution_settings()
         assert settings.host == "temporal.example.com:7233"
 
     def test_namespace_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_NAMESPACE", "production")
-        with pytest.warns(DeprecationWarning, match="TEMPORAL_NAMESPACE is deprecated"):
-            settings = load_execution_settings()
+        settings = load_execution_settings()
         assert settings.namespace == "production"
 
     def test_task_queue_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_TASK_QUEUE", "my-custom-queue")
-        with pytest.warns(
-            DeprecationWarning, match="TEMPORAL_TASK_QUEUE is deprecated"
-        ):
-            settings = load_execution_settings()
+        settings = load_execution_settings()
         assert settings.task_queue == "my-custom-queue"
 
     @pytest.mark.parametrize(
@@ -97,11 +92,13 @@ class TestLoadExecutionSettingsFromEnv:
         monkeypatch.setenv(key, "")
         assert getattr(load_execution_settings(), field) == default
 
-    def test_unset_temporal_family_does_not_warn(
+    def test_temporal_family_set_does_not_warn(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        for key in ("TEMPORAL_HOST", "TEMPORAL_NAMESPACE", "TEMPORAL_TASK_QUEUE"):
-            monkeypatch.delenv(key, raising=False)
+        """Apps set these names for their own code; only the SDK's read is deprecated."""
+        monkeypatch.setenv("TEMPORAL_HOST", "temporal.example.com:7233")
+        monkeypatch.setenv("TEMPORAL_NAMESPACE", "production")
+        monkeypatch.setenv("TEMPORAL_TASK_QUEUE", "my-custom-queue")
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
             load_execution_settings()

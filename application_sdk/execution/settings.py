@@ -14,7 +14,6 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
-from application_sdk import _deprecation
 from application_sdk import _env as _sdk_env
 from application_sdk.common._env import env_bool, env_float, env_int, env_str
 from application_sdk.constants import load_shutdown_budget
@@ -234,48 +233,15 @@ def _explicit_max_concurrent_activities() -> int | None:
     return explicit if explicit >= 1 else None
 
 
-def _warn_deprecated_temporal_env() -> None:
-    """Warn for each ``TEMPORAL_*`` variable that sets a deprecated field.
-
-    They are a third Temporal env family beside ``ATLAN_TEMPORAL_*`` (what the
-    worker and client read) and the v2 ``ATLAN_WORKFLOW_*``. Still read until
-    v4.0.0 because an app reads ``ExecutionSettings.host``; a deployment that
-    sets one is told which name the SDK itself uses.
-    """
-    if env_str("TEMPORAL_HOST", ""):
-        _deprecation.warn_deprecated(
-            "TEMPORAL_HOST",
-            "ATLAN_TEMPORAL_HOST",
-            "4.0.0",
-            note="it sets only the deprecated ExecutionSettings.host, which the SDK's worker and client never read",
-            stacklevel=3,
-        )
-    if env_str("TEMPORAL_NAMESPACE", ""):
-        _deprecation.warn_deprecated(
-            "TEMPORAL_NAMESPACE",
-            "ATLAN_TEMPORAL_NAMESPACE",
-            "4.0.0",
-            note="it sets only the deprecated ExecutionSettings.namespace, which the SDK's worker and client never read",
-            stacklevel=3,
-        )
-    if env_str("TEMPORAL_TASK_QUEUE", ""):
-        _deprecation.warn_deprecated(
-            "TEMPORAL_TASK_QUEUE",
-            "ATLAN_TASK_QUEUE",
-            "4.0.0",
-            note="it sets only the deprecated ExecutionSettings.task_queue, which the SDK's worker and client never read",
-            stacklevel=3,
-        )
-
-
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables.
 
     ``host``, ``namespace`` and ``task_queue`` are deprecated (see their
     docstrings) but still loaded, so a caller reading them sees no change
-    until v4.0.0.
+    until v4.0.0. Setting ``TEMPORAL_*`` does not warn: apps set those names
+    for their own code too, and the SDK reading them is what is deprecated,
+    not an app setting them.
     """
-    _warn_deprecated_temporal_env()
     return ExecutionSettings(
         # v2-compat fallback: ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT.
         host=env_str(

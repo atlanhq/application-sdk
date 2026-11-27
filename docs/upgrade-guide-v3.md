@@ -1513,7 +1513,7 @@ Each old name shared a name with a different SDK symbol, so which one an import 
 
 ## `ExecutionSettings.host`, `namespace` and `task_queue` (deprecated, removed in v4.0.0)
 
-The SDK's worker and client never read these three fields, or the `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE` and `TEMPORAL_TASK_QUEUE` variables that set them: they connect with `AppConfig`, which reads `ATLAN_TEMPORAL_HOST`, `ATLAN_TEMPORAL_NAMESPACE` and `ATLAN_TASK_QUEUE`. `load_execution_settings()` still fills the fields, so nothing changes until v4.0.0, but setting any of the three variables now emits a `DeprecationWarning` naming its `ATLAN_*` replacement. If you read the address from `load_execution_settings().host`, read `ATLAN_TEMPORAL_HOST` instead.
+The SDK's worker and client never read these three fields, or the `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE` and `TEMPORAL_TASK_QUEUE` variables that set them: they connect with `AppConfig`, which reads `ATLAN_TEMPORAL_HOST`, `ATLAN_TEMPORAL_NAMESPACE` and `ATLAN_TASK_QUEUE`. `load_execution_settings()` still fills the fields, so nothing changes until v4.0.0, and setting the variables does not warn: an app may set them for its own code. If you read the address from `load_execution_settings().host`, read `ATLAN_TEMPORAL_HOST` instead. If you set `TEMPORAL_*` only so the SDK would connect, set the `ATLAN_*` name: the SDK's worker and client never read `TEMPORAL_*`.
 
 ---
 
