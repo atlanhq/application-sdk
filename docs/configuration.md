@@ -6,7 +6,7 @@ Set variables in your shell environment or Docker `ENV` / Kubernetes `ConfigMap`
 
 ### The `.env` file
 
-Only `run_dev_combined()` reads `./.env`, as its first step, and a variable already set in the environment wins over the file. Importing `application_sdk` reads no file, so a production process never loads one.
+When an app runs, only `run_dev_combined()` reads `./.env`, as its first step, and a variable already set in the environment wins over the file. Importing `application_sdk` reads no file, so a production process never loads one. The one other reader is test tooling: the integration test runner in `application_sdk.testing.integration` loads `./.env` the same way during test setup, for the `E2E_*` credentials a suite needs.
 
 `run_dev_combined()` runs after the SDK is imported, and the settings in `application_sdk/constants.py` are read at import. So a `.env` value reaches the runtime settings (`AppConfig`: ports, Temporal connection, task queue) but not the import-time ones (log level, OpenTelemetry exporters, application name in log tags). To apply the file to those too, load it before Python starts:
 

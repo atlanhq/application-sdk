@@ -153,7 +153,9 @@ async def run_dev_combined(
     ``run_combined_mode()`` via CLI flags, which goes through Dapr.
 
     Loads ``./.env`` first, without overriding variables already set. This
-    is the only place the SDK reads a ``.env`` file.
+    is the only place a running app reads a ``.env`` file; the integration
+    test runner (``application_sdk.testing.integration``) loads one for test
+    credentials.
 
     All four connection-shaped kwargs (``host``, ``port``,
     ``temporal_namespace``, ``task_queue``) follow the same precedence as

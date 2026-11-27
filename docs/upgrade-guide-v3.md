@@ -578,7 +578,8 @@ from application_sdk.main import run_dev_combined
 asyncio.run(run_dev_combined(MyMetadataExtractor))
 ```
 
-`run_dev_combined` is the only place the SDK reads `./.env`; importing
+`run_dev_combined` is the only place a running app reads `./.env` (the
+integration test runner also loads it, for test credentials); importing
 `application_sdk` no longer loads it, so a container never does. Settings
 read at import (log level, OpenTelemetry exporters) miss a `.env` loaded
 that late: start with `uv run --env-file .env python run_dev.py` to apply the
