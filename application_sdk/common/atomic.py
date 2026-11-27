@@ -77,7 +77,7 @@ from application_sdk.common.path import convert_to_extended_path
 
 # Read through ``_env``, not imported from ``application_sdk.constants``: this
 # module ships in the api distribution's ``obstore`` extra (the object store's
-# write path), whose closure stays off ``constants``.
+# write path), which the API host installs without python-dotenv.
 TEMPORARY_PATH = _env.temporary_path()
 #: Same as ``application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE``.
 WORKFLOW_OUTPUT_PATH_TEMPLATE = _env.sdk_constant(

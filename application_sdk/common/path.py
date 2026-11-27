@@ -10,7 +10,7 @@ __all__ = [
 
 #: The Windows extended-length path prefix (``\\?\``). The same value as
 #: ``application_sdk.constants.WINDOWS_EXTENDED_PATH_PREFIX``, defined here so
-#: this module does not import ``constants`` on the API
+#: this module does not import ``constants`` (and python-dotenv) on the API
 #: host, which ships it with the object store's write path.
 WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 

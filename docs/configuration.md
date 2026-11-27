@@ -2,19 +2,7 @@
 
 The Application SDK reads configuration from environment variables at startup. Variables are grouped below by subsystem. The canonical source of truth is [`application_sdk/constants.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/constants.py) (import-time constants) and [`application_sdk/main.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/main.py) (`AppConfig` runtime values).
 
-Set variables in your shell environment or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. For local development, a `.env` file at the project root also works: see `.env.example` at the repo root for a ready-to-copy template.
-
-### The `.env` file
-
-When an app runs, only `run_dev_combined()` reads `./.env`, as its first step, and a variable already set in the environment wins over the file. Importing `application_sdk` reads no file, so a production process never loads one. The one other reader is test tooling: the integration test runner in `application_sdk.testing.integration` loads `./.env` the same way during test setup, for the `E2E_*` credentials a suite needs.
-
-`run_dev_combined()` runs after the SDK is imported, and the settings in `application_sdk/constants.py` are read at import. So a `.env` value reaches the runtime settings (`AppConfig`: ports, Temporal connection, task queue) but not the import-time ones (log level, OpenTelemetry exporters, application name in log tags). To apply the file to those too, load it before Python starts:
-
-```bash
-uv run --env-file .env python run_dev.py
-```
-
-The log line `Loaded <names> from ./.env after the SDK was imported` lists the variables the file set late.
+Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 
 ### How values are read
 

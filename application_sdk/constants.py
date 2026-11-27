@@ -16,13 +16,7 @@ logging.basicConfig, Dapr component names).
 
 Both read from the **same environment variables with the same defaults** so they
 stay in sync. The env var is the single source of truth — it is set once by
-Helm/Docker before the process starts and both readers see the same value.
-
-Importing this module reads the environment and nothing else: it does not load
-``./.env``. Local development loads it in
-:func:`application_sdk.main.run_dev_combined`, after this module is imported, so
-a ``.env`` value reaches ``AppConfig`` but not the settings frozen here; load
-the file before the process starts (``uv run --env-file .env ...``) for those.
+Helm/Docker/.env before the process starts and both readers see the same value.
 
 **Why not move everything to AppConfig?**
 The observability layer (``logger_adaptor``, ``traces_adaptor``, ``metrics_adaptor``)
@@ -63,6 +57,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import httpx
+from dotenv import load_dotenv
 
 from application_sdk import _deprecation
 from application_sdk._env import (
@@ -224,6 +219,9 @@ __all__ = [
     "WORKFLOW_AUTH_CLIENT_SECRET_KEY",
     "WORKFLOW_OUTPUT_PATH_TEMPLATE",
 ]
+
+
+load_dotenv(dotenv_path=".env")
 
 
 def _user_warning(message: str) -> None:

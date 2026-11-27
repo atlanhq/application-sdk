@@ -342,13 +342,14 @@ _CONSTANTS_MODULE = "application_sdk.constants"
 def sdk_constant(name: str, read: Callable[[], _T]) -> _T:
     """``application_sdk.constants.<name>`` once that module is loaded, else ``read()``.
 
-    ``constants`` reads every setting once, at import. The worker always has
-    it loaded, and tests and the SDK's testing fixtures patch its attributes
+    ``constants`` reads every setting once, at import, and imports
+    python-dotenv to load ``./.env`` first. The worker always has it loaded,
+    and tests and the SDK's testing fixtures patch its attributes
     (``TEMPORARY_PATH`` above all), so on the worker its value is the one in
     force. The API host ships the object store's read and write path
-    (``application_sdk.storage.ops`` and what it needs) and keeps that
-    closure to the storage path, so those modules do not import
-    ``constants``. They read a setting through here instead: the worker's value whenever ``constants`` is
+    (``application_sdk.storage.ops`` and what it needs) without python-dotenv,
+    so those modules must not import ``constants``. They read a setting
+    through here instead: the worker's value whenever ``constants`` is
     loaded, else *read*, which reads the same variable with the same default.
     ``tests/unit/test_api_distribution.py`` pins that each reader agrees with
     ``constants``.

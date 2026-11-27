@@ -1,9 +1,9 @@
 """The storage settings the read and write path reads, without importing ``constants``.
 
 ``application_sdk.storage.ops`` and the modules it needs ship in the api
-distribution's ``obstore`` extra, whose closure stays the storage path alone,
-so these modules read their settings here instead of importing
-``application_sdk.constants``. Each reader
+distribution's ``obstore`` extra, which the API host installs without
+python-dotenv. ``application_sdk.constants`` imports python-dotenv (and loads
+``./.env``), so these modules read their settings here instead. Each reader
 returns ``constants``' value whenever that module is loaded, as it always is on
 the worker (and as tests patch it), else reads the same variable with the same
 default (:func:`application_sdk._env.sdk_constant`).
