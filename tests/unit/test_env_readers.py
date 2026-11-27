@@ -63,6 +63,37 @@ class TestPodName:
         assert _env.pod_name() == expected
 
 
+class TestLegacyWorkflowHost:
+    """The v2 Temporal address, one reader for AppConfig and ExecutionSettings (FND-4095)."""
+
+    @pytest.mark.parametrize(
+        ("host", "port", "expected"),
+        [
+            (None, None, ""),
+            ("  ", "7236", ""),
+            ("temporal.internal", None, "temporal.internal:7233"),
+            ("temporal.internal", "", "temporal.internal:7233"),
+            ("temporal.internal", "7236", "temporal.internal:7236"),
+        ],
+    )
+    def test_host_and_port(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        host: str | None,
+        port: str | None,
+        expected: str,
+    ) -> None:
+        for key, value in (
+            ("ATLAN_WORKFLOW_HOST", host),
+            ("ATLAN_WORKFLOW_PORT", port),
+        ):
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
+        assert _env.legacy_workflow_host() == expected
+
+
 #: Variable -> the modules allowed to name it in a call. ``_env`` holds the
 #: one reader; ``common/task_queue`` reads ``ATLAN_DEPLOYMENT_NAME`` raw for
 #: queue derivation, where unset means "no prefix", not a default.
@@ -71,6 +102,8 @@ _ONE_READER: dict[str, frozenset[str]] = {
     "DAPR_COMPONENTS_PATH": frozenset({"_env.py"}),
     "K8S_POD_NAME": frozenset({"_env.py"}),
     "HOSTNAME": frozenset({"_env.py"}),
+    "ATLAN_WORKFLOW_HOST": frozenset({"_env.py"}),
+    "ATLAN_WORKFLOW_PORT": frozenset({"_env.py"}),
 }
 #: Code that sets these for a child process or a test, not reads them.
 _EXCLUDED_DIRS = ("testing/", "dev/")

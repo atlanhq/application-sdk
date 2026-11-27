@@ -69,7 +69,7 @@ def test_template_registry_excludes_only_ambiguous_bare_names() -> None:
     surfaces as a failing test rather than as a permanent silent gap.
     """
     ambiguous = ambiguous_template_names(_sdk_sources())
-    assert sorted(ambiguous) == ["UploadInput", "UploadOutput"], (
+    assert sorted(ambiguous) == [], (
         "the set of ambiguous template contract bare names changed — "
         f"now { ({k: sorted(v) for k, v in ambiguous.items()}) }. Extend the "
         "exclusion note in _sdk_contract_mixins.py for any new one."

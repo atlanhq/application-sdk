@@ -88,9 +88,9 @@ before changing either value.
 | `APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR` | `true` | Publish lifecycle events (workflow and activity start/end) through the event binding. Read once at worker start and pinned on each run the worker starts, so a run publishes (or not) according to the worker that started it. |
 | `ATLAN_POOL_<POOL>_QUEUE` | _(derived)_ | Task queue for tasks declared with `@task(pool="<pool>")`. `<POOL>` is the pool name upper-cased with `-` replaced by `_` (`cold-tier` reads `ATLAN_POOL_COLD_TIER_QUEUE`). Unset means `<task queue>-<pool>`, from `ATLAN_TASK_QUEUE` or the derived queue. |
 | `ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS` | _(unset: no limit)_ | Execution timeout, in hours, the handler sets on the workflows it starts. Unset, `0` or negative means no timeout (a negative value logs a warning). |
-| `TEMPORAL_HOST` | `localhost:7233` | Read by `load_execution_settings()` into `ExecutionSettings.host`, with `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` as the fallback. The SDK's own worker and client do not use this field: they connect with `ATLAN_TEMPORAL_HOST`. Set that one. |
-| `TEMPORAL_NAMESPACE` | `default` | Read into `ExecutionSettings.namespace`. Not used by the SDK's worker or client, which read `ATLAN_TEMPORAL_NAMESPACE`. |
-| `TEMPORAL_TASK_QUEUE` | `application-sdk` | Read into `ExecutionSettings.task_queue`. Not used by the SDK's worker or client, which read `ATLAN_TASK_QUEUE`. |
+| `TEMPORAL_HOST` | `localhost:7233` | **Deprecated, removed in v4.0.0; set `ATLAN_TEMPORAL_HOST`.** Read by `load_execution_settings()` into the deprecated `ExecutionSettings.host`, with `ATLAN_WORKFLOW_HOST` + `ATLAN_WORKFLOW_PORT` as the fallback. The SDK's own worker and client do not use this field: they connect with `ATLAN_TEMPORAL_HOST`. Setting it emits a `DeprecationWarning`. |
+| `TEMPORAL_NAMESPACE` | `default` | **Deprecated, removed in v4.0.0; set `ATLAN_TEMPORAL_NAMESPACE`.** Read into the deprecated `ExecutionSettings.namespace`. Not used by the SDK's worker or client. |
+| `TEMPORAL_TASK_QUEUE` | `application-sdk` | **Deprecated, removed in v4.0.0; set `ATLAN_TASK_QUEUE`.** Read into the deprecated `ExecutionSettings.task_queue`. Not used by the SDK's worker or client. |
 
 ### Task-queue naming
 

@@ -33,6 +33,18 @@ REPO_ROOT = (
 )  # .claude/skills/capability-manifest/references/extractor.py
 PKG_ROOT = REPO_ROOT / "application_sdk"
 
+#: The conformance package's record of every deprecated SDK name: the same table
+#: B001 reads to nudge apps off them. The manifest reads it rather than
+#: re-deriving deprecation from decorators, so the two never disagree.
+DEPRECATED_SYMBOLS_PATH = (
+    REPO_ROOT
+    / "packages"
+    / "conformance"
+    / "conformance"
+    / "data"
+    / "deprecated_symbols.json"
+)
+
 # Subpackages are not hand-listed: every public module that declares ``__all__`` is
 # discovered by walking the tree (see ``discover_public_modules``). A hand-maintained
 # list is exactly how the manifest came to omit ``application_sdk.execution.heartbeat``
@@ -136,6 +148,46 @@ def _deprecated_constant_names(tree: ast.Module) -> frozenset[str]:
                 if isinstance(k, ast.Constant) and isinstance(k.value, str)
             )
     return frozenset()
+
+
+def load_deprecations(path: Path = DEPRECATED_SYMBOLS_PATH) -> dict[str, str]:
+    """``"module:symbol"`` -> deprecation notice, from ``deprecated_symbols.json``.
+
+    Only module-level names (no ``.`` in the symbol): a deprecated method or
+    parameter does not make its class deprecated.
+    """
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        f"{entry['module']}:{entry['symbol']}": entry["message"]
+        for entry in data.get("symbols", [])
+        if "." not in entry["symbol"]
+    }
+
+
+def _module_of_filepath(filepath: str) -> str:
+    """``application_sdk/app/registry.py`` -> ``application_sdk.app.registry``."""
+    if not filepath.endswith(".py"):
+        return ""
+    dotted = filepath.removesuffix(".py").replace("/", ".").replace("\\", ".")
+    return dotted.removesuffix(".__init__")
+
+
+def deprecation_for(
+    name: str, modules: list[str], filepath: str, deprecations: dict[str, str]
+) -> str | None:
+    """The notice when *name* is deprecated at any path it is listed under.
+
+    *modules* are the public modules exporting it; the module that defines it
+    (from *filepath*) is checked too, since a ``@deprecated`` class is recorded
+    where it is defined, not where it is re-exported.
+    """
+    defining = _module_of_filepath(filepath)
+    for module in [*modules, defining]:
+        if module and (notice := deprecations.get(f"{module}:{name}")):
+            return notice
+    return None
 
 
 def discover_public_modules() -> list[tuple[str, str, list[str]]]:
@@ -734,6 +786,15 @@ def cmd_dump() -> None:
             contracts_data[ns] = models
             eprint(f"  {ns}: {len(models)} models")
 
+    deprecations = load_deprecations()
+    for ns_models in contracts_data.values():
+        for model in ns_models:
+            notice = deprecation_for(
+                model["name"], [model["namespace"]], model["filepath"], deprecations
+            )
+            if notice:
+                model["deprecated"] = notice
+
     output["contracts"] = contracts_data
 
     # Subpackages are collected after contracts so a submodule re-export of an
@@ -792,6 +853,16 @@ def cmd_dump() -> None:
                 by_name[name] = symbol
                 symbols.append(symbol)
 
+        for symbol in symbols:
+            notice = deprecation_for(
+                symbol["name"],
+                [symbol["module"], *symbol["also_exported_from"]],
+                symbol["filepath"],
+                deprecations,
+            )
+            if notice:
+                symbol["deprecated"] = notice
+
         if not symbols:
             continue
         n_submodules = sum(1 for dotted, _ in modules if dotted != root_path)
@@ -829,10 +900,15 @@ def cmd_normalize(raw_json_path: str) -> None:
 
     for subpkg_name in sorted(raw["subpackages"].keys()):
         subpkg = raw["subpackages"][subpkg_name]
-        # Sort symbols: by kind group, then alphabetical
+        # Sort symbols: by kind group, deprecated ones after the rest of their
+        # group (they are kept for migration, not offered), then alphabetical.
         symbols = sorted(
             subpkg["symbols"],
-            key=lambda s: (GROUP_ORDER.get(s["kind"], 99), s["name"].lower()),
+            key=lambda s: (
+                GROUP_ORDER.get(s["kind"], 99),
+                "deprecated" in s,
+                s["name"].lower(),
+            ),
         )
         normalized["subpackages"][subpkg_name] = {
             "all": subpkg["all"],
@@ -841,7 +917,9 @@ def cmd_normalize(raw_json_path: str) -> None:
 
     # Sort contracts alphabetically by namespace, then by model name
     for ns in sorted(raw["contracts"].keys()):
-        models = sorted(raw["contracts"][ns], key=lambda m: m["name"].lower())
+        models = sorted(
+            raw["contracts"][ns], key=lambda m: ("deprecated" in m, m["name"].lower())
+        )
         normalized["contracts"][ns] = models
 
     print(json.dumps(normalized, indent=2))  # noqa: T201
@@ -851,6 +929,12 @@ def cmd_normalize(raw_json_path: str) -> None:
 # ---------------------------------------------------------------------------
 # RENDER subcommand
 # ---------------------------------------------------------------------------
+
+
+def _sentence(text: str) -> str:
+    """*text* stripped, ending in a full stop, so a following sentence reads on."""
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else text + "."
 
 
 def _load_purposes(yaml_path: str) -> dict[str, str]:
@@ -900,6 +984,11 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     lines.append("> plus every typed Input/Output contract.")
     lines.append(
         "> Read this before reading SDK source. Generated by `.claude/skills/capability-manifest`."
+    )
+    lines.append(">")
+    lines.append(
+        "> A heading marked **(deprecated)** is listed so existing code can be read and"
+        " migrated, not as a recommendation: its **Deprecated** line names the replacement."
     )
     lines.append(">")
     lines.append(
@@ -976,8 +1065,14 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
                 # subpackage root: a submodule ``__all__`` is public surface too.
                 module = sym.get("module", full_name)
                 also = sym.get("also_exported_from") or []
-                lines.append(f"#### `{prefix}{name}`")
+                deprecated = sym.get("deprecated")
+                heading = f"#### `{prefix}{name}`"
+                lines.append(f"{heading} (deprecated)" if deprecated else heading)
                 lines.append("")
+                if deprecated:
+                    lines.append(
+                        f"- **Deprecated:** {_sentence(deprecated)} Do not use in new code."
+                    )
                 lines.append(f"- **Import:** `from {module} import {name}`")
                 if also:
                     paths = ", ".join(f"`{path}`" for path in also)
@@ -1012,8 +1107,14 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
             m_summary = model["summary"]
             m_filepath = model["filepath"]
             m_fields = model["fields"]
-            lines.append(f"#### `{m_name}`")
+            m_deprecated = model.get("deprecated")
+            heading = f"#### `{m_name}`"
+            lines.append(f"{heading} (deprecated)" if m_deprecated else heading)
             lines.append("")
+            if m_deprecated:
+                lines.append(
+                    f"- **Deprecated:** {_sentence(m_deprecated)} Do not use in new code."
+                )
             lines.append(f"- **Import:** `from {ns} import {m_name}`")
             lines.append(f"- **Summary:** {m_summary}")
             if m_fields:

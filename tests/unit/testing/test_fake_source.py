@@ -1402,3 +1402,26 @@ class TestCursorPageLimitValidation:
     def test_non_positive_request_limit_still_falls_back(self) -> None:
         page = cursor_page(OBJECTS, self._request({"limit": "-1"}), default_limit=3)
         assert page.limit == 3
+
+
+class TestHandlerAliasRenamed:
+    """``Handler`` collided with ``application_sdk.handler.Handler``."""
+
+    @pytest.mark.parametrize(
+        "module", ["application_sdk.testing", "application_sdk.testing.fake_source"]
+    )
+    def test_old_name_warns_and_aliases(self, module: str) -> None:
+        import importlib
+
+        from application_sdk.testing.fake_source import FakeSourceHandler
+
+        mod = importlib.import_module(module)
+        with pytest.warns(DeprecationWarning, match="Handler is deprecated"):
+            assert getattr(mod, "Handler") is FakeSourceHandler
+
+    def test_star_import_does_not_rebind_the_app_handler(self) -> None:
+        from application_sdk.handler import Handler
+
+        namespace: dict[str, object] = {"Handler": Handler}
+        exec("from application_sdk.testing import *", namespace)  # noqa: S102
+        assert namespace["Handler"] is Handler

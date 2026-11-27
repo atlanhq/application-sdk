@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 from temporalio.common import VersioningBehavior
 
@@ -60,17 +62,22 @@ class TestLoadExecutionSettingsFromEnv:
 
     def test_host_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_HOST", "temporal.example.com:7233")
-        settings = load_execution_settings()
+        with pytest.warns(DeprecationWarning, match="TEMPORAL_HOST is deprecated"):
+            settings = load_execution_settings()
         assert settings.host == "temporal.example.com:7233"
 
     def test_namespace_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_NAMESPACE", "production")
-        settings = load_execution_settings()
+        with pytest.warns(DeprecationWarning, match="TEMPORAL_NAMESPACE is deprecated"):
+            settings = load_execution_settings()
         assert settings.namespace == "production"
 
     def test_task_queue_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEMPORAL_TASK_QUEUE", "my-custom-queue")
-        settings = load_execution_settings()
+        with pytest.warns(
+            DeprecationWarning, match="TEMPORAL_TASK_QUEUE is deprecated"
+        ):
+            settings = load_execution_settings()
         assert settings.task_queue == "my-custom-queue"
 
     @pytest.mark.parametrize(
@@ -89,6 +96,21 @@ class TestLoadExecutionSettingsFromEnv:
         monkeypatch.delenv("ATLAN_WORKFLOW_HOST", raising=False)
         monkeypatch.setenv(key, "")
         assert getattr(load_execution_settings(), field) == default
+
+    def test_unset_temporal_family_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for key in ("TEMPORAL_HOST", "TEMPORAL_NAMESPACE", "TEMPORAL_TASK_QUEUE"):
+            monkeypatch.delenv(key, raising=False)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            load_execution_settings()
+
+    def test_v2_host_and_port_fall_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "temporal.internal")
+        monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "7236")
+        assert load_execution_settings().host == "temporal.internal:7236"
 
     def test_empty_v2_port_keeps_the_default_port(
         self, monkeypatch: pytest.MonkeyPatch

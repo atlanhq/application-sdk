@@ -2647,6 +2647,24 @@
       "symbol": "BaseMetadataExtractor"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UploadInput is deprecated; use application_sdk.templates.contracts.base_metadata_extraction.UploadToAtlanInput \u2014 the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadInput. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.base_metadata_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "UploadInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UploadOutput is deprecated; use application_sdk.templates.contracts.base_metadata_extraction.UploadToAtlanOutput \u2014 the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadOutput. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.base_metadata_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "UploadOutput"
+    },
+    {
       "kind": "method",
       "marker_via": "decorator",
       "message": "upload_to_atlan is deprecated and will be removed in v4.0.0. Migrate to App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). See docs/concepts/file-reference.md for migration guidance.",
@@ -2654,6 +2672,42 @@
       "module": "application_sdk.templates.base_metadata_extractor",
       "removal_version": "4.0.0",
       "symbol": "upload_to_atlan"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UploadInput is deprecated; use application_sdk.templates.contracts.UploadToAtlanInput \u2014 the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadInput. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.contracts",
+      "removal_version": "4.0.0",
+      "symbol": "UploadInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UploadOutput is deprecated; use application_sdk.templates.contracts.UploadToAtlanOutput \u2014 the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadOutput. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.contracts",
+      "removal_version": "4.0.0",
+      "symbol": "UploadOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UploadInput is deprecated; use application_sdk.templates.contracts.base_metadata_extraction.UploadToAtlanInput \u2014 the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadInput. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.contracts.base_metadata_extraction",
+      "removal_version": "4.0.0",
+      "symbol": "UploadInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UploadOutput is deprecated; use application_sdk.templates.contracts.base_metadata_extraction.UploadToAtlanOutput \u2014 the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadOutput. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.contracts.base_metadata_extraction",
+      "removal_version": "4.0.0",
+      "symbol": "UploadOutput"
     },
     {
       "kind": "class",
@@ -2845,6 +2899,15 @@
       "symbol": "legacy_credential_ref"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "Handler is deprecated; use application_sdk.testing.FakeSourceHandler \u2014 the same alias, renamed so a star-import no longer rebinds application_sdk.handler.Handler. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing",
+      "removal_version": "4.0.0",
+      "symbol": "Handler"
+    },
+    {
       "kind": "property",
       "marker_via": "decorator",
       "message": "BaseE2ETest.client is deprecated and will be removed in v4.0. Use application_sdk.testing.harness.automation_engine.AEClient and application_sdk.testing.harness.atlas directly, reaching them from synchronous code through application_sdk.testing.harness.run_sync.",
@@ -2897,6 +2960,15 @@
       "module": "application_sdk.testing.e2e.payload",
       "removal_version": "4.0.0",
       "symbol": "_agent_credential_ref_keys"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "Handler is deprecated; use application_sdk.testing.fake_source.FakeSourceHandler \u2014 the same alias, renamed so a star-import no longer rebinds application_sdk.handler.Handler. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.testing.fake_source",
+      "removal_version": "4.0.0",
+      "symbol": "Handler"
     },
     {
       "kind": "constant",

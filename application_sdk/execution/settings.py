@@ -14,6 +14,8 @@ from dataclasses import dataclass
 # direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
 
+from application_sdk import _deprecation
+from application_sdk import _env as _sdk_env
 from application_sdk.common._env import env_bool, env_float, env_int, env_str
 from application_sdk.constants import load_shutdown_budget
 from application_sdk.observability.logger_adaptor import get_logger
@@ -60,13 +62,32 @@ class ExecutionSettings:
     """Settings for the Temporal execution layer."""
 
     host: str = "localhost:7233"
-    """Temporal server address."""
+    """Temporal server address (``TEMPORAL_HOST``).
+
+    .. deprecated:: 3.61
+        The SDK's worker and client never read this field: they connect with
+        ``AppConfig.temporal_host`` (``ATLAN_TEMPORAL_HOST``). Read that, or
+        ``ATLAN_TEMPORAL_HOST`` directly. Removed in v4.0.0, with the
+        ``TEMPORAL_HOST`` variable that sets it.
+    """
 
     namespace: str = "default"
-    """Temporal namespace."""
+    """Temporal namespace (``TEMPORAL_NAMESPACE``).
+
+    .. deprecated:: 3.61
+        Never read by the SDK's worker or client, which use
+        ``AppConfig.temporal_namespace`` (``ATLAN_TEMPORAL_NAMESPACE``).
+        Removed in v4.0.0, with ``TEMPORAL_NAMESPACE``.
+    """
 
     task_queue: str = "application-sdk"
-    """Default task queue for workers."""
+    """Default task queue for workers (``TEMPORAL_TASK_QUEUE``).
+
+    .. deprecated:: 3.61
+        Never read by the SDK's worker or client, which use
+        ``AppConfig.task_queue`` (``ATLAN_TASK_QUEUE``, else derived from the
+        app). Removed in v4.0.0, with ``TEMPORAL_TASK_QUEUE``.
+    """
 
     max_concurrent_activities: int = _MAX_CONCURRENT_ACTIVITIES_CAP
     """Maximum concurrent activities per worker.
@@ -213,15 +234,53 @@ def _explicit_max_concurrent_activities() -> int | None:
     return explicit if explicit >= 1 else None
 
 
+def _warn_deprecated_temporal_env() -> None:
+    """Warn for each ``TEMPORAL_*`` variable that sets a deprecated field.
+
+    They are a third Temporal env family beside ``ATLAN_TEMPORAL_*`` (what the
+    worker and client read) and the v2 ``ATLAN_WORKFLOW_*``. Still read until
+    v4.0.0 because an app reads ``ExecutionSettings.host``; a deployment that
+    sets one is told which name the SDK itself uses.
+    """
+    if env_str("TEMPORAL_HOST", ""):
+        _deprecation.warn_deprecated(
+            "TEMPORAL_HOST",
+            "ATLAN_TEMPORAL_HOST",
+            "4.0.0",
+            note="it sets only the deprecated ExecutionSettings.host, which the SDK's worker and client never read",
+            stacklevel=3,
+        )
+    if env_str("TEMPORAL_NAMESPACE", ""):
+        _deprecation.warn_deprecated(
+            "TEMPORAL_NAMESPACE",
+            "ATLAN_TEMPORAL_NAMESPACE",
+            "4.0.0",
+            note="it sets only the deprecated ExecutionSettings.namespace, which the SDK's worker and client never read",
+            stacklevel=3,
+        )
+    if env_str("TEMPORAL_TASK_QUEUE", ""):
+        _deprecation.warn_deprecated(
+            "TEMPORAL_TASK_QUEUE",
+            "ATLAN_TASK_QUEUE",
+            "4.0.0",
+            note="it sets only the deprecated ExecutionSettings.task_queue, which the SDK's worker and client never read",
+            stacklevel=3,
+        )
+
+
 def load_execution_settings() -> ExecutionSettings:
-    """Load execution settings from environment variables."""
-    # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
-    # Prefer TEMPORAL_HOST (v3). Fall back to ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT (v2).
-    _v2_host = env_str("ATLAN_WORKFLOW_HOST", "")
-    _v2_port = env_str("ATLAN_WORKFLOW_PORT", "7233")
-    _v2_default = f"{_v2_host}:{_v2_port}" if _v2_host else "localhost:7233"
+    """Load execution settings from environment variables.
+
+    ``host``, ``namespace`` and ``task_queue`` are deprecated (see their
+    docstrings) but still loaded, so a caller reading them sees no change
+    until v4.0.0.
+    """
+    _warn_deprecated_temporal_env()
     return ExecutionSettings(
-        host=env_str("TEMPORAL_HOST", _v2_default),
+        # v2-compat fallback: ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT.
+        host=env_str(
+            "TEMPORAL_HOST", _sdk_env.legacy_workflow_host() or "localhost:7233"
+        ),
         namespace=env_str("TEMPORAL_NAMESPACE", "default"),
         task_queue=env_str("TEMPORAL_TASK_QUEUE", "application-sdk"),
         max_concurrent_activities=_load_max_concurrent_activities(),

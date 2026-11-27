@@ -407,3 +407,17 @@ def pod_name() -> str:
     downward-API ``K8S_POD_NAME`` still names itself the same way everywhere.
     """
     return env_str("K8S_POD_NAME", "") or env_str("HOSTNAME", "")
+
+
+def legacy_workflow_host() -> str:
+    """The v2 Temporal address, ``ATLAN_WORKFLOW_HOST:ATLAN_WORKFLOW_PORT``, or ``""``.
+
+    ``""`` when ``ATLAN_WORKFLOW_HOST`` is unset or empty; the port defaults to
+    ``7233``. Charts that predate the v3 names still set the pair, so both
+    ``AppConfig.temporal_host`` and the deprecated ``ExecutionSettings.host``
+    fall back to it. v2-compat: remove when no deployment sets the pair.
+    """
+    host = env_str("ATLAN_WORKFLOW_HOST", "")
+    if not host:
+        return ""
+    return f"{host}:{env_str('ATLAN_WORKFLOW_PORT', '7233')}"

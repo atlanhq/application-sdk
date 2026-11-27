@@ -53,6 +53,7 @@ Fixtures (import into conftest.py or test files)::
 
 from typing import TYPE_CHECKING, Any
 
+from application_sdk import _deprecation
 from application_sdk._install import lazy_getattr
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ if TYPE_CHECKING:
         CursorPage,
         FakeRequest,
         FakeResponse,
-        Handler,
+        FakeSourceHandler,
         HandlerResult,
         HttpFakeSource,
         HttpFakeSourceFactory,
@@ -132,7 +133,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "CursorPage": ("application_sdk.testing.fake_source", "CursorPage"),
     "FakeRequest": ("application_sdk.testing.fake_source", "FakeRequest"),
     "FakeResponse": ("application_sdk.testing.fake_source", "FakeResponse"),
-    "Handler": ("application_sdk.testing.fake_source", "Handler"),
+    "FakeSourceHandler": ("application_sdk.testing.fake_source", "FakeSourceHandler"),
     "HandlerResult": ("application_sdk.testing.fake_source", "HandlerResult"),
     "HttpFakeSource": ("application_sdk.testing.fake_source", "HttpFakeSource"),
     "HttpFakeSourceFactory": (
@@ -244,7 +245,7 @@ __all__ = [
     "GoldenRuleError",
     "FakeResponse",
     "GoldenReport",
-    "Handler",
+    "FakeSourceHandler",
     "HandlerResult",
     "HttpFakeSource",
     "HttpFakeSourceFactory",
@@ -283,8 +284,32 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> Any:
+#: name -> (replacement, why). Kept out of ``__all__``: a star-import of this
+#: package must not rebind ``application_sdk.handler.Handler`` in the caller.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "Handler": (
+        "application_sdk.testing.FakeSourceHandler",
+        "the same alias, renamed so a star-import no longer rebinds application_sdk.handler.Handler",
+    ),
+}
+
+if TYPE_CHECKING:
+    Handler = FakeSourceHandler
+
+
+def _lazy_export(name: str) -> Any:
     return lazy_getattr(__name__, name, _LAZY, globals(), _EAGER_SUBMODULES)
+
+
+#: PEP 562: a deprecated name warns on every access and is never cached; any
+#: other name is a lazy export, imported once and cached.
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=lambda _name: _lazy_export("FakeSourceHandler"),
+    fallback=_lazy_export,
+)
 
 
 def __dir__() -> list[str]:
