@@ -62,7 +62,13 @@ from temporalio.workflow import update as _update
 from temporalio.workflow import uuid4 as _uuid4
 from temporalio.workflow import wait_condition as _wait_condition
 
-from application_sdk.app.base import App, AppError, NonRetryableError, RetryableError
+from application_sdk.app.base import (
+    App,
+    AppError,
+    DetachedRun,
+    NonRetryableError,
+    RetryableError,
+)
 from application_sdk.app.context import AppContext
 from application_sdk.app.entrypoint import (
     EntryPointMetadata,
@@ -258,6 +264,7 @@ __all__ = [
     "AppError",
     "AppRegistry",
     "AtlanClientMixin",
+    "DetachedRun",
     "EntryPointMetadata",
     "Input",
     "InteractionUnfinishedPolicy",
