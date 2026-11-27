@@ -245,6 +245,28 @@ class TestResult:
             "error": "Workflow execution failed.",
         }
 
+    @pytest.mark.parametrize(
+        ("code", "status", "detail"),
+        [
+            (RPCStatusCode.UNAVAILABLE, 500, "Failed to get workflow result"),
+            (RPCStatusCode.NOT_FOUND, 404, "Workflow not found: wf"),
+        ],
+    )
+    def test_temporal_failure_reading_the_result_is_an_http_error(
+        self, code: RPCStatusCode, status: int, detail: str
+    ) -> None:
+        """A Temporal outage while reading a result is not a decode failure."""
+        client = _temporal(_desc(WorkflowExecutionStatus.COMPLETED))
+        client.handle.result.side_effect = RPCError("frontend down", code, b"")
+        http, _ = _routes(client)
+
+        response = http.get("/workflows/v1/result/wf")
+
+        assert response.status_code == status
+        assert response.json()["detail"] == detail
+        # Not retried untyped: the read failed, not the decode.
+        assert client.handle.result.await_count == 1
+
     def test_undecodable_result_names_the_error_type(self) -> None:
         client = _temporal(_desc(WorkflowExecutionStatus.COMPLETED))
         client.handle.result.side_effect = ValueError("bad payload")

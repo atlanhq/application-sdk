@@ -78,12 +78,13 @@ def _routes(client: Any = None, **config: Any) -> tuple[TestClient, MagicMock]:
         client.start_workflow = AsyncMock(
             return_value=MagicMock(id="wf-1", result_run_id="run-1")
         )
+    workflow_config = _config(**config)
     app = FastAPI()
     register_event_routes(
         app,
         EventRoutesSource(
             app_name="events-test",
-            workflow_config=_config(**config),
+            workflow_config=lambda: workflow_config,
             temporal_client=AsyncMock(return_value=client),
             event_triggers=[_TRIGGER],
             subscriptions=[_SUBSCRIPTION],
@@ -191,3 +192,35 @@ class TestHandleEvent:
 
         assert response.status_code == 500
         assert response.json() == {"status": "RETRY"}
+
+
+def test_workflow_config_is_read_per_event() -> None:
+    """The config is read when the event arrives, not when the routes are built."""
+    client = MagicMock()
+    client.start_workflow = AsyncMock(
+        return_value=MagicMock(id="wf-1", result_run_id="run-1")
+    )
+    current = {"config": _config(configured=False)}
+    app = FastAPI()
+    register_event_routes(
+        app,
+        EventRoutesSource(
+            app_name="events-test",
+            workflow_config=lambda: current["config"],
+            temporal_client=AsyncMock(return_value=client),
+            event_triggers=[_TRIGGER],
+        ),
+    )
+    http = TestClient(app, raise_server_exceptions=False)
+    assert http.post("/events/v1/event/extract", json={}).status_code == 503
+
+    current["config"] = WorkflowClientConfig(
+        host="localhost:7233",
+        task_queue="reconfigured-queue",
+        app_name="events-test",
+        app_class=_App,
+    )
+    response = http.post("/events/v1/event/extract", json={"data": {}})
+
+    assert response.status_code == 200
+    assert client.start_workflow.await_args.kwargs["task_queue"] == "reconfigured-queue"

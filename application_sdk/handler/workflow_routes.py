@@ -206,6 +206,10 @@ async def _get_workflow_result(
         result = await client.get_workflow_handle(
             workflow_id, run_id=run_id, result_type=output_type
         ).result()
+    except temporalio.service.RPCError:
+        # Temporal could not answer: not a decode problem, and an untyped
+        # retry would not help. The route maps it to 404 / 500.
+        raise
     except Exception:
         logger.warning(
             "Typed deserialization failed for workflow %s (output_type=%s), falling back to untyped result",
@@ -624,6 +628,10 @@ async def _completed_result_response(
                 success=False,
             )
         )
+    except temporalio.service.RPCError:
+        # Temporal could not answer, so this is not a decode failure: the
+        # route's _temporal_errors answers 404 (not found) or 500.
+        raise
     except Exception as exc:
         logger.warning(
             "Workflow result decode failed for workflow_id=%s error_type=%s",
@@ -752,12 +760,16 @@ async def _get_status(
 
 
 def _require_configured(
-    workflow_config: WorkflowClientConfig, detail: str = _NOT_CONFIGURED
+    workflow_config: Callable[[], WorkflowClientConfig],
+    detail: str = _NOT_CONFIGURED,
 ) -> Callable[[], Awaitable[None]]:
-    """A route dependency answering 503 while workflow execution is not configured."""
+    """A route dependency answering 503 while workflow execution is not configured.
+
+    *workflow_config* is read on every request.
+    """
 
     async def configured() -> None:
-        if not workflow_config.is_configured():
+        if not workflow_config().is_configured():
             raise HTTPException(status_code=503, detail=detail)
 
     return configured
@@ -765,9 +777,13 @@ def _require_configured(
 
 def register_workflow_routes(app: FastAPI, source: WorkflowRoutesSource) -> None:
     """Register the workflow lifecycle routes (start, stop, result, status) on *app*."""
-    configured = [Depends(_require_configured(source.workflow_config))]
+
+    def workflow_config() -> WorkflowClientConfig:
+        return source.workflow_config
+
+    configured = [Depends(_require_configured(workflow_config))]
     start_configured = [
-        Depends(_require_configured(source.workflow_config, _START_NOT_CONFIGURED))
+        Depends(_require_configured(workflow_config, _START_NOT_CONFIGURED))
     ]
 
     @app.post("/workflows/v1/start", dependencies=start_configured)

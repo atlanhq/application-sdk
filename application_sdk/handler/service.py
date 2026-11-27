@@ -1146,7 +1146,9 @@ def _register_worker_routes(
         app,
         EventRoutesSource(
             app_name=app_name,
-            workflow_config=workflow_config,
+            # Read per event, like _get_temporal_client reads it: the client is
+            # one per process, so the queue must come from the same config.
+            workflow_config=lambda: _workflow_config,
             temporal_client=_service_temporal_client,
             event_triggers=event_triggers,
             subscriptions=subscriptions,

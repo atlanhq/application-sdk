@@ -59,15 +59,17 @@ class EventRoutesSource:
 
     Args:
         app_name: The app's name, for event-started workflow IDs.
-        workflow_config: The workflow configuration captured when the routes
-            are registered.
+        workflow_config: Returns the workflow configuration, read once per
+            event. The worker reads its module-level configuration here, the
+            same one its shared Temporal client is created from, so an event
+            is never dispatched with one service's queue over another's client.
         temporal_client: Returns the Temporal client, called once per event.
         event_triggers: The events that start a workflow.
         subscriptions: The pub/sub topics delivered to the app's own handlers.
     """
 
     app_name: str
-    workflow_config: WorkflowClientConfig
+    workflow_config: Callable[[], WorkflowClientConfig]
     temporal_client: Callable[[], Awaitable[Client]]
     event_triggers: Sequence[EventTriggerConfig] = ()
     subscriptions: Sequence[SubscriptionConfig] = ()
@@ -127,13 +129,16 @@ async def _read_event_body(request: Request) -> object:
 
 
 async def _start_event_workflow(
-    source: EventRoutesSource, app_cls: type[App], event_id: str, body: object
+    source: EventRoutesSource,
+    config: WorkflowClientConfig,
+    app_cls: type[App],
+    event_id: str,
+    body: object,
 ) -> JSONResponse:
     """Start the app's default entry point with the event's data.
 
     Raises on any failure; the route answers ``RETRY`` so Dapr redelivers.
     """
-    config = source.workflow_config
     client = await source.temporal_client()
 
     ep = _resolve_default_entrypoint(
@@ -207,13 +212,14 @@ async def _handle_event(
             status_code=404,
             detail=f"No trigger registered for event_id: {event_id}",
         )
-    app_cls = source.workflow_config.app_class
+    config = source.workflow_config()
+    app_cls = config.app_class
     if app_cls is None:
         raise HTTPException(status_code=503, detail="App class not provided.")
 
     body = await _read_event_body(request)
     try:
-        return await _start_event_workflow(source, app_cls, event_id, body)
+        return await _start_event_workflow(source, config, app_cls, event_id, body)
     except Exception as e:
         logger.error(
             "Failed to start event-triggered workflow for event %s: %s",
