@@ -65,6 +65,7 @@ path = "hatch_build_ledger.py"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 
 # Dev tooling. ruff is a genuine test dependency here, not only a
