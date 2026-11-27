@@ -641,7 +641,7 @@ accepted until every repo has resynced.
 |---|---|
 | **Produced by** | `.github/scripts/dataforge_lineage_targets.py`, run by `tests-reusable.yaml`'s wake job when a caller sets `dataforge-lineage-targets: true` |
 | **Served at** | DataForge API (`atlanhq/dataforge`), `PUT /api/v1/resources/{id}/lineage-targets` with body `{"url": "https://<tenant>", "api_key": "<key>"}` and a `resource:lifecycle` SERVICE token from the run's OIDC exchange |
-| **Key** | One call per cloud of the run's tenant-matrix secret (system matrix when shared, else connector), with `url` = `https://<tenant>` (the same derivation as `resolve_e2e_tenant.py`'s `ATLAN_BASE_URL`) and that entry's `lineage_api_key` (a least-privilege key; never the harness `api_key`) |
+| **Key** | One call per cloud of the run's tenant-matrix secret (system matrix when shared, else connector), with `url` = `https://<tenant>` (the same derivation as `resolve_e2e_tenant.py`'s `ATLAN_BASE_URL`) and a key minted for the run on that tenant (`POST /api/service/apikeys`, no persona, two-day validity) with the entry's harness `api_key`, which is itself never registered |
 | **Read by** | DataForge, which merges the entry by tenant into the source's OpenLineage config and prunes CI entries not refreshed for a week |
 | **Pinned by** | `.github/scripts/tests/test_dataforge_lineage_targets.py` |
 

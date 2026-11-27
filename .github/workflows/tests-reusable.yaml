@@ -441,10 +441,12 @@ on:
           pinned DataForge source, after it is woken (FND-5375). For a lineage
           connector whose e2e drives a real emitting source (openlineage on a
           DataForge Airflow): the source sends its OpenLineage events to each
-          registered tenant, with that tenant's `lineage_api_key` from the
-          tenant-matrix secret: a least-privilege key, never the harness's
-          realm-admin `api_key`, because code running on the source can read
-          it. A cloud without one is skipped with a warning. DataForge merges by tenant
+          registered tenant, with a key this step mints on that tenant for the
+          run: no persona, two-day validity, created with the tenant's harness
+          key from the tenant-matrix secret. The harness key itself is never
+          registered (it is realm-admin, and code running on the source can read
+          a target's key); expired keys this step minted earlier are purged.
+          DataForge merges by tenant
           and prunes entries not refreshed in a week, so concurrent runs and
           rotated tenants need no hand edits. Needs dataforge-lifecycle (it rides
           the wake job's VPN tunnel and resource:lifecycle token) and a source
@@ -1468,6 +1470,8 @@ jobs:
         env:
           E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
           E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/dataforge_lineage_targets.py
