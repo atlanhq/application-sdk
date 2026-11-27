@@ -44,6 +44,7 @@ IMPORT_DIST: dict[str, str] = {
     "opentelemetry.trace": "opentelemetry-api",
     "opentelemetry.metrics": "opentelemetry-api",
     "opentelemetry._logs": "opentelemetry-api",
+    "opentelemetry.context": "opentelemetry-api",
     "opentelemetry.exporter.otlp.proto.grpc": "opentelemetry-exporter-otlp-proto-grpc",
     "opentelemetry.exporter.prometheus": "opentelemetry-exporter-prometheus",
     "opentelemetry.instrumentation.fastapi": "opentelemetry-instrumentation-fastapi",

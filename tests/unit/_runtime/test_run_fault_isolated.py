@@ -7,7 +7,10 @@ importable — no closures, no mocks.
 
 import asyncio
 import faulthandler
+import multiprocessing.process
+import threading
 import time
+from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from unittest.mock import MagicMock
 
@@ -67,10 +70,73 @@ async def test_pool_recycles_after_native_crash():
     assert await run_fault_isolated(_echo, "recovered") == "echo:recovered"
 
 
-async def test_timeout_kills_hung_child_and_pool_recycles():
+async def test_timeout_kills_hung_child_and_pool_recycles(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Capture the hung child as the discard path sees it, so the test proves
+    # the child died rather than only that a new pool works.
+    children: list[multiprocessing.process.BaseProcess] = []
+    real_kill = offload._kill_pool_children
+
+    def _capturing_kill(executor: ProcessPoolExecutor) -> None:
+        children.extend((executor._processes or {}).values())
+        real_kill(executor)
+
+    monkeypatch.setattr(offload, "_kill_pool_children", _capturing_kill)
     with pytest.raises(TimeoutError):
-        await run_fault_isolated(_sleep_forever, timeout=0.5)
+        await run_fault_isolated(_sleep_forever, timeout=0.5, max_workers=1)
+    assert children
+    for child in children:
+        child.join(timeout=10)
+        assert child.exitcode is not None, "hung child outlived its timeout"
     assert await run_fault_isolated(_echo, "recovered") == "echo:recovered"
+
+
+def test_isolation_pool_exposes_a_kill():
+    """Every supported Python must offer a way to kill a hung child: the public
+    ``kill_workers()`` (3.14+) or the private ``_processes`` table. A CPython
+    that drops both fails here by name instead of leaking children silently."""
+    with ProcessPoolExecutor(max_workers=1) as executor:
+        assert callable(getattr(executor, "kill_workers", None)) or hasattr(
+            executor, "_processes"
+        )
+
+
+class _FakeChild:
+    def __init__(self) -> None:
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_kill_prefers_public_kill_workers():
+    executor = MagicMock(spec=["kill_workers", "shutdown", "_processes"])
+    offload._kill_pool_children(executor)
+    executor.kill_workers.assert_called_once_with()
+    executor.shutdown.assert_not_called()
+
+
+def test_kill_falls_back_to_private_process_table():
+    child = _FakeChild()
+    executor = MagicMock(spec=["shutdown", "_processes"])
+    executor._processes = {1: child}
+    offload._kill_pool_children(executor)
+    assert child.killed
+    executor.shutdown.assert_called_once_with(wait=False)
+
+
+def test_kill_unsupported_warns_once_and_still_shuts_down(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(offload, "_KILL_UNSUPPORTED_WARNED", threading.Event())
+    mock_logger = MagicMock()
+    monkeypatch.setattr(offload, "logger", mock_logger)
+    for _ in range(2):
+        executor = MagicMock(spec=["shutdown"])
+        offload._kill_pool_children(executor)
+        executor.shutdown.assert_called_once_with(wait=False)
+    mock_logger.warning.assert_called_once()
 
 
 async def test_foreign_discard_never_cancels_a_concurrent_caller():

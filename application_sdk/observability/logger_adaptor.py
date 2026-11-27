@@ -10,10 +10,10 @@ from typing import Any, Callable, ClassVar
 from loguru import logger
 from opentelemetry import trace as otel_trace
 from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry.context import Context
 from opentelemetry.metrics import Counter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-from opentelemetry.trace.span import TraceFlags
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation, _env
@@ -495,6 +495,19 @@ DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 # The OTel SDK and its exporters log their own failures on stdlib loggers under
 # this namespace. Those records must never be exported over OTLP (FND-4228).
 _OTEL_SELF_LOGGER = "opentelemetry"
+
+
+def _level_registered(name: str) -> bool:
+    """Return True if loguru already has a level called *name*.
+
+    Uses the public ``logger.level(name)`` probe (raises ``ValueError`` for an
+    unknown level) rather than the private ``logger._core.levels`` table.
+    """
+    try:
+        logger.level(name)
+    except ValueError:
+        return False
+    return True
 
 
 def _is_otel_self_log(logger_name: str) -> bool:
@@ -1154,19 +1167,19 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         logger.remove()
 
         # Register custom log level for activity
-        if "ACTIVITY" not in logger._core.levels:
+        if not _level_registered("ACTIVITY"):
             logger.level(
                 "ACTIVITY", no=SEVERITY_MAPPING["ACTIVITY"], color="<cyan>", icon="🔵"
             )
 
         # Register custom log level for metrics
-        if "METRIC" not in logger._core.levels:
+        if not _level_registered("METRIC"):
             logger.level(
                 "METRIC", no=SEVERITY_MAPPING["METRIC"], color="<yellow>", icon="📊"
             )
 
         # Register custom log level for tracing
-        if "TRACING" not in logger._core.levels:
+        if not _level_registered("TRACING"):
             logger.level(
                 "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
             )
@@ -1395,22 +1408,28 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # (tracing disabled — the production default today), fall back to
         # zeros exactly as before. ``correlation_id`` stays the business key;
         # trace context is not a substitute for it.
-        otel_trace_id, otel_span_id, otel_trace_flags = 0, 0, TraceFlags(0)
+        #
+        # The trace context reaches the record through ``context=``: the
+        # ``trace_id=``/``span_id=``/``trace_flags=`` constructor is deprecated
+        # since opentelemetry-api 1.35 and its marker never warns at runtime
+        # (guarded by tests/unit/observability/test_otel_public_imports.py).
+        # The context always carries a span, valid or ``INVALID_SPAN``: an
+        # empty ``Context()`` is falsy, and ``LogRecord`` would then read
+        # ``get_current()`` itself, outside the guard below.
+        log_context = otel_trace.set_span_in_context(otel_trace.INVALID_SPAN, Context())
         try:
             span_context = otel_trace.get_current_span().get_span_context()
             if span_context.is_valid:
-                otel_trace_id = span_context.trace_id
-                otel_span_id = span_context.span_id
-                otel_trace_flags = TraceFlags(span_context.trace_flags)
+                log_context = otel_trace.set_span_in_context(
+                    otel_trace.NonRecordingSpan(span_context), Context()
+                )
         except Exception:  # noqa: S110, BLE001 — degrade to untraced record, never drop the log; best-effort trace enrichment; a broken span context must never block log emission
             pass
 
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
             observed_timestamp=int(record["timestamp"] * 1e9),
-            trace_id=otel_trace_id,
-            span_id=otel_span_id,
-            trace_flags=otel_trace_flags,
+            context=log_context,
             severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],
@@ -1468,9 +1487,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         the same laziness stdlib logging.Logger provides for free.
         """
         try:
+            # loguru exposes no public minimum level; ``_core`` is private, so
+            # the pyproject.toml loguru cap pins it. AttributeError covers a
+            # loguru that renames it: fail open, never raise from a log call.
             return level_no >= self.logger._core.min_level
-        except TypeError:
-            # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError here would recurse, so it defaults to enabled
+        except (TypeError, AttributeError):
+            # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError/AttributeError here would recurse, so it defaults to enabled
             return True
 
     def _emit(
