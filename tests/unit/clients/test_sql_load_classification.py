@@ -110,6 +110,16 @@ _CASES: list[tuple[str, Any, type[AppError], FailureCategory]] = [
         FailureCategory.SOURCE_UNAVAILABLE,
     ),
     (
+        # SQLSTATE 28000 (role missing, host refused by pg_hba.conf): no auth
+        # phrase in the message, only in the class name.
+        "psycopg2-invalid-authorization",
+        lambda: psycopg2.errors.InvalidAuthorizationSpecification(
+            'FATAL:  role "example_user" does not exist'
+        ),
+        SqlClientAuthFailedError,
+        FailureCategory.AUTH,
+    ),
+    (
         "psycopg2-tls",
         lambda: psycopg2.OperationalError(
             "SSL error: certificate verify failed: self-signed certificate"

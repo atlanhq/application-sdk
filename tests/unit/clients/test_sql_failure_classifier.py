@@ -123,6 +123,11 @@ class AdminShutdown(OperationalError):
     name matches no hint, only its base class does."""
 
 
+class InvalidAuthorizationSpecification(OperationalError):
+    """psycopg's class for SQLSTATE 28000 (a missing role, a host the server
+    refuses): an OperationalError whose message carries no auth phrase."""
+
+
 class ProgrammingError(Exception):
     """Stands in for a DBAPI ``ProgrammingError``."""
 
@@ -198,6 +203,11 @@ def test_root_cause_stops_on_a_cycle() -> None:
         # The message still decides an overloaded base class.
         (AdminShutdown("password authentication failed for user"), AUTH),
         (AdminShutdown("connection timed out"), TIMEOUT),
+        # SQLSTATE 28000 says auth only in its class name, never its message.
+        (
+            InvalidAuthorizationSpecification('role "example_user" does not exist'),
+            AUTH,
+        ),
         # A subclass of a base that is no hint stays unclassified.
         (UndefinedTable('relation "t" does not exist'), UNCLASSIFIED),
         # A builtin base is not read: a missing local file is no unreachable

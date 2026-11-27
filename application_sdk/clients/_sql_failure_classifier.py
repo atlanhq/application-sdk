@@ -44,7 +44,11 @@ _TIMEOUT_MSG_HINTS = ("timed out", "login timeout", "timeout expired", "hyt00")
 # Driver error_type for MySQL ``Access denied`` is ``OperationalError`` — that
 # class is overloaded across both auth and network failures, so message content
 # has to be the tiebreaker.
-_AUTH_CLASS_HINTS = ("authentication", "accessdenied", "authfail")
+# "authorization": SQLSTATE 28000 is "invalid authorization specification"
+# (psycopg's ``InvalidAuthorizationSpecification``), sent for a role that does
+# not exist or a host the server's access rules refuse. Its messages carry no
+# auth phrase, so only the class name marks it.
+_AUTH_CLASS_HINTS = ("authentication", "authorization", "accessdenied", "authfail")
 _AUTH_MSG_HINTS = (
     "access denied",
     "1045",
@@ -106,7 +110,7 @@ def classify_sql_failure(error_type: str, error_message: str) -> SqlFailureKind:
     return SqlFailureKind.UNCLASSIFIED
 
 
-def _class_names(exc_type: type[BaseException]) -> str:
+def exception_class_names(exc_type: type[BaseException]) -> str:
     """The class's own name and the names of its non-builtin base classes.
 
     Drivers raise one subclass per server error code (psycopg's
@@ -126,4 +130,4 @@ def _class_names(exc_type: type[BaseException]) -> str:
 def classify_sql_exception(exc: BaseException) -> SqlFailureKind:
     """Classify a live exception by its root cause's class names and message."""
     root = root_cause(exc)
-    return classify_sql_failure(_class_names(type(root)), str(root))
+    return classify_sql_failure(exception_class_names(type(root)), str(root))

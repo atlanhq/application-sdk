@@ -99,6 +99,7 @@ from application_sdk.app.task import task
 from application_sdk.clients._sql_failure_classifier import (
     SqlFailureKind,
     classify_sql_failure,
+    exception_class_names,
     root_cause,
 )
 from application_sdk.common.asset_serialization import entity_bytes
@@ -654,8 +655,13 @@ class SqlApp(App):
         root = _root_cause(exc)
         if isinstance(root, AppError):
             return SqlApp._redact_typed_error(root)
+        # Classify on the base class names too, as ``load()`` does: a driver's
+        # per-SQLSTATE subclass is named for the code, not the failure kind.
         return SqlApp._classify_probe_strings(
-            type(root).__name__, redact_secrets(str(root)), cause=root
+            type(root).__name__,
+            redact_secrets(str(root)),
+            cause=root,
+            class_names=exception_class_names(type(root)),
         )
 
     @staticmethod
@@ -682,6 +688,8 @@ class SqlApp(App):
         error_type: str,
         error_message: str,
         cause: BaseException | None = None,
+        *,
+        class_names: str | None = None,
     ) -> AppError:
         """Map a probe failure's class name and message to a typed error.
 
@@ -711,8 +719,12 @@ class SqlApp(App):
 
         ``error_message`` must already be secret-redacted — it is copied
         verbatim into the returned error's evidence fields.
+
+        ``class_names`` is what the classifier matches when the live exception
+        is at hand (its class and non-builtin base names); ``error_type`` stays
+        the single name shown in messages. Without it, ``error_type`` is matched.
         """
-        kind = classify_sql_failure(error_type, error_message)
+        kind = classify_sql_failure(class_names or error_type, error_message)
         if kind is SqlFailureKind.TIMEOUT:
             return SqlProbeTimeoutError(
                 message=(
