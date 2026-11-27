@@ -49,6 +49,7 @@ from application_sdk.common.incremental.helpers import (
 from application_sdk.common.incremental.helpers import (
     get_persistent_artifacts_path as _get_persistent_artifacts_path,
 )
+from application_sdk.common.incremental.incremental_errors import MarkerUploadError
 from application_sdk.constants import MARKER_FILENAME, MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.ops import upload_bytes
@@ -387,10 +388,6 @@ async def persist_marker(
         )
     # conformance: ignore[E004] broad catch wraps upload failure into typed MarkerUploadError and re-raises; no swallowing occurs
     except Exception as e:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            MarkerUploadError,
-        )
-
         raise MarkerUploadError(cause=e) from e
 
     return MarkerPersistResult(marker_timestamp=marker_value, s3_key=marker_s3_key)

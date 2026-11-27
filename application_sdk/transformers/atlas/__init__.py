@@ -93,7 +93,7 @@ class AtlasTransformer(TransformerInterface):
             DeprecationWarning,
             stacklevel=2,
         )
-        from application_sdk.transformers.atlas.sql import (  # noqa: PLC0415 — circular: transformers/atlas/__init__.py loads sibling sql submodule
+        from application_sdk.transformers.atlas.sql import (  # noqa: PLC0415 — import cost: sql pulls in pyyaml and nanoid, which importing this package should not load
             Column,
             Database,
             Function,

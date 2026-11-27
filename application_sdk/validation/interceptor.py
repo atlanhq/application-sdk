@@ -78,6 +78,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Iterable, Iterator, Mapping
 
+from application_sdk.constants import ARTIFACT_VALIDATION_MODE_ENV
 from application_sdk.contracts.types import asset_artifact_marker
 from application_sdk.errors.leaves import DataIntegrityError
 from application_sdk.observability.events import (
@@ -302,10 +303,6 @@ def resolve_artifact_enforcement(app_cls: type | None) -> bool:
     Returns:
         ``True`` for hard mode, ``False`` for soft.
     """
-    from application_sdk.constants import (  # noqa: PLC0415 — deferred so a deployment can flip the lever under test, mirroring VALIDATE_ARTIFACTS
-        ARTIFACT_VALIDATION_MODE_ENV,
-    )
-
     val = os.environ.get(ARTIFACT_VALIDATION_MODE_ENV)
     if val:
         return val.strip().lower() == "hard"

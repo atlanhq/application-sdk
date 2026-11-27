@@ -48,8 +48,10 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.errors import InternalError as _InternalError
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._manifest import MANIFEST_SUFFIX
 
 # The batch key listers are imported at top level, unlike the other
 # storage-sibling imports in this module which are lazy: ``batch`` depends only
@@ -57,12 +59,19 @@ from application_sdk.observability.logger_adaptor import get_logger
 # ``transfer → batch`` is unconditionally acyclic — the import is safe
 # regardless of module load order.
 from application_sdk.storage.batch import DataObject, list_data_objects, list_keys
+from application_sdk.storage.chunked import _discard_transfer_state
+from application_sdk.storage.errors import (
+    StorageEmptyUploadError,
+    StorageError,
+    UnsafeUploadPathError,
+)
 
 # Sidecar naming, digest computation and the read/write of ``{key}.sha256`` all
 # live in ``storage.integrity``, which ``ops`` calls on every transfer. This
 # module holds no copy of them: a second implementation of the digest protocol
 # is how the reader and the writer drift apart.
 from application_sdk.storage.integrity import read_expected_digest, sha256_file
+from application_sdk.storage.ops import normalize_key
 
 __all__ = [
     "download",
@@ -172,9 +181,6 @@ async def _upload_from_store(
     — what the directory engine's manifest records — or ``None`` for the
     same-object skip, which deliberately reads no sidecar.
     """
-    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _discard_transfer_state,
-    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
         exists,
@@ -407,12 +413,6 @@ def _manifest_path(tier: StorageTier, output_path: str) -> str | None:
     ``None`` — no manifest, the ref lists as before — when the tier needs a
     run prefix and the caller supplied none (a direct ``transfer.upload``).
     """
-    from application_sdk.contracts.types_errors import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
-        RunPrefixRequiredError,
-    )
-    from application_sdk.storage._manifest import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        MANIFEST_SUFFIX,
-    )
     from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: reference imports storage siblings that import this module
         _make_storage_path,
     )
@@ -451,16 +451,8 @@ async def _list_source_objects(
     """
     from pathlib import PurePosixPath  # noqa: PLC0415 — stdlib; lazy use only
 
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        normalize_key,
-    )
-
     source_norm = normalize_key(source_storage_path)
     if source_norm and ".." in PurePosixPath(source_norm).parts:
-        from application_sdk.storage.errors import (  # noqa: PLC0415
-            UnsafeUploadPathError,
-        )
-
         raise UnsafeUploadPathError(unsafe_path=source_storage_path)
     source_dir_prefix = source_norm.rstrip("/") + "/"
     objects = await list_data_objects(source_dir_prefix, source_store, normalize=False)
@@ -569,9 +561,6 @@ async def upload(
             *local_path* is a directory containing zero files
             (category=DATA_INTEGRITY, audience=APP_OWNER, retryable=False).
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
-    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
         normalize_key,
@@ -616,10 +605,6 @@ async def upload(
             or ".." in PurePosixPath(cleaned).parts
             or "\x00" in storage_subdir
         ):
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                UnsafeUploadPathError,
-            )
-
             raise UnsafeUploadPathError(unsafe_path=storage_subdir)
         storage_subdir = cleaned
 
@@ -682,10 +667,6 @@ async def upload(
                 copies.append(_StoreCopy(source_resolved, obj, rel))
 
         if raise_on_empty and not files and not copies:
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                StorageEmptyUploadError,
-            )
-
             raise StorageEmptyUploadError(
                 f"upload(local_path={local_path!r}): directory contains "
                 "zero files. Either the extract step produced no output, "

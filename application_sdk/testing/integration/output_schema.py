@@ -78,7 +78,7 @@ from application_sdk.validation.ndjson import (
     NdjsonValidator,
     iter_ndjson_lines,
 )
-from application_sdk.validation.parquet import ParquetFooterValidator
+from application_sdk.validation.parquet import ParquetFooterValidator, _parquet_files
 
 __all__ = [
     "FieldRule",
@@ -818,10 +818,6 @@ def _parquet_value_pass(
     fields: Sequence[FieldRule],
     collector: _Collector,
 ) -> int | None:
-    from application_sdk.validation.parquet import (  # noqa: PLC0415 — private helper, same package
-        _parquet_files,
-    )
-
     # De-duplicated by real path, as iter_ndjson_lines does for NDJSON parts.
     files = tuple({f.resolve(): f for p in paths for f in _parquet_files(p)}.values())
     if not files:

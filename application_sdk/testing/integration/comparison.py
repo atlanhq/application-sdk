@@ -49,6 +49,7 @@ from typing import Any
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import ComparisonInputError
 from application_sdk.testing.volatile_fields import (
     ENVIRONMENT_SCOPED_FIELDS,
     ENVIRONMENT_SCOPED_NESTED_FIELDS,
@@ -302,10 +303,6 @@ def load_expected_data(file_path: str) -> dict[str, list[dict[str, Any]]]:
 
     with open(file_path, "rb") as f:
         data = orjson.loads(f.read())
-
-    from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-        ComparisonInputError,
-    )
 
     if not isinstance(data, dict):
         raise ComparisonInputError(

@@ -59,6 +59,11 @@ from application_sdk import _deprecation
 from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
     run_in_thread,
 )
+from application_sdk.app.entrypoint import (
+    _resolve_default_entrypoint,
+    entrypoint_module_segment,
+)
+from application_sdk.app.registry import AppNotRegisteredError, AppRegistry
 from application_sdk.common._generated_tree import (  # noqa: F401 — MANIFEST_STEM, choose_form_configmap, names_entrypoint re-exported (served here before metadata_routes)
     MANIFEST_STEM,
     choose_form_configmap,
@@ -93,7 +98,13 @@ from application_sdk.handler.service_errors import (  # noqa: F401 — re-export
     InvalidConfigTypeError,
     TempPathEscapeError,
 )
+from application_sdk.observability import metrics as _metrics_module
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._observability_sink import (
+    install_observability_store_sink,
+)
+from application_sdk.storage.errors import StorageNotFoundError
+from application_sdk.storage.ops import normalize_key
 
 __all__ = [
     "CONTRACT_GENERATED_DIR",
@@ -346,10 +357,6 @@ def _record_proxy_failure(
     in the logs), and emits a bounded diagnostic. ``reason`` should be a
     bounded label value — exception class name, ``http_<status>`` or
     ``oversize``."""
-    from application_sdk.observability import (  # noqa: PLC0415 — cold path: only on proxy failure
-        metrics as _metrics_module,
-    )
-
     counter = _metrics_module.create_counter(
         "temporal_core_metrics_proxy_failures",
         description=(
@@ -449,11 +456,6 @@ def _registered_workflow_types(
     mapping when no app is configured or it is not in the registry."""
     if workflow_config.app_class is None or not workflow_config.app_name:
         return {}
-
-    from application_sdk.app.registry import (  # noqa: PLC0415
-        AppNotRegisteredError,
-        AppRegistry,
-    )
 
     try:
         app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
@@ -739,13 +741,6 @@ def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
     not a coroutine function. Best-effort discovery — never raises on import
     failure.
     """
-    # Lazy: app.entrypoint pulls in app.base, which imports this module
-    # (handler.service is the FastAPI entry point); deferring to this cold
-    # path avoids the import cycle.
-    from application_sdk.app.entrypoint import (  # noqa: PLC0415
-        entrypoint_module_segment,
-    )
-
     segment = entrypoint_module_segment(entrypoint)
     module = _import_optional_app_module(f"app.{segment}.core")
     if module is None:
@@ -901,14 +896,6 @@ def _resolve_app_entrypoint(
             with no marked default).
         HTTPException 500: App has no registered entry points at all.
     """
-    from application_sdk.app.entrypoint import (  # noqa: PLC0415
-        _resolve_default_entrypoint,
-    )
-    from application_sdk.app.registry import (  # noqa: PLC0415
-        AppNotRegisteredError,
-        AppRegistry,
-    )
-
     try:
         app_meta = AppRegistry.get_instance().get(app_name)
     except AppNotRegisteredError:
@@ -1109,7 +1096,6 @@ async def _config_load_from_objectstore(
     fd, tmp = tempfile.mkstemp(suffix=".json")
     safe_tmp = _validated_temp_path(tmp)
     os.close(fd)
-    from application_sdk.storage.errors import StorageNotFoundError  # noqa: PLC0415
 
     try:
         await download_file(key, safe_tmp, _storage)
@@ -1735,10 +1721,6 @@ def _register_workflow_routes(
         await _upload_file(key, local_path, _storage)
 
     def _stored_upload_key(key: str) -> str:
-        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
-            normalize_key,
-        )
-
         return normalize_key(key)
 
     # Every operation reads this module's _storage per request.
@@ -1952,10 +1934,6 @@ def _register_workflow_routes(
         # connector that implements run() AND declares explicit @entrypoints
         # gets run() forced as its default, but run() has no generated manifest
         # dir — so the explicit ones, alphabetically, are the fallback.
-        from application_sdk.app.registry import (  # noqa: PLC0415
-            AppNotRegisteredError,
-            AppRegistry,
-        )
 
         try:
             app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
@@ -2127,6 +2105,7 @@ def create_app_handler_service(
     Returns:
         Configured FastAPI application.
     """
+    install_observability_store_sink()
     global _workflow_config, _secret_store, _storage
 
     _secret_store = secret_store

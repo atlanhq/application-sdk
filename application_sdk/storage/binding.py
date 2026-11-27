@@ -30,6 +30,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
+from application_sdk.storage.errors import (
+    StorageBindingBrokenError,
+    StorageBindingNotFoundError,
+    StorageConfigError,
+)
+
 __all__ = [
     "BINDING_TYPE_MAP",
     "BindingSecretRefs",
@@ -384,7 +390,6 @@ def _build_s3_config(
     as an obstore put attribute (requires obstore ≥ 0.10.0).
     """
     from application_sdk._obstore_config import S3StoreSettings  # noqa: PLC0415
-    from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
 
     # Region: explicit metadata wins; otherwise fall back to the standard AWS
     # env vars. Dapr's Go binding leaves region resolution to the AWS SDK
@@ -507,7 +512,6 @@ def _build_azure_config(
     is set in the binding metadata, or ``None`` otherwise.
     """
     from application_sdk._obstore_config import AzureStoreSettings  # noqa: PLC0415
-    from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
 
     authority_host = ""
     if _nonempty(meta, "azureEnvironment"):
@@ -765,12 +769,6 @@ def _create_store_core(
     startup resolver used, rather than re-deriving a different result
     env-only.  Mirrors :func:`is_binding_configured`.
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageBindingBrokenError,
-        StorageBindingNotFoundError,
-        StorageConfigError,
-    )
-
     components_path = Path(components_dir)
     component = _find_component(name, components_path)
 
@@ -934,11 +932,6 @@ def create_store_from_binding_optional(
             treated as absent and return ``None`` with a warning instead of
             raising.
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageBindingBrokenError,
-        StorageBindingNotFoundError,
-    )
-
     try:
         return create_store_from_binding(
             name, components_dir=components_dir, secrets=secrets
@@ -998,11 +991,6 @@ def _create_store_from_binding_optional_with_put_attrs(
             misconfigured (unsupported binding type, missing required options,
             etc.).
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageBindingBrokenError,
-        StorageBindingNotFoundError,
-    )
-
     try:
         return create_store_from_binding_with_put_attrs(
             name, components_dir=components_dir, secrets=secrets

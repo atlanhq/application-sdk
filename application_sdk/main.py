@@ -34,6 +34,9 @@ this module.
 
 from __future__ import annotations
 
+from application_sdk.observability.observability import AtlanObservability
+from application_sdk.storage.errors import ObjectStorePreflightError
+
 __all__ = [
     "AppConfig",
     "run_dev_combined",
@@ -102,6 +105,13 @@ from application_sdk.main_errors import (
     UnknownModeError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._observability_sink import (
+    install_observability_store_sink,
+)
+
+# Every process started through this module exports its logs, metrics and
+# traces to the object store; observability gets the store from here (FND-4260).
+install_observability_store_sink()
 
 # Module-level reference to the running event loop (set in worker/combined mode).
 # Used by the SIGUSR1 debug handler to snapshot asyncio tasks.
@@ -432,10 +442,6 @@ def _parse_workflow_max_timeout_hours() -> int | None:
 
 async def _flush_observability() -> None:
     """Flush all observability buffers before exit."""
-    from application_sdk.observability.observability import (  # noqa: PLC0415 — cold path: observability components only at startup
-        AtlanObservability,
-    )
-
     try:
         await AtlanObservability.flush_all()
     except Exception:
@@ -1429,10 +1435,6 @@ def main() -> NoReturn:
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as exc:
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: lazy import avoids loading storage module on every boot
-            ObjectStorePreflightError,
-        )
-
         if isinstance(exc, ObjectStorePreflightError):
             logger.error(
                 "SDR object-store preflight failed — cannot start:\n%s",

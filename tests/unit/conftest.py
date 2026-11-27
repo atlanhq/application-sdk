@@ -276,6 +276,26 @@ def _reset_dropped_log_keys() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _observability_store_sink(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Install the object-store sink for observability exports in every unit test.
+
+    A real process gets it from its bootstrap (``application_sdk.main``,
+    ``create_worker``, ``create_app_handler_service``). A test that wants the
+    no-sink path sets ``observability._store_sink`` to ``None`` itself. The
+    monkeypatch restores whatever was there, so one test's sink never leaks
+    into the next.
+    """
+    from application_sdk.observability import observability
+    from application_sdk.storage._observability_sink import (
+        install_observability_store_sink,
+    )
+
+    monkeypatch.setattr(observability, "_store_sink", None)
+    monkeypatch.setattr(observability, "_missing_sink_warned", False)
+    install_observability_store_sink()
+
+
+@pytest.fixture(autouse=True)
 def _reset_sizing_sink() -> Iterator[None]:
     """Drop the lazily built, process-wide sizing sink around every unit test.
 

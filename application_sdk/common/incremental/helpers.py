@@ -25,6 +25,11 @@ from application_sdk.common.atomic import (
     disk_full_guard,
     ensure_free_space,
 )
+from application_sdk.common.incremental.incremental_errors import (
+    ConnectionQualifiedNameEmptyError,
+    ConnectionQualifiedNameFormatError,
+    ConnectionQualifiedNameMissingError,
+)
 from application_sdk.constants import (
     APPLICATION_NAME,
     MARKER_FILENAME,
@@ -149,11 +154,6 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
         ConnectionQualifiedNameFormatError: If the qualified name is not
             well-formed (fewer than three segments, or an empty or padded one).
     """
-    from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-        ConnectionQualifiedNameEmptyError,
-        ConnectionQualifiedNameFormatError,
-    )
-
     if not connection_qualified_name:
         raise ConnectionQualifiedNameEmptyError()
 
@@ -198,10 +198,6 @@ def get_persistent_s3_prefix(
         ConnectionQualifiedNameMissingError: If connection_qualified_name is not provided.
     """
     if not connection_qualified_name:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            ConnectionQualifiedNameMissingError,
-        )
-
         raise ConnectionQualifiedNameMissingError()
 
     connection_id = extract_epoch_id_from_qualified_name(connection_qualified_name)

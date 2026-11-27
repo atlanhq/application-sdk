@@ -22,7 +22,6 @@ from application_sdk.observability.background_loop import (  # noqa: F401 — re
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
-from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION
 from application_sdk.observability.utils import get_observability_dir
 
 __all__ = [
@@ -31,6 +30,10 @@ __all__ = [
     "persist",
     "SizingObservabilitySink",
 ]
+
+#: Bump on any field or meaning change; rows outlive the version that wrote them.
+#: v2 added attribution fields; v3 added the entry baseline. Do not pool versions.
+SIZING_SCHEMA_VERSION = 3
 
 
 logger = get_logger(__name__)

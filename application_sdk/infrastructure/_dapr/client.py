@@ -9,6 +9,10 @@ import orjson
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation
+from application_sdk.infrastructure._dapr._dapr_errors import (
+    DaprBinaryPayloadError,
+    DaprListKeysUnsupportedError,
+)
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import (
     BindingError,  # noqa: F401 — deprecated names kept importable from this module (shipped surface); removed with the class in v4.0
@@ -149,10 +153,6 @@ class DaprStateStore:
         Note: Not all Dapr state stores support listing keys.
         This may raise NotImplementedError for some backends.
         """
-        from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — avoid circular import on module load
-            DaprListKeysUnsupportedError,
-        )
-
         raise DaprListKeysUnsupportedError()
 
 
@@ -696,10 +696,6 @@ class DaprBinding:
         metadata: dict[str, str] | None = None,
     ) -> BindingResponse:
         """Invoke the binding via Dapr."""
-        from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — avoid circular import on module load
-            DaprBinaryPayloadError,
-        )
-
         try:
             result = await self._client.invoke_binding(
                 binding_name=self._binding_name,

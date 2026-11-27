@@ -39,8 +39,14 @@ from typing import Any, TypeVar
 from temporalio import activity
 
 from application_sdk import _deprecation, constants
+from application_sdk.app._run_scratch import run_scratch_dir
 from application_sdk.app.registry import AppRegistry
 from application_sdk.constants import _run_prefix
+from application_sdk.execution._temporal._activity_errors import (
+    RunTempDirEscapeError,
+    WorkflowIdError,
+    WorkflowRunIdError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -91,10 +97,6 @@ def get_workflow_id() -> str:
         WorkflowIdError: If called outside an activity context, or if the
             workflow ID cannot be retrieved.
     """
-    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-        WorkflowIdError,
-    )
-
     try:
         wf_id = activity.info().workflow_id
     # conformance: ignore[E004] re-raises as typed WorkflowIdError; no swallowing occurs
@@ -122,10 +124,6 @@ def get_workflow_run_id() -> str:
     run ID (e.g. cleanup of artifacts written under the current
     attempt's prefix).
     """
-    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-        WorkflowRunIdError,
-    )
-
     try:
         wf_run_id = activity.info().workflow_run_id
     # conformance: ignore[E004,E007] re-raises immediately as typed WorkflowRunIdError; broad catch is intentional to wrap any unexpected SDK error
@@ -189,13 +187,6 @@ def run_temp_dir() -> str:
         RunTempDirEscapeError: If the directory would not be strictly inside
             ``TEMPORARY_PATH``.
     """
-    from application_sdk.app._run_scratch import (  # noqa: PLC0415 — circular: app/__init__.py loads app.base, which imports execution
-        run_scratch_dir,
-    )
-    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-        RunTempDirEscapeError,
-    )
-
     path = run_scratch_dir(
         AppRegistry.resolve_running_app_name(),
         get_workflow_id(),

@@ -6,6 +6,7 @@ automatically manages collectors and merges their contents into the workflow's
 return dict.
 """
 
+import contextvars
 from typing import Any, Dict, Mapping, Optional
 
 from pydantic import ValidationError
@@ -15,6 +16,8 @@ from application_sdk.outputs.models import Artifact, Metric
 
 __all__ = [
     "OutputCollector",
+    "current_outputs",
+    "get_outputs",
 ]
 
 
@@ -211,3 +214,31 @@ class OutputCollector:
             True if any metrics or artifacts have been added.
         """
         return bool(self._metrics or self._artifacts)
+
+
+current_outputs: contextvars.ContextVar[OutputCollector | None] = (
+    contextvars.ContextVar("workflow_outputs", default=None)
+)
+
+
+def get_outputs() -> OutputCollector:
+    """Get the output collector for the current execution context.
+
+    Call add_metric() / add_artifact() on the returned collector.
+    The SDK interceptor handles everything else automatically.
+
+    Returns:
+        OutputCollector: The collector for the current activity or workflow.
+            Creates a new collector if one doesn't exist for this context.
+
+    Example:
+        >>> from application_sdk.outputs import get_outputs, Metric, Artifact
+        >>> outputs = get_outputs()
+        >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
+        >>> outputs.add_artifact(Artifact(name="debug-logs", path="artifacts/debug.tgz"))
+    """
+    collector = current_outputs.get()
+    if collector is None:
+        collector = OutputCollector()
+        current_outputs.set(collector)
+    return collector

@@ -11,7 +11,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from application_sdk.storage.ops import BoundStore
@@ -21,7 +21,9 @@ import orjson
 from application_sdk import _deprecation
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
 from application_sdk._env import dapr_components_path
-from application_sdk._install import worker_only_missing
+from application_sdk._install import (  # noqa: F401 — importable from here in the last release; unused since FND-4260
+    worker_only_missing,
+)
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
@@ -216,6 +218,67 @@ _store_state_lock = threading.Lock()
 _periodic_flush_lock = threading.Lock()
 
 
+class ObservabilityStoreSink(Protocol):
+    """The object-store operations the telemetry export needs.
+
+    ``application_sdk.storage`` provides it and the process bootstrap installs
+    it with :func:`install_store_sink` (``application_sdk.main``,
+    ``create_worker``, ``create_app_handler_service``, the daprd log
+    forwarder). Observability does not import storage itself: storage logs
+    through this package, so the import would be a cycle (FND-4260).
+    SDK-internal wiring, not public API.
+    """
+
+    def open_store(self, binding_name: str, components_dir: str) -> "BoundStore":
+        """Build the store for Dapr binding *binding_name*."""
+        ...
+
+    async def upload_file(self, key: str, local_path: str, store: "BoundStore") -> None:
+        """Upload *local_path* to *key* in *store*, without an integrity sidecar."""
+        ...
+
+    def is_transient_binding_error(self, exc: Exception) -> bool:
+        """Whether *exc* from :meth:`open_store` may heal on a later attempt."""
+        ...
+
+
+# The installed sink, or ``None`` before the bootstrap installs one (and always
+# on an install without the storage layer).
+_store_sink: ObservabilityStoreSink | None = None
+# Whether the "no sink installed" warning has been logged.
+_missing_sink_warned = False
+
+
+def install_store_sink(sink: ObservabilityStoreSink) -> None:
+    """Make *sink* the object store every observability signal exports to.
+
+    Idempotent in effect: installing again replaces the sink. Exports that run
+    before a sink is installed are dropped with a WARNING, logged once.
+    """
+    global _store_sink
+    _store_sink = sink
+
+
+def _installed_store_sink() -> ObservabilityStoreSink | None:
+    """The installed sink; warns once, at WARNING, when there is none."""
+    global _missing_sink_warned
+    sink = _store_sink
+    if sink is None:
+        with _store_state_lock:
+            first = not _missing_sink_warned
+            _missing_sink_warned = True
+        if first:
+            logging.warning(
+                "No object-store sink installed; observability export to the "
+                "object store skipped. The process bootstrap installs it "
+                "(application_sdk.storage._observability_sink."
+                "install_observability_store_sink); "
+                "a process started without application_sdk.main, create_worker "
+                "or create_app_handler_service must call it itself."
+            )
+    return sink
+
+
 def _partition_segments(timestamp: datetime) -> tuple[str, str, str, str]:
     """The ``year=/month=/day=/hour=`` path segments for *timestamp*."""
     return (
@@ -319,15 +382,8 @@ def _store_or_none(
 
 def _is_transient_binding_error(exc: Exception) -> bool:
     """Whether *exc* is a binding that is missing or unresolved *for now*."""
-    try:
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-            StorageBindingBrokenError,
-            StorageBindingNotFoundError,
-        )
-    except ModuleNotFoundError:
-        # api-only install: no storage layer, so nothing here can heal.
-        return False
-    return isinstance(exc, (StorageBindingNotFoundError, StorageBindingBrokenError))
+    sink = _store_sink
+    return sink is not None and sink.is_transient_binding_error(exc)
 
 
 async def _upload_to_observability_stores(
@@ -342,33 +398,27 @@ async def _upload_to_observability_stores(
     The deployment-store upload is non-fatal (logged at WARNING). The
     upstream-store upload (only when ``ENABLE_ATLAN_UPLOAD``) propagates its
     failure to the caller. A store whose binding cannot be resolved is skipped
-    (see :func:`_store_or_none`). The local file is always deleted.
+    (see :func:`_store_or_none`), and so is the whole export when no sink is
+    installed (see :func:`install_store_sink`). The local file is always
+    deleted.
     """
     try:
-        try:
-            from application_sdk.storage import upload_file  # noqa: PLC0415
-        except ModuleNotFoundError as exc:
-            if not worker_only_missing(exc):
-                raise
-            # api-only install (the API host): no object store to export to.
-            raise ObjectStoreNotConfiguredError() from exc
+        sink = _installed_store_sink()
+        if sink is None:
+            return
 
-        # write_sidecar=False: telemetry exports are not artifacts anyone
-        # downloads through the SDK, and the ingestion pipelines that read these
-        # prefixes enumerate them directly — a `.sha256` next to every
-        # `.json.gz` would double the object count there for no verification
-        # anyone performs. The upload-side size validation still applies.
+        # The sink uploads without a `.sha256` sidecar: telemetry exports are
+        # not artifacts anyone downloads through the SDK, and the ingestion
+        # pipelines that read these prefixes enumerate them directly — a
+        # sidecar next to every `.json.gz` would double the object count there
+        # for no verification anyone performs. The upload-side size validation
+        # still applies.
         deployment_store = _store_or_none(
             DEPLOYMENT_OBJECT_STORE_NAME, get_deployment_store
         )
         if deployment_store is not None:
             try:
-                await upload_file(
-                    remote_key,
-                    local_path,
-                    store=deployment_store,
-                    write_sidecar=False,
-                )
+                await sink.upload_file(remote_key, local_path, deployment_store)
             except Exception:
                 logging.warning(
                     "Deployment objectstore upload failed (non-fatal)",
@@ -380,12 +430,7 @@ async def _upload_to_observability_stores(
                 UPSTREAM_OBJECT_STORE_NAME, get_upstream_store
             )
             if upstream_store is not None:
-                await upload_file(
-                    remote_key,
-                    local_path,
-                    store=upstream_store,
-                    write_sidecar=False,
-                )
+                await sink.upload_file(remote_key, local_path, upstream_store)
 
         logging.debug("Exported records → %s", remote_key)
     finally:
@@ -507,43 +552,23 @@ class AtlanObservability(Generic[T], ABC):
     @classmethod
     def _get_deployment_store(cls) -> "BoundStore":
         if AtlanObservability._deployment_store is None:
-            try:
-                from application_sdk.storage.binding import (  # noqa: PLC0415
-                    create_store_from_binding_with_put_attrs,
-                )
-                from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
-            except ModuleNotFoundError as exc:
-                if not worker_only_missing(exc):
-                    raise
-                # api-only install (the API host): no object store to export to.
-                raise ObjectStoreNotConfiguredError() from exc
-
-            store, put_attrs = create_store_from_binding_with_put_attrs(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=cls._components_dir(),
+            sink = _store_sink
+            if sink is None:
+                raise ObjectStoreNotConfiguredError()
+            AtlanObservability._deployment_store = sink.open_store(
+                DEPLOYMENT_OBJECT_STORE_NAME, cls._components_dir()
             )
-            AtlanObservability._deployment_store = BoundStore(store, put_attrs)
         return AtlanObservability._deployment_store
 
     @classmethod
     def _get_upstream_store(cls) -> "BoundStore":
         if AtlanObservability._upstream_store is None:
-            try:
-                from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-                    create_store_from_binding_with_put_attrs,
-                )
-                from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
-            except ModuleNotFoundError as exc:
-                if not worker_only_missing(exc):
-                    raise
-                # api-only install (the API host): no object store to export to.
-                raise ObjectStoreNotConfiguredError() from exc
-
-            store, put_attrs = create_store_from_binding_with_put_attrs(
-                UPSTREAM_OBJECT_STORE_NAME,
-                components_dir=cls._components_dir(),
+            sink = _store_sink
+            if sink is None:
+                raise ObjectStoreNotConfiguredError()
+            AtlanObservability._upstream_store = sink.open_store(
+                UPSTREAM_OBJECT_STORE_NAME, cls._components_dir()
             )
-            AtlanObservability._upstream_store = BoundStore(store, put_attrs)
         return AtlanObservability._upstream_store
 
     def __init__(

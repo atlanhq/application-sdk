@@ -58,6 +58,8 @@ from application_sdk.validation.artifacts import (
     FieldMapDeclaration,
     ModelDeclaration,
 )
+from application_sdk.validation.ndjson import NdjsonValidator
+from application_sdk.validation.parquet import ParquetFooterValidator
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
 from application_sdk.validation.sources import ArtifactDeclarationError
 
@@ -89,13 +91,6 @@ def builtin_format_validators() -> tuple[FormatValidator, ...]:
     declaration kind. Parquet x model stays genuinely ``unsupported``: a model
     carries no column mapping, so a footer diff has nothing to diff against.
     """
-    from application_sdk.validation.ndjson import (  # noqa: PLC0415 — deferred on purpose: the parquet import below must stay inside this function, and both are resolved together
-        NdjsonValidator,
-    )
-    from application_sdk.validation.parquet import (  # noqa: PLC0415 — deferred: keeps the parquet reader off a JSON-only caller's import path
-        ParquetFooterValidator,
-    )
-
     return (NdjsonValidator(), ParquetFooterValidator())
 
 

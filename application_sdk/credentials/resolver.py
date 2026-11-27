@@ -6,6 +6,16 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
+from application_sdk.credentials.errors import (
+    CredentialError,
+    CredentialNotFoundError,
+    CredentialParseError,
+)
+from application_sdk.credentials.registry import get_registry
+from application_sdk.credentials.types import RawCredential
+from application_sdk.errors import DependencyUnavailableError
+from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -54,10 +64,6 @@ class CredentialResolver:
     ) -> None:
         self._secret_store = secret_store
         if registry is None:
-            from application_sdk.credentials.registry import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-                get_registry,
-            )
-
             self._registry = get_registry()
         else:
             self._registry = registry
@@ -125,10 +131,6 @@ class CredentialResolver:
             or "unknown"
         )
         if type_name == "unknown":
-            from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-                RawCredential,
-            )
-
             return RawCredential(data=data)
         # For typed parsing, pull the section matching the auth type if
         # present (e.g. data["basic"] for ``auth-type: "basic"``);
@@ -146,16 +148,9 @@ class CredentialResolver:
         return await resolve_agent_credential(ref.agent_spec, self._secret_store)
 
     async def _fetch_raw_json(self, ref: CredentialRef) -> dict[str, Any]:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialNotFoundError,
-            CredentialParseError,
-        )
         from application_sdk.infrastructure import (  # noqa: PLC0415 — circular: infrastructure imports observability which loads credentials transitively
             DAPR_SECRET_STORE_COMPONENT,
             retry_past_dapr_cold_start,
-        )
-        from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure.secrets imports observability which loads credentials transitively
-            SecretNotFoundError,
         )
 
         try:
@@ -172,10 +167,6 @@ class CredentialResolver:
             raise CredentialNotFoundError(ref.name) from exc
         # conformance: ignore[E004] re-raise only; wraps any unexpected fetch error into typed CredentialError and re-raises
         except Exception as exc:
-            from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-                CredentialError,
-            )
-
             raise CredentialError(
                 f"Failed to fetch credential '{ref.name}': {exc}",
                 credential_name=ref.name,
@@ -196,10 +187,6 @@ class CredentialResolver:
     async def _resolve_guid(self, ref: CredentialRef) -> Credential:
         data = await self._resolve_by_guid(ref)
         if ref.credential_type == "unknown":
-            from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-                RawCredential,
-            )
-
             return RawCredential(data=data)
         return self._registry.parse(ref.credential_type, data)
 
@@ -210,15 +197,6 @@ class CredentialResolver:
         (S3) and merges it with secrets from the Dapr secret store (Vault).
         This is the single resolution path for both production and local dev.
         """
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialNotFoundError,
-        )
-        from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
-            DependencyUnavailableError,
-        )
-        from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
-            ColdStartRaceError,
-        )
         from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
             AsyncDaprClient,
             DaprCredentialVault,

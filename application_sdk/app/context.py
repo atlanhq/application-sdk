@@ -24,6 +24,7 @@ from application_sdk.app.base_errors import (
 )
 from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails
+from application_sdk.credentials.errors import CredentialRoutingError
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
 from application_sdk.observability.correlation import (
@@ -532,9 +533,6 @@ class AppContext:
             )
 
             return expand_dotted_keys(dict(inline))
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — only the error path needs it
-            CredentialRoutingError,
-        )
 
         raise CredentialRoutingError(
             message="Task input carries neither a credential ref nor inline credentials",

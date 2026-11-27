@@ -117,6 +117,13 @@ from typing import Any
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import (
+    GoldenCorpusFormatError,
+    GoldenCorpusLayoutError,
+    GoldenCorpusUnavailableError,
+    GoldenLayoutError,
+    GoldenParquetSupportError,
+)
 
 logger = get_logger(__name__)
 
@@ -158,10 +165,6 @@ class GoldenLayout:
     tenant_level: bool = False
 
     def __post_init__(self) -> None:
-        from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-            GoldenLayoutError,
-        )
-
         if not self.stages:
             raise GoldenLayoutError(
                 message="A golden-corpus layout must declare at least one stage.",
@@ -235,10 +238,6 @@ class GoldenCorpus:
             GoldenCorpusLayoutError: A root resolved but is not a directory, or
                 the tenant directory does not exist.
         """
-        from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-            GoldenCorpusUnavailableError,
-        )
-
         layout = layout or GoldenLayout()
         override = os.environ.get(GOLDEN_ROOT_ENV)
         if override is not None and not override.strip():
@@ -536,10 +535,6 @@ def _validate_tenant_name(root: Path, tenant: str) -> None:
 
 def _layout_error(*, path: Path, message: str, suggested_action: str) -> Exception:
     """Build a :class:`GoldenCorpusLayoutError` carrying the offending path."""
-    from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-        GoldenCorpusLayoutError,
-    )
-
     return GoldenCorpusLayoutError(
         message=f"{message} (path: {path})",
         field="golden_corpus",
@@ -578,10 +573,6 @@ def read_records(path: Path) -> list[dict[str, Any]]:
 
 
 def _format_error(path: Path, message: str, action: str) -> Exception:
-    from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-        GoldenCorpusFormatError,
-    )
-
     return GoldenCorpusFormatError(
         message=f"{message} (file: {path})",
         field="golden_corpus_file",
@@ -618,10 +609,6 @@ def _read_json(path: Path) -> list[dict[str, Any]]:
     the suffix alone would reject those, so an undecodable whole-file parse is
     retried line by line before it is reported.
     """
-    from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-        GoldenCorpusFormatError,
-    )
-
     try:
         payload = orjson.loads(path.read_bytes())
     except orjson.JSONDecodeError as exc:
@@ -676,10 +663,6 @@ def _read_parquet(path: Path) -> list[dict[str, Any]]:
     try:
         import pyarrow.parquet as pq  # noqa: PLC0415
     except ImportError as exc:
-        from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-            GoldenParquetSupportError,
-        )
-
         raise GoldenParquetSupportError(
             message=(
                 f"Corpus holds a parquet file but pyarrow is not installed "
@@ -724,10 +707,6 @@ def require_golden_corpus(
             declared layout.
     """
     import pytest  # noqa: PLC0415
-
-    from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-        GoldenCorpusUnavailableError,
-    )
 
     try:
         corpus = GoldenCorpus.from_env(

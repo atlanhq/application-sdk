@@ -10,6 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from application_sdk.common.incremental.incremental_errors import (
+    ColumnExtractionAnalysisError,
+)
 from application_sdk.common.incremental.models import EntityType, TableState
 from application_sdk.constants import TRANSFORMED_SUBDIR
 from application_sdk.observability.logger_adaptor import get_logger
@@ -210,8 +213,4 @@ def get_tables_needing_column_extraction(
 
     # conformance: ignore[E004] re-raises immediately as typed ColumnExtractionAnalysisError; no swallow occurs
     except Exception as e:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            ColumnExtractionAnalysisError,
-        )
-
         raise ColumnExtractionAnalysisError(cause=e) from e

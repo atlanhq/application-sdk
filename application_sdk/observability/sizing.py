@@ -9,10 +9,15 @@ from typing import Any
 
 import orjson
 
+from application_sdk.observability import sizing_sink
 from application_sdk.observability.cgroup import ContainerTrace
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics import create_histogram
 from application_sdk.observability.sizing_inputs import InputSize
+
+# Defined beside the sink that writes it, so the sink need not import this
+# module (FND-4260); still importable from here.
+from application_sdk.observability.sizing_sink import SIZING_SCHEMA_VERSION
 
 __all__ = [
     "record_observation",
@@ -26,10 +31,6 @@ _logger = get_logger(__name__)
 _INSTRUMENTS: dict[str, Any] = {}
 
 _MIB = 1024 * 1024
-
-#: Bump on any field or meaning change; rows outlive the version that wrote them.
-#: v2 added attribution fields; v3 added the entry baseline. Do not pool versions.
-SIZING_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -290,11 +291,7 @@ def record_observation(observation: SizingObservation) -> None:
 
         # Durable copy for fitting: this survives log retention, the line above
         # is what is queryable today.
-        from application_sdk.observability.sizing_sink import (  # noqa: PLC0415 — circular: the sink imports this module's record type
-            persist,
-        )
-
-        persist(observation)
+        sizing_sink.persist(observation)
     # conformance: ignore[E004] telemetry in an activity finally; a failure here must cost the observation, never the activity's real outcome
     except Exception:
         _logger.debug("sizing observation emission failed", exc_info=True)

@@ -67,6 +67,7 @@ from typing import Any
 import orjson
 
 from application_sdk._env import env_str
+from application_sdk.constants import LOG_FLUSH_INTERVAL_SECONDS
 
 __all__ = [
     "main",
@@ -320,10 +321,6 @@ async def _run(child_cmd: list[str]) -> int:
     )
     _install_signal_forwarding(proc)
 
-    from application_sdk.constants import (  # noqa: PLC0415 — deferred: env-driven flush cadence
-        LOG_FLUSH_INTERVAL_SECONDS,
-    )
-
     flusher = asyncio.create_task(
         _periodic_drain_flush(complete, LOG_FLUSH_INTERVAL_SECONDS)
     )
@@ -394,6 +391,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if not ENABLE_ATLAN_UPLOAD:
         _exec_transparently(child_cmd)  # never returns
+
+    # This process exports daprd's lines itself, outside application_sdk.main,
+    # so it installs the object-store sink observability exports to (FND-4260).
+    from application_sdk.storage._observability_sink import (  # noqa: PLC0415 — SDR-only path; keeps storage off the transparent-exec path above
+        install_observability_store_sink,
+    )
+
+    install_observability_store_sink()
 
     # Gate this process at the more verbose of LOG_LEVEL and DAPR_LOG_LEVEL.
     # The SDK logger was already built (at import, by the package __init__) at

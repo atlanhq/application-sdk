@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.sizing_inputs import report_local_paths
 from application_sdk.storage.batch import list_keys as _list_keys
 from application_sdk.storage.formats.format_errors import (
     ObjectStoreDownloadError,
     ObjectStoreReadError,
+    UnsupportedFileExtensionError,
 )
 from application_sdk.storage.ops import _resolve_store, normalize_key
 from application_sdk.storage.transfer import _download_one
@@ -106,10 +108,6 @@ def _report_sizing_inputs(paths: list[str]) -> None:
     """Report these files' bytes for sizing. On the path every SDK reader takes, so
     apps contribute the driver variable without writing code. Inert when off.
     """
-    from application_sdk.observability.sizing_inputs import (  # noqa: PLC0415 — circular: observability.sizing_inputs reads storage contracts
-        report_local_paths,
-    )
-
     report_local_paths(paths)
 
 
@@ -248,10 +246,6 @@ def estimate_dataframe_record_size(
     elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
     else:
-        from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-            UnsupportedFileExtensionError,
-        )
-
         raise UnsupportedFileExtensionError(observed_extension=file_extension)
 
     if sample_file is not None:
