@@ -124,7 +124,7 @@ class TestConvertDataFiles:
         input_files = ["/path/input.xyz"]
 
         # Act & Assert - This should raise ValueError when trying to construct ConvertFile enum
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is not a valid ConvertFile"):
             await convert_data_files(input_files, FileType.PARQUET)
 
     @patch("application_sdk.common.file_converter._file_converter_registry")
@@ -345,10 +345,10 @@ class TestEdgeCasesAndErrorHandling:
 
     def test_convert_file_enum_construction_with_invalid_types(self):
         """Test that ConvertFile enum raises ValueError for unsupported combinations."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is not a valid ConvertFile"):
             ConvertFile("csv_to_parquet")  # Unsupported conversion
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is not a valid ConvertFile"):
             ConvertFile("json_to_csv")  # Unsupported conversion
 
     def test_file_type_enum_values(self):

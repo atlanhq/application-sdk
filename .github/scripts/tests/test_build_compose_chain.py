@@ -94,7 +94,7 @@ def test_two_store_without_app_overlay(tmp_path: Path) -> None:
 
 
 def test_two_store_requires_compose_path() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="two_store_compose is required"):
         build_compose_files(Path("a"), Path("b"), "", "", two_store=True)
 
 
@@ -219,7 +219,7 @@ def test_full_dag_and_two_store_ordering(tmp_path: Path) -> None:
 
 
 def test_full_dag_requires_compose_path() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="full_dag_compose is required"):
         build_compose_files(
             Path("a"), Path("b"), "", "", two_store=False, full_dag=True
         )

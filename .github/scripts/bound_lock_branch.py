@@ -82,6 +82,14 @@ import renovate_uv_lock_bounded as bounded
 
 COMMIT_MESSAGE = "chore(deps): bound the refreshed locks to the release-age window"
 
+#: The author of every commit the fix-up lanes push onto a Renovate branch. Its
+#: email must be in the fleet preset's ``gitIgnoredAuthors``, together with the
+#: committer that sign-bot-commits sets, or Renovate reads the branch as
+#: human-edited and stops rebasing it (FND-5471). test_renovate_branch_fixup.py
+#: pins both.
+BOT_AUTHOR_NAME = "github-actions[bot]"
+BOT_AUTHOR_EMAIL = "github-actions[bot]@users.noreply.github.com"
+
 
 @dataclass(frozen=True)
 class Project:
@@ -265,17 +273,10 @@ def stage_and_commit(
     into a branch that auto-merges.
     """
     subprocess.run(
-        ["git", "config", "user.name", "github-actions[bot]"], cwd=root, check=True
+        ["git", "config", "user.name", BOT_AUTHOR_NAME], cwd=root, check=True
     )
     subprocess.run(
-        [
-            "git",
-            "config",
-            "user.email",
-            "github-actions[bot]@users.noreply.github.com",
-        ],
-        cwd=root,
-        check=True,
+        ["git", "config", "user.email", BOT_AUTHOR_EMAIL], cwd=root, check=True
     )
     for path in paths:
         if (root / path).exists():

@@ -14,6 +14,7 @@ from __future__ import annotations
 from unittest import mock
 
 import pytest
+from temporalio.exceptions import ActivityError as _TemporalActivityError
 
 from application_sdk.app.base import _run_preflight_gate
 from application_sdk.errors.categories import Audience, FailureCategory
@@ -810,7 +811,7 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         block = _preflight_failed_error()
         _, exec_patch = _exec(side_effect=_real_activity_error(block))
         with _patched(True), exec_patch:
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(_TemporalActivityError) as excinfo:
                 await _run_preflight_gate(
                     _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
                 )

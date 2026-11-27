@@ -151,7 +151,7 @@ class TestAtomicWrite:
             raise OSError(errno.EACCES, "Permission denied")
 
         with _in_atomic("os", "fsync", _eacces):
-            with pytest.raises(OSError) as caught:
+            with pytest.raises(PermissionError) as caught:
                 with atomic_write(artifact, operation="test write") as handle:
                     handle.write(b"x")
 
@@ -163,7 +163,7 @@ class TestAtomicWrite:
         """Any exception, not just a disk one, leaves the final path untouched."""
         artifact = tmp_path / "artifact.json"
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="serialisation blew up"):
             with atomic_write(artifact, operation="test write") as handle:
                 handle.write(b"half a record")
                 raise ValueError("serialisation blew up")

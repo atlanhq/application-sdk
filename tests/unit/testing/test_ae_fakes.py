@@ -84,5 +84,5 @@ async def test_a_scripted_error_is_raised_after_the_call_is_recorded() -> None:
 def test_a_nameless_success_is_refused() -> None:
     """An empty node list is never ``all_nodes_succeeded``, so a nameless
     ``succeeded()`` would model a run the harness grades as failed."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="needs at least one node name"):
         succeeded()

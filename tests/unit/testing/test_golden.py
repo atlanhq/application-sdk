@@ -554,7 +554,7 @@ class TestDuplicateKeyPolicyEnum:
         assert by_string.diffs[0].duplicate_keys_golden == ("q1",)
 
     def test_an_unknown_spelling_is_rejected_up_front(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="is not a valid DuplicateKeyPolicy"):
             diff_golden([], [], on_duplicate_key="first-wins")  # type: ignore[arg-type]
 
 

@@ -33,7 +33,10 @@ from application_sdk.clients.sql import (
     _cap_next_connect_timeout,
     _with_connect_timeout,
 )
-from application_sdk.clients.sql_errors import SqlClientConnectTimeoutError
+from application_sdk.clients.sql_errors import (
+    SqlClientConnectTimeoutError,
+    SqlClientConnectUnclassifiedError,
+)
 from tests.unit._doubles import StopConnect, record_connect_params
 from tests.unit.loop_probe import LoopProbe
 
@@ -270,8 +273,10 @@ class TestSyncLoadBudget:
 
         client.get_sqlalchemy_connection_string = _build  # type: ignore[method-assign]
         started = time.monotonic()
-        with _budget(30.0), pytest.raises(Exception):
+        with _budget(30.0), pytest.raises(SqlClientConnectUnclassifiedError) as exc:
             await client.load({})
+        # load() failed at the stubbed connection-string build, nowhere else.
+        assert isinstance(exc.value.__cause__, StopConnect)
         ended = time.monotonic()
         assert len(seen) == 1 and seen[0] is not None
         # The deadline is the budget measured from when load() began, which

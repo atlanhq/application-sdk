@@ -193,6 +193,14 @@ The worker registers the same modules with its own lookups (the app registry,
 its Dapr-configured store), and `test_metadata_route_parity.py` /
 `test_object_routes_host.py` pin that the two answer alike.
 
+The workflow lifecycle routes (`start`, `stop`, `result`, `status`:
+`handler/workflow_routes.py`) and the Dapr event routes (`/dapr/subscribe`,
+`/events/v1/*`: `handler/event_routes.py`) are worker-only. They start and read
+workflows through a Temporal client, so they are not in `api-files.txt` and the
+host does not serve them. They are separate modules, registered through a
+source object like the shared ones, so they can be tested without building the
+whole service.
+
 **The split changes no behaviour, except two deliberate fixes: secrets are
 redacted from response bodies; a malformed body is a 422.** These modules
 were moved out of `handler/service.py` (and `credentials/utils.py`) as they

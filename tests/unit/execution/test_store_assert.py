@@ -80,22 +80,26 @@ def test_allowed_prefixes_resolve_with_a_trailing_slash(
     assert resolve_assert_prefix(prefix) == expected
 
 
+_MALFORMED = "plain relative key"
+_OUTSIDE = "must sit strictly below one of"
+
+
 @pytest.mark.parametrize(
-    "prefix",
+    ("prefix", "match"),
     [
-        pytest.param("", id="empty"),
-        pytest.param("persistent-artifacts", id="root-itself"),
-        pytest.param("artifacts/apps", id="nested-root-itself"),
-        pytest.param("artifacts/other", id="sibling-of-nested-root"),
-        pytest.param("artifacts", id="parent-of-root"),
-        pytest.param("persistent-artifactsX/a", id="bleeds-into-sibling"),
-        pytest.param("secrets/a", id="outside"),
-        pytest.param("persistent-artifacts/../secrets", id="dotdot"),
-        pytest.param("persistent-artifacts/a//b", id="empty-segment"),
+        pytest.param("", _MALFORMED, id="empty"),
+        pytest.param("persistent-artifacts", _OUTSIDE, id="root-itself"),
+        pytest.param("artifacts/apps", _OUTSIDE, id="nested-root-itself"),
+        pytest.param("artifacts/other", _OUTSIDE, id="sibling-of-nested-root"),
+        pytest.param("artifacts", _OUTSIDE, id="parent-of-root"),
+        pytest.param("persistent-artifactsX/a", _OUTSIDE, id="bleeds-into-sibling"),
+        pytest.param("secrets/a", _OUTSIDE, id="outside"),
+        pytest.param("persistent-artifacts/../secrets", _MALFORMED, id="dotdot"),
+        pytest.param("persistent-artifacts/a//b", _MALFORMED, id="empty-segment"),
     ],
 )
-def test_prefixes_outside_the_allowlist_are_rejected(prefix: str) -> None:
-    with pytest.raises(ValueError):
+def test_prefixes_outside_the_allowlist_are_rejected(prefix: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
         resolve_assert_prefix(prefix)
 
 

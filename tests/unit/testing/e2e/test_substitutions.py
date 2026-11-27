@@ -87,7 +87,7 @@ class TestMustacheSubstitutionsAliases:
     def test_frozen_model(self) -> None:
         conn = _make_connection_ref()
         subs = MustacheSubstitutions(connection=conn)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="frozen_instance"):
             subs.connection = _make_connection_ref()  # type: ignore[misc]
 
 

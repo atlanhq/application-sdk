@@ -478,7 +478,7 @@ class TestLogWorkflowInboundInterceptor:
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
             ) as mock_logger:
-                with pytest.raises(ValueError):
+                with pytest.raises(ValueError, match="boom"):
                     await interceptor.execute_workflow(ExecuteInput())
 
         ended_error = [
@@ -1826,7 +1826,7 @@ class TestLifecycleMessageBodies:
             with patch(
                 "application_sdk.execution._temporal.interceptors.log.logger"
             ) as mock_logger:
-                with pytest.raises(ValueError):
+                with pytest.raises(ValueError, match="could not connect"):
                     await interceptor.execute_activity(ExecuteInput())
         errors = [
             c[0][0]

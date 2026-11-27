@@ -34,7 +34,7 @@ class TestParseCpu:
 
     @pytest.mark.parametrize("value", ["abc", "1x", "", True, False])
     def test_invalid(self, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="invalid cpu quantity"):
             parse_cpu(value)
 
 
@@ -62,7 +62,7 @@ class TestParseMemory:
 
     @pytest.mark.parametrize("value", ["abc", "1xi", "", True])
     def test_invalid(self, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="invalid memory quantity"):
             parse_memory(value)
 
 
@@ -599,7 +599,7 @@ keda:
             assert set(d.keys()) == {"field", "actual", "expected", "rule", "fix"}
 
     def test_inherits_value_error(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="atlan.yaml validation failed"):
             validate_config("vpa:\n  maxAllowed:\n    cpu: 8\n")
 
 

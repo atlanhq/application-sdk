@@ -98,6 +98,8 @@ extend-select = [
     "S110",    # try-except-pass detected
     "S112",    # try-except-continue detected
     "LOG009",  # logger.warn() is deprecated — use .warning()
+    "B017",    # `pytest.raises(Exception)`: passes whatever went wrong
+    "PT011",   # broad `pytest.raises` with no `match=`
 ]
 
 # Function size and complexity (FND-4668). The thresholds are ruff's defaults,

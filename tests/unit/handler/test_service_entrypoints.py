@@ -658,7 +658,7 @@ class TestAgentJsonIngressOnTheHandlerPath:
                 new=AsyncMock(return_value=MagicMock()),
             ),
             patch(
-                "application_sdk.handler.service.resolve_dispatch_workflow_id",
+                "application_sdk.handler.workflow_routes.resolve_dispatch_workflow_id",
                 new=_stamp_fails,
             ),
         ):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 
 import pytest
@@ -53,7 +54,7 @@ class TestExecutionSettingsDefaults:
 
     def test_is_frozen(self) -> None:
         settings = ExecutionSettings()
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError, match="'host'"):
             settings.host = "other:7233"  # type: ignore[misc]
 
 

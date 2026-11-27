@@ -178,7 +178,7 @@ async def test_max_workers_1_serialises_into_a_single_child():
 
 
 async def test_max_workers_below_one_is_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="max_workers must be >= 1"):
         await run_fault_isolated(_pid, max_workers=0)
 
 

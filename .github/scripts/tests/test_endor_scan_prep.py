@@ -112,9 +112,16 @@ def test_a_short_ref_is_used_whole():
     assert prep.local_ref("repo", "abc") == "ghcr.io/atlanhq/repo:abc"
 
 
-@pytest.mark.parametrize(("repo", "ref"), [("", "abcdef0"), ("repo", ""), ("  ", " ")])
-def test_local_path_requires_repo_and_ref(repo, ref):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    ("repo", "ref", "match"),
+    [
+        ("", "abcdef0", "REPO is empty"),
+        ("repo", "", "REF is empty"),
+        ("  ", " ", "REPO is empty"),
+    ],
+)
+def test_local_path_requires_repo_and_ref(repo, ref, match):
+    with pytest.raises(ValueError, match=match):
         prep.plan_materialise("", repo, ref, "/t.tar")
 
 

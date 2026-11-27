@@ -83,7 +83,7 @@ def test_a_carriage_return_is_treated_as_multi_line(output_file: Path) -> None:
 
 @pytest.mark.parametrize("name", ["", "a=b", "a<<b", "a\nb", "result\n", "1abc", "a b"])
 def test_an_invalid_name_is_refused(output_file: Path, name: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="invalid step output name"):
         _gha.set_output(name, "v")
     assert not output_file.exists()
 
