@@ -47,24 +47,6 @@ from application_sdk.testing.hypothesis.strategies.common.logger import (
 )
 
 
-@pytest.fixture
-def mock_logger():
-    """Create a mock logger instance."""
-    # Create a copy of the real logger for testing
-    test_logger = logger.bind()
-    test_logger.remove()
-
-    # Add a mock handler for testing
-    mock_handler = mock.MagicMock()
-
-    def sink(message):
-        mock_handler(message)
-
-    test_logger.add(sink, format="{message}")
-
-    return test_logger
-
-
 @contextmanager
 def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
     """Create a logger adapter instance with mocked environment.
@@ -321,21 +303,25 @@ def test_get_logger_with_various_names(logger_name: str):
 def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter):
     """A dict or list argument is rendered into the message, not a format error."""
     rendered: list[str] = []
-    sink_logger = logger.bind()
-    sink_logger.remove()
-    sink_logger.add(
+    # logger.bind() shares Loguru's process-wide handler registry, so add one
+    # sink to it and remove only that sink; the marker keeps out records from
+    # anything else logging meanwhile.
+    marker = object()
+    handler_id = logger.add(
         lambda message: rendered.append(str(message)),
         format="{level}|{message}",
         level="DEBUG",
+        filter=lambda record: record["extra"].get("_complex_types_test") is marker,
     )
     original_logger = logger_adapter.logger
-    logger_adapter.logger = sink_logger
+    logger_adapter.logger = logger.bind(_complex_types_test=marker)
 
     try:
         logger_adapter.info("Message with dict: {}", {"key1": "value1", "key2": 123})
         logger_adapter.debug("Message with list: {}", ["item1", "item2", 123])
     finally:
         logger_adapter.logger = original_logger
+        logger.remove(handler_id)
 
     assert rendered == [
         "INFO|Message with dict: {'key1': 'value1', 'key2': 123}\n",
