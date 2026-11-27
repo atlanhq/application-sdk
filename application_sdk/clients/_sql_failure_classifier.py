@@ -39,12 +39,28 @@ def root_cause(exc: BaseException) -> BaseException:
 # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout" in the
 # class name and no "timed out" in the message, so a generic substring check
 # misses it. Match the driver phrasings explicitly.
-_TIMEOUT_MSG_HINTS = ("timed out", "login timeout", "timeout expired", "hyt00")
+#
+# Postgres cancels a statement that outruns ``statement_timeout`` or
+# ``lock_timeout`` with SQLSTATE 57014 ("canceling statement due to statement
+# timeout"), raised by psycopg as ``QueryCanceled`` — an ``OperationalError``
+# subclass, so without these phrasings it would read as an unreachable source.
+_TIMEOUT_MSG_HINTS = (
+    "timed out",
+    "login timeout",
+    "timeout expired",
+    "hyt00",
+    "statement timeout",
+    "lock timeout",
+)
 
 # Driver error_type for MySQL ``Access denied`` is ``OperationalError`` — that
 # class is overloaded across both auth and network failures, so message content
 # has to be the tiebreaker.
-_AUTH_CLASS_HINTS = ("authentication", "accessdenied", "authfail")
+# "authorization": SQLSTATE 28000 is "invalid authorization specification"
+# (psycopg's ``InvalidAuthorizationSpecification``), sent for a role that does
+# not exist or a host the server's access rules refuse. Its messages carry no
+# auth phrase, so only the class name marks it.
+_AUTH_CLASS_HINTS = ("authentication", "authorization", "accessdenied", "authfail")
 _AUTH_MSG_HINTS = (
     "access denied",
     "1045",
@@ -106,7 +122,24 @@ def classify_sql_failure(error_type: str, error_message: str) -> SqlFailureKind:
     return SqlFailureKind.UNCLASSIFIED
 
 
+def exception_class_names(exc_type: type[BaseException]) -> str:
+    """The class's own name and the names of its non-builtin base classes.
+
+    Drivers raise one subclass per server error code (psycopg's
+    ``AdminShutdown`` for a server shutting down is an ``OperationalError``),
+    so the class's own name often matches no hint while its DBAPI base does.
+    Builtin bases are left out: ``OSError`` would otherwise mark every local
+    file error, such as a missing certificate file, as an unreachable source.
+    Space-separated, so no hint can match across two names.
+    """
+    return " ".join(
+        cls.__name__
+        for cls in exc_type.__mro__
+        if cls is exc_type or cls.__module__ != "builtins"
+    )
+
+
 def classify_sql_exception(exc: BaseException) -> SqlFailureKind:
-    """Classify a live exception by its root cause's class name and message."""
+    """Classify a live exception by its root cause's class names and message."""
     root = root_cause(exc)
-    return classify_sql_failure(type(root).__name__, str(root))
+    return classify_sql_failure(exception_class_names(type(root)), str(root))

@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import psycopg2
+import psycopg2.errors
 import pytest
 from sqlalchemy import exc as sa_exc
 
@@ -89,6 +90,34 @@ _CASES: list[tuple[str, Any, type[AppError], FailureCategory]] = [
         ),
         SqlClientSourceUnavailableError,
         FailureCategory.SOURCE_UNAVAILABLE,
+    ),
+    (
+        # The server is shutting down (SQLSTATE 57P01): psycopg raises a
+        # subclass of OperationalError whose own name matches no hint.
+        "psycopg2-admin-shutdown",
+        lambda: psycopg2.errors.AdminShutdown(
+            "terminating connection due to administrator command"
+        ),
+        SqlClientSourceUnavailableError,
+        FailureCategory.SOURCE_UNAVAILABLE,
+    ),
+    (
+        "psycopg2-cannot-connect-now",
+        lambda: psycopg2.errors.CannotConnectNow(
+            "FATAL:  the database system is shutting down"
+        ),
+        SqlClientSourceUnavailableError,
+        FailureCategory.SOURCE_UNAVAILABLE,
+    ),
+    (
+        # SQLSTATE 28000 (role missing, host refused by pg_hba.conf): no auth
+        # phrase in the message, only in the class name.
+        "psycopg2-invalid-authorization",
+        lambda: psycopg2.errors.InvalidAuthorizationSpecification(
+            'FATAL:  role "example_user" does not exist'
+        ),
+        SqlClientAuthFailedError,
+        FailureCategory.AUTH,
     ),
     (
         "psycopg2-tls",
