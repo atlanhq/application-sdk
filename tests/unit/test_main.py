@@ -635,6 +635,63 @@ def _fake_app_class() -> mock.MagicMock:
     return cls
 
 
+_ACQUIRED_TOKEN = "api-key-xyz"
+
+
+def _non_default_temporal_config(mode: str, *, auth_enabled: bool) -> AppConfig:
+    """An AppConfig whose every Temporal connection field differs from its default.
+
+    A connection kwarg that main.py drops or hardcodes back to its default
+    (namespace "default", TLS off, no api_key) then fails the call assertion.
+    """
+    auth: dict[str, Any] = (
+        {
+            "auth_enabled": True,
+            "auth_client_id": "cid",
+            "auth_client_secret": "csec",
+            "auth_token_url": "https://example.com/token",
+            "auth_base_url": "https://example.com",
+        }
+        if auth_enabled
+        else {}
+    )
+    return AppConfig(
+        mode=mode,
+        app_module="pkg:FakeApp",
+        temporal_host="temporal.example.test:7233",
+        temporal_namespace="tenant-namespace",
+        tls_enabled=True,
+        tls_server_root_ca_cert_path="/certs/ca.pem",
+        tls_client_cert_path="/certs/client.pem",
+        tls_client_private_key_path="/certs/client.key",
+        tls_domain="temporal.example.test",
+        enable_temporal_core_metrics=False,
+        prometheus_bind_address="0.0.0.0:9999",
+        **auth,
+    )
+
+
+def _assert_client_built_from_non_default_config(
+    create_client: AsyncMock, *, data_converter: Any, api_key: str | None
+) -> None:
+    """The Temporal client was built once, from every field of
+    ``_non_default_temporal_config`` plus the app's converter and the token."""
+    assert data_converter is not None
+    create_client.assert_awaited_once_with(
+        "temporal.example.test:7233",
+        "tenant-namespace",
+        data_converter=data_converter,
+        api_key=api_key,
+        tls_enabled=True,
+        tls_server_root_ca_cert_path="/certs/ca.pem",
+        tls_client_cert_path="/certs/client.pem",
+        tls_client_private_key_path="/certs/client.key",
+        tls_domain="temporal.example.test",
+        enable_prometheus=False,
+        prometheus_bind_address="0.0.0.0:9999",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # AppConfig — additional edge cases                                           #
 # --------------------------------------------------------------------------- #
@@ -1061,7 +1118,7 @@ class TestRunWorkerMode:
             ) as mock_create_client,
             patch(
                 "application_sdk.execution._temporal.converter.create_data_converter_for_app"
-            ),
+            ) as mock_converter,
             patch(
                 "application_sdk.execution._temporal.worker.create_worker",
                 return_value=_make_async_cm(),
@@ -1086,6 +1143,7 @@ class TestRunWorkerMode:
             yield {
                 "infra": infra,
                 "create_client": mock_create_client,
+                "converter": mock_converter,
                 "set_infra": mock_set_infra,
                 "close_infra": mock_close_infra,
                 "health": mock_health,
@@ -1094,7 +1152,7 @@ class TestRunWorkerMode:
     @pytest.fixture
     def auth_manager(self):
         auth_mgr = MagicMock()
-        auth_mgr.acquire_initial_token = AsyncMock(return_value="api-key-xyz")
+        auth_mgr.acquire_initial_token = AsyncMock(return_value=_ACQUIRED_TOKEN)
         auth_mgr.start_background_refresh = MagicMock()
         auth_mgr.restart_background_refresh = AsyncMock()
         auth_mgr.shutdown = AsyncMock()
@@ -1259,6 +1317,25 @@ class TestRunWorkerMode:
         auth_manager.acquire_initial_token.assert_awaited_once()
         auth_manager.start_background_refresh.assert_called_once()
         auth_manager.shutdown.assert_awaited_once()
+
+    @pytest.mark.parametrize("auth_enabled", [False, True], ids=["no-auth", "auth"])
+    async def test_client_built_from_config_and_token(
+        self, worker_patches, auth_manager, wait_patch, auth_enabled: bool
+    ) -> None:
+        """Host, namespace, TLS, metrics, the app's converter and the acquired
+        token all reach create_temporal_client."""
+        cfg = _non_default_temporal_config("worker", auth_enabled=auth_enabled)
+        with patch(
+            "application_sdk.execution._temporal.auth.TemporalAuthManager",
+            return_value=auth_manager,
+        ):
+            await run_worker_mode(cfg)
+
+        _assert_client_built_from_non_default_config(
+            worker_patches["create_client"],
+            data_converter=worker_patches["converter"].return_value,
+            api_key=_ACQUIRED_TOKEN if auth_enabled else None,
+        )
 
     async def test_failure_in_create_client_propagates(self, worker_patches) -> None:
         """If create_temporal_client raises, the exception bubbles up (not swallowed)."""
@@ -1794,7 +1871,7 @@ class TestRunCombinedMode:
             ) as mock_create_client,
             patch(
                 "application_sdk.execution._temporal.converter.create_data_converter_for_app"
-            ),
+            ) as mock_converter,
             patch(
                 "application_sdk.execution._temporal.worker.create_worker",
                 return_value=_make_async_cm(),
@@ -1828,11 +1905,39 @@ class TestRunCombinedMode:
             yield {
                 "infra": infra,
                 "create_client": mock_create_client,
+                "converter": mock_converter,
                 "create_svc": mock_create_svc,
                 "close_infra": mock_close_infra,
                 "uvicorn_server": uvicorn_server,
                 "health": mock_health,
             }
+
+    @pytest.fixture
+    def auth_manager(self):
+        auth_mgr = MagicMock()
+        auth_mgr.acquire_initial_token = AsyncMock(return_value=_ACQUIRED_TOKEN)
+        auth_mgr.start_background_refresh = MagicMock()
+        auth_mgr.shutdown = AsyncMock()
+        return auth_mgr
+
+    @pytest.mark.parametrize("auth_enabled", [False, True], ids=["no-auth", "auth"])
+    async def test_client_built_from_config_and_token(
+        self, combined_patches, auth_manager, auth_enabled: bool
+    ) -> None:
+        """Host, namespace, TLS, metrics, the app's converter and the acquired
+        token all reach create_temporal_client."""
+        cfg = _non_default_temporal_config("combined", auth_enabled=auth_enabled)
+        with patch(
+            "application_sdk.execution._temporal.auth.TemporalAuthManager",
+            return_value=auth_manager,
+        ):
+            await run_combined_mode(cfg)
+
+        _assert_client_built_from_non_default_config(
+            combined_patches["create_client"],
+            data_converter=combined_patches["converter"].return_value,
+            api_key=_ACQUIRED_TOKEN if auth_enabled else None,
+        )
 
     async def test_combined_runs_to_completion(self, combined_patches) -> None:
         """Combined mode creates client, FastAPI app, runs uvicorn, closes infra."""
