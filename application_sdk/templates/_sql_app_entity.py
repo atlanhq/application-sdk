@@ -44,6 +44,7 @@ from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._concurrency import _run_drained
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionTaskInput,
     ExtractionTaskOutput,
@@ -271,24 +272,25 @@ class _SqlEntityIOMixin(_AppBase):
                 )
 
             with open(output_file, "wb") as f:
+
+                def _write_batch(batch: list[dict[str, Any]]) -> None:
+                    f.write(_serialize_batch(batch))
+
                 async for batch in client.run_query(
                     sql, batch_size=_EXTRACT_BATCH_SIZE
                 ):
-                    # Only the serialisation is offloaded — 10k orjson.dumps
-                    # calls per batch is the part that outlasts the heartbeat
-                    # interval on wide rows (ADR-0010). The write stays on the
-                    # loop as one buffered call, which costs microseconds.
+                    # Serialise and write off the loop (ADR-0010): 10k
+                    # orjson.dumps calls per batch outlast the heartbeat
+                    # interval on wide rows, and a batch has no byte bound, so
+                    # its write to a slow or contended volume can too.
                     #
-                    # Deliberately NOT passing `f` into the thread: if the
-                    # activity is cancelled at this await, the `with` block
-                    # unwinds and closes the handle while a worker thread is
-                    # still writing to it — and per ADR-0010 that thread cannot
-                    # be killed, so it would write on into a closed (or
-                    # retry-reopened) file. Serialise off-loop, write on-loop:
-                    # the handle never crosses the thread boundary, so the
-                    # single-handle streaming loop stays cancellation-safe.
-                    payload = await run_in_thread(_serialize_batch, batch)
-                    f.write(payload)
+                    # Drained, because the handle crosses into the thread: on
+                    # a cancellation at this await, ``_run_drained`` waits for
+                    # the thread before the cancellation propagates, so the
+                    # ``with`` closes ``f`` only after the write has returned —
+                    # never under a live writer, and never into a
+                    # retry-reopened file.
+                    await _run_drained(run_in_thread(_write_batch, batch))
                     count += len(batch)
                     # One fetched page serialised and written is one observable
                     # unit (ADR-0018). Marked here rather than per record: one
@@ -300,7 +302,7 @@ class _SqlEntityIOMixin(_AppBase):
                     # only a *single* cycle slower than max_no_progress_seconds
                     # needs an explicit hold from the app. (FND-290's auto-hold
                     # around the `run_in_thread` above already covers the
-                    # serialise leg of that cycle.)
+                    # serialise-and-write leg of that cycle.)
                     current_progress_tracker().mark_progress("extract.page")
         finally:
             await client.close()

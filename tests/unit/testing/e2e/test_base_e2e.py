@@ -7,6 +7,7 @@ Covers the two methods the review flagged as uncovered (TEST-001/G4):
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -1905,6 +1906,22 @@ class TestTeardownFallsBackToTheHarnessPurge:
         harness._ae = SimpleNamespace(aclose=_aclose)
         harness.teardown_method(method=None)  # must not raise
         # ...and the purge still ran: closing is the second, independent phase.
+        assert purged == [self._QN]
+
+    def test_a_pool_close_that_hangs_is_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stalled transport close times out instead of holding teardown."""
+        from application_sdk.testing.e2e import _base_teardown
+
+        monkeypatch.setattr(_base_teardown, "_AE_CLOSE_TIMEOUT_SECONDS", 0.05)
+        harness, purged = self._harness(monkeypatch)
+
+        async def _aclose() -> None:
+            await asyncio.Event().wait()  # never set: a close that never returns
+
+        harness._ae = SimpleNamespace(aclose=_aclose)
+        harness.teardown_method(method=None)  # must return, and must not raise
         assert purged == [self._QN]
 
 

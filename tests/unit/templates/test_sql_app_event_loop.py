@@ -19,6 +19,8 @@ on the runner and still failed one matrix cell at random (FND-360, FND-4018).
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -173,42 +175,108 @@ async def test_extract_entity_does_not_block_the_loop(
     app.probe.assert_loop_stayed_free("extract_entity")
 
 
-async def test_extract_entity_never_hands_the_file_handle_to_a_thread(
+async def test_extract_entity_writes_each_batch_off_the_loop(
     app: _SlowMapperApp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Only serialisation may be offloaded — never the open output handle.
+    """The batch *write* is offloaded too, not only its serialisation.
 
-    If the handle crossed into the blocking pool, a cancellation at that await
-    would unwind the enclosing ``with`` and close the file while a worker thread
-    was still writing to it. Per ADR-0010 that thread cannot be killed, so it
-    would write on into a closed — or retry-reopened — file.
-
-    Asserts the invariant directly: nothing passed to ``run_in_thread`` is a
-    file object, and the bytes still land on disk.
+    A batch has no byte bound, so its write to a slow or contended volume can
+    hold the loop past the heartbeat on its own.
     """
-    offloaded_args: list[Any] = []
-    real_run_in_thread = sql_app_entity.run_in_thread
+    real_open = open
+    write_threads: list[int] = []
 
-    async def _recording_run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
-        offloaded_args.extend(args)
-        offloaded_args.extend(kwargs.values())
-        return await real_run_in_thread(func, *args, **kwargs)
+    class _ProbedFile:
+        def __init__(self, fh: Any) -> None:
+            self._fh = fh
 
-    monkeypatch.setattr(sql_app_entity, "run_in_thread", _recording_run_in_thread)
+        def write(self, data: bytes) -> int:
+            write_threads.append(threading.get_ident())
+            app.probe.block()
+            return self._fh.write(data)
 
-    result = await app.extract_entity(
-        entity_type="database",
-        sql_template=_SlowMapperApp.fetch_database_sql,
-        input=_extract_input(tmp_path),
+        def __enter__(self) -> _ProbedFile:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self._fh.close()
+
+    monkeypatch.setattr(
+        sql_app_entity,
+        "open",
+        lambda *a, **k: _ProbedFile(real_open(*a, **k)),
+        raising=False,
     )
 
-    assert offloaded_args, "nothing was offloaded"
-    for arg in offloaded_args:
-        assert not hasattr(arg, "write"), (
-            f"a file-like object ({arg!r}) was handed to run_in_thread — a "
-            "cancellation there would close the handle under a live writer"
+    result = await app.probe.run(
+        lambda: app.extract_entity(
+            entity_type="database",
+            sql_template=_SlowMapperApp.fetch_database_sql,
+            input=_extract_input(tmp_path),
         )
+    )
 
     assert result.total_record_count == 2
-    written = (tmp_path / "raw" / "database" / "records.json").read_bytes()
-    assert written.count(b"\n") == 2
+    assert write_threads, "the batch was never written"
+    assert threading.get_ident() not in write_threads, "a batch write ran on the loop"
+    app.probe.assert_loop_stayed_free("extract_entity batch write")
+
+
+async def test_cancelled_extract_closes_the_file_only_after_the_write_returns(
+    app: _SlowMapperApp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancellation never closes the output handle under a live writer.
+
+    The handle crosses into the blocking pool for the write, and that thread
+    cannot be killed (ADR-0010). Cancel the activity while a write is blocked:
+    the write must return before the file is closed, or the thread would write
+    on into a closed (or retry-reopened) file.
+    """
+    real_open = open
+    events: list[str] = []
+    writing = threading.Event()
+    release = threading.Event()
+
+    class _GatedFile:
+        def __init__(self, fh: Any) -> None:
+            self._fh = fh
+
+        def write(self, data: bytes) -> int:
+            events.append("write-start")
+            writing.set()
+            release.wait(10)
+            n = self._fh.write(data)
+            events.append("write-end")
+            return n
+
+        def __enter__(self) -> _GatedFile:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            events.append("close")
+            self._fh.close()
+
+    monkeypatch.setattr(
+        sql_app_entity,
+        "open",
+        lambda *a, **k: _GatedFile(real_open(*a, **k)),
+        raising=False,
+    )
+
+    task = asyncio.ensure_future(
+        app.extract_entity(
+            entity_type="database",
+            sql_template=_SlowMapperApp.fetch_database_sql,
+            input=_extract_input(tmp_path),
+        )
+    )
+    assert await asyncio.to_thread(writing.wait, 10), "the write never started"
+    task.cancel()
+    # Give the cancellation a turn to reach the extract before the write ends.
+    await asyncio.sleep(0.05)
+    assert "close" not in events, "the file closed while the write was blocked"
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events == ["write-start", "write-end", "close"]

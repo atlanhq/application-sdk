@@ -16,9 +16,9 @@ import math
 import os
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, BinaryIO
 
 import obstore
 
@@ -28,6 +28,7 @@ from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.atomic import disk_full_guard, ensure_free_space
 from application_sdk.storage import _settings
 from application_sdk.storage._budget import transfer_budget
+from application_sdk.storage._concurrency import _run_drained
 from application_sdk.storage._ops_errors import (
     _exc_class_name,
     _is_not_found,
@@ -62,18 +63,35 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 @contextlib.contextmanager
 def _open_chunks(
     source: Path | bytes, size: int
-) -> Iterator[Iterator[bytes | memoryview]]:
-    """Yield an iterator over *source* in *size*-byte chunks.
+) -> Iterator[AsyncIterator[bytes | memoryview]]:
+    """Yield an async iterator over *source* in *size*-byte chunks.
 
-    A file is read a chunk at a time; an in-memory payload is sliced through a
-    ``memoryview``, so no chunk is copied.
+    A file is read a chunk at a time, each read offloaded so a slow volume
+    cannot hold the event loop (and the activity heartbeat) for a whole part;
+    an in-memory payload is sliced through a ``memoryview``, so no chunk is
+    copied.
     """
     if isinstance(source, Path):
         with source.open("rb") as fh:
-            yield iter(lambda: fh.read(size), b"")
+            yield _read_chunks(fh, size)
     else:
-        view = memoryview(source)
-        yield (view[i : i + size] for i in range(0, len(view), size))
+        yield _slice_chunks(memoryview(source), size)
+
+
+async def _read_chunks(fh: BinaryIO, size: int) -> AsyncIterator[bytes]:
+    """Read *fh* in *size*-byte chunks off the event loop.
+
+    Drained: a cancelled read waits for its thread before the cancellation
+    propagates, so the file is never closed under a read still running.
+    """
+    while chunk := await _run_drained(run_in_thread(fh.read, size)):
+        yield chunk
+
+
+async def _slice_chunks(view: memoryview, size: int) -> AsyncIterator[memoryview]:
+    """Slice an in-memory payload into *size*-byte views; nothing to offload."""
+    for i in range(0, len(view), size):
+        yield view[i : i + size]
 
 
 async def _upload_once(
@@ -112,7 +130,7 @@ async def _upload_once(
             attributes=put_attributes,
         ) as writer:
             with _open_chunks(source, effective_chunk) as chunks:
-                for chunk in chunks:
+                async for chunk in chunks:
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
@@ -312,7 +330,11 @@ async def _write_download(
                     async with transfer_budget().reserve(stream_bytes):
                         async for chunk in result.stream(min_chunk_size=min_chunk_size):
                             raw = bytes(chunk)
-                            fh.write(raw)
+                            # Offloaded and drained, like the fsync below: a
+                            # multi-MiB write to a slow volume would otherwise
+                            # hold the event loop and the heartbeat, and a
+                            # cancelled write finishes before ``fh`` closes.
+                            await _run_drained(run_in_thread(fh.write, raw))
                             bytes_written += len(raw)
                             if h is not None:
                                 h.update(raw)

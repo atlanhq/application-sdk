@@ -8,10 +8,11 @@ chain described in :mod:`application_sdk.testing.e2e._base_config` (FND-4267).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
 
 from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.e2e._base_tenant import _E2ETenantMixin
 from application_sdk.testing.harness.teardown import (
     CONNECTION_DELETE_NODE_ID,
     ConnectionDeletePlan,
@@ -21,12 +22,12 @@ from application_sdk.testing.harness.teardown import (
     purge_connection,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
-    pass
-
-from application_sdk.testing.e2e._base_tenant import _E2ETenantMixin
-
 logger = get_logger(__name__)
+
+#: How long teardown waits for the AE pool to close. ``AEClient.aclose`` awaits
+#: ``httpx.AsyncClient.aclose`` with no bound of its own, so a stalled transport
+#: would otherwise hold teardown, and the test worker with it, indefinitely.
+_AE_CLOSE_TIMEOUT_SECONDS = 30.0
 
 
 class _E2ETeardownMixin(_E2ETenantMixin):
@@ -459,8 +460,9 @@ class _E2ETeardownMixin(_E2ETenantMixin):
         if ae is None:
             return
         try:
-            await ae.aclose()
-        # conformance: ignore[E004] teardown boundary — the same rule as the purge above; a pool that will not close must not become the test's verdict
+            async with asyncio.timeout(_AE_CLOSE_TIMEOUT_SECONDS):
+                await ae.aclose()
+        # conformance: ignore[E004] teardown boundary — the same rule as the purge above; a pool that will not close (or not in time) must not become the test's verdict
         except Exception:
             logger.warning(
                 "e2e cleanup: the AE connection pool did not close cleanly",
