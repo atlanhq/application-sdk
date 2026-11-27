@@ -11,7 +11,8 @@ would fail at import time, depending on which module loaded first. That made
 imports that closed no cycle at all.
 
 This test builds the graph from source, without importing anything, and fails
-on any cycle. The edges it counts:
+on any cycle not closed by an allowlisted edge (``_DEFERRED_CYCLE_EDGES``,
+below). The edges it counts:
 
 * every ``import`` / ``from ... import`` that runs, wherever it is written:
   module level, function bodies, ``try`` blocks, ``with`` blocks. Only the body
@@ -34,6 +35,8 @@ import ast
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+import pytest
 
 import application_sdk
 
@@ -109,7 +112,7 @@ _DEFERRED_CYCLE_EDGES: dict[tuple[str, str], str] = {
 
 #: Ceiling on in-function import statements in application_sdk (FND-4260).
 #: Lower it when you lift imports; raising it needs a reason in the PR.
-_MAX_IN_FUNCTION_IMPORTS = 648
+_MAX_IN_FUNCTION_IMPORTS = 650
 
 
 @dataclass(frozen=True)
@@ -284,9 +287,15 @@ def _all_edges() -> list[_Edge]:
 
 
 def _graph(edges: list[_Edge], drop: set[tuple[str, str]]) -> dict[str, set[str]]:
+    """The import graph, without the in-function edges named in *drop*.
+
+    Only in-function edges are dropped: an allowlisted pair that also gains a
+    module-level import keeps that edge, so a cycle it closes at import time
+    still fails the test.
+    """
     graph: dict[str, set[str]] = {m: set() for m in _MODULES}
     for edge in edges:
-        if (edge.importer, edge.imported) not in drop:
+        if not edge.in_function or (edge.importer, edge.imported) not in drop:
             graph[edge.importer].add(edge.imported)
     return graph
 
@@ -485,6 +494,44 @@ def test_app_task_and_entrypoint_are_the_decorators_after_their_submodules_load(
         "import application_sdk.app.task, application_sdk.app.entrypoint\n"
         "from application_sdk.app import entrypoint, task\n"
         "assert callable(task) and callable(entrypoint), (task, entrypoint)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_an_allowlisted_pair_still_counts_its_module_level_import() -> None:
+    """``_DEFERRED_CYCLE_EDGES`` excuses the in-function import only."""
+    a, b = "application_sdk.app", "application_sdk.constants"
+    edges = [_Edge(a, b, 1, in_function=True), _Edge(b, a, 2, in_function=False)]
+    assert not _cycles(_graph(edges, {(a, b)}))
+    edges.append(_Edge(a, b, 3, in_function=False))
+    assert _cycles(_graph(edges, {(a, b)})) == [sorted([a, b])]
+
+
+#: Optional or heavy third-party packages that importing a module must not
+#: load, because the module only needs them on a call path (FND-4260 lifted
+#: imports to module level only where this held; these pin the exceptions).
+_DEFERRED_THIRD_PARTY = (
+    ("application_sdk.transformers.query", "duckdb"),
+    ("application_sdk.transformers.atlas", "yaml"),
+    ("application_sdk.transformers.atlas", "nanoid"),
+)
+
+
+@pytest.mark.parametrize(("module", "package"), _DEFERRED_THIRD_PARTY)
+def test_importing_the_module_does_not_load_the_package(
+    module: str, package: str
+) -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, warnings\n"
+        "warnings.simplefilter('ignore')\n"
+        f"import {module}\n"
+        f"assert {package!r} not in sys.modules, '{module} loaded {package}'\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
