@@ -55,27 +55,46 @@ def _internal_imports(tree: ast.Module) -> list[tuple[int, str]]:
     return found
 
 
+def _log_record_names(tree: ast.Module) -> set[str]:
+    """Local names bound to OTel ``LogRecord``, aliases included.
+
+    ``from opentelemetry._logs import LogRecord as OTelLogRecord`` binds
+    ``OTelLogRecord``; matching on the literal ``LogRecord`` alone would let
+    that alias reintroduce the deprecated keywords unseen.
+    """
+    names = {"LogRecord"}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.split(".")[0] == "opentelemetry"
+        ):
+            names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "LogRecord"
+            )
+    return names
+
+
 def _deprecated_log_record_calls(tree: ast.Module) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
+    log_record_names = _log_record_names(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        name = (
-            func.id
-            if isinstance(func, ast.Name)
-            else func.attr
-            if isinstance(func, ast.Attribute)
-            else ""
-        )
-        if name != "LogRecord":
-            continue
-        # ``logging.LogRecord`` is the stdlib class, unrelated to OTel.
-        if (
-            isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "logging"
-        ):
+        if isinstance(func, ast.Name):
+            if func.id not in log_record_names:
+                continue
+        elif isinstance(func, ast.Attribute):
+            # ``mod.LogRecord(...)`` under any module alias. ``logging.LogRecord``
+            # is the stdlib class, unrelated to OTel.
+            if func.attr != "LogRecord" or (
+                isinstance(func.value, ast.Name) and func.value.id == "logging"
+            ):
+                continue
+        else:
             continue
         found.extend(
             (node.lineno, kw.arg)
@@ -147,6 +166,20 @@ def test_internal_import_detector(source: str, expected: list[tuple[int, str]]) 
         (
             "_logs.LogRecord(span_id=1, trace_flags=f)",
             [(1, "span_id"), (1, "trace_flags")],
+        ),
+        (
+            "from opentelemetry._logs import LogRecord as OTelLogRecord\n"
+            "OTelLogRecord(trace_id=1, body='x')",
+            [(2, "trace_id")],
+        ),
+        (
+            "import opentelemetry._logs as otel_logs\n"
+            "otel_logs.LogRecord(trace_flags=f)",
+            [(2, "trace_flags")],
+        ),
+        (
+            "from mylib import LogRecord as Other\nOther(trace_id=1)",
+            [],
         ),
         ("LogRecord(context=ctx, body='x')", []),
         ("logging.LogRecord('n', 10, 'p', 1, 'm', None, None)", []),
