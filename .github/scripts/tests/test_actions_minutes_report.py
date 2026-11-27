@@ -152,7 +152,7 @@ def test_day_windows_are_inclusive_utc_days():
 
 
 def test_day_windows_rejects_inverted_range():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="is before --since"):
         amr.day_windows(date(2026, 9, 29), date(2026, 9, 28))
 
 

@@ -160,14 +160,14 @@ class TestSafeListDirectoryErrorSurfacing:
         on some failures), safe_list_directory surfaces OSError.
         """
         missing = tmp_path / "does_not_exist"
-        with pytest.raises(OSError):
+        with pytest.raises(FileNotFoundError):
             safe_list_directory(missing)
 
     def test_file_path_raises_oserror(self, tmp_path: Path) -> None:
         """Passing a regular file (not a directory) raises OSError."""
         f = tmp_path / "is_a_file.txt"
         f.write_bytes(b"x")
-        with pytest.raises(OSError):
+        with pytest.raises(NotADirectoryError):
             safe_list_directory(f)
 
 

@@ -1784,6 +1784,39 @@ and "not yet" would otherwise read as "never".
 If you add another workflow that commits to a Renovate branch, it inherits this
 problem. Carry the status or accept that the PR needs a human.
 
+### Renovate must recognise the bot commit, committer included
+
+Renovate treats a branch as human-edited, and stops rebasing it for good, when
+any commit on it has an author **or committer** email that is neither Renovate's
+own nor listed in `gitIgnoredAuthors`. A branch Renovate will not rebase cannot
+refresh and cannot catch up with `main`, and nothing goes red: the PR waits with
+auto-merge armed.
+
+`sign-bot-commits` makes `atlan-ci <it@atlan.com>` the committer of every bot
+commit and leaves the author alone. The fix-up lanes' author
+(`github-actions[bot]`) was already ignored, but the new committer was not, so
+from the first signed fix-up commit application-sdk's lock refresh sat for 22
+days with Renovate reporting that it "does not recognize the last commit author"
+(FND-5471). Both identities are now in the fleet preset's `gitIgnoredAuthors`.
+`test_renovate_branch_fixup.py` makes a fix-up commit the way `publish` does and
+fails if either identity on it is missing from the list. If you change the
+committer `sign-bot-commits` sets, or add a lane with a different author, add
+the new email to `gitIgnoredAuthors` in the same change.
+
+A lane can stall in other ways too. `renovate_stale_lock_alarm.py` runs last in
+`renovate-dashboard.yaml` and fails the hourly run when a lock-maintenance PR in
+this repo is 7 or more days old, whatever the cause. Stale lock PRs in other
+repos are listed and warned on but never fail the run, because their repos own
+them and an hourly job that is always red stops being read. A run with no scan
+report for this repo also fails, so a scan that dropped it does not pass for a
+healthy lane.
+
+A lock-maintenance PR with no changed files is not a gate failure. When the
+release-age bound rolls back everything Renovate refreshed, the PR's diff against
+`main` is empty, and the approval gate correctly declines to approve it (`no
+changed files found`). Renovate's next refresh adds the newly aged releases, and
+the PR moves again, as long as Renovate still recognises the branch.
+
 ### One implementation for both fix-up lanes
 
 `renovate-lock-cooldown.yaml` and `renovate-pyatlan-table-sync.yaml` both

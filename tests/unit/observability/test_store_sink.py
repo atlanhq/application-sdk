@@ -129,7 +129,7 @@ class TestBootstrapsInstallTheSink:
             wraps=install_observability_store_sink,
         ) as install:
             # The sink goes in first, before the worker reads its client.
-            with pytest.raises(Exception):
+            with pytest.raises(AttributeError, match="'config'"):
                 worker.create_worker(None)  # type: ignore[arg-type]
         install.assert_called_once_with()
         assert observability._store_sink is not None

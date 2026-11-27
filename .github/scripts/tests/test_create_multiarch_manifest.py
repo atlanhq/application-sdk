@@ -83,7 +83,7 @@ def test_grouping_splits_on_the_tag_not_the_registry_port() -> None:
 
 def test_an_untagged_reference_is_rejected() -> None:
     """Passing a bare repo to `create --tag` would publish `:latest` silently."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not a tagged reference"):
         mod.group_by_repo(["registry.atlan.com/public/app-runtime-base"])
 
 
@@ -99,12 +99,12 @@ def test_blank_lines_from_the_heredoc_are_dropped() -> None:
 
 def test_no_tags_is_an_error() -> None:
     """Silently doing nothing here means the release publishes no pullable tag."""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="at least one tag is required"):
         mod.create_manifests([], SOURCES)
 
 
 def test_no_sources_is_an_error() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="at least one --source is required"):
         mod.create_manifests([f"{OTHER}:latest"], [])
 
 

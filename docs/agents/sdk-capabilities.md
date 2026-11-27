@@ -27,7 +27,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.discovery` | Dynamic App and Handler loading from "module.path:ClassName" strings at container startup | 5 |
 | `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 85 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 69 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 123 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 127 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 55 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.main_errors` | Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection | 4 |
@@ -6635,6 +6635,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Pass-through handler that always returns SUCCESS/READY/empty.
 - **Defined in:** `application_sdk/handler/base.py`
 
+#### `EventRoutesSource`
+
+- **Import:** `from application_sdk.handler.event_routes import EventRoutesSource`
+- **Signature:** `class EventRoutesSource(app_name: str, ...)`
+- **Summary:** What the event routes need, for one app.
+- **Defined in:** `application_sdk/handler/event_routes.py`
+
 #### `ExecuteWorkflowInputs`
 
 - **Import:** `from application_sdk.handler.manifest import ExecuteWorkflowInputs`
@@ -6962,6 +6969,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Configuration for the Temporal client used by the /start endpoint.
 - **Defined in:** `application_sdk/handler/service.py`
 
+#### `WorkflowRoutesSource`
+
+- **Import:** `from application_sdk.handler.workflow_routes import WorkflowRoutesSource`
+- **Signature:** `class WorkflowRoutesSource(app_name: str, ...)`
+- **Summary:** What the workflow routes need, for one app.
+- **Defined in:** `application_sdk/handler/workflow_routes.py`
+
 #### `AgentCredentialSpec` (deprecated)
 
 - **Deprecated:** AgentCredentialSpec is deprecated; use application_sdk.credentials.spec.AgentCredentialSpec — it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0. Do not use in new code.
@@ -7166,6 +7180,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Read a request body that must be a JSON object, answering 422 if not.
 - **Defined in:** `application_sdk/handler/request_contract.py`
 
+#### `register_event_routes`
+
+- **Import:** `from application_sdk.handler.event_routes import register_event_routes`
+- **Signature:** `register_event_routes(app: FastAPI, source: EventRoutesSource) -> None`
+- **Summary:** Register the Dapr subscription, event and subscription-handler routes on *app*.
+- **Defined in:** `application_sdk/handler/event_routes.py`
+
 #### `register_handler_routes`
 
 - **Import:** `from application_sdk.handler.routes import register_handler_routes`
@@ -7186,6 +7207,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None`
 - **Summary:** Register the config and file-upload routes on *app*.
 - **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `register_workflow_routes`
+
+- **Import:** `from application_sdk.handler.workflow_routes import register_workflow_routes`
+- **Signature:** `register_workflow_routes(app: FastAPI, source: WorkflowRoutesSource) -> None`
+- **Summary:** Register the workflow lifecycle routes (start, stop, result, status) on *app*.
+- **Defined in:** `application_sdk/handler/workflow_routes.py`
 
 #### `sagev2_warmup_flag`
 

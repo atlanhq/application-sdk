@@ -363,7 +363,9 @@ class TestSourceUnverifiableAppliesMode:
             _RaisingHandler(CredentialNotFoundError("nope")),
             mode=PreflightGateMode.HARD,
         )
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(
+            ApplicationError, match="Credential 'nope' not found"
+        ) as excinfo:
             await gate(PreflightGateInput())
         assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
         assert (
@@ -487,7 +489,9 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
         with (
             _patched_resolution(raises=CredentialNotFoundError("guid-1")),
         ):
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(
+                ApplicationError, match="Credential 'guid-1' not found"
+            ) as excinfo:
                 await gate(PreflightGateInput())
         assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
         assert (
@@ -578,7 +582,7 @@ class TestHandlerRaisedBlockPassesThrough:
             non_retryable=True,
         )
         gate = _gate(_RaisingHandler(block), mode=PreflightGateMode.HARD, budget=5)
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(ApplicationError, match="bad creds") as excinfo:
             await gate(PreflightGateInput())
         assert excinfo.value is block
         assert capture_preflight_outcomes.rows == []
@@ -912,7 +916,7 @@ class TestVerdictOnAnyAttempt:
         with (
             mock.patch(f"{_GATE}.activity.info", return_value=info),
         ):
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(ApplicationError, match="bad creds") as excinfo:
                 await gate(PreflightGateInput())
 
         assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
@@ -929,7 +933,7 @@ class TestVerdictOnAnyAttempt:
         with (
             mock.patch(f"{_GATE}.activity.info", side_effect=RuntimeError("no ctx")),
         ):
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(ApplicationError, match="bad creds") as excinfo:
                 await gate(PreflightGateInput())
         assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
         assert capture_preflight_outcomes.one["outcome"] == "blocked"

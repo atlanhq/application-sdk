@@ -280,7 +280,7 @@ class TestTempTableRegexInjectionGuard:
         ],
     )
     def test_singlechar_sequence_rejected(self, value: str) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="String should match pattern"):
             ExtractionInput.model_validate({"temp_table_regex": value})
 
     def test_clean_regex_passes(self) -> None:

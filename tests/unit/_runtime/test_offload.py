@@ -61,7 +61,7 @@ class TestRunInThread:
             raise ValueError("nope")
 
         with patch.object(hb_mod, "_BLOCKING_EXECUTOR", InlineExecutor()):
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="nope"):
                 await run_in_thread(bad)
 
 

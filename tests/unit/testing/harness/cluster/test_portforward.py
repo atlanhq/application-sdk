@@ -261,7 +261,7 @@ async def test_a_non_transport_failure_is_not_retried():
             "httpx.AsyncClient.request",
             new=AsyncMock(side_effect=ValueError("bad body")),
         ),
-        pytest.raises(ValueError),
+        pytest.raises(ValueError, match="bad body"),
     ):
         async with port_forward("ns", "svc", 8080) as session:
             await session.request("POST", "/api/v1/workflows", body={"a": 1})

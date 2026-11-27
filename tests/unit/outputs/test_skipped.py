@@ -297,7 +297,10 @@ class TestPartialAppend:
     def test_failed_append_is_rolled_back(self, tmp_path):
         path = tmp_path / "part.ndjson"
         path.write_bytes(b'{"record_id":"a"}\n')
-        with self._open_partial(path), pytest.raises(OSError):
+        with (
+            self._open_partial(path),
+            pytest.raises(OSError, match="No space left on device"),
+        ):
             skipped._append_lines(path, b'{"record_id":"b"}\n')
 
         assert path.read_bytes() == b'{"record_id":"a"}\n'

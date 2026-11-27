@@ -30,10 +30,9 @@ _OWNED_QUEUE = "lifecycle-test-queue"
 def _owned_workflow_type() -> str:
     """A workflow type registered by the most recently built service's app."""
     from application_sdk.handler import service as svc_module
+    from application_sdk.handler.workflow_routes import _registered_workflow_types
 
-    return next(
-        iter(svc_module._registered_workflow_types(svc_module._workflow_config))
-    )
+    return next(iter(_registered_workflow_types(svc_module._workflow_config)))
 
 
 def _owned_desc():
@@ -206,7 +205,7 @@ class TestGetWorkflowResultHelper:
     async def test_typed_dict_result_returned_as_dict(self) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
-        from application_sdk.handler.service import _get_workflow_result
+        from application_sdk.handler.workflow_routes import _get_workflow_result
 
         mock_handle = MagicMock()
         mock_handle.result = AsyncMock(return_value={"foo": "bar"})
@@ -223,7 +222,7 @@ class TestGetWorkflowResultHelper:
 
         from pydantic import BaseModel
 
-        from application_sdk.handler.service import _get_workflow_result
+        from application_sdk.handler.workflow_routes import _get_workflow_result
 
         class _Out(BaseModel):
             x: int = 1
@@ -242,7 +241,7 @@ class TestGetWorkflowResultHelper:
     async def test_unknown_result_type_returns_empty_dict(self) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
-        from application_sdk.handler.service import _get_workflow_result
+        from application_sdk.handler.workflow_routes import _get_workflow_result
 
         mock_handle = MagicMock()
         mock_handle.result = AsyncMock(return_value="not-a-dict-or-model")
@@ -260,7 +259,7 @@ class TestGetWorkflowResultHelper:
         """
         from unittest.mock import AsyncMock, MagicMock
 
-        from application_sdk.handler.service import _get_workflow_result
+        from application_sdk.handler.workflow_routes import _get_workflow_result
 
         # First call (typed) raises; second (untyped) succeeds
         first_handle = MagicMock()
@@ -564,7 +563,7 @@ class TestGetResultEndpoint:
                 new=AsyncMock(return_value=mock_client),
             ),
             patch(
-                "application_sdk.handler.service._get_workflow_result",
+                "application_sdk.handler.workflow_routes._get_workflow_result",
                 new=AsyncMock(return_value={"a": 1}),
             ),
         ):
@@ -643,7 +642,7 @@ class TestGetResultEndpoint:
                 new=AsyncMock(return_value=mock_client),
             ),
             patch(
-                "application_sdk.handler.service._get_workflow_result",
+                "application_sdk.handler.workflow_routes._get_workflow_result",
                 new=AsyncMock(return_value={"final": "value"}),
             ),
         ):
@@ -676,7 +675,7 @@ class TestGetResultEndpoint:
                 new=AsyncMock(return_value=mock_client),
             ),
             patch(
-                "application_sdk.handler.service._get_workflow_result",
+                "application_sdk.handler.workflow_routes._get_workflow_result",
                 new=AsyncMock(side_effect=RuntimeError("internal-error-xxx")),
             ),
         ):
@@ -940,7 +939,7 @@ class TestGetResultMultiEntrypointOutputType:
                 new=AsyncMock(return_value=mock_client),
             ),
             patch(
-                "application_sdk.handler.service._get_workflow_result",
+                "application_sdk.handler.workflow_routes._get_workflow_result",
                 side_effect=_spy,
             ),
         ):
@@ -986,7 +985,7 @@ class TestGetResultMultiEntrypointOutputType:
                 new=AsyncMock(return_value=mock_client),
             ),
             patch(
-                "application_sdk.handler.service._get_workflow_result",
+                "application_sdk.handler.workflow_routes._get_workflow_result",
                 side_effect=_spy,
             ),
         ):

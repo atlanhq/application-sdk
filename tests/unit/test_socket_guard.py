@@ -68,15 +68,19 @@ def test_event_loop_self_pipe_works_with_the_loopback_pair(
 
 
 @pytest.mark.parametrize(
-    ("family", "type_", "proto"),
+    ("family", "type_", "proto", "match"),
     [
-        pytest.param(socket.AF_UNSPEC, socket.SOCK_STREAM, 0, id="family"),
-        pytest.param(socket.AF_INET, socket.SOCK_DGRAM, 0, id="type"),
-        pytest.param(socket.AF_INET, socket.SOCK_STREAM, 6, id="proto"),
+        pytest.param(
+            socket.AF_UNSPEC, socket.SOCK_STREAM, 0, "address families", id="family"
+        ),
+        pytest.param(socket.AF_INET, socket.SOCK_DGRAM, 0, "socket type", id="type"),
+        pytest.param(
+            socket.AF_INET, socket.SOCK_STREAM, 6, "protocol zero", id="proto"
+        ),
     ],
 )
 def test_rejects_what_cpython_fallback_rejects(
-    family: int, type_: int, proto: int
+    family: int, type_: int, proto: int, match: str
 ) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=match):
         loopback_socketpair(family, type_, proto)

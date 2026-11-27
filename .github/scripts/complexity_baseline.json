@@ -192,12 +192,9 @@
   },
   "application_sdk/handler/service.py": {
     "C901": [
-      "_register_workflow_routes",
-      "_register_workflow_routes.get_result",
       "create_app_handler_service"
     ],
     "PLR0915": [
-      "_register_workflow_routes",
       "create_app_handler_service"
     ]
   },

@@ -150,7 +150,7 @@ def test_an_indented_version_key_is_not_mistaken_for_the_project_version(
 def test_a_pyproject_without_a_version_is_an_error(tmp_path: Path) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "x"\n', encoding="utf-8")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="no top-level `version = "):
         mod.read_version(str(pyproject))
 
 

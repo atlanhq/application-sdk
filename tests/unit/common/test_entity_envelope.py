@@ -19,6 +19,7 @@ them wrong:
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import orjson
@@ -538,7 +539,7 @@ class TestPolicyDefaults:
         ).is_identity
 
     def test_policy_is_frozen(self):
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError, match="'shape'"):
             DEFAULT_ENVELOPE.shape = EnvelopeShape.PYATLAN  # type: ignore[misc]
 
 

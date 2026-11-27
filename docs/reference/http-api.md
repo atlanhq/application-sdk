@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-The Application SDK handler exposes a FastAPI HTTP service. All endpoints below are registered by `create_app_handler_service()` in `application_sdk/handler/service.py`.
+The Application SDK handler exposes a FastAPI HTTP service. All endpoints below are registered by `create_app_handler_service()` in `application_sdk/handler/service.py`, from one route module per group: `handler/routes.py` (auth, check, warmup, metadata), `handler/metadata_routes.py` (configmaps, manifest, input contract, validate), `handler/object_routes.py` (config, file), `handler/workflow_routes.py` (start, stop, result, status) and `handler/event_routes.py` (Dapr subscriptions and events).
 
 Base URL (local): `http://localhost:8000`
 

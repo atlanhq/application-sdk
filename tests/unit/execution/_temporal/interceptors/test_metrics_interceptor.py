@@ -527,7 +527,7 @@ class TestMetricsActivityInboundInterceptor:
             patch.object(local_time, "monotonic_ns", side_effect=[0, 1_000_000_000]),
         ):
             mock_act.info.return_value = ActivityInfo()
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="bad"):
                 await interceptor.execute_activity(ExecuteInput())
 
         histogram = mock_meter.create_histogram.return_value
@@ -602,7 +602,7 @@ class TestMetricsActivityInboundInterceptor:
             "application_sdk.execution._temporal.interceptors.metrics.activity"
         ) as mock_act:
             mock_act.info.return_value = ActivityInfo()
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="bad"):
                 await interceptor.execute_activity(ExecuteInput())
 
         errors_counter.add.assert_called_once()
