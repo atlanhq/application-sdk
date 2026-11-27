@@ -1,0 +1,5826 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/concepts/common/">
+      
+      
+        <link rel="prev" href="../clients/">
+      
+      
+        <link rel="next" href="../handlers/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Common - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#common-utilities" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Common
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../standards/coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#getting-a-logger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting a Logger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-level-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-level hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storagebucketrelocationerror-a-write-rejected-by-a-bucket-relocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageBucketRelocationError — a write rejected by a bucket relocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storagegatewayauthunavailableerror-a-401-that-is-not-about-your-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageGatewayAuthUnavailableError — a 401 that is not about your credentials
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storagegatewaynorouteerror-a-404-that-does-not-mean-the-key-is-missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageGatewayNoRouteError — a 404 that does not mean the key is missing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coldstartraceerror-the-cross-domain-transient-marker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ColdStartRaceError — the cross-domain transient marker
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-backoff-application_sdkcommonbackoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry backoff — application_sdk.common.backoff
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#taskstallederror-raised-by-the-sdk-never-by-an-app" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TaskStalledError — raised by the SDK, never by an app
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invalidinputvalueerror-a-compatibility-shim-not-a-leaf-to-reach-for" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidInputValueError — a compatibility shim, not a leaf to reach for
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raise-by-failure-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raise by failure shape
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#map-an-http-failure-to-a-leaf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Map an HTTP failure to a leaf
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#catch-by-shape-or-by-domain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catch by shape or by domain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audience
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wire-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire envelope
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Wire envelope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-cause_repr-is-sanitised" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How cause_repr is sanitised
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-failures-carry-the-backends-verdict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage failures carry the backend's verdict
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evidence-keys-may-not-be-secret-named" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evidence keys may not be secret-named
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rebuilding-a-typed-error-from-the-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rebuilding a typed error from the envelope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#legacy-error-code-namespaces-backward-compat-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy error-code namespaces (backward-compat only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sql-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SQL Utilities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SQL Utilities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read_sql_files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        read_sql_files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prepare_query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prepare_query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prepare_filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prepare_filters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#asset-serialisation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asset Serialisation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Asset Serialisation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#framework-injected-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Framework-injected attributes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Framework-injected attributes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#placeholder-guid-removal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placeholder guid removal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entity-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entity envelope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#general-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        General Utilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#temporal-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Temporal Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#getting-a-logger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting a Logger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-level-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-level hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storagebucketrelocationerror-a-write-rejected-by-a-bucket-relocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageBucketRelocationError — a write rejected by a bucket relocation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storagegatewayauthunavailableerror-a-401-that-is-not-about-your-credentials" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageGatewayAuthUnavailableError — a 401 that is not about your credentials
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storagegatewaynorouteerror-a-404-that-does-not-mean-the-key-is-missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageGatewayNoRouteError — a 404 that does not mean the key is missing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coldstartraceerror-the-cross-domain-transient-marker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ColdStartRaceError — the cross-domain transient marker
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-backoff-application_sdkcommonbackoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry backoff — application_sdk.common.backoff
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#taskstallederror-raised-by-the-sdk-never-by-an-app" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TaskStalledError — raised by the SDK, never by an app
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#invalidinputvalueerror-a-compatibility-shim-not-a-leaf-to-reach-for" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        InvalidInputValueError — a compatibility shim, not a leaf to reach for
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#raise-by-failure-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Raise by failure shape
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#map-an-http-failure-to-a-leaf" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Map an HTTP failure to a leaf
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#catch-by-shape-or-by-domain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catch by shape or by domain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audience
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#wire-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire envelope
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Wire envelope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-cause_repr-is-sanitised" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How cause_repr is sanitised
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storage-failures-carry-the-backends-verdict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage failures carry the backend's verdict
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evidence-keys-may-not-be-secret-named" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Evidence keys may not be secret-named
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rebuilding-a-typed-error-from-the-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rebuilding a typed error from the envelope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#legacy-error-code-namespaces-backward-compat-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy error-code namespaces (backward-compat only)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sql-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SQL Utilities
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="SQL Utilities">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read_sql_files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        read_sql_files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prepare_query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prepare_query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prepare_filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        prepare_filters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#asset-serialisation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asset Serialisation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Asset Serialisation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#framework-injected-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Framework-injected attributes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Framework-injected attributes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#placeholder-guid-removal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Placeholder guid removal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#entity-envelope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Entity envelope
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#general-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        General Utilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#temporal-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Temporal Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../apps/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="common-utilities">Common Utilities</h1>
+<p>This section describes utility functions and classes in the <code>application_sdk.common</code> package used across the SDK.</p>
+<h2 id="logging">Logging</h2>
+<p>v3 uses <code>loguru</code> (via an <code>AtlanLoggerAdapter</code> wrapper) for structured logging. The v2 patterns of <code>workflow.logger</code> and <code>activity.logger</code> from Temporal are no longer used — all logging goes through <code>get_logger</code>.</p>
+<h3 id="getting-a-logger">Getting a Logger</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.observability</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_logger</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">logger</span> <span class="o">=</span> <span class="n">get_logger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">my_function</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"processing_data: </span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="n">result</span> <span class="o">=</span> <span class="n">process</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"processing_complete: rows=</span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">result</span><span class="o">.</span><span class="n">count</span><span class="p">)</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">"processing_failed"</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Use <code>%</code>-style format strings in message bodies. The only kwarg you should ever pass to a log call is <code>exc_info=True</code> (or <code>exc_info=exc</code>); embed every other field — <code>correlation_id</code>, <code>workflow_id</code>, <code>run_id</code>, etc. — in the message body via %-style so it is always visible in log output regardless of pipeline configuration.</p>
+<h3 id="configuration">Configuration</h3>
+<p>Logging is configured via environment variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ATLAN_LOG_LEVEL</code></td>
+<td><code>INFO</code></td>
+<td>Minimum log level (fallback: <code>LOG_LEVEL</code>)</td>
+</tr>
+<tr>
+<td><code>ENABLE_OTLP_LOGS</code></td>
+<td><code>false</code></td>
+<td>Export logs via OpenTelemetry Protocol</td>
+</tr>
+<tr>
+<td><code>OTEL_EXPORTER_OTLP_ENDPOINT</code></td>
+<td><code>http://localhost:4317</code></td>
+<td>OTLP endpoint</td>
+</tr>
+<tr>
+<td><code>ATLAN_LOG_SOURCE</code></td>
+<td><code>APPLICATION_NAME</code></td>
+<td>Overrides the app label in the <code>source</code> field stamped on every record. Records from <code>application_sdk</code> are labelled <code>sdk</code> and known third-party loggers <code>dependency</code> regardless of this setting — it only renames the <em>app</em> bucket. Apps should leave it unset so their own name appears; the Automation Engine sets <code>ae</code> so its orchestration lines are attributed to the engine rather than to the app it is running. See <a href="../monitoring/#log-provenance-the-source-field">Monitoring → Log provenance</a>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="error-handling">Error Handling</h2>
+<p>The SDK provides a structured error hierarchy in <code>application_sdk/errors/</code> built on two axes: a
+closed <code>FailureCategory</code> enum (<em>what happened</em>) and an orthogonal <code>Audience</code> enum (<em>who must act</em>).</p>
+<h3 id="two-level-hierarchy">Two-level hierarchy</h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>AppError  (base — application_sdk.errors)
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>│
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>├── Categorical leaves  (application_sdk.errors.leaves)
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>│   ├── AuthError              CATEGORY=AUTH              retryable=False  audience=USER
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>│   ├── AppPermissionDeniedError  PERMISSION             retryable=False  audience=USER
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>│   ├── NotFoundError          NOT_FOUND                  retryable=False  audience=USER
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>│   ├── AlreadyExistsError     ALREADY_EXISTS             retryable=False  audience=USER
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>│   ├── InvalidInputError      INVALID_INPUT              retryable=False  audience=USER
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>│   │   └── InvalidInputValueError  INVALID_INPUT (INVALID_INPUT_VALUE), also a builtin ValueError  retryable=False  audience=USER
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>│   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>│   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>│   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>│   ├── SourceUnavailableError   SOURCE_UNAVAILABLE        retryable=True   audience=USER
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>│   │   └── SourceWarmupExhaustedError  SOURCE_UNAVAILABLE (SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED)  retryable=True   audience=USER
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>│   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>│   │   └── DiskFullError      RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_DISK_FULL)  retryable=True   audience=PLATFORM
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>│   │   └── LocalVolumeUnwritableError  RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_VOLUME_UNWRITABLE)  retryable=True   audience=PLATFORM
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>│   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>│   │   └── TaskStalledError   TIMEOUT (TIMEOUT_TASK_STALLED)  retryable=True   audience=APP_OWNER
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>│   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>│   ├── DataIntegrityError     DATA_INTEGRITY             retryable=False  audience=APP_OWNER
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>│   ├── InternalError          INTERNAL                   retryable=False  audience=APP_OWNER
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>│   └── UnimplementedError     UNIMPLEMENTED              retryable=False  audience=APP_OWNER
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>│
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>└── Domain umbrellas  (leaf-first multi-inheritance)
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    ├── CredentialError(AuthError)
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    │   ├── CredentialNotFoundError(NotFoundError, CredentialError)
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>    │   ├── CredentialParseError(InvalidInputError, CredentialError)
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    │   └── CredentialValidationError(InvalidInputError, CredentialError)
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    ├── StorageError(DependencyUnavailableError)
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>    │   ├── StorageNotFoundError(NotFoundError, StorageError)
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>    │   ├── StoragePermissionError(AppPermissionDeniedError, StorageError)
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>    │   ├── StorageConfigError(InvalidInputError, StorageError)
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>    │   └── StorageBucketRelocationError(StorageError)                                 # platform-side, temporary
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>    └── SecretStoreError(DependencyUnavailableError)
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>        ├── SecretNotFoundError(NotFoundError, SecretStoreError)
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>        ├── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)          # transient
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>        └── SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)  # terminal
+</span></code></pre></div>
+<p>The <strong>categorical leaf</strong> (listed first in the MRO) drives <code>category</code>, <code>audience</code>, and
+<code>default_retryable</code> on the wire. The <strong>domain umbrella</strong> (listed second) keeps legacy
+<code>except StorageError:</code> / <code>except CredentialError:</code> catch sites alive. A single exception
+instance satisfies both hierarchies simultaneously.</p>
+<h3 id="storagebucketrelocationerror-a-write-rejected-by-a-bucket-relocation">StorageBucketRelocationError — a write rejected by a bucket relocation</h3>
+<p><code>StorageBucketRelocationError(StorageError)</code> keeps the generic
+<code>DependencyUnavailableError</code> category and PLATFORM audience of its parent, but carries its own
+<code>code</code> (<code>DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION</code>) and <code>ErrorCode</code> (<code>AAF-STR-008</code>) rather than
+the generic <code>AAF-STR-004</code>. It exists because a dual-/multi-region bucket relocation makes a store
+reject multipart upload <em>initiation</em> for the whole move window while plain single-request PUTs
+keep working — so artifact uploads above the writer's part size fail while smaller ones succeed.</p>
+<p>Nothing the app or the customer controls fixes it: no credential, permission, or connector change
+shortens a relocation. That is why it is PLATFORM-attributed and <code>retryable=True</code>, and why its
+<code>suggested_action</code> says to retry once the relocation finishes. Both the preflight gate's
+<code>objectStoreAccess:&lt;store&gt;</code> check and a mid-run <code>upload_file</code> failure raise or stamp this one code,
+so a relocation lands in a single analytics bucket wherever it is caught.</p>
+<h3 id="storagegatewayauthunavailableerror-a-401-that-is-not-about-your-credentials">StorageGatewayAuthUnavailableError — a 401 that is not about your credentials</h3>
+<p><code>StorageGatewayAuthUnavailableError(StorageError)</code> carries
+<code>DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH</code> / <code>AAF-STR-010</code> instead of the generic
+<code>AAF-STR-004</code>, for one narrow condition: Atlan's <code>/api/blobstorage</code> proxy verifies the SigV4
+signature by looking the signing key's secret up in Keycloak on <strong>every</strong> request, and maps every
+failure of that lookup — including its own 30-second timeout — onto
+<code>401 {"code": 1005, "error": "Invalid Client"}</code>.</p>
+<p>The leaf matches on both halves of that pair, so a 401 from any other store, or a <code>1005</code> on any
+other status, still falls through to the generic <code>StorageError</code>.</p>
+<p>It applies to reads as well as writes. Every store operation that can fail against a remote —
+<code>upload_file</code>, <code>put</code>, <code>download_file</code>, <code>exists</code>, <code>get_file_meta</code>, <code>_get_bytes</code>, <code>delete</code>,
+<code>list_keys</code> — now routes its non-not-found failures through the same classifier, so all of them
+carry <code>http_status</code> / <code>provider_code</code> / <code>target</code> too. That matters for more than tidiness: a
+<code>verify_refs</code> HEAD goes through <code>exists()</code>, and a HEAD was what the run that motivated this leaf
+finally died on. The not-found contracts are unchanged — <code>exists</code> and <code>delete</code> still return
+<code>False</code>, <code>get_file_meta</code> and <code>_get_bytes</code> still return <code>None</code> — because the classifier sits after
+that short-circuit.</p>
+<p>Why the distinction earns a code: the signing key is a <em>static</em> Keycloak client id/secret, so a
+genuinely wrong credential fails the very first request a deployment makes — the SDR preflight
+probe at startup, long before any artifact moves. A <code>1005</code> arriving mid-run, after that probe
+passed, is the gateway being unavailable, and no credential change fixes it. Its
+<code>suggested_action</code> says so explicitly, because the generic wording ("lacked valid authentication
+credentials") sends an operator to rotate credentials that are working.</p>
+<h3 id="storagegatewaynorouteerror-a-404-that-does-not-mean-the-key-is-missing">StorageGatewayNoRouteError — a 404 that does not mean the key is missing</h3>
+<p><code>StorageGatewayNoRouteError(StorageError)</code> carries
+<code>DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE</code> / <code>AAF-STR-012</code>. A blobstorage gateway
+instance that joins the load balancer before its route table has synced answers every request with
+<code>404 {"message":"no Route matched with those values"}</code> for a few seconds. The object, the bucket
+and the credentials are fine; the next gateway instance would have accepted the request.</p>
+<p>The leaf matches on the 404 <strong>and</strong> the gateway's own text, so a plain 404 (a real missing bucket
+or container) still falls through. It is retryable, and its <code>suggested_action</code> says to wait and
+retry rather than to look for a missing key.</p>
+<p>Every store request retries this answer itself (5, 10 and 20s, each scaled by a jitter factor in
+0.5–1.5), at one seam in <code>storage/ops.py</code>. That covers the upload, its post-upload readback HEAD,
+the <code>{key}.sha256</code> sidecar PUT, <code>download_file</code> and the chunked range GETs, <code>exists</code>,
+<code>get_file_meta</code>, <code>_get_bytes</code>, <code>delete</code> and listings. The typed error is raised only once those
+retries are spent. No path treats this 404 as a missing key: it raises the typed error, which is
+retryable, instead of returning "absent" or raising the non-retryable <code>StorageNotFoundError</code>.</p>
+<p>HEAD is the exception. A HEAD response has no body, so the gateway's no-route 404 on a HEAD
+cannot be told from a real missing key, and <code>exists</code> / <code>get_file_meta</code> report the object absent.
+Where a miss is the exception and acting on a false one is expensive, callers use
+<code>_exists_confirmed</code> / <code>_get_file_meta_confirmed</code> instead: a HEAD hit costs nothing extra, and a miss
+is checked against a listing of the key's parent folder (body-bearing, so it rides the retry
+above). <code>verify_refs</code>, the single-file <code>FileReference</code> materialise and the post-upload readback
+use them. The integrity sidecar is read with a GET rather than probed with a HEAD, so a gateway
+answer cannot pass for "no sidecar". Plain <code>exists</code> / <code>get_file_meta</code> stay for callers where a
+miss is the normal answer.</p>
+<p>The confirmed helpers are private and temporary. The fix for the 404 itself is on the platform:
+Kong answers "no Route matched" only while a load balancer sends it traffic before its routes have
+loaded, and every load balancer in front of Kong gating on <code>/status/ready</code> stops that. Once the
+fleet shows no more no-route 404s, the helpers go and their callers return to <code>exists</code> /
+<code>get_file_meta</code>. Reading the sidecar with a GET stays: it is one round trip fewer whenever a
+sidecar exists.</p>
+<h3 id="coldstartraceerror-the-cross-domain-transient-marker">ColdStartRaceError — the cross-domain transient marker</h3>
+<p><code>ColdStartRaceError(DependencyUnavailableError)</code> is not a domain umbrella itself — it's a
+marker mixed into a domain leaf's transient subtype to answer one narrow question: "is this
+specific failure a not-yet-reachable dependency right now" (a transport failure, or — for the
+secrets domain specifically — the one Dapr secrets-API error code that unambiguously means "no
+secret store registered yet"), independent of the general <code>retryable</code> wire hint. A bare 5xx
+from the Dapr <em>secrets</em> API is deliberately NOT treated as proof of unreachability on its own:
+verified against a live sidecar, a genuinely-missing secret key also returns 500 with
+<code>errorCode=ERR_SECRET_GET</code> — indistinguishable by status code alone from a still-cold
+component — so classification there additionally inspects the JSON error body's <code>errorCode</code>,
+and for <code>ERR_SECRET_GET</code> its message: only a not-found-shaped message is "absent"; a throttled,
+access-denied or KMS failure is a retryable <code>SecretStoreError</code>
+(see <code>application_sdk.infrastructure._dapr.client.classify_secret_fetch_error</code>). A generic
+helper — <code>application_sdk.infrastructure.retry_past_dapr_cold_start</code> — retries any current or
+future subtype across domains (secret store today; state store, pub/sub, or credential-vault
+config fetches tomorrow) just by catching this one marker, with no new per-domain check needed.
+<code>SecretStoreUnavailableError</code> above is the first concrete example: it multiply-inherits
+<code>SecretStoreError</code> (so <code>except SecretStoreError:</code> still catches it) and <code>ColdStartRaceError</code>
+(so the retry helper does too).</p>
+<p><strong>Terminal vs transient — <code>DaprSidecarUnreachableError</code>.</strong> <code>ColdStartRaceError</code> means "not
+reachable <em>yet</em>, still waiting". Its terminal counterpart is
+<code>DaprSidecarUnreachableError(ColdStartRaceError)</code>, raised by <code>retry_past_dapr_cold_start</code> only
+when the whole cold-start budget elapses without one usable answer — "waited the whole budget,
+<em>done</em> waiting". It stays a <code>ColdStartRaceError</code> subtype on purpose: the same
+<code>except ColdStartRaceError:</code> sites keep catching it and its category stays <code>DEPENDENCY_UNAVAILABLE</code>
+(so preflight-gate routing and <code>gate_broken</code> are unchanged), while its distinct type name and
+<code>code = DEPENDENCY_UNAVAILABLE_SIDECAR_UNREACHABLE</code> — plus <code>component</code> / <code>attempts</code> /
+<code>elapsed_seconds</code> — let an operator tell a persistent sidecar outage from a still-booting one. Catch
+<code>ColdStartRaceError</code> to retry the race; read the concrete subtype to report the fault.</p>
+<p>The secrets domain carries both forms as a pair: <code>SecretStoreUnavailableError</code> (transient) and
+<code>SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)</code> (terminal). The
+secret-resolution catch sites re-raise the terminal one — hash-labelled and cause-free, same
+redaction as the transient — when <code>retry_past_dapr_cold_start</code> exhausts its budget, so a
+budget-exhausted outage stays distinguishable from a still-cold race end-to-end even after the raw
+<code>DaprSidecarUnreachableError</code> is redacted at the secret boundary. Both stay <code>SecretStoreError</code> (so
+<code>except SecretStoreError:</code> catches either) and <code>ColdStartRaceError</code> (so the probe aggregators route
+either); only a store that has already answered once (steady state, not first contact) surfaces the
+transient type on a later blip.</p>
+<p><strong>The readiness gates reset.</strong> Once a component has answered (or <code>/healthz</code> returned 204), a
+later transient failure gets only a short warm ladder (two retries), so a real outage is not
+masked on every call. When that warm ladder also runs out, the sidecar the process trusted is gone
+(a daprd restart, an evicted sidecar), so both that component's gate and the holistic healthz gate
+are cleared, and the next call waits out a cold start again. Gates are keyed by the Dapr component
+actually called: the credential vault's <code>component_name</code> override has its own gate rather than
+sharing the default secret store's.</p>
+<h3 id="retry-backoff-application_sdkcommonbackoff">Retry backoff — <code>application_sdk.common.backoff</code></h3>
+<p>Every in-process retry ladder in the SDK states its shape as a <code>Backoff</code> (geometric
+<code>base</code>/<code>factor</code>/<code>cap</code>, or explicit <code>steps</code>, plus <code>max_attempts</code> and/or <code>budget_seconds</code>) and walks it
+with <code>retry_async(call, backoff=..., retry_if=...)</code>. A supervisor loop with its own control flow
+(worker restart, token refresh) keeps its loop and takes only <code>Backoff.delay(n)</code>. Jitter is part of
+the shape: <code>Jitter.FULL</code> (<code>U(0, d)</code>, the default) for anything that many workers retry at once,
+<code>Jitter.SPREAD</code> (<code>d × U(0.5, 1.5)</code>) where the floor matters, and <code>Jitter.NONE</code> only for loops that must
+be reproducible, such as the preflight warmup poll on the workflow path. Retries owned by a library
+(httpcore connect retries, the <code>httpx-retries</code> Dapr transport, botocore, object_store's Rust client,
+Temporal <code>RetryPolicy</code>) are listed in the module docstring rather than wrapped.</p>
+<h3 id="taskstallederror-raised-by-the-sdk-never-by-an-app">TaskStalledError — raised by the SDK, never by an app</h3>
+<p><code>TaskStalledError(AppTimeoutError)</code> is the failure the stall watchdog produces when an activity
+attempt keeps heartbeating but nothing observable advances for longer than the task's
+no-progress budget (ADR-0018). It carries <code>stalled_for_seconds</code> and <code>last_progress_label</code>, so
+the failure names <em>where</em> the attempt went quiet rather than only that it did, and it is
+<strong>retryable</strong>: the dominant cause is a transient source-side hang that self-heals on a fresh
+attempt. A subtype rather than a sixteenth leaf, so <code>except AppTimeoutError:</code> still catches it
+while the distinct <code>TIMEOUT_TASK_STALLED</code> code and the <code>TaskStalledError</code> Temporal wire type keep stall
+kills countable apart from <code>StartToClose</code> and heartbeat timeouts. App code should not raise it —
+raise the leaf that describes what the source actually did.</p>
+<h3 id="invalidinputvalueerror-a-compatibility-shim-not-a-leaf-to-reach-for">InvalidInputValueError — a compatibility shim, not a leaf to reach for</h3>
+<p><code>InvalidInputValueError(InvalidInputError, ValueError)</code> exists for one job: typing a public SDK
+entry point whose documented contract was already a bare <code>ValueError</code>. <code>ValueError</code> stays in the
+bases, so <code>except ValueError:</code> in an app keeps catching the failure while the raise now carries a
+typed <code>INVALID_INPUT</code> / <code>USER</code> envelope. Its own code, <code>INVALID_INPUT_VALUE</code>, keeps the shim
+countable apart from the bare leaf — a non-zero rate on it measures how much still depends on the
+builtin contract, which is what decides when it can be retired.</p>
+<p><strong>Do not use it for new APIs.</strong> A new entry point has no <code>ValueError</code> contract to preserve, so
+raise plain <code>InvalidInputError</code> and let callers catch the typed hierarchy. Copying the shim onto
+new code spreads the builtin dependency this class exists to contain.</p>
+<h3 id="raise-by-failure-shape">Raise by failure shape</h3>
+<p>Pick the leaf whose <code>FailureCategory</code> best describes what happened. Prefer a domain subclass
+when the calling context is clearly within that subsystem:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">DependencyUnavailableError</span><span class="p">,</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">InvalidInputError</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">NotFoundError</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">RateLimitedError</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.storage.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">StorageNotFoundError</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># Generic categorical leaf — any context</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="k">raise</span> <span class="n">DependencyUnavailableError</span><span class="p">(</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">message</span><span class="o">=</span><span class="s2">"Temporal frontend unreachable"</span><span class="p">,</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>    <span class="n">service</span><span class="o">=</span><span class="s2">"temporal"</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">"temporal-frontend:7233"</span><span class="p">,</span> <span class="n">cause</span><span class="o">=</span><span class="n">exc</span><span class="p">,</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">)</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="c1"># Domain subclass — storage context; routes as NOT_FOUND, catchable as StorageError</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="k">raise</span> <span class="n">StorageNotFoundError</span><span class="p">(</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="n">message</span><span class="o">=</span><span class="s2">"Object not found in bucket"</span><span class="p">,</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="n">key</span><span class="o">=</span><span class="s2">"artifacts/run-123/output.parquet"</span><span class="p">,</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="map-an-http-failure-to-a-leaf">Map an HTTP failure to a leaf</h3>
+<p><code>classify_http_status(status)</code> and <code>classify_http_exception(exc)</code> pick the leaf for an HTTP
+failure, so an app does not keep its own status table. Both return the leaf <strong>class</strong>, or
+<code>None</code> when nothing maps; the app builds it with its own <code>message</code>, <code>suggested_action</code> and
+<code>cause</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Leaf</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>401</td>
+<td><code>AuthError</code></td>
+</tr>
+<tr>
+<td>403</td>
+<td><code>AppPermissionDeniedError</code></td>
+</tr>
+<tr>
+<td>404</td>
+<td><code>NotFoundError</code></td>
+</tr>
+<tr>
+<td>429</td>
+<td><code>RateLimitedError</code></td>
+</tr>
+<tr>
+<td>5xx</td>
+<td><code>SourceUnavailableError</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>classify_http_exception</code> looks at the exception and then its explicit <code>__cause__</code> links
+(<code>raise Wrapper(...) from err</code>). It never follows implicit <code>__context__</code>: an error raised
+<em>while</em> handling a 403, such as a <code>KeyError</code> in your parsing code, is not a permission
+failure. The first <code>httpx</code> frame decides. A network error, a timeout or a dropped connection
+is <code>SourceUnavailableError</code>, and an <code>HTTPStatusError</code> goes through the table. An unmapped
+status, <code>httpx.PoolTimeout</code> (the client's own pool running dry, not the source) and any other
+httpx error (a decoding or redirect failure) return <code>None</code> instead of borrowing an older
+failure further down the chain. <code>overrides</code> replaces an entry, including one in the 5xx
+range, for a source whose statuses mean something else.</p>
+<p>The helpers are opt-in: nothing in the SDK calls them for you. The pattern is to keep a
+typed error you already have, classify an untyped HTTP failure, and fall back to
+<code>InternalError</code> for anything else, with wording that matches the leaf you picked:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">AppError</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">AppPermissionDeniedError</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">AuthError</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">InternalError</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">NotFoundError</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">RateLimitedError</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">SourceUnavailableError</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>    <span class="n">classify_http_exception</span><span class="p">,</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">_WORDING</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">AuthError</span><span class="p">:</span> <span class="p">(</span><span class="s2">"The source rejected the credentials."</span><span class="p">,</span> <span class="s2">"Check the API key, then try again."</span><span class="p">),</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="n">AppPermissionDeniedError</span><span class="p">:</span> <span class="p">(</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>        <span class="s2">"The credentials cannot read the projects."</span><span class="p">,</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>        <span class="s2">"Grant the API user read access to the projects, then try again."</span><span class="p">,</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>    <span class="p">),</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>    <span class="n">NotFoundError</span><span class="p">:</span> <span class="p">(</span><span class="s2">"The configured workspace was not found."</span><span class="p">,</span> <span class="s2">"Check the workspace name."</span><span class="p">),</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="n">RateLimitedError</span><span class="p">:</span> <span class="p">(</span><span class="s2">"The source is rate limiting requests."</span><span class="p">,</span> <span class="s2">"Wait, then try again."</span><span class="p">),</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>    <span class="n">SourceUnavailableError</span><span class="p">:</span> <span class="p">(</span><span class="s2">"The source did not respond."</span><span class="p">,</span> <span class="s2">"Check that it is up, then retry."</span><span class="p">),</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>    <span class="n">InternalError</span><span class="p">:</span> <span class="p">(</span><span class="s2">"Could not check the source."</span><span class="p">,</span> <span class="s2">"Retry, then contact support."</span><span class="p">),</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a><span class="p">}</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a>
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="k">def</span><span class="w"> </span><span class="nf">preflight_error</span><span class="p">(</span><span class="n">exc</span><span class="p">:</span> <span class="ne">Exception</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AppError</span><span class="p">:</span>
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">exc</span><span class="p">,</span> <span class="n">AppError</span><span class="p">):</span>
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>        <span class="k">return</span> <span class="n">exc</span>
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a>    <span class="n">leaf</span> <span class="o">=</span> <span class="n">classify_http_exception</span><span class="p">(</span><span class="n">exc</span><span class="p">,</span> <span class="n">overrides</span><span class="o">=</span><span class="p">{</span><span class="mi">402</span><span class="p">:</span> <span class="n">AuthError</span><span class="p">,</span> <span class="mi">503</span><span class="p">:</span> <span class="n">RateLimitedError</span><span class="p">})</span>
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a>    <span class="k">if</span> <span class="n">leaf</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>        <span class="n">leaf</span> <span class="o">=</span> <span class="n">InternalError</span>
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>    <span class="n">message</span><span class="p">,</span> <span class="n">action</span> <span class="o">=</span> <span class="n">_WORDING</span><span class="p">[</span><span class="n">leaf</span><span class="p">]</span>
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a>    <span class="k">return</span> <span class="n">leaf</span><span class="p">(</span><span class="n">message</span><span class="o">=</span><span class="n">message</span><span class="p">,</span> <span class="n">suggested_action</span><span class="o">=</span><span class="n">action</span><span class="p">,</span> <span class="n">cause</span><span class="o">=</span><span class="n">exc</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Validate what you know is a credential problem (an empty or malformed credential) with its
+own typed error before the call that can fail; the fallback is for causes you cannot name,
+and <code>InternalError</code> files them against the app rather than the customer.</p>
+<h3 id="catch-by-shape-or-by-domain">Catch by shape or by domain</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">NotFoundError</span><span class="p">,</span> <span class="n">AppError</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.storage.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">StorageError</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="k">try</span><span class="p">:</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="o">...</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># Catch any not-found regardless of domain:</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="k">except</span> <span class="n">NotFoundError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="o">...</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1"># Catch any storage failure regardless of category:</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="k">except</span> <span class="n">StorageError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="o">...</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1"># Catch everything the SDK can raise:</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="k">except</span> <span class="n">AppError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>    <span class="n">fd</span> <span class="o">=</span> <span class="n">e</span><span class="o">.</span><span class="n">to_failure_details</span><span class="p">()</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>    <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">"failure category=</span><span class="si">%s</span><span class="s2"> audience=</span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">fd</span><span class="o">.</span><span class="n">category</span><span class="p">,</span> <span class="n">fd</span><span class="o">.</span><span class="n">audience</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="audience">Audience</h3>
+<p><code>Audience</code> is a closed three-value enum — every leaf must pick one:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>First-responder</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>USER</code></td>
+<td>Customer self-service (credentials, IAM, source config)</td>
+</tr>
+<tr>
+<td><code>PLATFORM</code></td>
+<td>Infra ops — shared deps down: Dapr, Temporal, object store, pod health</td>
+</tr>
+<tr>
+<td><code>APP_OWNER</code></td>
+<td>The team that wrote the failing code (connector or SDK): file a bug, add a specific subclass, investigate</td>
+</tr>
+</tbody>
+</table>
+<p>There is no <code>UNKNOWN</code> escape hatch. If the locus is unclear, <code>APP_OWNER</code> means "the team
+that wrote this code investigates and reclassifies."</p>
+<h3 id="wire-envelope">Wire envelope</h3>
+<p><code>AppError.to_failure_details()</code> builds a Pydantic <code>FailureDetails</code> envelope suitable for
+<code>ApplicationError.details=[…]</code> in Temporal:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">fd</span> <span class="o">=</span> <span class="n">e</span><span class="o">.</span><span class="n">to_failure_details</span><span class="p">()</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># fd.category      — FailureCategory enum (routing: what happened)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># fd.audience      — Audience enum (routing: who acts)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># fd.retryable     — bool (resolved from class default or per-instance override)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># fd.code          — str (app-owned fine-grained code, e.g. "NOT_FOUND_STORAGE")</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># fd.message       — str (the human line; URL userinfo of any credential shape (Azure blob `container@account` addressing excepted) and secret-named params are redacted by the envelope's own validator, at construction and again on model_validate)</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># fd.suggested_action — str | None (imperative hint; voice shifts with audience; redacted the same way as message)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># fd.evidence      — dict of per-error structured context (dataclass fields)</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted; cause message capped at 2000 chars; never the live object)</span>
+</span></code></pre></div>
+<h4 id="how-cause_repr-is-sanitised">How <code>cause_repr</code> is sanitised</h4>
+<p>Three steps, in this order — the order is what makes the result safe:</p>
+<ol>
+<li><strong>Redact.</strong> <code>redact_secrets</code> strips URL userinfo and known secret query-params,
+   including the presigned-URL signatures (<code>X-Amz-Signature</code>, <code>X-Goog-Signature</code>,
+   Azure's <code>sig=</code>) that object-store errors quote verbatim.</li>
+<li><strong>Strip the driver's debug dump.</strong> <code>object_store</code> appends a multi-line Rust
+   <code>Debug source:</code> block to every error's <code>str()</code>. It sits <em>after</em> the provider's
+   own explanation, so it would otherwise compete for the budget.</li>
+<li><strong>Cap at 2000 chars, keeping both ends</strong> — 1200 from the head, 700 from the
+   tail, with <code>…[N chars elided]…</code> between them. A backend error puts the request
+   URL at the head and the reason at the tail, so a head-only cut spends the whole
+   budget on boilerplate and deletes the diagnostic.</li>
+</ol>
+<p>Redaction runs <em>before</em> truncation, so keeping a tail can never expose an
+unredacted secret. Do not reorder these.</p>
+<h4 id="storage-failures-carry-the-backends-verdict">Storage failures carry the backend's verdict</h4>
+<p>Every <code>Storage*</code> error populates <code>evidence</code> with <code>service</code> (always
+<code>"object_store"</code>), <code>target</code> (a credential-free <code>scheme://bucket/key</code> identity —
+never the request URL, never <code>store.config</code>), and, when the failure was a backend
+HTTP rejection, <code>http_status</code> and <code>provider_code</code> parsed from the driver message:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># fd.evidence == {</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#     "service":       "object_store",</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1">#     "target":        "gs://example-bucket/artifacts/apps/…/table.json",</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#     "key":           "artifacts/apps/…/table.json",</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1">#     "http_status":   400,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1">#     "provider_code": "PreconditionFailed",</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1">#     …</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># }</span>
+</span></code></pre></div>
+<p><code>http_status</code> and <code>provider_code</code> are <strong>evidence, not routing</strong> — they ride the
+envelope so a consumer holding context the SDK lacks can branch on them, but the
+SDK reclassifies on only two conditions (a missing Azure container, and a bucket
+mid-relocation). Everything else stays a retryable <code>StorageError</code>. <code>target</code>'s
+<em>shape</em> is per-producer: see the <code>evidence</code> bullet in
+<a href="../../standards/cross-repo-contracts/">cross-repo-contracts.md</a> before comparing
+it across raise sites.</p>
+<p>Tenant identity is intentionally absent from <code>FailureDetails</code>. Per-tenant attribution is
+the consumer's responsibility (e.g., the Automation Engine attaches tenant from its own
+session at ingest time).</p>
+<h4 id="evidence-keys-may-not-be-secret-named">Evidence keys may not be secret-named</h4>
+<p><code>FailureDetails</code> refuses evidence keys that advertise a secret -- exact names
+(<code>password</code>, <code>token</code>, <code>secret</code>, <code>api_key</code>, <code>private_key</code>, <code>authorization</code>, <code>auth_header</code>,
+<code>cookie</code>) and compound suffixes (<code>*_password</code>, <code>*_token</code>, <code>*_secret</code>, so <code>client_secret</code>
+and <code>db_password</code> are rejected while <code>object_key</code> and <code>cache_key</code> pass). Construction
+raises <code>ValidationError</code>, so a leaf that declares such a dataclass field cannot serialise
+at all:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors.wire</span><span class="w"> </span><span class="kn">import</span> <span class="n">secret_named_evidence_keys</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># Ask before you build — the rejection names no keys you can act on.</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">bad</span> <span class="o">=</span> <span class="n">secret_named_evidence_keys</span><span class="p">({</span><span class="s2">"host"</span><span class="p">:</span> <span class="s2">"db.internal"</span><span class="p">,</span> <span class="s2">"api_key"</span><span class="p">:</span> <span class="s2">"…"</span><span class="p">})</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="c1"># frozenset({'api_key'})</span>
+</span></code></pre></div>
+<p>The denylist is a name check, not a value check: it cannot see a credential sitting in an
+innocently-named key, or nested inside a dict or list value. Redact values yourself before
+attaching them as evidence — <code>redact_secrets</code> for a single string, <code>redact_wire_value</code> for
+anything with structure:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">redact_wire_value</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="c1"># Walks dicts, lists, tuples and sets to any depth, redacting every string it</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># reaches and leaving the shape alone. Cycle- and depth-guarded, so a hostile</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="c1"># structure truncates rather than hanging the worker.</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="n">safe</span> <span class="o">=</span> <span class="n">redact_wire_value</span><span class="p">({</span><span class="s2">"dsn"</span><span class="p">:</span> <span class="s2">"postgresql://u:p@host/db"</span><span class="p">,</span> <span class="s2">"tags"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"pwd=hunter2"</span><span class="p">]})</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># {'dsn': 'postgresql://***@host/db', 'tags': ['pwd=***']}</span>
+</span></code></pre></div>
+<p>Use it on anything handler-authored that goes under an <code>evidence</code> key: nested values are not
+redacted where they are built. <code>message</code> and <code>suggested_action</code> <strong>are</strong> — a <code>field_validator</code> on
+<code>FailureDetails</code> runs <code>redact_secrets</code> over both at construction and again on <code>model_validate</code>,
+idempotently, so a handler gains nothing by redacting them first. <code>cause_repr</code> is redacted where the
+cause is captured, by <code>sanitize_cause_repr</code>.</p>
+<h4 id="rebuilding-a-typed-error-from-the-envelope">Rebuilding a typed error from the envelope</h4>
+<p>On the far side of an activity boundary only <code>FailureDetails</code> survives. <code>error_from_failure_details</code>
+turns it back into a typed error, picking the leaf by <code>code</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">ClassVar</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="n">NotFoundError</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>    <span class="n">error_from_failure_details</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="n">register_wire_leaf</span><span class="p">,</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="p">)</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="c1"># Register the leaves your activities emit, once, next to their definition.</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="nd">@register_wire_leaf</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="k">class</span><span class="w"> </span><span class="nc">WidgetMissingError</span><span class="p">(</span><span class="n">NotFoundError</span><span class="p">):</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>    <span class="n">code</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"NOT_FOUND_WIDGET"</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a>    <span class="n">widget</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="n">err</span> <span class="o">=</span> <span class="n">error_from_failure_details</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">failure</span><span class="p">)</span>
+</span></code></pre></div>
+<p>A registered code rebuilds as its leaf with the evidence fields that leaf declares; extra keys are
+dropped, so a newer producer cannot crash an older consumer. An unregistered code still rebuilds,
+keeping the envelope's own <code>category</code>, <code>audience</code>, <code>code</code>, <code>retryable</code> and evidence, so routing is
+never lost. The SDK registers <code>AuthError</code>, <code>AppTimeoutError</code>, <code>SourceUnavailableError</code> and
+<code>InternalError</code>. One code maps to one class: registering a code already bound to another class
+raises <code>TypeError</code>, as does registering a leaf whose constructor does not take the base fields
+(<code>message</code>, <code>retryable</code>, <code>suggested_action</code>, <code>app_name</code>, <code>run_id</code>). Evidence values are redacted on
+the way in, and a value under a nested secret-named key (<code>{"conn": {"api_key": …}}</code>) is replaced
+with <code>***</code>; <code>redact_evidence_value</code> in <code>application_sdk.errors.wire</code> does the same for your own
+evidence before you attach it.</p>
+<p>If <code>to_failure_details()</code> raises because a leaf carries a secret-named evidence field,
+<code>degraded_failure_details(err)</code> builds the envelope without those keys (or without evidence at all)
+and keeps the routing. Log its <code>ValidationError</code> with <code>redacted_validation_reason</code>, never <code>str()</code> or
+<code>exc_info</code>: both include the rejected input.</p>
+<h3 id="legacy-error-code-namespaces-backward-compat-only">Legacy error-code namespaces (backward-compat only)</h3>
+<ul>
+<li><strong><code>application_sdk.common.error_codes</code></strong> — <code>ATLAN-{COMPONENT}-{HTTP_CODE}-{SEQ}</code> HTTP-style codes. Do not use in new code.</li>
+<li><strong><code>application_sdk.errors</code> legacy constants</strong> — <code>ErrorCode</code> and the <code>AAF-{COMP}-{NNN}</code> constants (<code>APP_ERROR</code>, <code>HANDLER_ERROR</code>, etc.). Reading one from <code>application_sdk.errors</code> emits a <code>DeprecationWarning</code>; removed in v4.0.</li>
+</ul>
+<p>An SDK error that had an <code>AAF-*</code> code still prints it as the <code>[AAF-…]</code> prefix of <code>str()</code>, so log text is unchanged. The code itself is no longer declared on the class: <code>Cls.DEFAULT_ERROR_CODE</code>, <code>err.error_code</code> and the <code>error_code=</code> constructor keyword keep working but warn. Use the class's <code>code</code> (or <code>qualified_code</code>) instead:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.storage.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">StorageConfigError</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="k">try</span><span class="p">:</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    <span class="o">...</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="k">except</span> <span class="n">StorageConfigError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">"Storage misconfigured [</span><span class="si">%s</span><span class="s2">]"</span><span class="p">,</span> <span class="n">exc</span><span class="o">.</span><span class="n">qualified_code</span><span class="p">,</span> <span class="n">exc_info</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="sql-utilities">SQL Utilities</h2>
+<h3 id="read_sql_files">read_sql_files</h3>
+<p>Reads all <code>.sql</code> files from a directory and returns them as a dictionary:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.sql_filters</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_sql_files</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">SQL_QUERIES</span> <span class="o">=</span> <span class="n">read_sql_files</span><span class="p">(</span><span class="s2">"/path/to/queries"</span><span class="p">)</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">fetch_tables_query</span> <span class="o">=</span> <span class="n">SQL_QUERIES</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"FETCH_TABLES"</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Keys are uppercase filenames without the <code>.sql</code> extension.</p>
+<h3 id="prepare_query">prepare_query</h3>
+<p>Formats a SQL query with include/exclude filters:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.sql_filters</span><span class="w"> </span><span class="kn">import</span> <span class="n">prepare_query</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">query</span> <span class="o">=</span> <span class="n">prepare_query</span><span class="p">(</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">base_query</span><span class="p">,</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">workflow_args</span><span class="p">,</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="n">temp_table_regex_sql</span><span class="o">=</span><span class="s2">"..."</span><span class="p">,</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="prepare_filters">prepare_filters</h3>
+<p>Parses JSON filter strings into regex patterns for SQL <code>WHERE</code> clauses:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.sql_filters</span><span class="w"> </span><span class="kn">import</span> <span class="n">prepare_filters</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="n">include_pattern</span><span class="p">,</span> <span class="n">exclude_pattern</span> <span class="o">=</span> <span class="n">prepare_filters</span><span class="p">(</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="s1">'{"prod_db": ["analytics", "reporting"]}'</span><span class="p">,</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="s1">'{"dev_db": "*"}'</span><span class="p">,</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="asset-serialisation">Asset Serialisation</h2>
+<p><code>application_sdk.common.asset_serialization.entity_bytes()</code> is the single seam that turns an asset-mapper return value into one Atlas wire-shape JSONL record. Every template that runs the <code>map_&lt;entity&gt;()</code> pattern calls it, so a connector never serialises its own assets.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.asset_serialization</span><span class="w"> </span><span class="kn">import</span> <span class="n">entity_bytes</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">line</span> <span class="o">=</span> <span class="n">entity_bytes</span><span class="p">(</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    <span class="n">asset</span><span class="p">,</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    <span class="n">connection_name</span><span class="o">=</span><span class="s2">"My MySQL"</span><span class="p">,</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>    <span class="n">last_sync</span><span class="o">=</span><span class="n">last_sync</span><span class="p">,</span>       <span class="c1"># see "Framework-injected attributes" below</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">entity_type</span><span class="o">=</span><span class="s2">"table"</span><span class="p">,</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>What it accepts</strong>, in dispatch order:</p>
+<table>
+<thead>
+<tr>
+<th>Shape</th>
+<th>Protocol</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>to_nested_bytes()</code></td>
+<td><code>NestedBytesAsset</code></td>
+<td><code>pyatlan_v9</code> assets. Under the <code>PYATLAN</code> envelope, passed through byte-for-byte; under the default flattened envelope the asset goes through pyatlan's own <code>to_atlas_format</code> instead (see <a href="#entity-envelope">Entity envelope</a>).</td>
+</tr>
+<tr>
+<td><code>to_nested_dict()</code></td>
+<td><code>NestedDictAsset</code></td>
+<td>Serialised with the shared <code>orjson_default</code> (<code>Decimal</code> → float, <code>bytes</code> → text).</td>
+</tr>
+<tr>
+<td><code>model_dump()</code></td>
+<td><code>ModelDumpAsset</code></td>
+<td>pyatlan v1 / pydantic assets. Last of the object shapes: <code>model_dump()</code> yields the model's own field names, which for a snake_case model is <em>not</em> the Atlas wire shape, so an asset exposing a nested encoder as well is serialised through that instead.</td>
+</tr>
+<tr>
+<td><code>dict</code></td>
+<td>—</td>
+<td>Already in the Atlas wire shape.</td>
+</tr>
+</tbody>
+</table>
+<p>Anything else raises <code>UnserializableMapperResultError</code>. There is deliberately no fallback: the branch this replaced wrote the <em>raw source record</em> when no shape matched, so a mapper returning a <code>pyatlan_v9</code> asset — the type <code>map_&lt;entity&gt;()</code> is annotated to return — published unmapped source rows as entities while the run reported SUCCESS (FND-2056).</p>
+<p><strong>Every failure is that one typed error</strong>, non-retryable and attributed to <code>APP_OWNER</code>, with a message naming the offending type and the entity:</p>
+<table>
+<thead>
+<tr>
+<th>Failure</th>
+<th><code>observed</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The result matches no supported shape</td>
+<td>The returned type</td>
+</tr>
+<tr>
+<td>A supported shape holds a value neither orjson nor <code>orjson_default</code> can render</td>
+<td>The <em>nested</em> value's type</td>
+</tr>
+<tr>
+<td><code>to_nested_bytes()</code> returned JSON spanning more than one line</td>
+<td>The asset's type</td>
+</tr>
+</tbody>
+</table>
+<p>The last one guards a public protocol rather than a live bug — <code>pyatlan_v9</code>'s encoder is compact — but <code>NestedBytesAsset</code> is exported, and the caller writes the returned bytes verbatim plus one newline. A pretty-printing implementer would therefore split one entity across several JSONL records: well-formed lines, wrong count, no error. That is the same silent, count-passing damage this seam exists to remove, so it is refused rather than trusted.</p>
+<h3 id="framework-injected-attributes">Framework-injected attributes</h3>
+<p>Two groups of attributes are stamped by the seam, before the dispatch, on the asset itself rather than on a serialised dict afterwards — one of the accepted shapes (<code>to_nested_bytes()</code>) never produces a dict to patch.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute(s)</th>
+<th>Source</th>
+<th>Who wins on a conflict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>connectionName</code></td>
+<td>The <code>connection_name</code> argument</td>
+<td>The mapper. A value it set explicitly is kept.</td>
+</tr>
+<tr>
+<td><code>lastSyncRun</code>, <code>lastSyncWorkflowName</code>, <code>lastSyncRunAt</code></td>
+<td>The <code>last_sync</code> argument</td>
+<td>The framework. A resolved value overwrites whatever the mapper set.</td>
+</tr>
+</tbody>
+</table>
+<p>Both exist for the same reason: the mapper is handed a source record and a connection <em>qualified</em> name, and nothing else, so anything resolved from run context has to be injected by the framework. One seam beats a copy in every connector, which is how these ended up missing or wrong in the first place.</p>
+<p>They differ on who wins because they are different kinds of value. <code>connectionName</code> is asset content the mapper may legitimately know better. The three <code>lastSync*</code> attributes are <em>run identity</em> the mapper structurally cannot resolve: a connector that tries reaches for the workflow id it was handed, which is the <strong>child</strong> workflow's Temporal id, not the AE-dispatched run — so the value lands on the asset looking right and is not clickable back to the run that produced it (FND-2097, BLDX-1229). One exception, inherited from the primitive: an empty resolved <code>run</code> or <code>workflow_name</code> is never written, so outside Temporal (CLI tools, tests) a hand-set value survives rather than being blanked.</p>
+<p>If the asset declares the attribute but refuses assignment (frozen, or a property with no setter), the value is dropped rather than failing the transform — every asset type that genuinely needs these exposes settable fields.</p>
+<h4 id="placeholder-guid-removal">Placeholder <code>guid</code> removal</h4>
+<p>The seam also <em>removes</em> one value. pyatlan's <code>.creator()</code> methods are wrapped in <code>@init_guid</code>, which sets <code>guid</code> to a fresh random negative integer on every call. That placeholder means "not yet persisted" to pyatlan's own client; the SDK never saves through that client, so written out it is only noise that changes every run. <code>atlan-publish-app</code> hashes the whole entity, so a changing <code>guid</code> classifies every entity as DIFF instead of SYNCED and forces a per-entity diff that finds nothing (FND-2720).</p>
+<p><code>entity_bytes()</code> therefore clears a placeholder <code>guid</code> (a negative-integer string) before the dispatch: set to <code>UNSET</code> on a <code>pyatlan_v9</code> asset, dropped from a dict. Both envelopes are covered, and the <code>PYATLAN</code> path stays on the native encoder. A real guid — a UUID a mapper set on purpose — is kept. Connectors should not clear the guid themselves.</p>
+<p>The stamping itself is <code>application_sdk.common.last_sync.set_last_sync_details_on_asset()</code>, unwrapped — the seam adds the wider aperture (<code>entity_bytes</code> takes an <code>object</code>, so the shape may be a dict, may not declare the fields, or may refuse assignment) but not a second definition of what stamping means. An asset object qualifies when it satisfies <code>LastSyncStampable</code>, a runtime-checkable Protocol over the three fields; it is a structural type rather than pyatlan's <code>Asset</code> because both pyatlan generations are valid targets and they are unrelated classes.</p>
+<p><strong>Resolve <code>last_sync</code> once per transform activity</strong>, never per record:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.asset_serialization</span><span class="w"> </span><span class="kn">import</span> <span class="n">entity_bytes</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.last_sync</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_last_sync_details</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="n">last_sync</span> <span class="o">=</span> <span class="n">resolve_last_sync_details</span><span class="p">()</span>   <span class="c1"># once, outside the record loop</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="k">for</span> <span class="n">record</span> <span class="ow">in</span> <span class="n">records</span><span class="p">:</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>    <span class="n">line</span> <span class="o">=</span> <span class="n">entity_bytes</span><span class="p">(</span>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>        <span class="n">mapper</span><span class="p">(</span><span class="n">record</span><span class="p">,</span> <span class="n">connection_qn</span><span class="p">),</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>        <span class="n">connection_name</span><span class="o">=</span><span class="s2">"My MySQL"</span><span class="p">,</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>        <span class="n">last_sync</span><span class="o">=</span><span class="n">last_sync</span><span class="p">,</span>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>        <span class="n">entity_type</span><span class="o">=</span><span class="s2">"table"</span><span class="p">,</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>    <span class="p">)</span>
+</span></code></pre></div>
+<p><code>lastSyncRunAt</code> is a property of the <em>run</em>, so every asset one crawl produces must carry the same value; a per-record <code>time.time()</code> gives every row in one crawl a different "last synced at". <code>SqlApp.transform_entity</code> does this for every SQL connector already. <strong>Non-SQL apps get the same behaviour from the same two calls</strong> — nothing in this seam or in <code>last_sync</code> is SQL-specific, and an app that would otherwise write <code>asset.to_nested_bytes()</code> directly gets both injections plus the typed-error contract by routing through <code>entity_bytes()</code> instead. Conformance rule <strong>P052</strong> flags that direct call (and <code>to_nested_dict()</code> / <code>pyatlan_v9</code> <code>to_atlas_format()</code>) in app code, so the bypass does not spread from one connector to the next.</p>
+<p><code>resolve_last_sync_details()</code> reads the execution and correlation contextvars the SDK's Temporal interceptor populates. Call it on the event loop inside the activity. <code>run_in_thread</code> does propagate contextvars (it runs the callable under <code>contextvars.copy_context()</code>), so resolving inside an offloaded loop works too — but then the correctness rests on an offload implementation detail rather than on where the call sits.</p>
+<h3 id="entity-envelope">Entity envelope</h3>
+<p><code>entity_bytes()</code> decides <em>how to serialise</em> the mapper's return value. <code>application_sdk.common.entity_envelope</code> decides <em>what the finished line looks like</em> — and in particular where relationship references live (FND-2137).</p>
+<p>Before this, every connector hand-rolled its own post-serialisation pass, and a scan of the six SqlApp-pattern connectors found four mutually incompatible envelope strategies, two of which disagreed about that question. Two apps publishing to the same downstream disagreed about the wire contract.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.common.entity_envelope</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>    <span class="n">EntityDecorations</span><span class="p">,</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="n">EntityEnvelopePolicy</span><span class="p">,</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>    <span class="n">EnvelopeShape</span><span class="p">,</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="p">)</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="k">class</span><span class="w"> </span><span class="nc">TeradataApp</span><span class="p">(</span><span class="n">SqlApp</span><span class="p">):</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a>    <span class="n">entity_envelope</span> <span class="o">=</span> <span class="n">EntityEnvelopePolicy</span><span class="p">(</span><span class="n">sql_dialect</span><span class="o">=</span><span class="s2">"teradata"</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Declared once per app as a class attribute, not per mapper: the envelope is a property of the downstream contract, and per-mapper choice is how the fleet ended up with four of them. <code>SqlApp</code> reads it in <code>transform_entity</code> and threads it into <code>entity_bytes()</code>; a non-SQL app passes <code>envelope=</code> directly.</p>
+<p><strong><code>shape</code></strong> — where relationship refs live:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Output</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EnvelopeShape.FLATTENED</code></td>
+<td>Refs merged into <code>attributes</code>, no <code>relationshipAttributes</code> key</td>
+<td>The default</td>
+</tr>
+<tr>
+<td><code>EnvelopeShape.PYATLAN</code></td>
+<td>Refs under a top-level <code>relationshipAttributes</code> key</td>
+<td><strong>Deprecated, removed in v4.0.</strong> A migration lever for a connector whose <em>released</em> output is this shape</td>
+</tr>
+</tbody>
+</table>
+<p>Flattened is the default because that is what the publish app's diff engine reads: it does set-based append/remove diffing for <code>inputs</code>, <code>outputs</code> and <code>upstreamTables</code> out of <code>attributes</code>, and a top-level <code>relationshipAttributes</code> key falls through to a whole-dict equality branch. Under the pyatlan-native envelope the relationship append/remove path never fires. A connector emitting no lineage gets away with it; the first one that does loses incremental relationship diffing silently. <code>application_sdk.validation.assets</code> and the SDK's own seed harness are already on the flattened side.</p>
+<p>The flattening itself is <code>pyatlan_v9.model.transform.to_atlas_format</code> — the SDK does not hand-roll it, and does not need to: that encoder is <em>cheaper</em> than the nested one (≈3 µs/record against ≈11 µs), and never emits the <code>appendRelationshipAttributes</code> / <code>removeRelationshipAttributes</code> keys the publish app generates itself. A dict-returning mapper or a pyatlan v1 model goes through <code>flatten_envelope()</code> instead.</p>
+<p><strong>The two paths agree on ref placement, and on nulls.</strong> Neither drops them. <code>flatten_envelope()</code> does not, because a dict-returning mapper emits them on purpose: <code>atlan-clickhouse-app</code> emits a null relationship stub to mirror the legacy transformer's all-None-leaves collapse, and null <code>rowCount</code> / <code>sizeBytes</code> for v2 parity. Dropping those would delete real wire values and rehash every entity in the publish app's diff cache.</p>
+<p><code>to_atlas_format</code> does not either — <strong>from pyatlan 11.3.0</strong>, which is why <code>pyproject.toml</code> floors at <code>pyatlan&gt;=11.3</code> rather than the <code>&gt;=11</code> range that would otherwise do. This is a pinned dependency premise, not a property of SDK code, so it is worth knowing what the older behaviour was. <code>pyatlan_v9</code> fields are three-state — <code>Union[str, None, UnsetType] = UNSET</code> — so an asset <em>can</em> express an explicit null, and <code>to_nested_bytes</code> has always preserved it. Up to pyatlan 11.2.0 <code>to_atlas_format</code> rendered <code>None</code> and <code>UNSET</code> identically, as an absent key. That was survivable rather than harmless: the publish app's <code>calculate_attributes_diff</code> re-synthesises the clear, emitting <code>{key: None}</code> when a key in the cached entity is absent from the new one, so a dropped null still reached Atlas on the incremental path and a create had nothing to clear. On <code>&gt;=11.3</code> the argument is moot — a producer-side null on a v9 asset reaches the wire as written, the same as one from a dict mapper.</p>
+<p>So <code>FLATTENED</code> means exactly <strong>"relationship refs live in <code>attributes</code>"</strong> — nothing more. Null handling stays the mapper's decision, on both paths.</p>
+<p><strong><code>sql_dialect</code></strong> — stamped as <code>attributes.sqlDialect</code> on assets that carry DDL (<code>tableDefinition</code> on a <code>Table</code>, <code>definition</code> on a <code>View</code> / <code>MaterialisedView</code>), so downstream SQL parsing knows which grammar to read a definition with. The value is static per connector; the condition is per record. It lives here because no <code>pyatlan_v9</code> asset type declares <code>sqlDialect</code> — an asset-returning mapper has nowhere to put it.</p>
+<p><strong>Decorations</strong> — top-level fields no pyatlan model field can hold, returned per record from <code>SqlApp.decorate_entity()</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">MysqlApp</span><span class="p">(</span><span class="n">SqlApp</span><span class="p">):</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">decorate_entity</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">entity_type</span><span class="p">,</span> <span class="n">record</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">EntityDecorations</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>        <span class="k">return</span> <span class="n">EntityDecorations</span><span class="p">(</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>            <span class="n">default_catalog_name</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"table_catalog"</span><span class="p">],</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>            <span class="n">default_schema_name</span><span class="o">=</span><span class="n">record</span><span class="p">[</span><span class="s2">"table_schema"</span><span class="p">],</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>        <span class="p">)</span>
+</span></code></pre></div>
+<p>These land on the entity <em>root</em>, beside <code>typeName</code>, because that is where their readers look — Query Intelligence reads <code>defaultCatalogName</code> / <code>defaultSchemaName</code> into each <code>success.json</code> row, which lineage-app then uses to resolve a bare table name to a fully-qualified Atlas path. The publish app strips unknown root keys before hashing, so a decoration reaches its reader off the transformed artifact or not at all.</p>
+<p>The return type is a typed model rather than a <code>Mapping[str, Any]</code> deliberately. Every field is a named cross-app contract with a specific reader; a free dict is how a second undocumented side-channel gets added without anyone noticing. A connector needing a field <code>EntityDecorations</code> does not have adds it there, which forces the conversation about who reads it.</p>
+<h2 id="general-utilities">General Utilities</h2>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Import</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>get_actual_cpu_count()</code></td>
+<td><code>application_sdk.common</code></td>
+<td>Whole CPUs this process may use: the tighter of its affinity mask and the container's CPU quota (cgroup v1 or v2). A 1-CPU pod on a 16-core node gets 1. The same number the SDK sizes its own pools from</td>
+</tr>
+<tr>
+<td><code>get_safe_num_threads()</code></td>
+<td><code>application_sdk.common</code></td>
+<td><strong>Deprecated, removed in v4.0.</strong> <code>get_actual_cpu_count() * 2</code>. Size the pool for your workload from <code>get_actual_cpu_count()</code>, or use <code>run_in_thread</code></td>
+</tr>
+<tr>
+<td><code>parse_credentials_extra(credentials)</code></td>
+<td><code>application_sdk.credentials</code></td>
+<td>Parse the <code>extra</code> JSON field in a credentials dict</td>
+</tr>
+<tr>
+<td><code>yaml_template_paths(templates_path, assets=None)</code></td>
+<td><code>application_sdk.common.yaml_templates</code></td>
+<td>Map each <code>*.yaml</code> template under an app's directory (recursive) to its path, keyed by upper-cased basename (<code>table.yaml</code> → <code>"TABLE"</code>); <code>assets</code> filters the keys</td>
+</tr>
+<tr>
+<td><code>flatten_yaml_columns(nested)</code></td>
+<td><code>application_sdk.common.yaml_templates</code></td>
+<td>Flatten a template's nested <code>columns:</code> mapping into one dict per leaf column with a dotted <code>name</code></td>
+</tr>
+<tr>
+<td><code>download_file_from_upload_response(response)</code></td>
+<td><code>application_sdk.common.utils</code></td>
+<td>Download a file uploaded via <code>POST /workflows/v1/file</code> to a local temp path; takes the response as a dict, JSON string, or <code>application_sdk.handler.contracts.FileUploadResponse</code> (any pydantic model with a <code>key</code> field)</td>
+</tr>
+</tbody>
+</table>
+<p>The two YAML-template helpers moved here from the deprecated <code>application_sdk.transformers.common.utils</code>, for apps that run their own templates through an app-side applier. <code>yaml_template_paths</code> resolves only the directory it is given: unlike <code>get_yaml_query_template_path_mappings</code>, it does not merge in the SQL templates bundled with <code>QueryBasedTransformer</code>, which are removed with it in v4.0. Copy any of those you rely on into your app.</p>
+<h2 id="temporal-configuration">Temporal Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Env Var</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TEMPORAL_PROMETHEUS_BIND_ADDRESS</code></td>
+<td><code>ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS</code></td>
+<td><code>127.0.0.1:9464</code></td>
+<td>Bind address for Temporal SDK Prometheus metrics. Loopback-only — not externally reachable. Combined-mode FastAPI <code>/metrics</code> proxies it in-process.</td>
+</tr>
+<tr>
+<td><code>WORKER_LIVENESS_MAX_IDLE_SECONDS</code></td>
+<td><code>ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS</code></td>
+<td><code>0</code> (disabled)</td>
+<td>Idle window for the worker <code>/live</code> probe. When set to a positive number of seconds, <code>/live</code> fails once no worker activity has been recorded within that window, letting a Kubernetes <code>livenessProbe</code> recycle a worker whose Temporal poll loop has silently parked (BLDX-1552). Disabled by default because a positive window false-positives on legitimately idle queues — enable it only for continuously-busy queues, and set it larger than the longest activity that runs without heartbeating. Non-numeric, non-finite (<code>inf</code>/<code>nan</code>), or negative values fall back to <code>0</code>. See <code>docs/concepts/server.md</code> for the probe behavior.</td>
+</tr>
+<tr>
+<td><code>WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS</code></td>
+<td><code>ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS</code></td>
+<td><code>5</code></td>
+<td>Consecutive definitive zero-poller readings (sdk-core's <code>temporal_num_pollers</code> gauge) before <code>/live</code> fails (FND-4641). <code>0</code> disables. Non-numeric or non-finite values fall back to the default.</td>
+</tr>
+<tr>
+<td><code>WORKER_LIVENESS_FATAL_RECOVERY_SECONDS</code></td>
+<td><code>ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS</code></td>
+<td><code>600</code></td>
+<td>Seconds a fatal poll error may go without a later <code>polling</code> reading before <code>/live</code> fails (FND-4641). <code>0</code> disables. Non-numeric or non-finite values fall back to the default.</td>
+</tr>
+<tr>
+<td><code>WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS</code></td>
+<td><code>ATLAN_WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS</code></td>
+<td><code>300</code></td>
+<td>Seconds one thread may wait on the same module import lock before the worker <code>/live</code> probe fails (FND-5531). A Temporal deadlock interrupt delivered inside Python's import system can strand such a wait forever, after which every import of that module hangs. <code>0</code> disables the check. Non-numeric, non-finite or negative values fall back to the default or clamp to <code>0</code>. See <code>docs/concepts/server.md</code>.</td>
+</tr>
+<tr>
+<td><code>load_worker_loop_stall_timeout_override()</code></td>
+<td><code>ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS</code></td>
+<td>derived</td>
+<td>Replaces the event-loop stall bound of a shutting-down worker, which is otherwise 15 s past the longest registered <code>heartbeat_timeout_seconds</code> and capped by the shutdown budget (<code>ShutdownBudget.loop_stall_limit_seconds</code>). The watchdog is armed only by SIGTERM or SIGINT. <code>0</code> turns it off; malformed, negative or non-finite values are ignored with a warning. See <code>docs/configuration.md</code>.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,5230 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/concepts/tasks/">
+      
+      
+        <link rel="prev" href="../entry-points/">
+      
+      
+        <link rel="next" href="../progress-and-stalls/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Tasks - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#tasks" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Tasks
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../standards/coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#defining-a-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defining a Task
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#typed-inputoutput-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Typed Input/Output Contracts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reporting-failure-as-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reporting Failure as Data
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reporting Failure as Data">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-typed-failure-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The typed failure contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#legacy-string-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy string fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redaction-is-the-producers-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redaction is the producer's job
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#timeouts-and-auto-heartbeating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timeouts and Auto-Heartbeating
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Timeouts and Auto-Heartbeating">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#process-wide-timeout-defaults-via-env-vars" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Process-wide timeout defaults via env vars
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-three-knobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three knobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bounding-the-retry-product" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bounding the retry product
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-run-length-sla-alert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The run-length SLA alert
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manual-heartbeats-with-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Heartbeats with Progress
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#infrastructure-access-via-selfcontext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Infrastructure Access via self.context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#blocking-sync-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blocking Sync Code
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Blocking Sync Code">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cancelling-a-blocking-call-at-the-driver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancelling a blocking call at the driver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filereference-passing-large-data-between-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FileReference: Passing Large Data Between Tasks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FileReference: Passing Large Data Between Tasks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#extractionoutputtransformed_files-is-model-declared" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ExtractionOutput.transformed_files is model-declared
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Discovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing Tasks
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#defining-a-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defining a Task
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#typed-inputoutput-contracts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Typed Input/Output Contracts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reporting-failure-as-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reporting Failure as Data
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reporting Failure as Data">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-typed-failure-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The typed failure contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#legacy-string-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy string fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#redaction-is-the-producers-job" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redaction is the producer's job
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#timeouts-and-auto-heartbeating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timeouts and Auto-Heartbeating
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Timeouts and Auto-Heartbeating">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#process-wide-timeout-defaults-via-env-vars" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Process-wide timeout defaults via env vars
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-three-knobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three knobs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bounding-the-retry-product" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bounding the retry product
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-run-length-sla-alert" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The run-length SLA alert
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manual-heartbeats-with-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Heartbeats with Progress
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#infrastructure-access-via-selfcontext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Infrastructure Access via self.context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#blocking-sync-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Blocking Sync Code
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Blocking Sync Code">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cancelling-a-blocking-call-at-the-driver" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancelling a blocking call at the driver
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filereference-passing-large-data-between-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FileReference: Passing Large Data Between Tasks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FileReference: Passing Large Data Between Tasks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#extractionoutputtransformed_files-is-model-declared" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ExtractionOutput.transformed_files is model-declared
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auto-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Discovery
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Testing Tasks
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../apps/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="tasks">Tasks</h1>
+<p>Tasks are the units of work in a v3 application. They replace v2's <code>ActivitiesInterface</code> and <code>@activity.defn</code> with a single <code>@task</code> decorator on <code>App</code> methods.</p>
+<h2 id="defining-a-task">Defining a Task</h2>
+<p>Decorate any <code>async</code> method on your <code>App</code> subclass with <code>@task</code>. Each task method takes exactly one <code>Input</code> and returns exactly one <code>Output</code> -- both Pydantic models.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.app</span><span class="w"> </span><span class="kn">import</span> <span class="n">App</span><span class="p">,</span> <span class="n">task</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">Input</span><span class="p">,</span> <span class="n">Output</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">class</span><span class="w"> </span><span class="nc">FetchInput</span><span class="p">(</span><span class="n">Input</span><span class="p">):</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">connection_id</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="k">class</span><span class="w"> </span><span class="nc">FetchOutput</span><span class="p">(</span><span class="n">Output</span><span class="p">):</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="n">rows_fetched</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="nd">@task</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">FetchInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FetchOutput</span><span class="p">:</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        <span class="c1"># ... fetch logic</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="k">return</span> <span class="n">FetchOutput</span><span class="p">(</span><span class="n">rows_fetched</span><span class="o">=</span><span class="mi">42</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Under the hood, <code>@task</code> applies the Temporal <code>@activity.defn</code> decorator, registers the method in the <code>TaskRegistry</code>, and wires heartbeating. You never import from <code>temporalio</code> directly.</p>
+<p>When a run is created, the SDK replaces each <code>@task</code> method on that run's <code>App</code> instance with a dispatcher that schedules the task as an activity. This happens before <code>run()</code> and before any <code>@signal</code> or <code>@update</code> handler, so a task awaited from either always runs as an activity, never inline in workflow code.</p>
+<h2 id="typed-inputoutput-contracts">Typed Input/Output Contracts</h2>
+<p>Every task boundary is a typed contract. The SDK validates contract fields at class definition time -- forbidden types raise <code>PayloadSafetyError</code> before your app starts.</p>
+<p><strong>Forbidden types:</strong> <code>Any</code>, <code>bytes</code>, <code>bytearray</code>, unbounded <code>list[T]</code>, unbounded <code>dict[K, V]</code>.</p>
+<p><strong>Safe alternatives:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bounded list</td>
+<td><code>Annotated[list[str], MaxItems(1000)]</code></td>
+</tr>
+<tr>
+<td>Large binary / file data</td>
+<td><code>FileReference</code> (stored in object store)</td>
+</tr>
+<tr>
+<td>Enum values</td>
+<td><code>SerializableEnum</code></td>
+</tr>
+</tbody>
+</table>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Annotated</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">Input</span><span class="p">,</span> <span class="n">Output</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">MaxItems</span><span class="p">,</span> <span class="n">FileReference</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="k">class</span><span class="w"> </span><span class="nc">ProcessInput</span><span class="p">(</span><span class="n">Input</span><span class="p">):</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">items</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">MaxItems</span><span class="p">(</span><span class="mi">5000</span><span class="p">)]</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="k">class</span><span class="w"> </span><span class="nc">ProcessOutput</span><span class="p">(</span><span class="n">Output</span><span class="p">):</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">results</span><span class="p">:</span> <span class="n">FileReference</span>  <span class="c1"># large data stored in object store</span>
+</span></code></pre></div>
+<p>SQL extraction inputs normalise the connector form's filter keys before task
+inputs are built: for example <code>exclude_table_regex</code> is routed into
+<code>ExtractionInput.temp_table_regex</code>, which is what <code>SqlApp</code> hands to its fetch
+tasks. See <a href="../../guides/sql-application-guide/#excluding-tables-and-views-by-name">Excluding tables and views by name</a>.</p>
+<h2 id="reporting-failure-as-data">Reporting Failure as Data</h2>
+<p>Most tasks report failure by raising -- Temporal marks the activity failed and retries it
+per the task's retry policy. A few must not: when <em>retrying is itself the damage</em>, the task
+catches the exception and returns a structured failure on its <code>Output</code>, and the caller
+(<code>run()</code>) decides what to do.</p>
+<p><code>SqlApp.prime_sql_auth</code> is the SDK's worked example. It issues one <code>SELECT 1</code> to warm the
+source's auth cache before the parallel extract burst. If the source rejects the
+credential, an activity-level retry just stacks the source's <code>failed_login_attempts</code>
+counter -- accelerating the very lockout the probe exists to prevent. So the task is
+declared <code>retry_max_attempts=1</code> and returns <code>PrimeAuthOutput(success=False, failure=...)</code>
+instead of raising.</p>
+<h3 id="the-typed-failure-contract">The typed failure contract</h3>
+<p><code>failure</code> is a <code>FailureDetails</code> -- the SDK's wire envelope for a classified error (see
+<a href="../common/#wire-envelope">common.md</a>). It carries routing (<code>category</code>, <code>audience</code>,
+<code>retryable</code>, <code>code</code>), a <code>message</code>, an optional <code>suggested_action</code>, and per-error
+<code>evidence</code>.</p>
+<p><code>SqlApp.run()</code> consumes it by rebuilding the typed error and raising it, so the workflow
+fails with the verdict the task reached -- routing, evidence and remediation hint intact:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">prime_result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">prime_sql_auth</span><span class="p">(</span><span class="n">task_input</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">if</span> <span class="ow">not</span> <span class="n">prime_result</span><span class="o">.</span><span class="n">success</span><span class="p">:</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="k">raise</span> <span class="bp">self</span><span class="o">.</span><span class="n">_classify_prime_failure</span><span class="p">(</span><span class="n">prime_result</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Classify where the exception is, not where the strings are.</strong> Only serialisable fields
+cross an activity boundary, and <code>BaseSQLClient.get_results</code> rewraps every driver exception
+in one wrapper class with one fixed message -- so a DNS failure, a TLS error and a
+credential rejection arrive at the caller looking identical. A caller classifying from
+those strings routes all three to <code>INTERNAL</code> / <code>APP_OWNER</code>, telling Atlan to investigate a
+customer credential problem. Classifying inside the task, where the live <code>__cause__</code> chain
+still exists, is what makes <code>AuthError</code> / <code>USER</code> reach the right first-responder.</p>
+<p>Apply the same shape to your own task: classify against the live exception, put the verdict
+on the output, and let the caller rebuild it.</p>
+<h3 id="legacy-string-fields">Legacy string fields</h3>
+<p><code>PrimeAuthOutput</code> also carries <code>error_type</code> and <code>error_message</code>. They are a fallback, not
+the contract -- read <code>failure</code> first:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>failure</code></td>
+<td>Authoritative typed verdict. <code>None</code> on success, and on outputs from an older SDK.</td>
+</tr>
+<tr>
+<td><code>error_type</code></td>
+<td>Class name of the <strong>root cause</strong> (innermost <code>__cause__</code>), not the SDK wrapper around it.</td>
+</tr>
+<tr>
+<td><code>error_message</code></td>
+<td>Message of the <strong>root cause</strong>, secret-redacted and truncated to 500 chars.</td>
+</tr>
+</tbody>
+</table>
+<p><code>_classify_prime_failure</code> falls back to matching those two strings only when <code>failure</code> is
+absent -- an activity result written by an older SDK and replayed from Temporal history, or
+a <code>PrimeAuthOutput</code> a connector built by hand.</p>
+<h3 id="redaction-is-the-producers-job">Redaction is the producer's job</h3>
+<p>A SQL driver message routinely embeds the whole connection string, password included, and
+everything on an output is persisted in Temporal history and in logs. The SDK therefore
+redacts at every boundary that writes to the wire: at capture (<code>error_message</code>), when
+serialising a typed verdict (<code>message</code>, <code>suggested_action</code>, and recursively through nested
+<code>evidence</code> values), and again when rebuilding an error from a replayed envelope -- history
+may predate the redaction, and the envelope's denylist rejects secret-named evidence <em>keys</em>
+only, never a secret sitting in a value.</p>
+<p>If your task returns failure as data, redact before it leaves the task:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.errors</span><span class="w"> </span><span class="kn">import</span> <span class="n">redact_secrets</span><span class="p">,</span> <span class="n">safe_traceback</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nd">@task</span><span class="p">(</span><span class="n">retry_max_attempts</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">probe</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">ProbeInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ProbeOutput</span><span class="p">:</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_connect</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="c1"># Never exc_info=True here -- the traceback renders the driver</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>        <span class="c1"># message, connection string and all, verbatim into the log.</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>        <span class="n">logger</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">"probe failed</span><span class="se">\n</span><span class="si">%s</span><span class="s2">"</span><span class="p">,</span> <span class="n">safe_traceback</span><span class="p">(</span><span class="n">exc</span><span class="p">))</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="k">return</span> <span class="n">ProbeOutput</span><span class="p">(</span><span class="n">success</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">error_message</span><span class="o">=</span><span class="n">redact_secrets</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">exc</span><span class="p">)))</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="k">return</span> <span class="n">ProbeOutput</span><span class="p">(</span><span class="n">success</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Evidence keys are constrained too: <code>FailureDetails</code> rejects secret-named keys
+(<code>api_key</code>, <code>db_password</code>, <code>*_token</code>, …) outright. <code>prime_sql_auth</code> degrades such a verdict
+by dropping the offending keys and keeping the typed routing -- never by falling back to a
+string-matched guess, which would silently invert the connector's own verdict.</p>
+<h2 id="timeouts-and-auto-heartbeating">Timeouts and Auto-Heartbeating</h2>
+<p>Configure timeouts and heartbeating as keyword arguments on <code>@task</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="nd">@task</span><span class="p">(</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>            <span class="c1"># Temporal kills the task after 1 hour</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>        <span class="n">heartbeat_timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>    <span class="c1"># Temporal kills the task if no heartbeat in 60s</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>        <span class="n">auto_heartbeat_seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>       <span class="c1"># framework sends a heartbeat every 10s</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="p">)</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">long_running</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">MyInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyOutput</span><span class="p">:</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>        <span class="c1"># heartbeats run automatically in a background asyncio loop</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>        <span class="o">...</span>
+</span></code></pre></div>
+<p>There is no <code>@auto_heartbeater</code> decorator in v3. Heartbeating is declarative.</p>
+<h3 id="process-wide-timeout-defaults-via-env-vars">Process-wide timeout defaults via env vars</h3>
+<p>When no explicit value is passed to <code>@task</code>, the framework reads these env vars at
+process startup:</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>Default</th>
+<th>Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS</code></td>
+<td><code>86400</code> (24 h)</td>
+<td><code>timeout_seconds</code> — Temporal kills the activity attempt after this many seconds</td>
+</tr>
+<tr>
+<td><code>ATLAN_HEARTBEAT_TIMEOUT_SECONDS</code></td>
+<td><code>60</code></td>
+<td><code>heartbeat_timeout_seconds</code> — Temporal restarts the activity if no heartbeat is received within this window</td>
+</tr>
+<tr>
+<td><code>ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS</code></td>
+<td>unset</td>
+<td><code>schedule_to_close_seconds</code> — ceiling on the task's <strong>total</strong> time across every retry. Unset (or <code>0</code>) leaves the retry product unbounded</td>
+</tr>
+<tr>
+<td><code>ATLAN_PROGRESS_WATCHDOG</code></td>
+<td><code>warn</code></td>
+<td><code>progress_watchdog</code> — the stall watchdog's mode. <code>off</code> is a kill-switch that beats a per-task declaration</td>
+</tr>
+<tr>
+<td><code>ATLAN_MAX_NO_PROGRESS_SECONDS</code></td>
+<td><code>900</code></td>
+<td><code>max_no_progress_seconds</code> — how long an attempt may be silent before the watchdog reports a gap</td>
+</tr>
+</tbody>
+</table>
+<p>Set these in <code>atlan.yaml</code> (or your deployment env) to apply a fleet-wide default
+without touching every <code>@task</code> decorator:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># atlan.yaml</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nt">env</span><span class="p">:</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"1800"</span><span class="w">   </span><span class="c1"># 30 min default for all tasks in this app</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ATLAN_HEARTBEAT_TIMEOUT_SECONDS</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"120"</span><span class="w">    </span><span class="c1"># 2 min heartbeat window</span>
+</span></code></pre></div>
+<p>Explicit <code>@task(timeout_seconds=...)</code> values always take precedence over the env vars.</p>
+<p><strong>Which knob governs <code>SqlApp</code>.</strong> The twelve <code>extract_*</code> / <code>transform_*</code> tasks on
+<code>SqlApp</code> declare no timing values, so they take the env vars above:
+<code>ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS</code> (24 h backstop) and
+<code>ATLAN_HEARTBEAT_TIMEOUT_SECONDS</code> (60 s), with the framework beating every 10 s. Set
+those in the app's deployment env to change them; there is no SqlApp-specific
+variable. The one exception is <code>prime_sql_auth</code>, which keeps <code>timeout_seconds=120</code>:
+its work is a single probe that does not scale with the source, and
+<code>retry_max_attempts=1</code> makes a hung probe terminal. An app that overrides a task
+and passes its own values to <code>@task</code> takes those instead.</p>
+<h3 id="the-three-knobs">The three knobs</h3>
+<p>Timeout-shaped settings are easy to confuse, so it is worth being explicit about which
+question each one answers:</p>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Default</th>
+<th>Answers</th>
+<th>Tune it?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>heartbeat_timeout_seconds</code></td>
+<td>60s</td>
+<td><em>"Is anything beating at all?"</em> — crash, OOM kill, node loss, a fully blocked event loop</td>
+<td>No</td>
+</tr>
+<tr>
+<td><code>max_no_progress_seconds</code></td>
+<td>900s</td>
+<td><em>"How long may this attempt be silent before it counts as stalled?"</em> — wedged-but-alive</td>
+<td>Rarely</td>
+</tr>
+<tr>
+<td><code>timeout_seconds</code> (<code>start_to_close</code>)</td>
+<td>a 24h backstop</td>
+<td><em>"What is the absolute ceiling on one attempt?"</em></td>
+<td>No — it is a backstop, not a budget</td>
+</tr>
+</tbody>
+</table>
+<p>There is a fourth setting, <code>progress_watchdog</code> (<code>off</code> / <code>warn</code> / <code>enforce</code>, defaulting
+to <code>warn</code> fleet-wide), which decides what the watchdog <em>does</em> with a gap rather than how
+long a gap may be.</p>
+<p><code>max_no_progress_seconds</code> is <strong>not</strong> the beat interval (that is <code>auto_heartbeat_seconds</code>,
+and it is unconditional) and <strong>not</strong> a duration budget — it measures the <em>gap</em> between
+progress signals, so a nine-hour task that writes a batch every thirty seconds never
+approaches it. See <a href="../progress-and-stalls/">Progress and Stalls</a> for the full picture:
+what counts as progress, when you need <code>holding_progress()</code>, and how to read the report
+the watchdog produces for your app.</p>
+<p>All three bound <strong>one attempt</strong>. The ceiling on a task's <em>total</em> time across every
+attempt is a separate question, with its own answer below.</p>
+<h3 id="bounding-the-retry-product">Bounding the retry product</h3>
+<p><code>timeout_seconds</code> bounds <strong>one attempt</strong>. The retry policy multiplies it, and
+<code>StartToClose</code> is a retryable failure in Temporal, so a wedged task can spend the
+whole product:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>worst case per dispatch = retry_max_attempts x timeout_seconds
+</span></code></pre></div>
+<p>At the defaults — three attempts against the 24-hour backstop — that is 72 hours.
+The SDK leaves that product unbounded on purpose (<a href="../../adr/0018-progress-aware-heartbeat/">ADR-0018</a>
+→ <em>Bounding total time</em>) — picking a total duration up front is the guess the
+whole design removes — so the ceiling is a declaration, available three ways:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.execution.retry</span><span class="w"> </span><span class="kn">import</span> <span class="n">retry_product_seconds</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="c1"># 1. Bound the total. A ceiling below timeout_seconds caps the attempt too,</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="c1">#    so this works while inheriting a generous per-attempt backstop.</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="nd">@task</span><span class="p">(</span><span class="n">schedule_to_close_seconds</span><span class="o">=</span><span class="mi">7200</span><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">extract</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">MyInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyOutput</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="c1"># 2. Bound at exactly what the retry policy already implies — makes today's</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="c1">#    worst case explicit and enforced, and changes nothing about one attempt.</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    <span class="nd">@task</span><span class="p">(</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        <span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>        <span class="n">retry_max_attempts</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>        <span class="n">schedule_to_close_seconds</span><span class="o">=</span><span class="n">retry_product_seconds</span><span class="p">(</span><span class="mi">3600</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="p">)</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">transform</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">MyInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyOutput</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>    <span class="c1"># 3. Drop the multiplier instead — the right shape for a backstop-class task</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>    <span class="c1">#    where a retry cannot rescue anything.</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>    <span class="nd">@task</span><span class="p">(</span><span class="n">retry_max_attempts</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">publish</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">MyInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyOutput</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<p>Set <code>ATLAN_SCHEDULE_TO_CLOSE_TIMEOUT_SECONDS</code> to apply a ceiling to every task in
+the app without touching a decorator. Two caveats worth stating:</p>
+<ul>
+<li>A ceiling smaller than <strong>two</strong> attempts makes the retry policy cosmetic — the
+  second attempt cannot start inside the window. <code>retry_product_seconds</code> exists
+  so that arithmetic is explicit rather than accidental.</li>
+<li>The ceiling bounds one <em>dispatch</em>, which is what the retry policy spends.
+  Worker-eviction re-dispatches (pod SIGTERM: KEDA scale-down, spot reclaim,
+  rolling deploy) each get a fresh window by design, and are bounded separately
+  by <code>ATLAN_WORKER_EVICTION_MAX_RETRIES</code>. When that cap stops a re-dispatch, the
+  run records it in history, and a replay follows the record rather than the
+  replaying pod's cap, so pods with different caps replay the same run alike.</li>
+</ul>
+<h3 id="the-run-length-sla-alert">The run-length SLA alert</h3>
+<p>A ceiling on the retry product does not bound a run that keeps making <em>some</em>
+progress: every progress signal re-arms the stall watchdog, so it never fires,
+and no per-attempt timeout is ever reached. For that shape the SDK raises a
+duration <strong>alert</strong> rather than a duration kill — it cannot know how long a
+healthy run takes against a tenant it has never seen, but a run past the length
+its own operator declared is worth a human look.</p>
+<p>Every executing task attempt compares its run's age against the SLA on the same
+tick as its heartbeat. Past the SLA it logs one <code>WARNING</code> and records
+<code>task.run_length_over_sla</code> (a histogram of the run's age, re-asserted once a
+minute for as long as the run stays over), so the alert keeps firing while the
+run does and resolves once it ends.</p>
+<table>
+<thead>
+<tr>
+<th>Env var</th>
+<th>Default</th>
+<th>Controls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ATLAN_RUN_LENGTH_SLA_SECONDS</code></td>
+<td><code>86400</code> (24 h)</td>
+<td>How long a run may take before the alert is raised. <code>0</code> disables it</td>
+</tr>
+</tbody>
+</table>
+<p>Nothing terminates the run. See
+<a href="../monitoring/#run-length-the-run-no-stall-and-no-timeout-catches">Monitoring → Run length</a>
+for the alert rule and the <a href="../../runbooks/long-running-run/">long-running-run runbook</a>
+for what an operator does with one. An app whose healthy runs legitimately outlast
+24 hours declares its own value; that declaration is the point, and it costs one env
+var rather than a code change.</p>
+<h2 id="manual-heartbeats-with-progress">Manual Heartbeats with Progress</h2>
+<p>For tasks that should resume from where they left off after a retry, send typed heartbeat details:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">HeartbeatDetails</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyProgress</span><span class="p">(</span><span class="n">HeartbeatDetails</span><span class="p">):</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">last_id</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">records_done</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="nd">@task</span><span class="p">(</span><span class="n">heartbeat_timeout_seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">process_batches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">MyInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MyOutput</span><span class="p">:</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>        <span class="n">prev</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">task_context</span><span class="o">.</span><span class="n">get_heartbeat_details</span><span class="p">(</span><span class="n">MyProgress</span><span class="p">)</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>        <span class="n">start_id</span> <span class="o">=</span> <span class="n">prev</span><span class="o">.</span><span class="n">last_id</span> <span class="k">if</span> <span class="n">prev</span> <span class="k">else</span> <span class="kc">None</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>        <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">get_batches</span><span class="p">(</span><span class="n">start_from</span><span class="o">=</span><span class="n">start_id</span><span class="p">):</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>            <span class="n">process</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">task_context</span><span class="o">.</span><span class="n">heartbeat</span><span class="p">(</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a>                <span class="n">MyProgress</span><span class="p">(</span><span class="n">last_id</span><span class="o">=</span><span class="n">batch</span><span class="o">.</span><span class="n">id</span><span class="p">,</span> <span class="n">records_done</span><span class="o">=</span><span class="n">batch</span><span class="o">.</span><span class="n">count</span><span class="p">)</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a>            <span class="p">)</span>
+</span></code></pre></div>
+<p><code>self.heartbeat()</code> / <code>self.task_context.heartbeat()</code> is safe to call from
+blocking code you offloaded with <code>run_in_thread</code>, including a plain-function
+<code>RollingFileWriter</code> <code>on_chunk_complete</code>: the SDK hands the beat back to the
+event loop.</p>
+<p>The details survive a worker eviction too: when a pod is shut down mid-task
+(KEDA scale-down, spot reclaim, rolling deploy) the SDK re-dispatches the task
+as a new activity execution, and the last details the evicted attempt sent are
+carried across, so <code>get_heartbeat_details()</code> still returns them. Details that
+were never sent cannot be carried — beat at every safe resume point.</p>
+<p>Two things bound the carry, both deliberate:</p>
+<ul>
+<li><strong>A beat with no details clears the checkpoint.</strong> <code>self.heartbeat()</code> with no
+  arguments says <em>this attempt has moved past whatever was carried in</em>, so
+  nothing is carried out of it. That is what you want when the work is done;
+  it is not a keepalive. To beat without changing the checkpoint, pass the
+  same details again, or rely on the automatic heartbeat.</li>
+<li><strong>Details must be encodable by the Temporal data converter.</strong> They ride to
+  the next execution on the eviction failure itself, so anything that cannot
+  be serialised is dropped with a <code>WARNING</code> rather than carried. Beat with a
+  <code>HeartbeatDetails</code> model or plain JSON-native values — the eviction is still
+  re-dispatched either way, but an unserialisable checkpoint is lost.</li>
+</ul>
+<p>A manual beat also <strong>marks progress</strong> for the stall watchdog, under the label
+<code>task.heartbeat</code> — so a custom loop that beats once per iteration is observable and
+needs no hold. It is the third of the three progress mechanisms in
+<a href="../progress-and-stalls/#the-one-rule">Progress and Stalls</a>.</p>
+<h2 id="infrastructure-access-via-selfcontext">Infrastructure Access via self.context</h2>
+<p>Inside a <code>@task</code> method, access infrastructure through <code>self.context</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="nd">@task</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">FetchInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FetchOutput</span><span class="p">:</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>        <span class="c1"># Secret store</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>        <span class="n">api_key</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">context</span><span class="o">.</span><span class="n">get_secret</span><span class="p">(</span><span class="s2">"my-api-key"</span><span class="p">)</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>        <span class="c1"># Credential resolution</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>        <span class="n">cred</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">context</span><span class="o">.</span><span class="n">resolve_credential</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">credential_ref</span><span class="p">)</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>        <span class="o">...</span>
+</span></code></pre></div>
+<p>You do not create <code>DaprClient</code> instances or call <code>SecretStore</code> statics. Infrastructure is injected by the framework -- Dapr-backed in production, in-memory mocks in tests.</p>
+<h2 id="blocking-sync-code">Blocking Sync Code</h2>
+<p>Prefer native async libraries wherever possible. For legacy sync code that cannot be rewritten, <code>self.task_context.run_in_thread(fn, *args)</code> offloads the call to a thread pool, preventing it from stalling the event loop and blocking heartbeats. See <a href="../../adr/0010-async-first-blocking-code/">ADR-0010</a> for when this is appropriate and the required internal-timeout precautions.</p>
+<p>Every offload is automatically wrapped in an unbounded progress hold, so a long blocking call is never read as a stall — see <a href="../progress-and-stalls/#automatic-holds-on-offloaded-work">Progress and Stalls</a> for how to give it a real bound instead.</p>
+<h3 id="cancelling-a-blocking-call-at-the-driver">Cancelling a blocking call at the driver</h3>
+<p>Cancelling the task that awaits <code>run_in_thread</code> hands the event loop back at once, but the worker thread runs on: Python cannot kill a thread. Until the call returns by itself it holds a slot in the shared <code>sdk-blocking-</code> pool (<code>min(32, max(16, cpus + 4))</code> wide, where <code>cpus</code> is the tighter of the process's CPU affinity and the pod's CFS quota, rounded down, not the node's core count), a database connection, and warehouse compute. Enough abandoned calls fill the pool, and every other offload queues behind them.</p>
+<p>If the driver can stop the call from another thread, pass a <code>CancelHandle</code> and register the driver's cancel on it <strong>from inside the worker thread</strong>, at the moment the driver handle exists:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.execution.heartbeat</span><span class="w"> </span><span class="kn">import</span> <span class="n">CancelHandle</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">handle</span> <span class="o">=</span> <span class="n">CancelHandle</span><span class="p">()</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">_query</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">object</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="n">cursor</span> <span class="o">=</span> <span class="n">connection</span><span class="o">.</span><span class="n">cursor</span><span class="p">()</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="n">handle</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">cursor</span><span class="o">.</span><span class="n">cancel</span><span class="p">)</span>  <span class="c1"># the handle exists only here, in the thread</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">sql</span><span class="p">)</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>    <span class="k">return</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">task_context</span><span class="o">.</span><span class="n">run_in_thread</span><span class="p">(</span><span class="n">handle</span><span class="o">.</span><span class="n">bind</span><span class="p">(</span><span class="n">_query</span><span class="p">))</span>
+</span></code></pre></div>
+<p>Every <code>run_in_thread</code> call has a handle — the one bound with <code>bind</code>, or a fresh one — so you don't have to create one. Code anywhere inside the call reaches it with <code>current_cancel_handle()</code>, without the handle being passed down:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.execution.heartbeat</span><span class="w"> </span><span class="kn">import</span> <span class="n">current_cancel_handle</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_query</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">object</span><span class="p">,</span> <span class="o">...</span><span class="p">]]:</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    <span class="n">cursor</span> <span class="o">=</span> <span class="n">connection</span><span class="o">.</span><span class="n">cursor</span><span class="p">()</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>    <span class="n">handle</span> <span class="o">=</span> <span class="n">current_cancel_handle</span><span class="p">()</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>    <span class="k">if</span> <span class="n">handle</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>  <span class="c1"># None outside run_in_thread</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>        <span class="n">handle</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">cursor</span><span class="o">.</span><span class="n">cancel</span><span class="p">)</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>    <span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">sql</span><span class="p">)</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>    <span class="k">return</span> <span class="n">cursor</span><span class="o">.</span><span class="n">fetchall</span><span class="p">()</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a><span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">task_context</span><span class="o">.</span><span class="n">run_in_thread</span><span class="p">(</span><span class="n">_query</span><span class="p">)</span>
+</span></code></pre></div>
+<ul>
+<li>When the awaiting task is cancelled — by Temporal, <code>asyncio.timeout</code> or a failing <code>TaskGroup</code> sibling — <code>run_in_thread</code> calls <code>handle.request()</code> and re-raises <code>CancelledError</code> immediately.</li>
+<li>The action runs at most once, on a small dedicated <code>sdk-cancel-</code> pool — never on the loop, and never behind the <code>sdk-blocking-</code> calls it is meant to stop.</li>
+<li>If the cancel was requested before <code>set()</code> (a statement id known only after submit, say), <code>set()</code> fires the action straight away.</li>
+<li>A failing action is logged at WARNING, never raised.</li>
+<li>The request is scoped to that one call. The caller, and every other offloaded call, still read <code>False</code>.</li>
+<li>Between steps of a loop, <code>is_cancelled()</code> (or <code>handle.requested</code>) reports the request, and <code>raise_if_cancelled()</code> raises <code>asyncio.CancelledError</code>. That is a <code>BaseException</code>, so a per-record <code>except Exception</code> does not swallow it.</li>
+<li>For a nested scope inside one call — a helper opening its own connection while the caller's is mid-query — use <code>with handle.registered(conn.interrupt):</code>. It puts the previous action back when the block exits, so the outer query stays cancellable. A plain <code>set()</code> would leave the handle pointing at the closed inner connection.</li>
+<li>The handle travels on the callable (<code>handle.bind(func)</code>), so every keyword argument still reaches <code>func</code>; no keyword name is reserved.</li>
+</ul>
+<p>After a cancel, don't return the connection to a pool: invalidate it. <code>BaseSQLClient</code> already does this for its own read paths — see <a href="../clients/#cancelling-a-running-query">Clients</a>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Never stop or suspend a warehouse from a cancel action</p>
+<p>A cancel stops <em>this statement</em>. It does not stop a warehouse the statement caused to start resuming — that start was triggered server-side — and stopping or suspending the warehouse would take it from every other user of it. Cancel actions must call statement- or cursor-level cancels only.</p>
+</div>
+<p>A client-side cancel is the second line of defence. The first is a server-side statement timeout set in the session (for example Snowflake's <code>STATEMENT_TIMEOUT_IN_SECONDS</code> and <code>STATEMENT_QUEUED_TIMEOUT_IN_SECONDS</code>), which bounds the statement even when the worker is gone.</p>
+<h2 id="filereference-passing-large-data-between-tasks">FileReference: Passing Large Data Between Tasks</h2>
+<p>Temporal has a ~2 MB payload limit. Use <code>FileReference</code> for large data:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileReference</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">FetchOutput</span><span class="p">(</span><span class="n">Output</span><span class="p">):</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>    <span class="n">results</span><span class="p">:</span> <span class="n">FileReference</span>  <span class="c1"># automatically uploaded when output leaves the task</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="k">class</span><span class="w"> </span><span class="nc">ProcessInput</span><span class="p">(</span><span class="n">Input</span><span class="p">):</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="n">results</span><span class="p">:</span> <span class="n">FileReference</span>  <span class="c1"># automatically downloaded before the task runs</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>    <span class="nd">@task</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">FetchInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FetchOutput</span><span class="p">:</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>        <span class="n">write_parquet</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="s2">"/tmp/results.parquet"</span><span class="p">)</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>        <span class="k">return</span> <span class="n">FetchOutput</span><span class="p">(</span><span class="n">results</span><span class="o">=</span><span class="n">FileReference</span><span class="o">.</span><span class="n">from_local</span><span class="p">(</span><span class="s2">"/tmp/results.parquet"</span><span class="p">))</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>    <span class="nd">@task</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">ProcessInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ProcessOutput</span><span class="p">:</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>        <span class="n">data</span> <span class="o">=</span> <span class="n">read_parquet</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">results</span><span class="o">.</span><span class="n">local_path</span><span class="p">)</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>        <span class="o">...</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">FetchInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ProcessOutput</span><span class="p">:</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>        <span class="n">fetch_out</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">fetch</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>        <span class="k">return</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">process</span><span class="p">(</span><span class="n">ProcessInput</span><span class="p">(</span><span class="n">results</span><span class="o">=</span><span class="n">fetch_out</span><span class="o">.</span><span class="n">results</span><span class="p">))</span>
+</span></code></pre></div>
+<p><code>FileReference</code> handles task-to-task data passing within a run (automatic via the activity
+interceptor). For hand-off to Atlan system apps (publish, lineage, quality), call
+<code>App.upload()</code> explicitly from <code>run()</code> — see <a href="../storage/">storage.md</a> and
+<a href="../file-reference/">file-reference.md</a> for the two-store routing details.</p>
+<h3 id="extractionoutputtransformed_files-is-model-declared"><code>ExtractionOutput.transformed_files</code> is model-declared</h3>
+<p>A <code>FileReference</code> field on an <strong>entry point's</strong> boundary needs a declared shape —
+a warning today, an error in v4.0 (see
+<a href="../apps/#declaring-artifact-schemas">Apps — Declaring artifact schemas</a>).
+<code>ExtractionOutput.transformed_files</code> is the one you inherit rather than write, and
+it needs <strong>no <code>artifactSchemas</code> entry</strong>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyExtractionOutput</span><span class="p">(</span><span class="n">ExtractionOutput</span><span class="p">):</span>   <span class="c1"># transformed_files comes with a declaration</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="n">row_count</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span></code></pre></div>
+<p>The field carries the <code>AssetArtifact</code> marker, which says its declaration <em>is</em> the
+<code>pyatlan_v9</code> <code>Asset</code> model. It is the SDK's field end to end — declared on
+<code>ExtractionOutput</code>, populated by <code>SqlApp.run()</code>, written by
+<code>SqlApp.transform_entity</code> — so no connector authors any part of it, and the only
+envelope a connector could hand-write for it would be a partial restatement of a
+500-type model.</p>
+<p>At the task boundary the interceptor therefore validates it against the whole
+<code>Asset</code> backbone (per-record decode plus <code>.validate()</code>, plus a referential/orphan
+pass) rather than against a field map, in an isolated child process. The marker
+resolves across the MRO, so narrowing the field or attaching your own <code>Field(...)</code>
+keeps the declaration. <strong>If your pkl contract already declares this field, delete
+that entry</strong> — it is ignored at runtime, because the model wins. See
+<a href="../entry-points/#assetartifact-a-field-whose-declaration-is-a-model">Entry points — <code>AssetArtifact</code></a>.</p>
+<h2 id="auto-discovery">Auto-Discovery</h2>
+<p>You do not register tasks manually. When your <code>App</code> subclass is defined, <code>App.__init_subclass__</code> scans it for <code>@task</code> methods and registers them in the <code>TaskRegistry</code>. The worker discovers all registered tasks at startup via <code>create_worker()</code>.</p>
+<h2 id="testing-tasks">Testing Tasks</h2>
+<p>Tasks can be tested without any Dapr sidecar or Temporal server by injecting in-memory infrastructure:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.testing</span><span class="w"> </span><span class="kn">import</span> <span class="n">MockSecretStore</span><span class="p">,</span> <span class="n">MockStateStore</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.infrastructure</span><span class="w"> </span><span class="kn">import</span> <span class="n">InfrastructureContext</span><span class="p">,</span> <span class="n">set_infrastructure</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">fixture</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">infra</span><span class="p">():</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>    <span class="n">ctx</span> <span class="o">=</span> <span class="n">InfrastructureContext</span><span class="p">(</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>        <span class="n">secret_store</span><span class="o">=</span><span class="n">MockSecretStore</span><span class="p">({</span><span class="s2">"api-key"</span><span class="p">:</span> <span class="s2">"test-secret"</span><span class="p">}),</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>        <span class="n">state_store</span><span class="o">=</span><span class="n">MockStateStore</span><span class="p">(),</span>
+</span><span id="__span-14-10"><a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>    <span class="p">)</span>
+</span><span id="__span-14-11"><a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>    <span class="n">set_infrastructure</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+</span><span id="__span-14-12"><a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>    <span class="k">return</span> <span class="n">ctx</span>
+</span><span id="__span-14-13"><a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>
+</span><span id="__span-14-14"><a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">test_fetch_data</span><span class="p">(</span><span class="n">infra</span><span class="p">):</span>
+</span><span id="__span-14-15"><a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a>    <span class="n">connector</span> <span class="o">=</span> <span class="n">MyConnector</span><span class="p">()</span>
+</span><span id="__span-14-16"><a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a>    <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">connector</span><span class="o">.</span><span class="n">fetch_data</span><span class="p">(</span><span class="n">FetchInput</span><span class="p">(</span><span class="n">connection_id</span><span class="o">=</span><span class="s2">"test"</span><span class="p">))</span>
+</span><span id="__span-14-17"><a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a>    <span class="k">assert</span> <span class="n">output</span><span class="o">.</span><span class="n">rows_fetched</span> <span class="o">&gt;</span> <span class="mi">0</span>
+</span></code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

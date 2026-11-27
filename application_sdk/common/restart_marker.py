@@ -49,6 +49,7 @@ from pathlib import Path
 
 import httpx
 
+from application_sdk._env import pod_name
 from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS, OOM_RESTART_CHECK
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import get_metrics
@@ -323,7 +324,7 @@ async def ask_what_this_restart_earns() -> tuple[bool, str, int] | None:
     # Same source the OTel resource attributes and the sizing interceptor use, so
     # a pod names itself one way across the SDK. HOSTNAME is the kubelet's own
     # copy of the pod name, which makes the explicit variable optional.
-    pod = (os.getenv("K8S_POD_NAME") or os.getenv("HOSTNAME") or "").strip()
+    pod = pod_name()
     if not url or not pod:
         logger.info(
             "cannot ask what this restart earns (%s=%r, pod=%r), so this worker "

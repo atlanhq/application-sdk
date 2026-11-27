@@ -21,6 +21,7 @@ from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVe
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from typing_extensions import deprecated
 
+from application_sdk._env import deployment_name as _deployment_name
 from application_sdk._runtime.cgroup import available_cpus
 from application_sdk.app.registry import (
     AppRegistry,
@@ -28,7 +29,6 @@ from application_sdk.app.registry import (
     get_activity_name,
     resolve_pool_queue,
 )
-from application_sdk.common._env import env_str
 from application_sdk.constants import (
     _LOCK_METADATA_KEY,
     APP_BUILD_ID,
@@ -514,7 +514,7 @@ async def _emit_worker_start_event(
         BindingUnavailableError,
     )
 
-    deployment_name = env_str("ATLAN_DEPLOYMENT_NAME", app_name)
+    deployment_name = _deployment_name()
     host_part, _, port_part = host.partition(":")
 
     # Discover which Dapr binding types back the object/secret stores. Best-effort

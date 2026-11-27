@@ -93,9 +93,9 @@ that needs a declared dependency or a guarded fallback.
     read and write path (`application_sdk.storage.ops` and its closure),
     which the host's store calls. Those modules read their settings through
     `application_sdk/storage/_settings.py` and `_env.sdk_constant`, never by
-    importing `application_sdk.constants` (python-dotenv is not in this
-    extra): `constants`' value when it is loaded (the worker, and tests that
-    patch it), else the same variable with the same default. They log
+    importing `application_sdk.constants`: `constants`' value when it is
+    loaded (the worker, and tests that patch it), else the same variable with
+    the same default. They log
     through `application_sdk._logging`, and `application_sdk/storage/__init__.py`
     imports the Dapr binding parsing, `CloudStore`, the SDR preflight and the
     batch helpers lazily (`_LAZY`), so the host loads none of them;

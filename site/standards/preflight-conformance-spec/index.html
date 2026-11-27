@@ -1,0 +1,5229 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/standards/preflight-conformance-spec/">
+      
+      
+        <link rel="prev" href="../connector-ci-e2e/">
+      
+      
+        <link rel="next" href="../../adr/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Preflight Conformance Spec - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#preflight-conformance-specification" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Preflight Conformance Spec
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#objective-and-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Objective and scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contract-and-policy-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contract and policy decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Contract and policy decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#results-and-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results and actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transients-and-continuation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transients and continuation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#target-sdk-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target SDK enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-cost-tiers-and-warmup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check cost tiers and warmup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#existing-machinery-to-extend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Existing machinery to extend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-rule-allocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposed rule allocation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detector-fixtures-and-counterexamples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detector fixtures and counterexamples
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#executable-behavioral-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executable behavioral suite
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Executable behavioral suite">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#app-adapter-and-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        App adapter and isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f016-required-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        F016 required scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="F016 required scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warmup-scenarios-recommended-not-detected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warmup scenarios (recommended; not detected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f017-sdk-enforcement-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        F017 SDK enforcement matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f018-sdk-exit-and-evidence-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        F018 SDK exit and evidence matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runner integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registry-coverage-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registry coverage ledger
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delivery-order-and-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery order and acceptance
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#objective-and-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Objective and scope
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contract-and-policy-decisions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contract and policy decisions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Contract and policy decisions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#results-and-actions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results and actions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transients-and-continuation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transients and continuation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#target-sdk-enforcement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Target SDK enforcement
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#check-cost-tiers-and-warmup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Check cost tiers and warmup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#existing-machinery-to-extend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Existing machinery to extend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-rule-allocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposed rule allocation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detector-fixtures-and-counterexamples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detector fixtures and counterexamples
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#executable-behavioral-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Executable behavioral suite
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Executable behavioral suite">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#app-adapter-and-isolation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        App adapter and isolation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f016-required-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        F016 required scenarios
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="F016 required scenarios">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warmup-scenarios-recommended-not-detected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warmup scenarios (recommended; not detected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f017-sdk-enforcement-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        F017 SDK enforcement matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#f018-sdk-exit-and-evidence-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        F018 SDK exit and evidence matrix
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runner integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registry-coverage-ledger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registry coverage ledger
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delivery-order-and-acceptance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delivery order and acceptance
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../coding/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Standards
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="preflight-conformance-specification">Preflight conformance specification</h1>
+<p>Current policy: the SDK deprecates <code>PreflightStatus.PARTIAL</code>. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0 so B003 forces a deliberate re-schedule if that release arrives first; the gate emits a <code>DeprecationWarning</code> when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 20 preflight rules, all static, with 4 BLOCK and 16 WARN (F017 and F018 are retired and never fire); the generated catalog page <code>packages/conformance/conformance/docs/rules/preflight.md</code> is the source of truth for tiers.</p>
+<p>Status: conformance implementation and remaining acceptance requirements, 2026-09-08; revised 2026-09-24 (FND-2746); check cost tiers and warmup added 2026-10-04 (FND-3042). F003, F006 and F007 join F001 at BLOCK; other preflight rules remain WARN. <strong>Conformance and tests are separate measures:</strong> no preflight rule executes tests. F016 checks statically that the required scenarios are <em>defined</em>; whether they <em>pass</em> is the test gate's measure. F016 is WARN until the fleet has registered its scenarios. F017 and F018 were SDK-scoped and are retired: the SDK owns both the gate and its tests, so their matrices below are an SDK test plan (FND-2747), not conformance rules. SDK production behavior is unchanged.</p>
+<p>The rules ship as the conformance F-series; F001–F005 were first published as P032–P035 and P047. The detector audit that validated them against connector snapshots is recorded on <a href="https://linear.app/atlan-epd/issue/CONNECT-812">CONNECT-812</a> and in <a href="https://github.com/atlanhq/application-sdk/pull/3710">PR #3710</a>; its counts are tied to one connector revision and one detector build, so they are not kept in this repository.</p>
+<p>The implementation uses bounded static analysis, not general Python execution analysis. It follows direct module helpers, imported helpers, same-class methods, and imported error inheritance. Dynamic factories, arbitrary client instances, decorator wrappers, and semantic recovery still require behavioral adapters. The full acceptance criteria below describe the intended coverage; registration of a TEST rule is not proof that every SDK or app scenario has been implemented or executed.</p>
+<h2 id="objective-and-scope">Objective and scope</h2>
+<p>Ensure apps use SDK preflights correctly: the right inputs reach the handler, checks produce truthful and actionable verdicts within a bounded lifetime, and the SDK enforces those verdicts consistently before extraction.</p>
+<p>Cover app handlers, their reachable preflight helpers and clients, SDK gate registration and execution, and preflight response and outcome contracts. Inspect extraction only to establish whether a preflight checks the capabilities, resources, credentials, and fallback conditions the selected workflow actually uses. General extraction error handling, publishing, and connector remediation are outside this implementation scope.</p>
+<p>Sources:</p>
+<ul>
+<li><a href="https://linear.app/atlan-epd/issue/CONNECT-733">CONNECT-733</a>: typed contract and mandatory/advisory decisions.</li>
+<li><a href="https://linear.app/atlan-epd/issue/CONNECT-769">CONNECT-769</a>: typed-error rollout and enforcement.</li>
+<li><a href="https://linear.app/atlan-epd/issue/CONNECT-812">CONNECT-812</a>: pattern registry, app intakes, and September 6 and September 7 comments.</li>
+<li><a href="https://github.com/atlanhq/application-sdk/pull/3685">SDK PR #3685</a>: enforcement by failure origin, workflow enforcement after activity failure, and typed exit payloads.</li>
+</ul>
+<p>Baseline source inspected: SDK checkout <code>c4721ab6</code>. PR #3685 was open at <code>95677f263e1add545664d710ee36aba8c6551432</code>, with no merge date, when this specification was written. Its reported production reproductions are evidence in the PR, not reproductions performed for this document.</p>
+<h2 id="contract-and-policy-decisions">Contract and policy decisions</h2>
+<h3 id="results-and-actions">Results and actions</h3>
+<p>Handlers accept <code>PreflightInput</code> and return <code>PreflightOutput</code>. This applies to supported class handlers and per-entrypoint callback functions, with the context parameter permitted where required by dispatch.</p>
+<p>Every emitted failed check must carry <code>FailureDetails</code> with a nonblank message, category, code, audience, and explicit resolved retryability. Accept SDK-supported construction through an <code>AppError</code> converted to <code>FailureDetails</code>; do not require one spelling when a supported runtime coercion has the same result. Validate the resulting object, not just the presence of an <code>error=</code> expression.</p>
+<p>Every failed check must also provide a nonblank <code>suggested_action</code>. For USER errors, describe a concrete action the user can take. For PLATFORM and APP_OWNER errors, provide a safe next step appropriate to that ownership, such as retrying later or contacting support with the workflow reference. Do not direct customers to change credentials or permissions for an internal fault. Static checks establish missing values; behavioral fixtures and review establish relevance. Generic filler does not satisfy the acceptance criteria.</p>
+<p>A <code>NOT_READY</code> result must contain at least one failed, typed check. If an aggregate error is present, it must describe the actual blocking reason rather than an unrelated advisory failure. SDK failures before any handler check can run may carry no checks, but must retain a typed aggregate cause and an explicit verdict or no-verdict state.</p>
+<p><code>READY</code> means required checks passed and extraction can proceed, including explicitly supported advisory failures. <code>PARTIAL</code> is deprecated in the SDK (removal anchored at v3.40.0) and proceeds like <code>READY</code> until then. <code>NOT_READY</code> means a required capability was not established; hard mode blocks when the attributed failure's category is in <code>GATE_BLOCKING_CATEGORIES</code>. The handler owns aggregation; the SDK check model does not currently expose a <code>required</code> field. Do not introduce that field as part of conformance without a separate contract decision.</p>
+<p>Mandatory checks run in dependency order and short-circuit on the first mandatory failure, following the CONNECT-733 alignment decision. Preserve already completed checks; omit checks that did not run. Permitting additional independent mandatory probes after failure would change that agreed contract and is not part of this specification. Selected-resource aggregation must follow the workflow's supported scope semantics: at least one usable resource permits continuation only where extraction supports that reduced scope. A workflow requiring every selected resource must not inherit an at-least-one rule blindly.</p>
+<h3 id="transients-and-continuation">Transients and continuation</h3>
+<p>Expected source failures return structured results. A transient permits READY only when a tested extraction retry or fallback can tolerate that condition within its declared bounds. The fixture must exercise recovery with the same injected source condition. Otherwise return NOT_READY; retryability alone does not establish readiness.</p>
+<p>For a required capability that remains unavailable after the permitted probe/retry budget, return a typed <code>NOT_READY</code>. <code>retryable</code> describes the failure; it does not independently authorize continuation or promise that the gate retries it. Under the target PR contract, handler faults produce a verdict on the attempt where they occur, and deliberate blocks remain non-retryable at the gate boundary.</p>
+<p>The SDK deprecates PARTIAL, with removal in the first minor release after the reference apps migrate (anchored at v3.40.0); conformance reports on that contract and does not set it. Compatibility handling for existing histories and older app versions stays until removal.</p>
+<h3 id="target-sdk-enforcement">Target SDK enforcement</h3>
+<p>Under PR #3685, a handler cannot request fail-open by raising <code>RateLimitedError</code>, <code>DependencyUnavailableError</code>, or another category. The SDK applies mode to handler-originated failures. Hard mode must prevent extraction after a rejected verdict, handler crash, handler deadline overrun, or a running gate attempt whose failure is classified as source-unverifiable by the workflow — when the attributed failure's category is in <code>GATE_BLOCKING_CATEGORIES</code> (<code>AUTH</code>, <code>PERMISSION</code>, <code>INVALID_INPUT</code>, <code>PRECONDITION</code>, <code>NOT_FOUND</code>; FND-3040; and <code>SOURCE_UNAVAILABLE</code> and <code>RATE_LIMITED</code>, FND-3774). Those two block only on the gate's final attempt, each under its own reason: an earlier attempt raises the retryable <code>PreflightNoVerdict</code> marker so the retry can answer. With no aggregate <code>result.error</code>, the attributed failure is the most decisive failed check (deterministic blocking categories first, then <code>SOURCE_UNAVAILABLE</code> / <code>RATE_LIMITED</code>), not simply the first. Every other category, including the <code>TIMEOUT</code> of an overrun and the <code>INTERNAL</code> of an untyped crash, records <code>would_block</code> and proceeds in hard mode too. Soft mode records <code>would_block</code> and proceeds and never retries.</p>
+<p>SDK infrastructure failures remain distinct. Credential-store transport failures and activity scheduling failures can produce typed no-verdict fail-open outcomes. A definitive credential absence is not equivalent to a credential-store outage. Optional storage verification can return a confirmed blocking verdict in SDR mode, where the probed store is the customer's bucket (in-cluster stores are Atlan-side and map to the never-blocking <code>DEPENDENCY_UNAVAILABLE</code>); failure origin alone does not replace the distinction between a returned storage verdict and a plumbing exception.</p>
+<p>A Temporal timeout type is evidence about execution, not proof of a source root cause. Test running-attempt timeouts separately from never-started activities, credential-resolution stalls, store-probe failures, worker loss, and external cancellation. Preserve earlier typed evidence when present; without it, do not label an app deadline as a confirmed customer connectivity failure.</p>
+<h3 id="check-cost-tiers-and-warmup">Check cost tiers and warmup</h3>
+<p>This section's <em>cost tier</em> (<code>PreflightCheck.tier</code>: <code>PREFLIGHT</code> or <code>WARMUP</code>) is a property of a check. It is unrelated to the WARN/BLOCK <em>enforcement tier</em> of a conformance rule used elsewhere in this document.</p>
+<p>A <code>PREFLIGHT</code> check runs on demand and at gate start, with no preparation. A <code>WARMUP</code> check runs only once the app's <code>Handler.warmup</code> reports <code>READY</code>. A check with no tier is <code>PREFLIGHT</code>. Assign the tier by one question: <strong>can the source answer this check without starting, resuming, or queueing for compute it bills for?</strong> Yes is <code>PREFLIGHT</code>: login, token introspection, grant reads the metadata service answers, reachability. No is <code>WARMUP</code>: a query that executes on a suspended warehouse, a probe that waits for a job-queue slot, a scan of a catalog that must be indexed first. A check that is slow only because it fans out over the source's scope is a budget problem (F012) and stays <code>PREFLIGHT</code>. Reachability and authentication are always <code>PREFLIGHT</code>, so bad credentials fail at gate start and not after a resume. A <code>PREFLIGHT</code> check must not resume the source as a side effect; the resume belongs in <code>Handler.warmup</code>.</p>
+<p>A <code>WARMUP</code> tier is a promise the app keeps in two places at once: <code>WARMUP</code>-tier checks and a <code>warmup</code> override. Without the override the default answers <code>READY</code> on every surface, so the <code>WARMUP</code> checks run at gate start against cold compute, the cost the tier was meant to avoid. An override with no <code>WARMUP</code> checks sends every run whose first probe is not <code>READY</code> into a wait with nothing behind it. Either half on its own is a mistake: report it, don't infer intent from it. <code>App.preflight_warmup_ceiling_seconds</code> (default 600), <code>preflight_warmup_probe_timeout_seconds</code> (default 10) and <code>preflight_warmup_mode</code> (default <code>SOFT</code>) have defaults, so declaring them is optional.</p>
+<p>The handler must also honour <code>PreflightInput.tiers</code>: skip the checks outside it. The SDK checks every returned row's tier after the call, and a row outside the requested tiers is no verdict (a <code>500</code> on <code>/check</code>, <code>no_verdict</code> / <code>gate_broken</code> in the gate), never a silent drop.</p>
+<p>A source that is not ready <em>yet</em> reports that through <code>warmup</code>, never through <code>SOURCE_UNAVAILABLE</code>. Raising or returning <code>SOURCE_UNAVAILABLE</code> from <code>preflight_check</code> for cold, warming or queued compute is a defect: a hard gate reads it as "the source is not there" and blocks the run if it persists to the final attempt. From <code>warmup</code>, report <code>WARMING</code> or <code>QUEUED</code> instead: a non-terminal raise there is read as <code>WARMING</code> and polled again, and any eventual warmup block follows <code>preflight_warmup_mode</code>.</p>
+<p>The probe has a contract of its own. <code>warmup</code> is stateless and idempotent: each call both pushes the warmup forward and reports where it is, and returns within <code>WarmupInput.probe_timeout_seconds</code>, reporting <code>WARMING</code> or <code>QUEUED</code> when the source has not answered by then. <code>UNAVAILABLE</code> is for a source that will not get ready on its own. A typed <code>AUTH</code>, <code>PERMISSION</code> or <code>NOT_FOUND</code> raise ends the gate's wait at once; any other raise, or a probe that overruns its timeout, reads as <code>WARMING</code> and is polled again until the ceiling. Reaching the ceiling still pending is <code>SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED</code> (category <code>SOURCE_UNAVAILABLE</code>, row outcome <code>warmup_exhausted</code>).</p>
+<p><strong>Blocking is the exception to the category rule above.</strong> An <code>UNAVAILABLE</code> observation and a warmup that reaches its ceiling are decided by <code>App.preflight_warmup_mode</code> alone, independent of <code>preflight_gate_mode</code>: <code>HARD</code> blocks the run and <code>SOFT</code> reports and proceeds, whatever <code>gate_blocks</code> would say of <code>SOURCE_UNAVAILABLE</code>. The row's <code>gate_mode</code> is the warmup posture. A typed <code>AUTH</code> / <code>PERMISSION</code> / <code>NOT_FOUND</code> raise from the probe, and a <code>WARMUP</code>-tier <em>verdict</em> returned after <code>READY</code>, are enforced like any other verdict, by category under <code>preflight_gate_mode</code>. A warmup activity that itself fails (lost worker, refused credential lookup) is gate plumbing and fails open: the first probe activity falls back to one check dispatch with every tier (<code>warmup_outcome = 'broken'</code> on its row), and a later one ends the wait as <code>no_verdict</code> / <code>gate_broken</code>. The first probe is its own <code>{app}:preflight_warmup</code> activity ahead of the check activity, for every app, so it never spends the check budget.</p>
+<p>Test warmup behaviour against <code>application_sdk.testing.WarmingSource</code>, a scripted source whose script gives one answer per probe (<code>COLD → WARMING → QUEUED → READY</code>, or <code>→ UNAVAILABLE</code>, or a raise at any step). Back the app's source-client fake with it, so the app's real <code>warmup</code> runs. Do not replace <code>warmup</code> itself, for the same reason app tests do not replace <code>preflight_check</code>. SDK gate tests use <code>WarmingSourceHandler</code>, the synthetic-handler form.</p>
+<h2 id="existing-machinery-to-extend">Existing machinery to extend</h2>
+<table>
+<thead>
+<tr>
+<th>Existing surface</th>
+<th>Current behavior</th>
+<th>Required change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>F001, reserved preflight activity</td>
+<td>STATIC, BLOCK</td>
+<td>Retain; cover supported decorator aliases and wrappers without treating an unrelated decorator as SDK <code>task</code>.</td>
+</tr>
+<tr>
+<td>F002, duplicate workflow preflight</td>
+<td>STATIC, WARN</td>
+<td>Retain; relate the duplicate to the selected workflow. Removal requires a cold-source scenario because a duplicate may have been providing warm-up; the supported replacement is a declared warmup (see <a href="#check-cost-tiers-and-warmup">Check cost tiers and warmup</a>).</td>
+</tr>
+<tr>
+<td>F003, untyped failed check</td>
+<td>STATIC, BLOCK</td>
+<td>Extend beyond literal <code>passed=False</code> where local data flow proves failure. Runtime assertions cover dynamic expressions, factories, and keyword expansion.</td>
+</tr>
+<tr>
+<td>F004, metadata/input parity</td>
+<td>STATIC, WARN</td>
+<td>Compare the selected entrypoint's contract, not the union of all contracts. Unresolved contracts must report incomplete analysis.</td>
+</tr>
+<tr>
+<td>F005, handler warning logs</td>
+<td>STATIC, WARN</td>
+<td>Retain its existing identity. A log statement cannot substitute for a typed result. Apply safe reachable-helper discovery.</td>
+</tr>
+<tr>
+<td>Preflight discovery</td>
+<td>Primarily class async methods</td>
+<td>Include runtime-supported entrypoint functions, aliases, inherited handlers, and reachable helpers. Report unsupported dynamic dispatch.</td>
+</tr>
+<tr>
+<td>Rule mechanisms</td>
+<td><code>STATIC</code> and <code>TEST</code></td>
+<td>Keep these mechanisms. Add explicit execution and result ingestion for the new TEST suite; declaring the enum is not execution support.</td>
+</tr>
+<tr>
+<td>Test outcome capture</td>
+<td>Activity-log assertions</td>
+<td>Reuse for activity paths; separately capture workflow-emitted outcomes. One logger does not cover both surfaces.</td>
+</tr>
+</tbody>
+</table>
+<p>Implementation references:</p>
+<ul>
+<li><a href="https://github.com/atlanhq/application-sdk/blob/main/application_sdk/handler/contracts.py">Handler contract</a> and <a href="https://github.com/atlanhq/application-sdk/blob/main/application_sdk/handler/base.py">handler guidance</a>.</li>
+<li><a href="https://github.com/atlanhq/application-sdk/blob/main/application_sdk/execution/_temporal/preflight_gate.py">Gate activity</a> and <a href="https://github.com/atlanhq/application-sdk/blob/main/application_sdk/app/base.py">workflow boundary</a>.</li>
+<li><a href="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/rules/preflight.py">Rule definitions</a>.</li>
+<li><a href="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/checks/preflight/_common.py">Discovery</a>, <a href="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/checks/preflight/_untyped_failure.py">typed failure detector</a>, and <a href="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/checks/preflight/_metadata_parity.py">metadata parity detector</a>.</li>
+<li><a href="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/schema/disposition.py">Rule schema</a> and <a href="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/suite/runner.py">suite runner</a>.</li>
+<li><a href="https://github.com/atlanhq/application-sdk/blob/main/application_sdk/testing/preflight.py">Outcome assertion helpers</a>.</li>
+</ul>
+<h2 id="proposed-rule-allocation">Proposed rule allocation</h2>
+<p>The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F016, F019, and F020, which flags a suppression that still cites a retired id (the five vacated P-ids, or F017/F018, retired in 0.39.0 and deleted in 0.40.0). The vacated P-ids and F017/F018 stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020, excluding F017 and F018.</p>
+<p>Use <code>WARN</code> and <code>BLOCK</code> as enforcement tiers; <code>error</code> is the SARIF level corresponding to BLOCK. F001, F003, F006 and F007 use BLOCK (SARIF <code>error</code>). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. F016 reports each required scenario that is not defined — missing, skipped, declared unsupported, not calling the contract assertion, or not statically resolvable. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. <code>--exit-zero</code> preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.</p>
+<table>
+<thead>
+<tr>
+<th>ID and name</th>
+<th>Scope / mechanism</th>
+<th>Detects or requires</th>
+<th>Target tier</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>F006 PreflightHandlerContract</td>
+<td>APP / STATIC</td>
+<td>Missing or incompatible input/output annotations on a discovered handler; legacy result dictionaries instead of the SDK contract where provable. Runtime outputs checked by F016.</td>
+<td>BLOCK</td>
+</tr>
+<tr>
+<td>F007 PreflightFailureAction</td>
+<td>APP / STATIC</td>
+<td>Provably blank message or suggested action in a failure reaching a preflight result. Resolve inherited defaults and factory arguments; unresolved values defer to F016.</td>
+<td>BLOCK for definite omissions</td>
+</tr>
+<tr>
+<td>F008 PreflightExpectedFailureRaised</td>
+<td>APP / STATIC</td>
+<td>Expected probe failures escaping as raises, including the old fail-open tuple, typed subclasses, and re-raises. Follow bounded local call paths and exclude exceptions caught and converted before leaving the handler.</td>
+<td>BLOCK for resolved paths</td>
+</tr>
+<tr>
+<td>F009 PreflightVerdictAggregation</td>
+<td>APP / STATIC</td>
+<td>Provable status contradictions, unconditional READY shortcuts, and aggregation that makes a declared advisory failure blocking. General mandatory/advisory semantics belong to F016.</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>F010 PreflightGateInputParity</td>
+<td>APP / STATIC</td>
+<td>App-constructed workflow preflight input missing its known entrypoint; credentials populated only after the gate; provably incompatible routing selectors. Extend F004 rather than duplicate metadata-key checks.</td>
+<td>BLOCK for definite mismatches</td>
+</tr>
+<tr>
+<td>F011 PreflightBlockingProbe</td>
+<td>APP / STATIC</td>
+<td>Known blocking driver calls, sleeps, HTTP requests, or cleanup directly on the preflight event loop; executor work with no recognized surrounding deadline.</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>F012 PreflightBudgetOverride</td>
+<td>APP / STATIC</td>
+<td>Budget floors exceeding the remaining deadline, unreachable inner deadlines, equal nested driver/wrapper boundaries, and retry waits whose proven maximum exceeds remaining time.</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>F013 PreflightCancellationCleanup</td>
+<td>APP / STATIC</td>
+<td>Owned resources acquired on a preflight path with missing exceptional cleanup, or blocking cleanup in async code. Resolve delegated ownership before flagging.</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>F014 PreflightFailureExposure</td>
+<td>APP / STATIC</td>
+<td>Raw exception interpolation into preflight wire fields or traceback diagnostics that can expose credential-bearing values on the preflight path. Reuse existing secret/error checks where applicable.</td>
+<td>BLOCK for proven unsafe paths</td>
+</tr>
+<tr>
+<td>F015 PreflightRemovedGateContract</td>
+<td>APP / STATIC</td>
+<td>Executable/deployment references to the removed env override or private category-based gate helpers under the target SDK contract. Tests intentionally verifying removal are excluded.</td>
+<td>BLOCK after SDK applicability is established</td>
+</tr>
+<tr>
+<td>F016 PreflightBehaviorContract</td>
+<td>APP / STATIC</td>
+<td>Every required real-handler scenario — verdicts, typing, actions, input parity, scope/fallback parity, truthful check rows, deadlines, and cleanup — is defined as a collected, unskipped test that calls the contract assertion. The test gate runs them.</td>
+<td>WARN, then BLOCK once the fleet has registered its scenarios</td>
+</tr>
+<tr>
+<td>F017 PreflightWorkflowEnforcement</td>
+<td>SDK / deleted</td>
+<td>Deleted in 0.40.0; the enforcement matrix below is asserted by the SDK's own tests.</td>
+<td>—</td>
+</tr>
+<tr>
+<td>F018 PreflightExitEvidence</td>
+<td>SDK / deleted</td>
+<td>Deleted in 0.40.0; the exit and evidence matrix below is asserted by the SDK's own tests.</td>
+<td>—</td>
+</tr>
+<tr>
+<td>F019 PreflightAnalysisCoverage</td>
+<td>APP / STATIC</td>
+<td>Declared preflight entrypoints not analyzed, unresolved dispatch/contract shapes, and absent required scenario registration. Known no-preflight apps are explicitly not applicable, not healthy preflight implementations.</td>
+<td>WARN for unresolved analysis; BLOCK for missing required registration after adoption</td>
+</tr>
+</tbody>
+</table>
+<p>F016 can emit separately identified scenario failures under one rule. Do not create an independent rule for every spelling of the same error or every connector. Error-category correctness and preflight/extraction tolerance parity remain behavioral requirements; simple co-occurrence of two error subclasses does not prove misclassification.</p>
+<h2 id="detector-fixtures-and-counterexamples">Detector fixtures and counterexamples</h2>
+<p>Every static detector must include all three columns as executable fixtures. These fixtures are synthetic and contain no customer identifiers or credentials. Unsupported analysis produces a coverage diagnostic, not a fabricated finding or a clean pass.</p>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Broken fixture</th>
+<th>Corrected fixture</th>
+<th>Legitimate counterexample</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>F001/F002</td>
+<td>Wrapped SDK task registers the reserved gate or repeats the handler in the same workflow.</td>
+<td>SDK owns the single gate; removal verified without duplicate warm-up.</td>
+<td>Unrelated decorator or preflight task in an unrelated workflow.</td>
+</tr>
+<tr>
+<td>F003</td>
+<td>Failed check has no error, including a locally proven dynamic failure.</td>
+<td>Failed check resolves to <code>FailureDetails</code>.</td>
+<td>Factory supplies <code>error</code> through keyword expansion; TEST verifies it.</td>
+</tr>
+<tr>
+<td>F004/F010</td>
+<td>Miner reads crawler-only metadata or obtains its credential only in the entrypoint body.</td>
+<td>Selected input contains routing fields before dispatch.</td>
+<td>Interactive input intentionally omits entrypoint; credential reference is resolved by SDK.</td>
+</tr>
+<tr>
+<td>F005</td>
+<td>Warning is the only representation of a failed probe.</td>
+<td>Typed result reaches the SDK outcome boundary.</td>
+<td>Unrelated operational warning outside the preflight call path.</td>
+</tr>
+<tr>
+<td>F006</td>
+<td>Handler returns a legacy bool/dict or annotates the wrong input.</td>
+<td>SDK input/output annotations and actual SDK result.</td>
+<td>Supported callback includes <code>HandlerContext</code>; annotation imported under an alias.</td>
+</tr>
+<tr>
+<td>F007</td>
+<td>Error has blank action or an inherited unset action.</td>
+<td>Action is populated by the leaf or constructor.</td>
+<td>Constructor omits action but the typed leaf provides a meaningful default.</td>
+</tr>
+<tr>
+<td>F008</td>
+<td>Helper re-raises a caught transient out of the handler.</td>
+<td>Handler converts it to a typed result with scenario-appropriate status.</td>
+<td>Helper raises and an enclosing handler catch converts it before return.</td>
+</tr>
+<tr>
+<td>F009</td>
+<td>Advisory failure drives <code>all(passed)</code> to NOT_READY; empty shortcut returns READY without required checks.</td>
+<td>Status follows required capabilities and preserves advisory rows.</td>
+<td>All checks are mandatory, or local validation legitimately requires no I/O.</td>
+</tr>
+<tr>
+<td>F011</td>
+<td>Synchronous request or driver call runs inside async handler.</td>
+<td>Known bounded async client or bounded off-loop operation.</td>
+<td>Helper or async driver enforces the supplied deadline internally.</td>
+</tr>
+<tr>
+<td>F012</td>
+<td><code>max(remaining, 120)</code> or retry sleep outlives the budget.</td>
+<td>Per-operation bounds fit remaining time with cleanup headroom.</td>
+<td>Fixed cap is smaller than remaining time and enforced by an outer deadline.</td>
+</tr>
+<tr>
+<td>F013</td>
+<td>Cancelled connect leaks its owned engine; async close calls blocking dispose.</td>
+<td>Explicit ownership and bounded off-loop cleanup.</td>
+<td>Shared pool lifetime is owned and closed by a different component.</td>
+</tr>
+<tr>
+<td>F014</td>
+<td>Exception containing a synthetic DSN reaches message, action, or traceback locals.</td>
+<td>Supported redaction and safe fixed messages preserve typed attribution.</td>
+<td>Fixed non-sensitive message with separately sanitized cause.</td>
+</tr>
+<tr>
+<td>F015</td>
+<td>Deployment sets the removed override or test imports removed internals.</td>
+<td>App class declares mode; tests exercise public behavior.</td>
+<td>Negative compatibility fixture quotes the removed name without using it.</td>
+</tr>
+<tr>
+<td>F019</td>
+<td>Per-entrypoint callback exists but no detector visits it.</td>
+<td>Every applicable callback is discovered and has scenarios.</td>
+<td>App has no preflight by supported design and is explicitly reported as such.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="executable-behavioral-suite">Executable behavioral suite</h2>
+<h3 id="app-adapter-and-isolation">App adapter and isolation</h3>
+<p>Define a small test adapter per app and entrypoint. It supplies representative SDK inputs, the real registered handler/callback, fake source-client operations, expected error codes/audiences, required and advisory scenario roles, and any supported recovery/fallback. Scenario roles are test metadata, not additions to <code>PreflightCheck</code>.</p>
+<p>Patch at the external source-client boundary. Do not replace <code>preflight_check</code> or manufacture its output in app conformance tests. Include resolved and inline credential paths using synthetic values. SDK tests may use synthetic handlers to isolate gate behavior.</p>
+<p>Run tests without production credentials or live customer systems. Isolate deliberately blocking I/O, cancellation-resistant work, and worker-loss scenarios in disposable subprocesses with a parent-enforced deadline and teardown. A hung test must not hang CI. Track both handler return and remaining background work; cancelling an await does not establish that a thread or remote query stopped.</p>
+<h3 id="f016-required-scenarios">F016 required scenarios</h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Required observation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Healthy mandatory checks</td>
+<td>READY with actual successful probes; expected scope and credentials used.</td>
+</tr>
+<tr>
+<td>Mandatory authentication/permission failure</td>
+<td>NOT_READY, typed cause and action, no later mandatory or dependent probes; completed rows preserved.</td>
+</tr>
+<tr>
+<td>Advisory failure</td>
+<td>READY only when extraction supports continuation, typed failed row, correct action; required successful rows retained.</td>
+</tr>
+<tr>
+<td>Recoverable transient</td>
+<td>READY only for the declared tolerated condition; same-condition extraction retry/fallback fixture succeeds within bounds.</td>
+</tr>
+<tr>
+<td>Persistent required-source failure</td>
+<td>NOT_READY after bounded attempts; do not relabel source evidence as SDK plumbing to proceed.</td>
+</tr>
+<tr>
+<td>Mixed selected resources</td>
+<td>Status matches the selected workflow's supported scope; zero usable required scope blocks.</td>
+</tr>
+<tr>
+<td>Extraction fallback</td>
+<td>Test both tolerated and non-tolerated status codes/exceptions; preflight and extraction decisions agree in both directions.</td>
+</tr>
+<tr>
+<td>Credential and entrypoint shapes</td>
+<td>Crawler/miner, direct/agent, inline/reference, and connection-derived cases where supported resolve equivalent intended context before checks.</td>
+</tr>
+<tr>
+<td>No probe / skipped probe</td>
+<td>Required remote capability cannot pass without evidence; unexecuted checks omitted; legitimate local validation remains allowed.</td>
+</tr>
+<tr>
+<td>Hung DNS/connect/TLS/read</td>
+<td>Handler returns by its budget plus documented small test scheduling tolerance, with typed failure and correct ownership. Proven source timeout may use SOURCE_UNAVAILABLE; wrapper-only deadline uses TIMEOUT/app attribution unless evidence supports more.</td>
+</tr>
+<tr>
+<td>Cancellation and cleanup</td>
+<td>Cancellation is not swallowed into success; owned resources have bounded cleanup; no uncontrolled residual test processes/threads.</td>
+</tr>
+<tr>
+<td>Budget exhaustion and retry</td>
+<td>Connect plus probes plus retry waits plus cleanup fit remaining time; Retry-After and driver/wrapper boundaries cannot silently reset the deadline.</td>
+</tr>
+<tr>
+<td>Typed/actionable/safe output</td>
+<td>All failed rows meet the result contract; aggregate cause matches blocker; synthetic secret absent from message, action, evidence, cause, and captured logs.</td>
+</tr>
+</tbody>
+</table>
+<p>The adapter must explicitly mark unsupported scenario families with a reason. Skips, xfails, zero collected tests, missing adapters, or fixture setup failures cannot establish conformance. Measure evidence coverage per entrypoint and scenario rather than test-file presence.</p>
+<h4 id="warmup-scenarios-recommended-not-detected">Warmup scenarios (recommended; not detected)</h4>
+<p>An app that overrides <code>Handler.warmup</code> should also pin the rows below. They are <strong>not</strong> in <code>F016_SCENARIOS</code> (<code>packages/conformance/conformance/preflight_scenarios.py</code>), so F016 neither requires nor reports them. Adding them there would oblige every app, warmup or not, to register them, which needs an applicability rule first.</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Required observation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cold source reaches READY</td>
+<td>Against a scripted <code>WarmingSource</code> walking <code>COLD → WARMING → QUEUED → READY</code>: each <code>warmup</code> call reports the step it reached, with no state carried between calls, and returns within <code>probe_timeout_seconds</code>; the <code>WARMUP</code> checks then run and return a truthful verdict.</td>
+</tr>
+<tr>
+<td>Source never warms</td>
+<td>Scripted <code>→ UNAVAILABLE</code> (or a typed AUTH / PERMISSION / NOT_FOUND raise): <code>warmup</code> reports <code>UNAVAILABLE</code> or raises the typed, actionable leaf, and no <code>WARMUP</code> check claims a pass. The probe does not turn a transient source error into <code>UNAVAILABLE</code>: it raises it or keeps reporting <code>WARMING</code>, and the gate polls again.</td>
+</tr>
+<tr>
+<td>Tier assignment</td>
+<td>Reachability and authentication rows are <code>PREFLIGHT</code>; a <code>tiers={PREFLIGHT}</code> request against a cold scripted source returns no <code>WARMUP</code> row and never probes the source's compute.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="f017-sdk-enforcement-matrix">F017 SDK enforcement matrix</h3>
+<p>Retained as the SDK's test plan for gate enforcement; the F017 rule is retired (FND-2747 maps it onto <code>tests/unit/app/test_preflight_gate.py</code>).</p>
+<p>Execute a real Temporal test workflow through the SDK wrapper. Register a harmless extraction sentinel activity. In every hard-mode block case, assert the workflow fails with the preflight error and inspect history to prove the extraction sentinel was never scheduled. In permitted cases, assert it executes exactly once. Mocked <code>execute_activity</code> tests remain useful unit coverage but are insufficient for this guarantee.</p>
+<p>Cover READY, PARTIAL, NOT_READY, each typed handler-origin failure family, untyped handler crash, awaitable overrun, cancellation-resistant probe, and a running attempt terminated by Temporal. Include evidence present/absent and serialized model/dict forms. Cover never-started activities, credential absence versus vault outage, bounded credential-resolution overrun, storage exception versus returned storage verdict, external workflow cancellation, and old-history replay behavior independently.</p>
+<p>Run the matrix in soft and hard mode and with relevant attempt counts. Assert mode agreement between worker and workflow and that retry behavior matches the target contract. A source fault must not consume an extra gate attempt merely because it raised rather than returned. SDK infrastructure retries must not discard evidence. Test that a changed failure policy does not introduce replay nondeterminism for existing workflow histories.</p>
+<h3 id="f018-sdk-exit-and-evidence-matrix">F018 SDK exit and evidence matrix</h3>
+<p>Retained as the SDK's test plan for exit evidence; the F018 rule is retired (FND-2747).</p>
+<p>Validate HTTP success and raised-error paths, supported SDR dispatch, returned activity results, deliberate activity blocks, retry markers, plumbing failures, and workflow-built blocks after activity death. Assert status, checks, primary typed cause, audience, action, and message precedence. Infrastructure no-verdict payloads must not claim a readiness verdict.</p>
+<p>For PR #3685, preserve existing HTTP status and legacy <code>detail</code> compatibility while checking the additive typed body. Keep legacy successful response compatibility tests. Verify all declared outcome keys on activity and workflow emissions, failed-check codes on proceeded advisory results, and the unmeasured duration sentinel. Do not equate an empty check matrix with a healthy gate.</p>
+<p>Exercise log-buffer flush triggers from worker, workflow, and no-running-loop contexts. Assert accepted records remain buffered or are handed off safely; do not claim exactly-once durable delivery during process death. Test attempt-aware consumer selection so an orphaned earlier verdict cannot override the accepted final attempt. Reconcile consumer deduplication with the actual attempt/final-outcome contract rather than prescribing <code>(workflow_run_id, outcome)</code> universally.</p>
+<h3 id="runner-integration">Runner integration</h3>
+<p>Conformance reads the scenario registrations statically and never executes them. A TEST execution stage (<code>--with-tests</code>) and a report-ingest path (<code>--preflight-report</code>) were built, then deprecated and removed in 0.40.0: running the scenarios inside conformance duplicated the test job, and grading its report coupled two workflows' sequencing. The split is: F016 distinguishes a defined scenario from a missing, skipped, unsupported, unasserted or unresolvable one; the test gate distinguishes a passing scenario from a failing one. Neither derives a pass from the other. A fully defined F016 matrix clears F019's value-level gaps. Preserve existing suppression behavior; a suppressed F016 finding never counts as a defined scenario.</p>
+<h2 id="registry-coverage-ledger">Registry coverage ledger</h2>
+<p>The registry's main table and comments reuse identifiers. This document qualifies them by source rather than overwriting history: <code>Kafka PF-32..34</code> refers to the September 6 comment, and <code>Gate PF-32..36</code> to September 7. Pattern acceptance and current app deployment status are not inferred from an intake's Done status.</p>
+<table>
+<thead>
+<tr>
+<th>Registry finding</th>
+<th>Coverage or disposition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PF-01, PF-19, PF-31</td>
+<td>F016 scope/permission/fallback parity, both false-block and false-pass directions. Static semantic proof deferred.</td>
+</tr>
+<tr>
+<td>PF-02, PF-13, PF-14</td>
+<td>F010 and strengthened F004; F016 verifies entrypoint and credential routing. Arbitrary async credential derivation is not fixed by a connection-field validator.</td>
+</tr>
+<tr>
+<td>PF-03</td>
+<td>F001/F002 provenance improvements and F019 discovery coverage.</td>
+</tr>
+<tr>
+<td>PF-04</td>
+<td>Non-finding: absent interactive entrypoint remains legal; F010 must include it as a counterexample.</td>
+</tr>
+<tr>
+<td>PF-05, PF-06</td>
+<td>F016 cold-source and duplicate-removal scenarios; for an app that declares a warmup, the warmup scenarios run against a scripted <code>WarmingSource</code>. Old retry-warms-source advice is version-specific and must not be applied unchanged after #3685.</td>
+</tr>
+<tr>
+<td>PF-07</td>
+<td>F018 attempt/final-outcome evidence and consumer deduplication.</td>
+</tr>
+<tr>
+<td>PF-08, PF-15, PF-27, PF-30</td>
+<td>F016 checks actual discovery/authorization scope and rejects vacuous remote success. Fast duration is a telemetry signal, not proof.</td>
+</tr>
+<tr>
+<td>PF-09</td>
+<td>F018 evidence and sink tests; fleet storage/query coverage remains telemetry validation, not an app lint.</td>
+</tr>
+<tr>
+<td>PF-10</td>
+<td>Explicit limit: bounded preflight cannot prove completion of an unbounded/expensive extraction. F016 documents tested capabilities; no static rule promises full extraction success.</td>
+</tr>
+<tr>
+<td>PF-11</td>
+<td>F003, F007, F016 enforce typed failed rows and actionable NOT_READY.</td>
+</tr>
+<tr>
+<td>PF-12</td>
+<td>F009 and F016 mandatory/advisory aggregation.</td>
+</tr>
+<tr>
+<td>PF-16, PF-24, PF-26</td>
+<td>F011/F012/F013 plus F016 lifetime and deadline scenarios.</td>
+</tr>
+<tr>
+<td>PF-17, PF-18</td>
+<td>F014 plus F016/F018 synthetic-secret checks on preflight outputs and logging.</td>
+</tr>
+<tr>
+<td>PF-20</td>
+<td>F008/F016 cover classifier fallthrough reachable from preflight; extraction-only typing is excluded.</td>
+</tr>
+<tr>
+<td>PF-21</td>
+<td>F008/F016 distinguish source taxonomy, retryability, and continuation; includes ThoughtSpot and Kafka variants.</td>
+</tr>
+<tr>
+<td>PF-22, PF-23</td>
+<td>F012/F016 bounded transport retries and Retry-After on preflight paths only.</td>
+</tr>
+<tr>
+<td>PF-25</td>
+<td>Telemetry requirement: account for timeout-censored samples before budget sizing. Completed-run percentiles alone do not certify readiness.</td>
+</tr>
+<tr>
+<td>PF-28</td>
+<td>F007/F016/F018 enforce useful actions and retained typed attribution.</td>
+</tr>
+<tr>
+<td>PF-29</td>
+<td>F016 error-owner fixtures. Do not enforce the obsolete equation between fail-open categories and audience after origin-based classification.</td>
+</tr>
+<tr>
+<td>Kafka PF-32</td>
+<td>F012/F016 driver/request deadline boundary scenarios.</td>
+</tr>
+<tr>
+<td>Kafka PF-33</td>
+<td>F016/F017 separate app-owned deadline failures from confirmed source causes; mode enforcement must preserve ownership.</td>
+</tr>
+<tr>
+<td>Kafka PF-34</td>
+<td>F017 pins deliberate-block retry semantics. Changing whether NOT_READY should retry is a separate SDK policy change, not hidden in an app rule.</td>
+</tr>
+<tr>
+<td>Gate PF-32</td>
+<td>F008/F015 migration diagnostics and F016 transient scenarios.</td>
+</tr>
+<tr>
+<td>Gate PF-33</td>
+<td>F011/F012/F016 lifetime tests and F017 workflow enforcement.</td>
+</tr>
+<tr>
+<td>Gate PF-34</td>
+<td>F013/F016 cancellation and cleanup.</td>
+</tr>
+<tr>
+<td>Gate PF-35</td>
+<td>F017/F018 preserve failure evidence and enforce after a dead attempt.</td>
+</tr>
+<tr>
+<td>Gate PF-36</td>
+<td>F018 sink handoff regression; independent of app conformance.</td>
+</tr>
+<tr>
+<td>Looker and Tableau follow-ups</td>
+<td>F016 mixed-filter/request-shape parity, real auth probes, transient classification, and bounded recovery.</td>
+</tr>
+<tr>
+<td>Oracle credential flattening</td>
+<td>F010/F016 supported credential-shape scenarios.</td>
+</tr>
+<tr>
+<td>Kafka codegen follow-up</td>
+<td>F004/F010 cover runtime preflight inputs; general codegen re-adoption is excluded.</td>
+</tr>
+<tr>
+<td>EP-01, EP-02, EP-03, EP-03b</td>
+<td>No standalone extraction rules here. Reuse evidence only when retry/classification/sentinel behavior is reachable from preflight or needed for its tolerance-parity scenario.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="delivery-order-and-acceptance">Delivery order and acceptance</h2>
+<ol>
+<li>Implement discovery coverage and shared scenario/result infrastructure. Preserve existing rule identities and validate provisional IDs against the implementation branch.</li>
+<li>Strengthen F003; add F006/F007/F008/F015 and the corresponding F016 cases. This establishes typed, actionable, returned verdicts and safe upgrade diagnostics.</li>
+<li>Assert the F017/F018 matrices in the SDK's own tests alongside the target SDK contract (FND-2747). Require actual workflow-history evidence for the no-extraction guarantee.</li>
+<li>Extend input parity and add scope, fallback, truthful-result, budget, and cleanup coverage. Keep semantic static approximations at WARN.</li>
+<li>Run a representative app cohort covering SQL, HTTP, multi-entrypoint, direct/agent credentials, cold-start sources, and fallback extraction. Use synthetic reproductions derived from the registry, including negative controls.</li>
+<li>Promote precise rules to BLOCK only after applicable apps have scenarios, known findings are fixed or explicitly accounted for, detector counterexamples pass, and unresolved-analysis rates are reported. Hard-mode enablement additionally needs a fresh, build-bound runtime measurement; green conformance alone is insufficient.</li>
+</ol>
+<p>Version applicability must use the actual released SDK version containing #3685 once known, not an inferred version number. A rule's existing <code>since</code> field identifies the conformance package version, not the consumer SDK version; implement consumer applicability explicitly. Before that release, obsolete-contract findings explain upcoming incompatibility rather than claiming current behavior is broken. Migrating PARTIAL to an explicit readiness decision can happen before the bump; removed imports and deployment overrides must be addressed for the target version. Unknown SDK version yields an applicability diagnostic.</p>
+<p>Each implementation PR must include registry mappings, detector fixtures, scenario evidence, known blind spots, and the precise enforcement tier. No live fleet measurement, app remediation, issue updates, CI workflow edits, or SDK behavior changes are authorized by this specification alone.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,5593 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/standards/cross-repo-contracts/">
+      
+      
+        <link rel="prev" href="../review-checklist/">
+      
+      
+        <link rel="next" href="../release-flow/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Cross-Repo Contracts - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cross-repo-contracts" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Cross-Repo Contracts
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-typed-failure-envelope-failuredetails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The typed failure envelope (FailureDetails)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-served-manifests-resolved-task_queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The served manifest's resolved task_queue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-directory-filereference-manifest-manifest_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The directory FileReference manifest (manifest_path)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-filereference-store-tag-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The FileReference store tag (store)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-filereference-size-hint-size_bytes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The FileReference size hint (size_bytes)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-skipped-records-artifact-layout-and-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The skipped-records artifact, layout and metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-fetch-failures-artifact-layout-and-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The fetch-failures artifact, layout and metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-connection-scoped-persistent-artifacts-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The connection-scoped persistent-artifacts layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-s3-current-state-layout-its-manifest-and-the-incremental-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The S3 current-state layout, its manifest, and the incremental diff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-preflight-gates-temporal-failure-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The preflight gate's Temporal failure payload
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#submission-time-validation-workflowsv1validate-and-starts-422" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Submission-time validation: /workflows/v1/validate and /start's 422
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-preflight-results-write-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The preflight-results write route
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-warmup-tiers-wire-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The warmup tier's wire values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-streaming-event-trigger-contract-trigger_config-keys-event-args" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The streaming event-trigger contract (trigger_config keys ↔ $.event.* args)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-declared-source-agent_json-format-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The declared-source agent_json (format 2)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-workers-activity-slot-limit-gauge-temporal_worker_activity_slots_limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The worker's activity-slot limit gauge (temporal_worker_activity_slots_limit)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-pr-test-command-statuses-and-dispatch-inputs-e2e-gate-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The PR test-command statuses and dispatch inputs (/e2e, /gate-check)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-typed-failure-envelope-failuredetails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The typed failure envelope (FailureDetails)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-served-manifests-resolved-task_queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The served manifest's resolved task_queue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-directory-filereference-manifest-manifest_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The directory FileReference manifest (manifest_path)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-filereference-store-tag-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The FileReference store tag (store)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-filereference-size-hint-size_bytes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The FileReference size hint (size_bytes)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-skipped-records-artifact-layout-and-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The skipped-records artifact, layout and metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-fetch-failures-artifact-layout-and-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The fetch-failures artifact, layout and metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-connection-scoped-persistent-artifacts-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The connection-scoped persistent-artifacts layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-s3-current-state-layout-its-manifest-and-the-incremental-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The S3 current-state layout, its manifest, and the incremental diff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-preflight-gates-temporal-failure-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The preflight gate's Temporal failure payload
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#submission-time-validation-workflowsv1validate-and-starts-422" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Submission-time validation: /workflows/v1/validate and /start's 422
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-preflight-results-write-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The preflight-results write route
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-warmup-tiers-wire-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The warmup tier's wire values
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-streaming-event-trigger-contract-trigger_config-keys-event-args" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The streaming event-trigger contract (trigger_config keys ↔ $.event.* args)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-declared-source-agent_json-format-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The declared-source agent_json (format 2)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-workers-activity-slot-limit-gauge-temporal_worker_activity_slots_limit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The worker's activity-slot limit gauge (temporal_worker_activity_slots_limit)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-pr-test-command-statuses-and-dispatch-inputs-e2e-gate-check" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The PR test-command statuses and dispatch inputs (/e2e, /gate-check)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../coding/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Standards
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="cross-repo-contracts">Cross-Repo Contracts</h1>
+<p>Some values this SDK produces are read by code that does not live here — the
+Automation Engine, the runtime scenario suite, Heracles. For those, "the tests
+pass" is not the whole bar: a rename or a relocation can be locally invisible
+and still red another repo's suite, or worse, silently mis-route production
+work.</p>
+<p>Each entry below names one such value, what reads it, and the test in this repo
+that pins it. <strong>Before changing anything on this list, read the entry.</strong> If you
+are adding a value that another repo will read, add an entry and a pinning test
+with it.</p>
+<h2 id="the-typed-failure-envelope-failuredetails">The typed failure envelope (<code>FailureDetails</code>)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>AppError.to_failure_details()</code> in <code>application_sdk/errors/base.py</code>, wrapped into <code>ApplicationError(details=…)</code> by <code>_to_application_error()</code> in <code>application_sdk/execution/_temporal/activities.py</code></td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td><code>ApplicationError.details[0]</code> on every failed activity, plus <code>non_retryable</code> on the error itself</td>
+</tr>
+<tr>
+<td><strong>Key</strong></td>
+<td><code>category</code>, <code>code</code>, <code>retryable</code>, <code>audience</code> at the top level; per-error context under <code>evidence</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The Automation Engine, which attributes a failed run from these fields instead of parsing exception strings; connector-pulse, which buckets runs by <code>failure_category</code> / <code>failure_code</code> for the failure boards</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestFailureEnvelopeWireContract</code> in <code>tests/unit/errors/test_wire_contract.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The envelope is the whole point of the typed-error hierarchy: a consumer is
+supposed to branch on a field rather than regex a message. That makes the field
+<em>names</em>, the enum <em>spellings</em>, and the category-to-code relationship a contract,
+not an implementation detail.</p>
+<p><code>message</code> and <code>suggested_action</code> are <strong>redacted where the envelope is built</strong>, by
+a <code>field_validator</code> on the model: URL userinfo of any shape
+(<code>scheme://user:pass@host</code> or a bare token as the username → <code>scheme://***@host</code>;
+only the Azure blob schemes' <code>container@account</code> addressing is left alone, and
+only while no password is present) and secret-named query or DSN parameters
+(<code>password=</code>, <code>api_key=</code>, <code>pwd=</code>, … → <code>***</code>). A consumer must not expect raw credential text in either
+field, and must not rely on either as a stable identifier — the same handler
+line can arrive redacted differently if the redaction rules change. The pass is
+idempotent, so an envelope replayed off the wire compares equal. <code>evidence</code> is
+handled by key name instead: a secret-named key is rejected, not masked.</p>
+<p>What this means in practice:</p>
+<ul>
+<li><strong><code>category</code> is coarse; <code>code</code> is the specific cause.</strong> A consumer that keys a
+  customer-facing attribution on <code>category</code> alone will mis-attribute the moment
+  any app adds a leaf in that category — and every category already has several.
+  This is not hypothetical; it has happened. If you need a <code>code</code> that does not
+  exist yet, add one here rather than inferring it from the category downstream.</li>
+<li><strong>Renaming a field, or changing an enum's spelling, is a breaking change</strong> for
+  a consumer that cannot vote in this repo's CI. <code>FailureCategory</code> and
+  <code>Audience</code> serialise by member <em>name</em>, so renaming a member is a wire change
+  even though it looks like a local refactor.</li>
+<li><strong><code>evidence</code> is per-<code>service</code>, not comparable across producers.</strong> Two raise
+  sites may report the same <code>code</code> and still populate <code>evidence</code> differently —
+  the object-store write path sets <code>target</code> to a <code>scheme://bucket/key</code> URI,
+  while the boot-time preflight gate sets it to the Dapr binding name for the
+  same condition. Both are "what we were talking to" for their own producer.
+  A consumer may group by <code>code</code> and read <code>evidence</code> for context, but must not
+  assume a key holds the same <em>kind</em> of value across every producer of that
+  code. If you need one that does, say so here and make it so at both sites.</li>
+<li><strong>Merging or re-categorising a code is a wire change too.</strong> FND-4298 retired
+  four codes: <code>INVALID_INPUT_CREDENTIALS_PARSE</code> (SQL) and
+  <code>INVALID_INPUT_AZURE_CREDENTIALS_PARSE</code> now arrive as
+  <code>INVALID_INPUT_CREDENTIAL_PARSE</code>; <code>TIMEOUT_SQL_CLIENT_CONNECT</code> and
+  <code>TIMEOUT_SQL_PROBE</code> now arrive as <code>SOURCE_UNAVAILABLE_SQL_CLIENT_CONNECT_TIMEOUT</code>
+  and <code>SOURCE_UNAVAILABLE_SQL_PROBE_TIMEOUT</code>, category <code>SOURCE_UNAVAILABLE</code>.
+  <code>retryable</code> and <code>audience</code> did not change. A board keyed on an old code
+  should add the new one.</li>
+<li><strong>Adding an <code>evidence</code> key is safe; repurposing one is not.</strong> Evidence is the
+  producing dataclass's fields, so a new field appears automatically — but a
+  field that changes meaning silently changes what a consumer reads. Note that
+  <code>evidence</code> keys are also gated by the secret-name denylist in
+  <code>errors/wire.py</code>, which rejects the envelope outright rather than dropping the
+  key.</li>
+<li><strong><code>retryable</code> is not advisory.</strong> It becomes <code>non_retryable=not
+  effective_retryable</code> on the <code>ApplicationError</code>, so it <em>is</em> Temporal's retry
+  decision. Flipping it for an existing failure class changes production retry
+  behaviour, not just a dashboard label — coordinate it before landing.</li>
+<li><strong>A non-retryable task failure is non-retryable for the whole workflow.</strong>
+  Temporal reads <code>non_retryable</code> only on a workflow's <em>top-level</em> failure, and
+  a task's error arrives wrapped in an <code>ActivityError</code>. So the generated
+  workflow (<code>_lift_non_retryable_activity_failure()</code> in
+  <code>application_sdk/app/base.py</code>) re-raises a non-retryable cause as a
+  top-level <code>ApplicationError</code> with the same <code>type</code>, <code>message</code> and <code>details</code>,
+  <code>non_retryable=True</code>, chained <code>from</code> the <code>ActivityError</code>. A workflow-level
+  <code>RetryPolicy</code> then stops after one attempt instead of re-running a run that
+  fails the same way each time. The workflow's terminal failure therefore
+  carries the envelope at <code>details[0]</code> on the top level as well as on the
+  wrapped activity failure underneath. A consumer may read either, but must
+  not assume the top level is an <code>ActivityError</code>. <code>WorkerEvicted</code> is not
+  lifted: it is non-retryable only so the eviction re-dispatch loop sees it at
+  once. A retryable cause that used up its task retries is not lifted either.</li>
+</ul>
+<h2 id="the-served-manifests-resolved-task_queue">The served manifest's resolved <code>task_queue</code></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>resolve_manifest_tokens()</code> in <code>application_sdk/common/task_queue.py</code>, applied by the manifest route in <code>application_sdk/handler/metadata_routes.py</code>, which both the worker's handler service and the consolidated host (<code>handler/asgi.py</code>) register</td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td><code>GET</code>/<code>POST /workflows/v1/manifest</code> (and the deprecated unversioned <code>/manifest</code> alias)</td>
+</tr>
+<tr>
+<td><strong>Key</strong></td>
+<td><code>task_queue</code>, at <code>dag.&lt;node&gt;.task_queue</code>, <code>dag.&lt;node&gt;.inputs.task_queue</code>, and top level on single-node manifests</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The Automation Engine, which writes it into the DAG and submits work to it; from FND-224, the runtime scenario suite's contract tier, which diffs it against the TWD trigger, the KEDA metadata and the rerouter's formula</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestServedManifestTaskQueueContract</code> in <code>tests/unit/handler/test_service_manifest.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The value is <strong>stamped, not derived</strong>: the route hands <code>resolve_manifest_tokens</code>
+the queue this process was configured with — the same value <code>create_worker</code>
+receives — and that value is copied into the manifest verbatim. It is
+deliberately not re-derived from the environment at serve time, because an
+explicit <code>ATLAN_TASK_QUEUE</code> / <code>--task-queue</code> override is not reproducible by
+re-derivation. Two paths deriving the same answer is a convention that holds
+until someone's inputs differ; one path copying the other's answer is
+structural.</p>
+<p><strong>On the consolidated host</strong> the serving process is not the worker, so it
+cannot copy the worker's in-process value. It stamps the worker's
+<code>ATLAN_TASK_QUEUE</code> override when the host's app-env sync carries one
+(<code>ATLAN_APPENV__&lt;APP&gt;__ATLAN_TASK_QUEUE</code>, from the app's <code>atlan.yaml</code>
+<code>deploy.env</code>), and otherwise derives from the app's name and the deployment
+name. It never reads the bare <code>ATLAN_TASK_QUEUE</code> or <code>ATLAN_APPLICATION_NAME</code>:
+an override and an app name are one app's, and the host serves many
+(<code>resolve_manifest_tokens(from_process_env=False)</code>). The deployment name is
+<code>ATLAN_APPENV__&lt;APP&gt;__ATLAN_DEPLOYMENT_NAME</code> when set, else the host's own
+<code>ATLAN_DEPLOYMENT_NAME</code>: the atlan-app chart gives the host and every app's
+worker the same tenant-wide <code>deploymentName</code>. A Self-Deployed Runtime run
+polls a different queue, but Heracles re-stamps every agent-side node with
+<code>atlan-&lt;sdr deployment&gt;</code> on create and update (<code>stampSDRTaskQueue</code>), so the
+served queue only reaches cloud-side nodes. With no deployment name at all it
+stamps nothing and logs an ERROR. The residual risk is an override set on the
+worker some other way (not in <code>deploy.env</code>): the host cannot see it. Pinned by
+<code>test_metadata_route_parity.py</code>.</p>
+<p>That is the FND-195 fix, and the failure it removed is silent by construction:
+when the served queue and the polled queue disagree, nothing errors. AE submits
+to one queue, the worker polls another, and the run sits unclaimed until its 24h
+heartbeat backstop (CONNECT-183; the same gap stripped failure attribution in
+HYP-1954).</p>
+<p>What this means in practice for a change to <code>task_queue.py</code> or the manifest
+route:</p>
+<ul>
+<li><strong>Renaming the key, or the path it sits at, is a breaking change</strong> for a
+  consumer that cannot vote in this repo's CI. It needs coordinating, not just
+  a passing test run.</li>
+<li><strong>Reverting to token substitution</strong> — filling <code>{app_name}</code> /
+  <code>{deployment_name}</code> in place rather than replacing the whole template —
+  reintroduces the original divergence. The module docstring in
+  <code>task_queue.py</code> explains why at length; read it before proposing it again.</li>
+<li><strong>The unset case must stay loud.</strong> A missing app name resolves to <code>None</code> and
+  leaves the literal <code>{app_name}</code> token visible, rather than manufacturing
+  <code>atlan-default-&lt;deployment&gt;</code>, which reads as a legitimate queue and hangs the
+  run silently.</li>
+</ul>
+<h2 id="the-directory-filereference-manifest-manifest_path">The directory <code>FileReference</code> manifest (<code>manifest_path</code>)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td>The upload engine's directory pass, <code>_persist_directory()</code> in <code>application_sdk/storage/reference.py</code>, behind both <code>persist_file_reference()</code> and <code>transfer.upload()</code> / <code>App.upload()</code>; model <code>DirectoryManifest</code> in <code>application_sdk/storage/_manifest.py</code></td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td><code>FileReference.manifest_path</code> on every durable directory ref, in Temporal payloads passed between tasks — and between apps when one app's output is another's input</td>
+</tr>
+<tr>
+<td><strong>Format</strong></td>
+<td>JSON <code>{"version": 1, "files": [{"path", "sha256", "size_bytes"}]}</code>; <code>path</code> is relative to the ref's <code>storage_path</code> prefix, <code>/</code>-separated; <code>sha256</code> is lowercase hex</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td><code>materialize_file_reference()</code> and <code>App.verify_refs()</code> in consuming apps on an SDK that knows the field. An app on an older SDK drops <code>manifest_path</code> on decode and lists the data prefix instead (see below), so it never reads the manifest</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/storage/test_directory_manifest.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The manifest is the hand-off's statement of exactly which objects it covers.
+It is written <strong>last</strong>, so its presence means every listed object landed, and
+it is read instead of listing the prefix.</p>
+<ul>
+<li><strong>The location is carried, not derived.</strong> The key is on the ref; it lives
+  under the tier's <code>file_refs/</code> namespace (<code>{base}/file_refs/{uuid}.sdk-manifest</code>)
+  and is never inside the data prefix or beside it. The suffix must never be
+  <code>.json</code>: publish converters and apps glob run prefixes with <code>**/*.json</code> and
+  would parse it as asset records (the same constraint as the current-state
+  <code>.sdk-manifest</code> below). One case is unavoidable: <code>App.upload()</code>'s default
+  directory prefix is the run root itself (<code>RETAINED</code>, no <code>storage_subdir</code>),
+  and the run's <code>file_refs/</code> namespace sits under it. There the manifest is
+  inside the data prefix, in the SDK-owned <code>file_refs/</code> subtree that already
+  holds interceptor-persisted refs and their manifests, so an older SDK listing
+  that prefix already sees objects of the same kind. Without a run prefix (a
+  direct <code>transfer.upload()</code> call), a <code>RETAINED</code> upload writes no manifest and
+  its ref lists as before. A consumer must read
+  <code>manifest_path</code> and never compute it from <code>storage_path</code>. Do not move the
+  manifest inside the prefix: an SDK that predates manifests lists the prefix
+  and would read it as a data file.</li>
+<li><strong>The field is additive, and must stay optional.</strong> An older SDK decodes a new
+  ref with the default <code>extra="ignore"</code>, drops <code>manifest_path</code>, and falls back to
+  listing — which is why the manifest must stay out of the prefix. Making the
+  field required, or forbidding extras on <code>FileReference</code>, breaks mixed-version
+  hand-offs mid-deploy.</li>
+<li><strong>Adding a manifest field is safe; changing <code>version</code>, renaming a field, or
+  changing what <code>path</code> is relative to is not.</strong> <code>DirectoryManifest</code> pins
+  <code>version</code> to <code>1</code>, so an older reader rejects a v2 manifest with
+  <code>StorageIntegrityError</code> rather than misreading it. Bumping it needs a reader
+  that accepts both, shipped first.</li>
+</ul>
+<h2 id="the-filereference-store-tag-store">The <code>FileReference</code> store tag (<code>store</code>)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>App.download()</code> / <code>App.upload()</code> in <code>application_sdk/app/base.py</code> (<code>_tag_ref_store</code>), which set <code>StoreTarget.UPSTREAM</code> when they read from or wrote to a distinct upstream store</td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td><code>FileReference.store</code> in Temporal payloads, as <code>"deployment"</code> or <code>"upstream"</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td><code>materialize_file_refs()</code> / <code>fetch()</code> (via <code>_resolve_ref_store</code> in <code>application_sdk/storage/file_ref_sync.py</code>), which pick the store a ref is materialised from</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/app/test_transfer_ref_store.py</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>The field is additive and must stay optional, defaulting to <code>deployment</code>.</strong>
+  A producer on an older SDK sends no <code>store</code>. It is read as <code>deployment</code>, which
+  is where that SDK's interceptor always read. A consumer on an older SDK drops
+  the field and reads <code>deployment</code> as before.</li>
+<li><strong>Do not rename the two values.</strong> They are <code>StoreTarget</code>'s string values, and
+  <code>VerifyRefsInput.store</code> shares them.</li>
+<li><strong>An <code>upstream</code> ref with no upstream store bound reads the deployment store.</strong>
+  This mirrors <code>App.download()</code>'s own <code>upstream_storage or storage</code> routing.</li>
+<li><strong>The tag works only inside one run, so it does not cross app boundaries.</strong>
+  Every payload that enters a run from outside has <code>store=upstream</code> reset to
+  <code>deployment</code> on every ref: the start input (<code>_validate_workflow_input</code>, which
+  also covers <code>continue_with</code>) and every <code>@update</code> argument (the interaction
+  relay). Signals and queries carry no payload. Honouring the tag on those
+  payloads would let any external caller materialise any key in the upstream
+  bucket. The reset reaches typed fields, model extras, and plain dicts shaped
+  like a dumped ref (<code>storage_path</code>, <code>is_durable</code> and <code>store</code> keys). The dicts
+  are covered because an app may round-trip refs through untyped state with
+  <code>model_dump()</code> and <code>FileReference(**raw)</code> across <code>continue_with</code>. A ref that one app outputs and
+  another app takes as input therefore reads the deployment store, as before
+  this field existed. That consumer should go through <code>App.download(ref=...)</code>,
+  which routes to upstream itself.</li>
+<li><strong>The fix needs the consuming worker on an SDK that knows the field.</strong> Within
+  one app, <code>download()</code>/<code>upload()</code> and the task they hand off to run on the
+  same worker build, so one SDK bump covers both sides. Do not rely on an older
+  worker honouring the tag during a rolling deploy: it drops the field and
+  reads the deployment store.</li>
+</ul>
+<h2 id="the-filereference-size-hint-size_bytes">The <code>FileReference</code> size hint (<code>size_bytes</code>)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>persist_file_reference()</code> and the single-file branch of <code>materialize_file_reference()</code> in <code>application_sdk/storage/reference.py</code></td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td><code>FileReference.size_bytes</code> in Temporal payloads, an <code>int</code> or <code>null</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td><code>materialize_file_refs()</code> / <code>has_refs_to_materialize()</code> (via <code>_local_copy</code> in <code>application_sdk/storage/file_ref_sync.py</code>), as one condition for reusing <code>local_path</code> on the same pod without a download</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestSizeBytesWireContract</code> in <code>tests/unit/storage/test_file_ref_handoff.py</code></td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>The field is additive and must stay optional, defaulting to <code>null</code>.</strong> A
+  producer on an older SDK sends none, and the consumer falls back to the
+  local marker alone. A consumer on an older SDK drops the field on decode.</li>
+<li><strong>It is a hint, never a check of the stored object.</strong> A wrong value can only
+  force a re-hash or a re-download, never make a stale file look current —
+  the local marker's stat and digest still have to agree. That is why a value
+  from outside the run needs no reset at the workflow boundary, unlike <code>store</code>.</li>
+<li><strong>Directory refs leave it <code>null</code>.</strong></li>
+</ul>
+<h2 id="the-skipped-records-artifact-layout-and-metrics">The skipped-records artifact, layout and metrics</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>skip_record</code> and <code>merge_run_skips</code> in <code>application_sdk/outputs/skipped.py</code>; scheduled by <code>App.merge_skipped_records</code> (<a href="../../adr/0022-skipped-record-capture/">ADR-0022</a>)</td>
+</tr>
+<tr>
+<td><strong>Layout</strong></td>
+<td><code>{run prefix}/skipped-records.ndjson</code> (merged, one per run) and <code>{run prefix}/skipped-records/parts/{activity_id}.ndjson</code>, where the run prefix is <code>WORKFLOW_OUTPUT_PATH_TEMPLATE</code></td>
+</tr>
+<tr>
+<td><strong>Line shape</strong></td>
+<td><code>{"record_id", "entity_type", "reason", "detail", "record"}</code>; <code>reason</code> is a <code>SkipReason</code> value (<code>blank_identity</code>, <code>missing_required_field</code>, <code>malformed_record</code>, <code>unsupported_type</code>)</td>
+</tr>
+<tr>
+<td><strong>Run outputs</strong></td>
+<td>artifact <code>skipped-records</code>; metrics <code>skipped-records</code>, <code>skipped-records-&lt;reason&gt;</code> (kebab-case), <code>skipped-records-truncated</code>, <code>skipped-records-unpersisted</code>; status <code>partial_success</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>Run-output consumers (the Automation Engine UI) and anyone aggregating skips across the fleet</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/outputs/test_skipped.py</code>, <code>TestSkippedRecordsThroughInterceptors</code> in <code>tests/unit/execution/_temporal/interceptors/test_output_interceptor.py</code>, <code>tests/unit/app/test_merge_skipped_records.py</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Absence means zero.</strong> A run that skipped nothing has none of these: no artifact,
+no metric, no file. Consumers must treat a missing <code>skipped-records</code> metric as 0
+rather than as "unknown". Renaming a <code>SkipReason</code> value or a metric breaks
+fleet-wide aggregation across SDK versions, so add new members rather than
+renaming existing ones.</p>
+<h2 id="the-fetch-failures-artifact-layout-and-metrics">The fetch-failures artifact, layout and metrics</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>record_fetch_failure</code> and <code>persist_activity_fetch_failures</code> in <code>application_sdk/outputs/fetch_failures.py</code>, merged by <code>merge_run_log</code>; scheduled by <code>App.merge_fetch_failures</code> (<a href="../../adr/0022-skipped-record-capture/">ADR-0022</a>)</td>
+</tr>
+<tr>
+<td><strong>Layout</strong></td>
+<td><code>{run prefix}/fetch-failures.ndjson</code> (merged, one per run) and <code>{run prefix}/fetch-failures/parts/{activity_id}.ndjson</code>, where the run prefix is <code>WORKFLOW_OUTPUT_PATH_TEMPLATE</code></td>
+</tr>
+<tr>
+<td><strong>Line shape</strong></td>
+<td><code>{"record_id", "entity_type", "reason", "endpoint", "http_status", "detail"}</code>; <code>reason</code> is a <code>FetchFailureReason</code> value (<code>source_unavailable</code>, <code>not_found</code>, <code>forbidden</code>, <code>rate_limited</code>)</td>
+</tr>
+<tr>
+<td><strong>Run outputs</strong></td>
+<td>artifact <code>fetch-failures</code>; metrics <code>fetch-failures</code>, <code>fetch-failures-&lt;reason&gt;</code> (kebab-case), <code>fetch-failures-truncated</code>, <code>fetch-failures-unpersisted</code>; status <code>partial_success</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>Run-output consumers (the Automation Engine UI) and anyone aggregating extraction gaps across the fleet</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/outputs/test_fetch_failures.py</code>, <code>TestFetchFailuresThroughInterceptors</code> in <code>tests/unit/execution/_temporal/interceptors/test_output_interceptor.py</code>, <code>tests/unit/app/test_merge_fetch_failures.py</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Absence means zero</strong>, as for skipped records: a run that recorded no fetch failure has no
+artifact, metric or file. Add <code>FetchFailureReason</code> members rather than renaming existing ones.</p>
+<h2 id="the-connection-scoped-persistent-artifacts-layout">The connection-scoped <code>persistent-artifacts</code> layout</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>get_persistent_s3_prefix()</code> in <code>application_sdk/common/incremental/helpers.py</code>, from <code>PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE</code> in <code>application_sdk/constants.py</code>; local counterpart <code>get_persistent_artifacts_path()</code></td>
+</tr>
+<tr>
+<td><strong>Layout</strong></td>
+<td><code>persistent-artifacts/apps/{application_name}/connection/{connection_id}/</code>, where <code>connection_id</code> is the <strong>last</strong> segment of <code>connection_qualified_name</code></td>
+</tr>
+<tr>
+<td><strong>Written under it</strong></td>
+<td><code>marker.txt</code> (the incremental watermark, via <code>persist_marker</code>), <code>current-state/</code>, and per-app siblings such as a miner's own marker file</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>Every connector app doing incremental extraction — the crawler and the miner of the same connection both key off this prefix, in separate repos, and must agree; the object store retains it across runs, so past runs read what past SDK versions wrote</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestExtractEpochId</code> and <code>TestGetPersistentS3Prefix</code> in <code>tests/unit/common/incremental/test_helpers.py</code>; conformance <code>P048</code>/<code>P049</code> enforce that apps derive it from here rather than re-deriving it</td>
+</tr>
+</tbody>
+</table>
+<p>This prefix is <strong>state, not just a path</strong>. It is the address of a watermark that
+outlives the run that wrote it, so a change to how it is derived does not fail —
+it silently relocates every existing connection's marker. The next run finds no
+marker at the new address, treats itself as a first run, and re-extracts from
+the beginning; the old marker is orphaned where nothing will look for it again.
+Nothing errors, and the only visible symptom is a full extraction where an
+incremental one was expected.</p>
+<p>Two consequences for changes here:</p>
+<ul>
+<li><strong>Changing the segment choice, the template, or the <code>application_name</code>
+  fallback is a data migration</strong>, not a refactor. Existing markers live at the
+  old address. <code>ATLAN_APPLICATION_NAME</code> is not set in every app's <code>atlan.yaml</code>,
+  so apps that pass <code>application_name</code> explicitly and apps that rely on the
+  fallback resolve different directories for the same connection — aligning
+  those two is exactly such a migration and needs its own plan.</li>
+<li><strong>A non-epoch last segment must keep warning rather than raising.</strong>
+  Connections named after a workflow (<code>default/oracle/some-name</code>) are produced
+  by tenants that provision programmatically; they crawl normally, so failing
+  them here would fail one leg of a connection whose other leg works. An app
+  that re-derives the segment and raises reintroduces CONNECT-1136, where a
+  miner rejected names its own crawler accepted and one tenant's query lineage
+  went missing with every test green. The one rejected case is an <em>empty</em> last
+  segment, which is not a name and would collapse every such connection onto a
+  single shared directory.</li>
+</ul>
+<h2 id="the-s3-current-state-layout-its-manifest-and-the-incremental-diff">The S3 current-state layout, its manifest, and the incremental diff</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>CurrentStateStore.commit()</code> in <code>application_sdk/common/incremental/state/store.py</code>, called by <code>create_current_state_snapshot()</code> in <code>state/state_writer.py</code>; the diff by <code>create_incremental_diff()</code> / <code>_write_metadata()</code> in <code>state/incremental_diff.py</code>, uploaded by <code>create_current_state_snapshot()</code> before the commit</td>
+</tr>
+<tr>
+<td><strong>Layout</strong></td>
+<td>Under the connection-scoped prefix (previous entry), <code>persistent-artifacts/apps/{app}/connection/{id}/</code>: <strong>current state</strong> at <code>current-state/{entity}/{stamp}--{file}.json</code> plus <code>current-state/.sdk-manifest</code>; <strong>incremental diff</strong> at <code>runs/{run_id}/incremental-diff/</code> (<code>INCREMENTAL_DIFF_SUBPATH_TEMPLATE</code>) with <code>table/</code>, <code>column/</code>, <code>schema/</code>, <code>database/</code>, <code>delete/table/</code>, <code>delete/column/</code> and <code>metadata.json</code></td>
+</tr>
+<tr>
+<td><strong>Shape</strong></td>
+<td><code>.sdk-manifest</code> is JSON: <code>version</code>, <code>run_id</code>, <code>committed_at</code>, <code>keys</code> → size. <code>{stamp}</code> is 12 hex characters derived from the committing run ID. After the manifest is written, the commit prunes every key the manifest does not name — the snapshot it replaced, a failed run's uploads, and unstamped legacy keys — except keys with its own run's stamp, since two attempts of one run can overlap. An earlier attempt's leftovers go with the next run's commit. It then re-uploads any key the manifest names that the store no longer holds. Between a failed run and the next commit, a listing can hold stamped keys the manifest does not name — the manifest, not the listing, is the snapshot. This relies on one run per connection at a time, which scheduling guarantees. <code>metadata.json</code> is JSON with <code>is_incremental</code>, <code>tables_created</code>, <code>tables_updated</code>, <code>tables_backfill</code>, <code>tables_deleted</code>, <code>columns_total</code>, <code>columns_deleted</code>, <code>schemas_total</code>, <code>databases_total</code>, <code>total_changed_entities</code>, <code>total_files</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td><strong>Argo publish templates</strong> in marketplace-packages — the incremental connectors pass <code>current-state/</code> as <code>transformed-input-path</code> (marketplace-scripts' <code>convert_transformer_file_structure</code> globs it with <code>**/*.json</code> and takes the parent directory as the asset type), and <code>metadata.json</code> routes the publish (diff with entities → stream publish; no diff → batch publish; diff with zero entities → skip). <strong>atlan-snowflake-app</strong>, which duplicates the layout: it builds the <code>persistent-artifacts/apps/{app}/connection/{id}</code> prefix and the <code>current-state</code> subpath from its own constants rather than from this SDK. <strong>atlan-oracle-app</strong>, which rebuilds the object keys under that prefix itself. The SDK's own <code>probe()</code> on the next run</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/common/incremental/test_current_state_store.py</code> (<code>test_manifest_name_is_invisible_to_the_publish_glob</code>, the commit/prune tests, the two-run end-to-end test), the FND-3061 regressions in <code>test_state_lifecycle_characterization.py</code>, and <code>TestWriteMetadata</code> in <code>tests/unit/common/incremental/test_incremental_diff.py</code> (<code>test_metadata_key_set_is_the_argo_routing_contract</code> pins the exact <code>metadata.json</code> key set)</td>
+</tr>
+</tbody>
+</table>
+<p>Constraints that come from the readers:</p>
+<ul>
+<li><strong>The manifest must never match <code>**/*.json</code>.</strong> A root <code>_manifest.json</code> would
+  be parsed by the publish converter as asset records under an asset type
+  named <code>current-state</code>. Hence the dot-prefixed, suffix-less <code>.sdk-manifest</code>.</li>
+<li><strong>Entity files must stay directly under <code>{entity}/</code>.</strong> The converter reads
+  the asset type from the file's parent directory, so the run stamp goes in
+  the file name, never in a subdirectory. Readers must glob <code>{entity}/*.json</code>:
+  file names change every commit.</li>
+<li><strong>The prefix, <code>current-state</code>, and <code>runs/{run_id}/incremental-diff</code> are
+  spelled out in other repos.</strong> atlan-snowflake-app and atlan-oracle-app do
+  not import them from here, so renaming or relocating any segment strands
+  those apps' state exactly as the previous entry describes for the marker —
+  silently, with a full re-extraction as the only symptom. Coordinate the
+  change with both apps, and with the Argo templates, before landing it.</li>
+<li><strong>A key a reader rebuilds must still exist after the prune.</strong> An app that
+  constructs a current-state key by name rather than listing the prefix will
+  miss run-stamped files; that app must list <code>{entity}/</code>, not guess a name.</li>
+<li><strong>The snapshot is the manifest, not the listing.</strong> A reader that lists or
+  globs <code>current-state/</code> — the Argo publish converter, atlan-oracle-app's
+  direct <code>download_prefix</code> reads — also sees stamped keys no manifest names: a
+  failed commit's upload, until the next commit prunes it (see <strong>Shape</strong>).
+  New readers go through <code>CurrentStateStore.probe()</code> / <code>materialize()</code>, which
+  read only the manifest's keys. Glob readers that run after a commit, such as
+  Argo publish, see only its snapshot. A glob reader that runs before the next
+  commit, such as atlan-oracle-app's carry-forward reads, still sees a failed
+  run's copy, and the fix for it is to read through the manifest. The old
+  layout was worse on both counts: it never pruned at all.</li>
+<li><strong>A damaged manifest resets the connection to a full extraction.</strong> If
+  <code>.sdk-manifest</code> is unreadable or names a key the store does not hold, the
+  template's probes treat the snapshot as absent (<code>DamagedManifestPolicy.TREAT_AS_ABSENT</code>):
+  the run extracts in full, writes no diff, and its commit replaces the
+  manifest and prunes every key it does not name. For readers this means a
+  damaged manifest is followed by one full snapshot — and a batch publish, not
+  a stream one — rather than a connection that fails every run. A failed
+  listing or manifest read still fails the task, so a transient outage never
+  becomes a full extraction.</li>
+<li><strong><code>metadata.json</code> keys are routing inputs.</strong> Adding a key is safe; renaming
+  or dropping one — or writing it non-atomically — changes which publish mode
+  Argo picks. It is written with <code>atomic_write</code> because a truncated counts
+  block reads as zero entities and turns a stream publish into a skipped one.</li>
+<li><strong>Diff before commit.</strong> The diff is uploaded before <code>CurrentStateStore.commit</code>
+  moves the snapshot, so any committed snapshot has a durable diff behind it;
+  a publish step reading both never sees a committed snapshot without its diff.</li>
+</ul>
+<h2 id="the-preflight-gates-temporal-failure-payload">The preflight gate's Temporal failure payload</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>_gate_error()</code> and <code>_plumbing_error()</code> in <code>application_sdk/execution/_temporal/preflight_gate.py</code>, on every error that leaves the <code>{app}:preflight</code> activity, and on the block the workflow raises for a dead gate frame (<code>build_workflow_block()</code>, which routes through <code>_gate_error()</code>)</td>
+</tr>
+<tr>
+<td><strong>Shape</strong></td>
+<td>An <code>ApplicationError</code> whose <code>details[0]</code> is one <code>FailureDetails</code> (category, code, audience, retryable, message, suggested_action, evidence) and whose <code>details[1]</code> is <code>{"status": ..., "checks": [...], "attempt": N}</code>, every check in wire form. <code>status</code> is <code>not_ready</code> on every exit the gate attributes to the source, and <code>null</code> on a gate-plumbing failure, where no verdict was reached and the run proceeds. <code>attempt</code> is the activity attempt that raised. The wire <code>type</code> is <code>PreflightFailed</code> for the block, <code>PreflightNoVerdict</code> for a non-final attempt's retry marker, and the raising class name (e.g. <code>DependencyUnavailableError</code>) for a gate-plumbing failure. <code>details[0]</code> is present even when the raising leaf's own evidence cannot be serialised; the gate synthesises one rather than leave the position empty. For a verdict with no typed error, <code>details[0].message</code> is the handler's <code>result.message</code>, else every failed check's line joined with <code>;</code>, else a fixed line — the same string the raised error's message and the log rows carry</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The Automation Engine, which attributes a failed run from <code>details[0]</code> of the terminal failure and of the gate activity's failure; the Temporal UI's activity pane, which renders <code>details[1]</code>; the workflow itself, which reads <code>attempt</code> and the marker's evidence off a killed frame's chain</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestEveryExitCarriesFailureDetails</code>, <code>TestPlumbingPayloadNeverLosesItsPrimary</code> and <code>TestEveryGateErrorCarriesTheAttempt</code> in <code>tests/unit/execution/test_preflight_gate_classification.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>Every exit shares one builder on purpose. A consumer must be able to read a killed attempt's
+chain and find the previous attempt's typed evidence, so the retry marker cannot carry less
+than the block does; and a plumbing failure that left the activity as a bare class name gave
+the reader nothing to attribute at all. The workflow parses this payload inside its own
+<code>except</code>, so it reads tolerantly: a <code>details[0]</code> it cannot parse is <code>gate_broken</code> and fails
+open rather than failing the workflow task, and a single check it cannot parse is dropped
+from <code>checks</code> while the block stands on <code>details[0]</code>. <code>checks</code> may therefore be shorter
+than the handler's list, and it is empty on the <code>frame_lost</code> block the workflow raises for
+a killed attempt that left no evidence. A consumer must attribute from <code>details[0]</code> and
+treat <code>checks</code> as supplementary, never index <code>checks[0]</code>.</p>
+<p><code>details[0]</code> is <code>_primary_failure()</code> in <code>application_sdk/handler/_preflight_outcome.py</code>: the
+verdict's aggregate <code>result.error</code> when set, else the most decisive failed check (a deterministic
+blocking category such as <code>AUTH</code> first, then the first <code>SOURCE_UNAVAILABLE</code> or <code>RATE_LIMITED</code>
+check, then the first typed error).
+Before FND-3774 it was the first failed check, so a verdict mixing an unreachable or timed-out row
+with a later <code>AUTH</code> row now names the <code>AUTH</code> row. Since FND-3774 a hard gate also raises
+<code>PreflightNoVerdict</code> on a non-final attempt whose <code>details[0]</code> is <code>SOURCE_UNAVAILABLE</code> or
+<code>RATE_LIMITED</code>, so that
+marker now appears on ordinary runs, not only with storage verification opted in.</p>
+<h2 id="submission-time-validation-workflowsv1validate-and-starts-422">Submission-time validation: <code>/workflows/v1/validate</code> and <code>/start</code>'s 422</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>validate_workflow_config</code> in <code>register_metadata_routes()</code> (<code>application_sdk/handler/metadata_routes.py</code>, in the api distribution), which resolves the contract through the same <code>_resolve_input_contract</code> as <code>/input-contract</code>; <code>/start</code>'s 422 comes from <code>_parse_start_request()</code> in <code>application_sdk/handler/service.py</code>. Both 422 bodies are built by the <code>RequestContractError</code> handler in <code>application_sdk/handler/routes.py</code></td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td><code>POST /workflows/v1/validate?entrypoint=&lt;name&gt;</code> on the consolidated API host and on the worker (200 or 422, never dispatches), and the same 422 shape from the worker's <code>POST /workflows/v1/start</code></td>
+</tr>
+<tr>
+<td><strong>Key</strong></td>
+<td>422: <code>success: false</code>, <code>message</code>, <code>detail[]</code> of <code>{field, message, type}</code>. <code>field</code> is the dotted pydantic location (a missing required field has <code>type: "missing"</code>); pydantic's <code>input</code> is never included, and the SDK's own validators never embed the value in <code>message</code> (an app's custom validator is passed through as written). Missing credential fields (FND-502) use three prefixes: <code>credentials.&lt;path&gt;</code> (inline credential), <code>agent_json.&lt;auth-type&gt;.&lt;path&gt;</code> (agent mapping) and <code>credential_guid</code> (no reference)</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>Workflow creation callers (Heracles), which call <code>/validate</code> on the API host with the body they will later send to <code>/start</code>, and surface <code>detail[]</code> to the user</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/handler/test_validate_route_host.py</code> and <code>tests/unit/handler/test_validate_route_credentials.py</code> (host), <code>TestValidateWorkflowConfig</code> in <code>tests/unit/handler/test_service_entrypoints.py</code> and <code>test_start_contract_misfit_answers_422_naming_the_field</code> in <code>tests/unit/handler/test_service_start.py</code> (worker)</td>
+</tr>
+</tbody>
+</table>
+<p><code>/validate</code> judges the body against the <strong>published</strong> contract, the model
+<code>/input-contract</code> serves. The schema a caller reads and the verdict it gets
+come from one resolution, so they cannot drift. Don't give <code>/validate</code> its own
+contract lookup. A caller must treat 422 as final: the same body never succeeds
+on retry. Before FND-501, <code>/start</code> answered these as 500 "Failed to start
+workflow", so a caller that retried 5xx retried them uselessly.</p>
+<h2 id="the-preflight-results-write-route">The preflight-results write route</h2>
+<p>The one entry here that runs the other way: the SDK is the <strong>caller</strong>, not the
+producer. It holds another repo's address, route path and request shape.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>PREFLIGHT_RESULTS_ENDPOINT</code> in <code>application_sdk/constants.py</code>; the row is built by <code>build_check_result()</code> and sent by <code>post_check_result()</code> in <code>application_sdk/execution/_temporal/preflight_persist.py</code>, from the injected preflight gate</td>
+</tr>
+<tr>
+<td><strong>Sent to</strong></td>
+<td><code>POST http://system-workflows.system-workflows-app.svc.cluster.local:8000/continuous-preflight/check-results</code> — the <strong>whole URL is one constant</strong>, never composed from a base plus a path</td>
+</tr>
+<tr>
+<td><strong>Body</strong></td>
+<td><code>PreflightCheckResult</code>: <code>workflow_slug</code>, <code>origin</code>, <code>payload</code>, <code>extraction_method</code>, <code>connection_qualified_name</code>, <code>app_id</code>, <code>app_version</code>. Field names must match the receiver's request model exactly; <code>origin</code> and <code>extraction_method</code> are validated server-side against closed enums</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The <code>system-workflows</code> app (<code>atlanhq/atlan-system-workflows-app</code>, <code>app/continuous_preflight/api.py</code>), which holds the only writer principal for the tenant's <code>apps.system-workflows</code> Iceberg namespace and derives the table's own columns from <code>payload</code></td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestThePreflightResultsRouteContract</code> in <code>tests/unit/execution/test_preflight_persist.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The SDK ships the <strong>whole URL, path included</strong>, because the route belongs to the
+app that serves it: holding a base address and appending a path here would
+hardcode another repo's route layout and ship it stale the day that entrypoint's
+prefix changes. The host is safe to pin — the receiving app cannot be renamed
+without moving the Iceberg namespace its table lives in, so its name, and
+therefore its Service DNS, cannot change. The <strong>path</strong> carries no such
+protection, which is exactly why it is written down here.</p>
+<p>Three consequences, and the first two are silent by construction — the write is
+scheduled and abandoned, its response is never recorded beyond a status code, and
+nothing retries. A break costs rows, not runs, and nothing goes red:</p>
+<ul>
+<li><strong>Renaming the route path is a breaking change</strong> for every already-deployed SDK
+  version, not just the next release. That app's own docs describe the prefix as
+  "the entrypoint's own name", a locally-chosen convention it has renamed once
+  before; from this constant's first release it is frozen. Coordinate it, and
+  serve both paths until the old SDK versions retire.</li>
+<li><strong>The route is unauthenticated, and this caller depends on that.</strong>
+  <code>post_check_result</code> deliberately sends no <code>Authorization</code> header — forwarding
+  the run's token to a service that does not check it would widen that token's
+  reach for nothing. Putting auth in front of that route therefore drops every
+  row the fleet writes, with no error anywhere. It needs the header added here,
+  released, and the fleet bumped <strong>first</strong>.</li>
+<li><strong>Nothing authenticates this write, and that is accepted for the first ship.</strong>
+  Any workload that can reach
+  <code>system-workflows.system-workflows-app.svc.cluster.local:8000</code> can POST a row
+  for any <code>workflow_slug</code>, <code>app_id</code> and verdict — every field that attributes a
+  row is asserted by the caller — and because the write is abandoned, neither side
+  can tell a forged row from a real one afterwards.</li>
+</ul>
+<p>What bounds it: the address is a cluster-internal Service DNS name, so the trust
+  boundary is "any workload already running inside the tenant's cluster", not the
+  internet; the Iceberg writer principal stays in the receiving app; and the
+  <code>payload</code> narrowing above means no row carries handler-authored text either way.
+  What does <strong>not</strong> bound it, despite being the obvious candidate: this repo
+  neither owns nor asserts a <code>NetworkPolicy</code> in front of that Service. If one is
+  wanted it belongs to the receiving app's chart, and this SDK would not notice
+  its absence — so do not read this entry as a record that one exists.</p>
+<p>What that makes the rows worth: unauthenticated, self-asserted observability
+  data, good for counting and trending preflight outcomes across the fleet, which
+  is what they exist for. Nothing that has to be <em>trustworthy</em> should be built on
+  them — billing, access decisions, or anything a customer sees as authoritative.</p>
+<p>What would change the answer: the table starts feeding a decision that must be
+  trustworthy, the receiver becomes reachable beyond the cluster, or a tenant
+  begins hosting workloads that are not first-party. The fix is then the one the
+  SDK cannot make alone — workload identity, or a short-lived service token bound
+  to <code>app_id</code> — agreed with the <code>system-workflows</code> owners and rolled out in the
+  order the bullet above demands: header added here, released, fleet bumped,
+  <em>then</em> enforced at the receiver.
+- <strong>A run that waits on a warmup writes two rows, told apart by per-check <code>tier</code>.</strong>
+  When a run's first <code>Handler.warmup</code> probe is not <code>READY</code>, the gate dispatches
+  once for the <code>preflight</code> tier and once more for the <code>warmup</code> tier, and each
+  dispatch persists its own verdict over only that tier's checks. A run whose
+  first probe is <code>READY</code> (every app that does not override <code>warmup</code>) writes one
+  row, as before. The probe itself is a separate <code>{app}:preflight_warmup</code>
+  activity that persists nothing. <code>payload.preflight.checks[].tier</code> is on the wire only for a
+  <code>warmup</code> check; a <code>preflight</code> check, the default, carries no <code>tier</code> key, so an
+  untiered app's payload is byte-for-byte what it was. A reader that counts runs
+  must group on <code>workflow_slug</code> and the run, not count rows. The warmup phase's
+  own outcome, duration and observed transitions are deliberately <strong>not</strong> sent:
+  they describe the gate's wait, not the verdict, and live on the
+  <code>Preflight gate outcome</code> log row (<code>warmup_outcome</code>, <code>warmup_duration_ms</code>,
+  <code>warmup_transitions</code>). Adding <code>tier</code> relies on the receiver tolerating keys
+  it does not derive a column from inside <code>payload</code> — the relay contract this
+  entry already assumes for <code>payload</code>, but not separately verified against the
+  receiver here.
+- <strong>The two enum vocabularies must stay in step.</strong> <code>PreflightResultOrigin</code> and
+  <code>ExtractionMethod</code> are validated against the receiver's own enums; a value it
+  does not accept is a 422 and a dropped row, visible only as one WARNING
+  carrying a status code. Adding a member on either side is additive; renaming
+  one is not.</p>
+<h2 id="the-warmup-tiers-wire-values">The warmup tier's wire values</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>CheckTier</code>, <code>WarmupState</code>, <code>WarmupObservation</code> and <code>PreflightStatus.PENDING</code> in <code>application_sdk/handler/contracts.py</code>; the <code>/workflows/v1/check</code> and <code>/workflows/v1/warmup</code> routes in <code>application_sdk/handler/service.py</code>; <code>PreflightRowOutcome.WARMUP_EXHAUSTED</code> in <code>application_sdk/handler/_preflight_outcome.py</code> and <code>WarmupOutcome</code> in <code>application_sdk/execution/_temporal/preflight_gate.py</code>, stamped on the <code>Preflight gate outcome</code> row</td>
+</tr>
+<tr>
+<td><strong>Shape</strong></td>
+<td>Tier strings <code>preflight</code> / <code>warmup</code>, in the <code>/check</code> request's <code>tiers</code> and on a check's <code>tier</code>. A <code>preflight</code> check omits <code>tier</code> everywhere a check is serialised (<code>PreflightCheck.to_wire</code>, the <code>/check</code> body, <code>check_matrix</code>), so only a <code>warmup</code> check carries one. <code>preflight.status</code> gains <code>pending</code> on a tiered <code>/check</code>, with <code>preflight.warmup</code> set to the observation (<code>state</code>, <code>source_state</code>, and <code>queued_queries</code> / <code>next_poll_seconds</code> when set) or <code>null</code>. <code>POST /workflows/v1/warmup</code> answers <code>data</code> = the observation plus <code>ceiling_seconds</code>, <code>success</code> <code>false</code> only for <code>state: "unavailable"</code>. <code>WarmupState</code> strings are <code>cold</code> / <code>warming</code> / <code>queued</code> / <code>ready</code> / <code>unavailable</code>. On the gate row: <code>outcome</code> gains <code>warmup_exhausted</code>; <code>gate_tier</code> is <code>preflight</code> / <code>warmup</code>; <code>warmup_outcome</code> is <code>warming</code> / <code>ready</code> / <code>unavailable</code> / <code>failed</code> / <code>exhausted</code> / <code>broken</code>; <code>warmup_transitions</code> is a JSON list of <code>{"state", "at_ms"}</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The connector-setup UI, which sends <code>tiers</code> to <code>/check</code>, polls <code>/warmup</code> until <code>ready</code> or <code>ceiling_seconds</code>, and renders a <code>pending</code> verdict from <code>preflight.warmup</code>; connector-pulse, which buckets <code>warmup_exhausted</code> (and a newest row with <code>warmup_outcome = 'warming'</code>) as "warming", apart from <code>no_verdict</code></td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>TestContracts</code>, <code>TestCheckPreflightTierOnly</code>, <code>TestCheckWarmupTier</code> and <code>TestWarmupRoute</code> in <code>tests/unit/handler/test_warmup.py</code>; <code>TestTheCeiling</code> and <code>TestTheWarmupRowFields</code> in <code>tests/unit/execution/test_preflight_warmup.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>Every value here is additive for a caller that does not know about tiers: a
+<code>/check</code> without <code>tiers</code> never probes and never answers <code>pending</code>, an app that
+does not override <code>Handler.warmup</code> writes the gate row it always did
+(its run gains one <code>{app}:preflight_warmup</code> activity, which writes no row), and a
+<code>preflight</code> check is serialised exactly as an untiered check was. A consumer
+that does read them must treat <code>pending</code> as "not yet verified", never as a
+pass or a failure, and must not branch on <code>source_state</code>, which is the
+source's own display label. The strings are shipped values: renaming one is a
+breaking change for the UI and the dashboards, adding one is not.</p>
+<h2 id="the-streaming-event-trigger-contract-trigger_config-keys-event-args">The streaming event-trigger contract (<code>trigger_config</code> keys ↔ <code>$.event.*</code> args)</h2>
+<p>This one runs <strong>both ways</strong>, which is why it is here rather than only in the
+Automation Engine: the toolkit produces the trigger config AE reads, and AE
+produces the event shape an app's DAG reads through paths the toolkit renders.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by (toolkit → AE)</strong></td>
+<td>The <code>triggers.events[].trigger_config</code> block rendered by <code>contract-toolkit/src/App.pkl</code> and <code>NativeApp.pkl</code> from <code>EventTriggerConfig</code></td>
+</tr>
+<tr>
+<td><strong>Produced by (AE → app)</strong></td>
+<td><code>event_context</code> in <code>automation_engine/workflows/streaming_batch.py</code>, constructed there and nowhere else; <code>workflows/executor.py</code> forwards it unchanged into <code>$.event.*</code></td>
+</tr>
+<tr>
+<td><strong>Key (toolkit → AE)</strong></td>
+<td><code>streaming_enabled</code>, <code>ack_paths</code>; <code>max_retries</code> is deliberately <strong>not</strong> rendered under streaming</td>
+</tr>
+<tr>
+<td><strong>Key (AE → app)</strong></td>
+<td>Exactly four: <code>batch_key</code> (always set), <code>batch</code> (the events inline, or <code>null</code> above AE's inline cap), <code>event_count</code>, <code>topic</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The Automation Engine, which registers the trigger and picks a dispatch shell from <code>streaming_enabled</code>; every streaming consumer app, whose extract-node args resolve <code>$.event.batch</code> / <code>$.event.batch_key</code></td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>contract-toolkit/tests/streaming_trigger_config_test.pkl</code> (render shape, both schemas, and every eval-time refusal, asserted with <code>module.catch</code>)</td>
+</tr>
+<tr>
+<td><strong>Owner (AE side)</strong></td>
+<td>Anurag Badoni — change <code>event_context</code> or the <code>TriggerConfig</code> keys through this entry</td>
+</tr>
+<tr>
+<td><strong>Design record</strong></td>
+<td>DISTR-973</td>
+</tr>
+</tbody>
+</table>
+<p>Both directions fail <strong>silently</strong> by default, which is what makes this worth an
+entry rather than a comment:</p>
+<ul>
+<li><strong>AE ignores unknown <code>trigger_config</code> keys.</strong> Pydantic drops what it does not
+  model, so a toolkit-side key AE has not implemented registers as a trigger
+  with that key absent — for <code>streaming_enabled</code> that means a contract reading
+  as streaming and running as batch, with nothing logged. Ship the AE side
+  first, always.</li>
+<li><strong>A <code>$.event.*</code> path AE does not send fails the node</strong> with <code>did not match
+  any value</code> at run time, not at render time. Adding a key to <code>event_context</code>
+  is safe; renaming or removing one breaks every DAG wired to it, and the
+  toolkit cannot catch it because the path is a string it renders faithfully.</li>
+<li><strong><code>batch</code> is permanent, but it is not the contract.</strong> <code>batch_key</code> is always
+  set — AE writes the object before deciding whether the batch fits inline.
+  <code>batch</code> is present-but-<code>null</code> above the cap, deliberately: an <em>absent</em> key
+  raises <code>did not match any value</code>, while a null one lets the consumer fall
+  through to the key. A DAG that reads <code>batch</code> alone applies nothing on the
+  first over-cap batch and reports success, and Kafka was acked when the run
+  started. Handle <code>batch_key</code>; treat <code>batch</code> as an optimisation.</li>
+<li><strong>An SDK app receives only <code>batch_key</code>.</strong> The generated input model declares
+  <code>batch_key</code> and not <code>batch</code>, and the SDK's <code>Input</code> drops undeclared keys. The
+  <code>{id, topic, data}</code> envelope has no typed contract, and an untyped list of
+  dicts fails the SDK's payload-safety check, so <code>batch</code> stays undeclared until
+  the envelope gets a real type definition. Giving it one, on either side, is
+  a change to this entry.</li>
+<li><strong><code>ack_paths</code> renders under streaming even though it is inert there</strong>, because
+  AE's <code>_validate_event_ack_paths</code> rejects an event trigger with a falsy value.
+  <code>[""]</code> is AE's fire-and-forget form. Suppressing it needs the AE change
+  shipped first — the same ordering as the first bullet.</li>
+</ul>
+<h2 id="the-declared-source-agent_json-format-2">The declared-source <code>agent_json</code> (format 2)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td>The SDR setup form (Agent widget) through Heracles, and any one-off migration that rewrites a published workflow's <code>agent_json</code> (create-version → publish)</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td><code>AgentCredentialSpec</code> (<code>application_sdk/credentials/spec.py</code>) at ingress; resolution in <code>application_sdk/credentials/agent.py</code></td>
+</tr>
+<tr>
+<td><strong>Key</strong></td>
+<td>Top-level <code>"format": 2</code>; every non-envelope field is <code>{"value": X}</code> or <code>{"valueFrom": {"secretKeyRef": {"name", "key"}}}</code> / <code>{"valueFrom": {"fileRef": {"path"}}}</code>; internal round-trip key <code>value-sources</code></td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/credentials/test_agent_json_declared_sources.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>The full field rules are in <a href="../../concepts/credentials/#declared-sources-format-2">credentials</a>.
+This entry is about rollout, because the producer and the reader ship
+separately:</p>
+<ul>
+<li><strong>The reader must ship first.</strong> An SDK without this parser receives
+  <code>{"value": 3306}</code> where <code>port: int</code> expects an int and fails typed
+  validation; it would also probe the <code>format</code> value. Emit format 2 only for
+  an app whose SDK reads it. The contract toolkit's generated credential config
+  is the planned gate (FND-4361).</li>
+<li><strong>Migrating a published workflow</strong> has the same ordering: bump and deploy
+  the app first, then publish the new version.</li>
+<li><strong><code>value-sources</code> is internal.</strong> It is the normalized form a re-parsed spec
+  carries (<code>to_raw_dict()</code>, serialized workflow inputs). Producers never write
+  it; a producer that sends it alongside <code>"format": 2</code> is rejected.</li>
+<li><strong>A legacy payload is unchanged on the wire</strong>, and its serialized form gains
+  no key. Legacy probing, and the FND-4407 single-key fallback that keeps a
+  value the store rejects, are removed only once no legacy payload remains.</li>
+</ul>
+<h2 id="the-workers-activity-slot-limit-gauge-temporal_worker_activity_slots_limit">The worker's activity-slot limit gauge (<code>temporal_worker_activity_slots_limit</code>)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>_publish_activity_slots_limit()</code> in <code>application_sdk/execution/_temporal/worker.py</code>, called by <code>create_worker()</code> once the slot count is resolved</td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td>Wherever the Rust core's <code>temporal_worker_task_slots_*</code> gauges are, since it is recorded on the same Runtime: the Temporal Prometheus endpoint (<code>ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS</code>, default <code>127.0.0.1:9464</code>, loopback only), and the handler's <code>/metrics</code> route (default port 8000), which proxies that endpoint's series</td>
+</tr>
+<tr>
+<td><strong>Key</strong></td>
+<td>Series <code>temporal_worker_activity_slots_limit</code>; labels <code>task_queue</code> (the worker's task queue) and <code>worker_type="ActivityWorker"</code>; value = the activity slots the worker runs with</td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>The KEDA temporal scaler in atlanhq/keda (<code>workerActivitySlotsLimitMetric</code> in <code>pkg/scalers/temporal_scaler.go</code>), which scrapes each worker pod</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>tests/unit/execution/test_activity_slots_limit_gauge.py</code> (name, labels and value through a real Runtime's metric buffer) and <code>tests/integration/test_activity_slots_limit_scrape.py</code> (the rendered line, scraped from a real Prometheus endpoint)</td>
+</tr>
+</tbody>
+</table>
+<p>The scaler counts a pod's busy activity slots as this limit minus
+<code>temporal_worker_task_slots_available</code>, because <code>available</code> is accurate where
+<code>temporal_worker_task_slots_used</code> can carry phantom slots. Workers size their
+slots from their own container limits, and a vertical pod autoscaler sets those
+per pod, so only the worker knows the number.</p>
+<ul>
+<li><strong>Renaming the series or a label silently breaks autoscaling.</strong> The scaler
+  finds no limit and falls back to the limit configured on its ScaledObject,
+  which can be far from what the pod runs with. Keep the old name published
+  until the scaler reads the new one everywhere.</li>
+<li><strong>The value must be the count the worker actually runs with</strong>, whatever its
+  source: a value passed to <code>create_worker</code>, <code>TEMPORAL_MAX_CONCURRENT_ACTIVITIES</code>,
+  or the derived default. A different number makes the scaler count idle slots
+  as busy, or busy ones as idle.</li>
+<li><strong><code>TelemetryConfig.metric_prefix</code> does not apply</strong> to meter-created metrics,
+  so the full name, <code>temporal_</code> included, is the gauge's own name.</li>
+</ul>
+<h2 id="the-pr-test-command-statuses-and-dispatch-inputs-e2e-gate-check">The PR test-command statuses and dispatch inputs (<code>/e2e</code>, <code>/gate-check</code>)</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Produced by</strong></td>
+<td><code>.github/scripts/pr_test_command.py</code> (the comment command), <code>tests-reusable.yaml</code>'s e2e verdict steps, and <code>.github/scripts/gate_check_verdict.py</code></td>
+</tr>
+<tr>
+<td><strong>Served at</strong></td>
+<td>Commit statuses on a PR's head commit: <code>e2e</code> and <code>gate-check</code> (connector repos), <code>e2e-request</code> and <code>gate-check</code> (application-sdk). <code>workflow_dispatch</code> of a connector's <code>tests.yaml</code> with <code>run_e2e: only</code> and <code>head_sha</code></td>
+</tr>
+<tr>
+<td><strong>Key</strong></td>
+<td>Context names; the <code>running: &lt;workflow files&gt;</code> description of a pending <code>gate-check</code>; the <code>E2E_ONLY_MARKER</code> line (<code>inputs.run_e2e == 'only'</code>) in the scaffolded <code>tests.yaml</code></td>
+</tr>
+<tr>
+<td><strong>Read by</strong></td>
+<td>Every connector repo's Release Gate (<code>.github/scripts/release_gate.py</code> here, run from <code>main</code> by the scaffolded <code>release-gate.yaml</code>; reads <code>gate-check</code> and <code>connector-reviewer</code>; a repo that has not resynced since FND-5321 still runs its vendored copy), its scaffolded <code>tests.yaml</code> / <code>test-commands.yaml</code> (bootstrap templates, resynced per repo, so a rename reaches the fleet only on resync)</td>
+</tr>
+<tr>
+<td><strong>Pinned by</strong></td>
+<td><code>.github/scripts/tests/test_pr_test_command.py</code> (contexts, marker, workflow names), <code>.github/scripts/tests/test_release_gate.py::test_the_gate_reads_the_context_test_commands_writes</code> and <code>::test_the_contexts_and_identity_are_the_reviewers</code></td>
+</tr>
+</tbody>
+</table>
+<p>A connector keeps whatever template it last resynced, while the scripts here
+run at <code>@main</code>. So the command refuses a branch whose <code>tests.yaml</code> lacks the
+marker rather than dispatching it: an older file would publish an e2e-only run
+under the required <code>tests / …</code> checks and override the PR's real results
+(FND-3839). Renaming a context or the dispatch inputs needs the old name
+accepted until every repo has resynced.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

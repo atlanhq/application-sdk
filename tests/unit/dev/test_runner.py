@@ -508,3 +508,66 @@ class TestRunDevCombinedNamespace:
             await run_dev_combined(_fake_app_class(), temporal_namespace="kwarg")
 
         assert _stub_embedded_daemons[-1]["namespace"] == "kwarg"
+
+
+# --------------------------------------------------------------------------- #
+# ./.env loading (FND-4265)                                                   #
+# --------------------------------------------------------------------------- #
+
+
+class TestLoadDotenv:
+    """``run_dev_combined`` is where the SDK reads ``./.env``; importing
+    ``application_sdk.constants`` no longer does."""
+
+    def test_loads_unset_keys_and_keeps_set_ones(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.dev import _runner
+
+        (tmp_path / ".env").write_text(
+            "FND_4265_FROM_FILE=file\nFND_4265_ALREADY_SET=file\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("FND_4265_FROM_FILE", raising=False)
+        monkeypatch.setenv("FND_4265_ALREADY_SET", "shell")
+
+        with patch.object(_runner, "logger") as log:
+            _runner._load_dotenv()
+        try:
+            import os
+
+            assert os.environ["FND_4265_FROM_FILE"] == "file"
+            assert os.environ["FND_4265_ALREADY_SET"] == "shell"
+            # Names only, never values.
+            args = log.info.call_args.args
+            assert args[1] == "FND_4265_FROM_FILE"
+            assert "file" not in " ".join(str(a) for a in args[1:])
+        finally:
+            monkeypatch.delenv("FND_4265_FROM_FILE", raising=False)
+
+    def test_no_file_is_silent(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from application_sdk.dev import _runner
+
+        monkeypatch.chdir(tmp_path)
+        with patch.object(_runner, "logger") as log:
+            _runner._load_dotenv()
+        log.info.assert_not_called()
+
+    async def test_run_dev_combined_loads_before_building_config(
+        self, _stub_embedded_daemons
+    ) -> None:
+        from application_sdk.dev import _runner
+
+        calls: list[str] = []
+        with (
+            patch.object(
+                _runner, "_load_dotenv", side_effect=lambda: calls.append("env")
+            ),
+            patch.object(
+                _runner,
+                "_run_dev_combined_inner",
+                new=AsyncMock(side_effect=lambda **_: calls.append("run")),
+            ),
+        ):
+            await run_dev_combined(_fake_app_class())
+        assert calls == ["env", "run"]

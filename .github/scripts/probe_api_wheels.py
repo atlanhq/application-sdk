@@ -376,7 +376,7 @@ def api_legs(
         ),
         # Only the obstore extra: the host's store calls the worker's
         # storage.ops, whose closure must import without what the other extras
-        # bring (python-dotenv, which constants needs).
+        # bring (python-dotenv among them).
         ApiLeg(
             "api [obstore]",
             f"atlan-application-sdk-api[obstore] @ {uri}",

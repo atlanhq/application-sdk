@@ -1,0 +1,5399 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/standards/metrics/">
+      
+      
+        <link rel="prev" href="../api-distribution/">
+      
+      
+        <link rel="next" href="../app-certification/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Metrics - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#metrics-standards" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Metrics
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#core-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Principles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#understanding-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Understanding cardinality
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Understanding cardinality">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-the-cardinality-discipline-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the cardinality discipline matters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#critical-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Critical Rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Critical Rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#never-use-exception-messages-as-metric-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Never use exception messages as metric labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#never-embed-user-controlled-identifiers-in-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Never embed user-controlled identifiers in labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#label-keys-must-be-consistent-across-emission-sites-for-the-same-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Label keys must be consistent across emission sites for the same metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dont-double-count-failures-across-sdk-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Don't double-count failures across SDK layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-established-metric-names-dont-fragment-them-by-data-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use established metric names; don't fragment them by data format
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline-resource-enrichment-always-present" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inline resource enrichment (always present)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reserved-by-pushgateway-worker-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reserved by Pushgateway (worker mode)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#approved-label-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Approved Label Keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#canonical-metric-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Canonical metric inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#user-facing-metrics-shim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User-facing Metrics Shim
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#volume-estimate-current-sdk-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volume estimate (current SDK surface)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Volume estimate (current SDK surface)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-server-pod-handler-combined-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per server pod (handler / combined mode)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-worker-pod-split-deployment-push-to-pushgateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per worker pod (split deployment, push to Pushgateway)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-app-one-server-one-worker-split-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per app (one server + one worker, split-deployment)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#headroom" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Headroom
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-tenant-saas-fanout-vs-cardinality-bombs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-tenant SaaS fanout vs. cardinality bombs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-checklist-for-metric-related-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review Checklist for Metric-related PRs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference-incidents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference Incidents
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#core-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core Principles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#understanding-cardinality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Understanding cardinality
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Understanding cardinality">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#why-the-cardinality-discipline-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the cardinality discipline matters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#critical-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Critical Rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Critical Rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#never-use-exception-messages-as-metric-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Never use exception messages as metric labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#never-embed-user-controlled-identifiers-in-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Never embed user-controlled identifiers in labels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#label-keys-must-be-consistent-across-emission-sites-for-the-same-metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Label keys must be consistent across emission sites for the same metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dont-double-count-failures-across-sdk-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Don't double-count failures across SDK layers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#use-established-metric-names-dont-fragment-them-by-data-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use established metric names; don't fragment them by data format
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inline-resource-enrichment-always-present" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inline resource enrichment (always present)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reserved-by-pushgateway-worker-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reserved by Pushgateway (worker mode)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#approved-label-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Approved Label Keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#canonical-metric-inventory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Canonical metric inventory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#user-facing-metrics-shim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User-facing Metrics Shim
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#volume-estimate-current-sdk-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volume estimate (current SDK surface)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Volume estimate (current SDK surface)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-server-pod-handler-combined-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per server pod (handler / combined mode)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-worker-pod-split-deployment-push-to-pushgateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per worker pod (split deployment, push to Pushgateway)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#per-app-one-server-one-worker-split-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per app (one server + one worker, split-deployment)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#headroom" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Headroom
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#multi-tenant-saas-fanout-vs-cardinality-bombs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-tenant SaaS fanout vs. cardinality bombs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#review-checklist-for-metric-related-prs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Review Checklist for Metric-related PRs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference-incidents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference Incidents
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../coding/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Standards
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="metrics-standards">Metrics Standards</h1>
+<h2 id="core-principles">Core Principles</h2>
+<p><strong>Labels must be bounded.</strong> A metric label value must be drawn from a finite,
+deployment-time-known set. Anything that scales with users, tenants, requests,
+queries, exceptions, or runtime state belongs in <strong>logs</strong>, not in metric labels.</p>
+<p><strong>Diagnostic detail belongs in logs.</strong> The <code>activity.ended</code> log records emitted
+by <code>LogInterceptor</code> already carry <code>exception.type</code>, <code>exception.message</code>,
+<code>atlan.exception.cause_chain</code>, and <code>atlan.exception.fingerprint</code> — do not
+duplicate that detail as metric labels.</p>
+<h2 id="understanding-cardinality">Understanding cardinality</h2>
+<p>Authoritative definitions from the
+<a href="https://docs.victoriametrics.com/FAQ.html">VictoriaMetrics FAQ</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Time series</strong></td>
+<td>A unique combination of metric name + label key/value set. <code>chunks_written_total{type="pandas",mode="append"}</code> and <code>chunks_written_total{type="parquet",mode="append"}</code> are two distinct series of the same metric.</td>
+</tr>
+<tr>
+<td><strong>Active time series</strong> (<a href="https://docs.victoriametrics.com/FAQ.html#what-is-an-active-time-series">VM docs</a>)</td>
+<td>A series that received at least one sample in the last hour. The metric of operational interest — what the TSDB has to keep "hot" in memory for fast lookups.</td>
+</tr>
+<tr>
+<td><strong>Cardinality</strong> (<a href="https://docs.victoriametrics.com/FAQ.html#what-is-high-cardinality">VM docs</a>)</td>
+<td>The total number of distinct active time series. "High cardinality" is when this number is high enough to cause memory pressure or slow inserts.</td>
+</tr>
+<tr>
+<td><strong>Churn rate</strong> (<a href="https://docs.victoriametrics.com/FAQ.html#what-is-high-churn-rate">VM docs</a>)</td>
+<td>The rate at which old series are replaced by new ones — e.g. every pod restart or new release adds a new <code>instance</code> label value, retiring the old one. High churn bloats the on-disk index even if the active series count is bounded.</td>
+</tr>
+<tr>
+<td><strong>Slow inserts</strong> (<a href="https://docs.victoriametrics.com/FAQ.html#what-is-a-slow-insert">VM docs</a>)</td>
+<td>The symptom: the in-memory active-series cache overflows, the TSDB falls back to disk lookups, write throughput drops. Caused by either high cardinality or high churn.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="why-the-cardinality-discipline-matters">Why the cardinality discipline matters</h3>
+<p>A single carelessly-introduced label can multiply series count by orders
+of magnitude:</p>
+<ul>
+<li><code>error="some specific error message with timestamp 2026-05-04T12:00:00 and table foo"</code>
+  — every distinct message is a new series. Over time: thousands of new
+  series that never repeat (high churn) and accumulate in the index.</li>
+<li><code>workflow_id="&lt;uuid&gt;"</code> — every workflow run is one series. With 10 K
+  workflow runs per day, that's 10 K new series per day per metric.</li>
+<li><code>request_path="/api/users/12345/profile"</code> — without route templating
+  (<code>/api/users/{id}/profile</code>), every distinct path is a new series.</li>
+</ul>
+<p>Each of those exhibits both high cardinality (lots of unique combinations
+<em>right now</em>) <strong>and</strong> high churn (those combinations stop receiving samples
+quickly, get replaced). The TSDB pays twice: once for the active-series
+cache pressure, once for the index bloat from churn.</p>
+<p>The bounded label discipline below is what keeps an Atlan app's surface
+sub-thousand active series — comfortably below any VM tier's slow-insert
+threshold — and keeps churn flat across releases.</p>
+<h2 id="critical-rules">Critical Rules</h2>
+<h3 id="never-use-exception-messages-as-metric-labels"><strong>Never use exception messages as metric labels</strong></h3>
+<ul>
+<li><strong>Anti-pattern</strong>: <code>labels={"error": str(e)}</code> — the message embeds session
+  IDs, table names, file paths, and error codes that vary per occurrence.
+  Each unique message creates a new Prometheus time series.</li>
+<li><strong>Correct pattern</strong>: <code>labels={"error_type": type(e).__name__}</code> — bounded
+  class name. Useful for distinguishing <code>OperationalError</code> from
+  <code>TimeoutError</code> from <code>FileNotFoundError</code>.</li>
+</ul>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># WRONG — cardinality bomb</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="bp">self</span><span class="o">.</span><span class="n">metrics</span><span class="o">.</span><span class="n">record_metric</span><span class="p">(</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">"write_errors"</span><span class="p">,</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">,</span> <span class="s2">"error"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)},</span>  <span class="c1"># explodes</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="c1"># ...</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># RIGHT</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="bp">self</span><span class="o">.</span><span class="n">metrics</span><span class="o">.</span><span class="n">record_metric</span><span class="p">(</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">"write_errors"</span><span class="p">,</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">,</span> <span class="s2">"error_type"</span><span class="p">:</span> <span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="p">},</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="c1"># ...</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="never-embed-user-controlled-identifiers-in-labels"><strong>Never embed user-controlled identifiers in labels</strong></h3>
+<p>Forbidden as label values: <code>workflow_id</code>, <code>run_id</code>, <code>request_id</code>, <code>trace_id</code>,
+<code>span_id</code>, <code>correlation_id</code>, file paths, table names, schema names, database
+names, query text, payload bodies, IP addresses, hostnames of remote services.</p>
+<p>These belong in <strong>log records</strong> and <strong>trace attributes</strong>, where the storage
+layer can absorb high cardinality without time-series explosion.</p>
+<p><code>get_metric_labels()</code> in <code>observability/utils.py</code> lists the only
+auto-attached labels (<code>app_name</code>, <code>workflow_type</code>, <code>activity_type</code>) — all
+bounded by deployment configuration.</p>
+<h3 id="label-keys-must-be-consistent-across-emission-sites-for-the-same-metric"><strong>Label keys must be consistent across emission sites for the same metric</strong></h3>
+<p>Two <code>record_metric(name="X", labels=…)</code> calls for the same metric name must
+use the <strong>same set of label keys</strong>. Different values are fine; different keys
+are not — the OTel→Prometheus exporter splits inconsistent schemas into two
+metric families with the same name, producing malformed exposition that
+Pushgateway rejects with HTTP 400.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># WRONG — same metric name, different label keys → Pushgateway 400</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>  <span class="c1"># 2 keys</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"output"</span><span class="p">})</span>               <span class="c1"># 1 key</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># RIGHT — same key set</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"output"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>
+</span></code></pre></div>
+<h3 id="dont-double-count-failures-across-sdk-layers"><strong>Don't double-count failures across SDK layers</strong></h3>
+<p>Activity-level failures are already counted by <code>MetricsInterceptor</code> as
+<code>temporal_activity_errors_total{exception_type=...}</code>. Do not add a parallel
+counter that increments on the same failure with a different label scheme —
+either the new counter adds a dimension that genuinely doesn't exist on
+<code>temporal_activity_errors_total</code> (e.g. <code>format=parquet|json</code>) or it should
+not be added at all.</p>
+<h3 id="use-established-metric-names-dont-fragment-them-by-data-format"><strong>Use established metric names; don't fragment them by data format</strong></h3>
+<p>Prefer one metric with a <code>format</code> label over many parallel metrics:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># WRONG — three near-duplicate metrics</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"json_chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">})</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"parquet_write_records"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"pandas"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># RIGHT — one metric, format as a label</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"chunks_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"format"</span><span class="p">:</span> <span class="s2">"json"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">record_metric</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"records_written"</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="p">{</span><span class="s2">"format"</span><span class="p">:</span> <span class="s2">"parquet"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">:</span> <span class="o">...</span><span class="p">})</span>
+</span></code></pre></div>
+<p>(Note: the SDK currently has the legacy fragmented form. New metrics should
+follow the unified pattern.)</p>
+<h2 id="inline-resource-enrichment-always-present">Inline resource enrichment (always present)</h2>
+<p>Exactly <strong>one</strong> Resource attribute is inlined onto every metric series by
+<code>EnrichedPrometheusMetricReader</code> (and onto Temporal Rust-core series via
+<code>TelemetryConfig.global_tags</code>). Don't duplicate it in <code>record_metric()</code>
+calls — it's added automatically:</p>
+<table>
+<thead>
+<tr>
+<th>Always-present label</th>
+<th>OTel resource source</th>
+<th>Bounded by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_name</code></td>
+<td><code>app.name</code></td>
+<td>Number of connectors</td>
+</tr>
+</tbody>
+</table>
+<p><code>sum by (app_name) (rate(...))</code> works without a <code>target_info</code> JOIN.</p>
+<blockquote>
+<p><strong>Metric <code>app_name</code> is connector-level; log <code>app_name</code> is per-entry-point
+(CNCT-93).</strong> Every metric family — Temporal lifecycle <code>temporal_*</code> series and
+<code>record_metric()</code> custom metrics alike — carries the process-wide
+<code>ATLAN_APPLICATION_NAME</code> (one value per pod). Only <strong>logs</strong> resolve the
+per-entry-point <code>app_name</code> from the workflow input (e.g. <code>powerbi-crawler</code>),
+so for a multi-entrypoint bundle a metric's <code>app_name</code> may differ from the
+<code>app_name</code> on its correlated log lines. Do not pass <code>app_name</code> explicitly in
+<code>record_metric()</code> — it is auto-attached.</p>
+</blockquote>
+<p>Everything else lives on <code>target_info</code> and is recovered at query time
+via a join. This keeps per-series cardinality minimal (only the labels
+that genuinely vary by request/dimension end up multiplied) while
+preserving the ability to filter or group by deployment metadata:</p>
+<table>
+<thead>
+<tr>
+<th>Available via <code>target_info</code> (join required)</th>
+<th>OTel resource source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_type</code></td>
+<td><code>app.type</code></td>
+</tr>
+<tr>
+<td><code>app_version</code></td>
+<td><code>app.version</code></td>
+</tr>
+<tr>
+<td><code>app_release_id</code></td>
+<td><code>app.release_id</code></td>
+</tr>
+<tr>
+<td><code>app_sdk_version</code></td>
+<td><code>app.sdk_version</code></td>
+</tr>
+<tr>
+<td><code>app_release_channel</code></td>
+<td><code>app.release_channel</code></td>
+</tr>
+<tr>
+<td><code>k8s_pod_name</code>, <code>k8s_domain_name</code>, etc.</td>
+<td><code>k8s.*</code></td>
+</tr>
+</tbody>
+</table>
+<div class="language-promql highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Group by release-id at query time, not in storage:</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">app_release_id</span><span class="o">)</span><span class="w"> </span><span class="o">(</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="kr">rate</span><span class="o">(</span><span class="nv">http_server_request_duration_seconds_count</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="o">*</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="k">group_left</span><span class="o">(</span><span class="nv">app_release_id</span><span class="o">)</span><span class="w"> </span><span class="nv">target_info</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="o">)</span>
+</span></code></pre></div>
+<div class="language-promql highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Filter / group by release at query time, NOT in storage</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">app_release_id</span><span class="o">)</span><span class="w"> </span><span class="o">(</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="kr">rate</span><span class="o">(</span><span class="nv">http_server_request_duration_seconds_count</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">)</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="o">*</span><span class="w"> </span><span class="k">on</span><span class="o">(</span><span class="nv">instance</span><span class="o">)</span><span class="w"> </span><span class="k">group_left</span><span class="o">(</span><span class="nv">app_release_id</span><span class="o">)</span><span class="w"> </span><span class="nv">target_info</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="o">)</span>
+</span></code></pre></div>
+<h2 id="reserved-by-pushgateway-worker-mode">Reserved by Pushgateway (worker mode)</h2>
+<p>When the worker pushes to a Pushgateway, two labels are added by the
+gateway from the push grouping key. <strong>Do NOT pass them as labels in
+<code>record_metric()</code> calls</strong> — the duplicate would cause Pushgateway to
+reject the push with <code>400 Bad Request</code> ("label appears in both metric
+body and grouping key"):</p>
+<table>
+<thead>
+<tr>
+<th>Reserved label</th>
+<th>Set by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job</code></td>
+<td><code>PushGatewayClient.job</code> (e.g. <code>&lt;app-name&gt;-worker</code>)</td>
+</tr>
+<tr>
+<td><code>instance</code></td>
+<td><code>_default_grouping_key</code> → <code>socket.gethostname()</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="approved-label-keys">Approved Label Keys</h2>
+<p>For metrics emitted via <code>record_metric()</code> or via the OTel meter, the
+canonical bounded label set is:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Source</th>
+<th>Bounded by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>workflow_type</code></td>
+<td><code>get_metric_labels()</code></td>
+<td>Number of registered workflow classes</td>
+</tr>
+<tr>
+<td><code>activity_type</code></td>
+<td><code>get_metric_labels()</code></td>
+<td>Number of registered activity functions</td>
+</tr>
+<tr>
+<td><code>task_queue</code></td>
+<td><code>MetricsInterceptor</code></td>
+<td>Number of task queues per app (typically 1-2)</td>
+</tr>
+<tr>
+<td><code>temporal_workflow_type</code></td>
+<td><code>MetricsInterceptor</code></td>
+<td>same as <code>workflow_type</code></td>
+</tr>
+<tr>
+<td><code>temporal_activity_type</code></td>
+<td><code>MetricsInterceptor</code></td>
+<td>same as <code>activity_type</code></td>
+</tr>
+<tr>
+<td><code>otel_status_code</code></td>
+<td><code>MetricsInterceptor</code></td>
+<td><code>OK</code>, <code>ERROR</code></td>
+</tr>
+<tr>
+<td><code>exception_type</code></td>
+<td><code>MetricsInterceptor</code></td>
+<td>Number of exception classes (~30-50 at most)</td>
+</tr>
+<tr>
+<td><code>mode</code></td>
+<td><code>record_metric</code> callers</td>
+<td><code>WriteMode</code> enum (<code>append</code>, <code>overwrite</code>, …)</td>
+</tr>
+<tr>
+<td><code>type</code> / <code>format</code></td>
+<td><code>record_metric</code> callers</td>
+<td>Bounded enumerations of write paths</td>
+</tr>
+<tr>
+<td><code>error_type</code></td>
+<td><code>record_metric</code> callers</td>
+<td><code>type(e).__name__</code></td>
+</tr>
+<tr>
+<td><code>task_name</code></td>
+<td><code>execution/progress_telemetry.py</code>, <code>execution/run_length.py</code></td>
+<td>Number of registered tasks per app</td>
+</tr>
+<tr>
+<td><code>progress_last_label</code></td>
+<td><code>execution/progress_telemetry.py</code></td>
+<td>The SDK's fixed set of progress-hook labels plus each app's own hold labels — a call site, never a value</td>
+</tr>
+<tr>
+<td><code>hold_label</code></td>
+<td>same</td>
+<td>Same set. <code>run_in_thread</code> holds are labelled by the offloaded callable's qualname, never by an argument</td>
+</tr>
+<tr>
+<td><code>watchdog_mode</code></td>
+<td>same</td>
+<td><code>off</code>, <code>warn</code>, <code>enforce</code></td>
+</tr>
+<tr>
+<td><code>hold_bounded</code> / <code>hold_lapsed</code></td>
+<td>same</td>
+<td><code>true</code>, <code>false</code> — <strong>lowercase</strong>, since dashboard panels and alert rules filter on those literals</td>
+</tr>
+<tr>
+<td><code>function</code> / <code>outcome</code></td>
+<td><code>@observability</code> decorator</td>
+<td><code>function</code> is a decorated function's <code>__name__</code> — bounded by the code, never by input; <code>outcome</code> is <code>success</code> or <code>failure</code></td>
+</tr>
+</tbody>
+</table>
+<p>Any new label not on this list needs justification: prove it's bounded.</p>
+<p>(Note: <code>app_name</code> is also automatically present per the inline
+enrichment above — don't pass it explicitly in <code>record_metric()</code>.)</p>
+<h2 id="canonical-metric-inventory">Canonical metric inventory</h2>
+<p>Names emitted by the consolidated SDK surface (all use OTel base units
+— seconds for durations, bytes for sizes — and snake_case with the
+<code>_total</code> suffix on counters):</p>
+<div class="admonition note">
+<p class="admonition-title">Name new metrics in snake_case</p>
+<p>Two spellings exist in the source today: <code>MetricsInterceptor</code> creates
+OTel instruments with dotted names (<code>temporal.activity.executions</code>) and
+<code>record_metric()</code> callers use snake_case (<code>storage_transfer_total</code>).
+The Prometheus exporter rewrites dots to underscores, so both arrive as
+the snake_case names in this table. Write new names in snake_case so the
+name in the code is the name you query. Never put a variable part — a
+function, table or format — in the name: make it a label
+(<code>function_calls_total{function="..."}</code>, not <code>&lt;function&gt;_success_total</code>).</p>
+</div>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chunks_written_total</code></td>
+<td>counter</td>
+<td><code>record_metric()</code> in <code>storage/formats/</code></td>
+</tr>
+<tr>
+<td><code>function_calls_total</code></td>
+<td>counter</td>
+<td><code>@observability</code> decorator — one increment per call of a decorated function, labels <code>function</code> (<code>__name__</code>), <code>outcome</code> (<code>success</code>/<code>failure</code>), <code>error_type</code> (exception class, <code>none</code> on success). Replaces the per-function <code>&lt;function&gt;_success</code> / <code>&lt;function&gt;_failure</code> counters</td>
+</tr>
+<tr>
+<td><code>write_records_total</code></td>
+<td>counter</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>write_errors_total</code></td>
+<td>counter</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>temporal_activity_executions_total</code></td>
+<td>counter</td>
+<td><code>MetricsInterceptor</code></td>
+</tr>
+<tr>
+<td><code>temporal_activity_errors_total</code></td>
+<td>counter</td>
+<td>same (label <code>exception_type=type(e).__name__</code>)</td>
+</tr>
+<tr>
+<td><code>temporal_activity_duration_seconds</code></td>
+<td>histogram</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>temporal_activity_cpu_seconds</code></td>
+<td>histogram</td>
+<td>same — the activity's <strong>fair share</strong> of process CPU: the process is sampled at every activity start and end, and the consumption between two boundaries is split evenly across the activities in flight. <code>sum(rate(…_sum))</code> never exceeds what the worker used, and equals its busy CPU when every boundary sample succeeds (an activity whose start or end could not be sampled records nothing). Exact with one activity at a time; an even split, not a per-task measurement, under concurrency</td>
+</tr>
+<tr>
+<td><code>temporal_activity_mem_gib_seconds</code></td>
+<td>histogram</td>
+<td>same — the activity's fair share of process RSS integrated over wall-clock time (GiB·s), split the same way</td>
+</tr>
+<tr>
+<td><code>temporal_workflow_executions_total</code></td>
+<td>counter</td>
+<td>same — one sample per run, recorded by the worker instance that finishes the run live. A run evicted from the workflow cache, or handed to another worker after a restart, still records exactly one; eviction teardown and replay of a closed history record nothing</td>
+</tr>
+<tr>
+<td><code>temporal_workflow_duration_seconds</code></td>
+<td>histogram</td>
+<td>same — measured on the run's history clock (<code>workflow.now() - workflow.info().start_time</code>, from the run's first workflow task), not the recording process's clock, so it stays correct when the run changes worker</td>
+</tr>
+<tr>
+<td><code>http_server_request_duration_seconds</code></td>
+<td>histogram</td>
+<td>FastAPIInstrumentor (stable HTTP semconv)</td>
+</tr>
+<tr>
+<td><code>http_server_request_body_size_bytes</code></td>
+<td>histogram</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>http_server_response_body_size_bytes</code></td>
+<td>histogram</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>http_server_active_requests</code></td>
+<td>gauge</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>temporal_*</code> (Rust-core families)</td>
+<td>various</td>
+<td>Temporal SDK Rust core, scraped via FastAPI proxy or pushed via <code>TemporalCoreCollector</code></td>
+</tr>
+<tr>
+<td><code>temporal_core_metrics_proxy_failures_total</code></td>
+<td>counter</td>
+<td><code>handler/service.py</code> — bumped (with <code>reason</code> label) when the in-process Temporal-core proxy fetch from <code>127.0.0.1:9464</code> fails (<code>reason</code> is the httpx exception class, <code>http_&lt;status&gt;</code>, or <code>oversize</code> when the body exceeds <code>ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES</code>) so <code>up=1</code> scrapes with missing <code>temporal_*</code> series are observable from VictoriaMetrics rather than only from logs</td>
+</tr>
+<tr>
+<td><code>task_run_length_over_sla_seconds</code></td>
+<td>histogram</td>
+<td><code>execution/run_length.py</code> — age of a run observed past <code>ATLAN_RUN_LENGTH_SLA_SECONDS</code>, re-asserted once a minute while it stays over; labels <code>task_name</code>, <code>temporal_workflow_type</code>. Recorded <em>only</em> over the SLA, so <code>_count</code> rising is the alert. <strong>Alertable</strong>: see <a href="../../concepts/monitoring/#run-length-the-run-no-stall-and-no-timeout-catches">Monitoring</a> and the <a href="../../runbooks/long-running-run/">long-running-run runbook</a></td>
+</tr>
+<tr>
+<td><code>dapr_sidecar_wait_duration_seconds</code></td>
+<td>histogram</td>
+<td><code>infrastructure/_dapr/http.py</code> — <code>wait_for_dapr_sidecar()</code>, label <code>outcome</code> (<code>ready</code> / <code>reachable_not_ready</code> / <code>timed_out</code>); surfaces a slow/misconfigured sidecar as a boot-time metric instead of only as a downstream liveness-probe restart loop</td>
+</tr>
+<tr>
+<td><code>task_no_progress_gap_seconds</code></td>
+<td>histogram</td>
+<td><code>execution/progress_telemetry.py</code> — one entry per no-progress gap exceeding <code>max_no_progress_seconds</code>, labels <code>task_name</code>, <code>progress_last_label</code>, <code>watchdog_mode</code> (ADR-0018). <strong>Alertable</strong>: <code>AtlanAppTaskStalled</code> in <code>atlanhq/atlan-alerts</code> pages on <code>increase(…_sum[1h]) &gt;= 3600</code>, since in warn mode this signal stands in for the kill — see the <a href="../../runbooks/stalled-task/">stalled-task runbook</a></td>
+</tr>
+<tr>
+<td><code>task_hold_duration_seconds</code></td>
+<td>histogram</td>
+<td>same — one entry per released progress hold, labels <code>task_name</code>, <code>hold_label</code>, <code>hold_bounded</code>, <code>hold_lapsed</code>; every hold is recorded, since sizing an allowance means reading that site's own distribution. Work-list only, deliberately not alerted</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Renaming either <code>task_*</code> series is a cross-repo change</p>
+<p>The alert rule and the dashboard live outside this repository, so a rename
+here silently disables the only containment a wedged activity has while an
+app is in warn mode. <code>tests/unit/execution/test_progress_telemetry_exposition.py</code>
+pins the exported names, label keys and label <em>values</em> against the real
+Prometheus exporter and names every consumer that has to be updated with them.</p>
+</div>
+<h2 id="user-facing-metrics-shim">User-facing Metrics Shim</h2>
+<p>The <code>application_sdk.observability.metrics</code> module exposes
+<code>create_counter</code> / <code>create_histogram</code> / etc. for app authors. The same rules
+apply: labels passed to <code>.add()</code> / <code>.record()</code> MUST be bounded.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.observability</span><span class="w"> </span><span class="kn">import</span> <span class="n">metrics</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">requests</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">create_counter</span><span class="p">(</span><span class="s2">"myapp.requests"</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">"…"</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s2">"1"</span><span class="p">)</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># WRONG</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">requests</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="p">{</span><span class="s2">"workflow_id"</span><span class="p">:</span> <span class="n">workflow_id</span><span class="p">})</span>  <span class="c1"># explodes</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">requests</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="p">{</span><span class="s2">"sql"</span><span class="p">:</span> <span class="n">query_text</span><span class="p">})</span>           <span class="c1"># explodes</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># RIGHT</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="n">requests</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="p">{</span><span class="s2">"endpoint"</span><span class="p">:</span> <span class="s2">"/foo"</span><span class="p">,</span> <span class="s2">"status"</span><span class="p">:</span> <span class="s2">"ok"</span><span class="p">})</span>  <span class="c1"># bounded</span>
+</span></code></pre></div>
+<h2 id="volume-estimate-current-sdk-surface">Volume estimate (current SDK surface)</h2>
+<p>These numbers describe a split-deployment app (1 server pod + 1 worker
+pod) running on the SDK's current observability surface. They're
+order-of-magnitude — meant for headroom planning and to make the cost
+of new metrics visible — and don't replace measuring your own
+deployment.</p>
+<h3 id="per-server-pod-handler-combined-mode">Per server pod (handler / combined mode)</h3>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Active series</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FastAPI HTTP server instrumentation</td>
+<td>~30 (templated <code>http.route</code>, status code, method)</td>
+</tr>
+<tr>
+<td>SDK custom metrics (<code>record_metric()</code>)</td>
+<td>~5</td>
+</tr>
+<tr>
+<td>Temporal Rust core (proxied through <code>/metrics</code>)</td>
+<td>~150</td>
+</tr>
+<tr>
+<td><code>prometheus_client</code> defaults (<code>python_*</code>, <code>process_*</code>)</td>
+<td>~20</td>
+</tr>
+<tr>
+<td><strong>Total per pod</strong></td>
+<td><strong>≈ 200 active series</strong></td>
+</tr>
+</tbody>
+</table>
+<p>At a 15 s scrape interval that's ~800 K samples per pod per day.</p>
+<h3 id="per-worker-pod-split-deployment-push-to-pushgateway">Per worker pod (split deployment, push to Pushgateway)</h3>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Active series</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SDK custom metrics + interceptor <code>temporal_*</code> (record_metric path)</td>
+<td>~380</td>
+</tr>
+<tr>
+<td>Temporal Rust core (via <code>TemporalCoreCollector</code> bridge)</td>
+<td>~460</td>
+</tr>
+<tr>
+<td><code>prometheus_client</code> defaults</td>
+<td>~20</td>
+</tr>
+<tr>
+<td><strong>Total per pod</strong></td>
+<td><strong>≈ 840 active series</strong></td>
+</tr>
+</tbody>
+</table>
+<p>At a 30 s push interval that's ~2.4 M samples per pod per day pushed to
+the Pushgateway.</p>
+<h3 id="per-app-one-server-one-worker-split-deployment">Per app (one server + one worker, split-deployment)</h3>
+<ul>
+<li><strong>~1,040 active series</strong></li>
+<li><strong>~3.2 M samples/day</strong></li>
+</ul>
+<h3 id="headroom">Headroom</h3>
+<ul>
+<li>VictoriaMetrics single-node tier handles ~10 M active series with
+  sub-second insert latency on 8-core / 32 GB. A single app is at
+  ~0.01 % of that ceiling; even a fleet of dozens of comparable apps
+  stays well under 1 %.</li>
+<li>Churn from daily releases adds ~1,000 new pod-instance series per
+  app per day. With 30-day retention, the index carries ~30 K series
+  fingerprints per app — well under the slow-inserts threshold.</li>
+</ul>
+<h3 id="multi-tenant-saas-fanout-vs-cardinality-bombs">Multi-tenant SaaS fanout vs. cardinality bombs</h3>
+<p>These two scaling vectors look superficially similar but have very
+different cost profiles, and the doc above conflated them in an earlier
+draft. Both increase the series count, but only one is a problem.</p>
+<p><strong>Multi-tenant fanout (safe, linear).</strong> Each customer's pod adds a
+constant <code>tenant_id</code> / <code>cluster_name</code> label to every series it emits
+— the value is fixed for that pod's lifetime, same shape as the
+<code>app_name</code> resource enrichment we already inline.
+Series count scales linearly with the number of customers running
+the app:</p>
+<ul>
+<li>100 customers × ~1,040 series/app = ~104 K active series — fine</li>
+<li>1,000 customers × 1,040 = ~1 M — still well within VM single-node</li>
+<li>10,000 customers × 1,040 = ~10 M — at single-node ceiling, time
+    to plan VMCluster sharding, but not a <em>cardinality bug</em></li>
+</ul>
+<p>This is the normal SaaS pattern and what VM is built to handle.</p>
+<p><strong>Intra-pod cardinality bomb (dangerous, multiplicative).</strong> A label
+whose value varies <em>within a single pod's lifetime</em> multiplies the
+series count regardless of how many customers you have:</p>
+<ul>
+<li><code>workflow_id</code> — UUID per workflow run; one pod processing
+    1,000 workflows/day adds 1,000 new series per metric per pod per day</li>
+<li><code>request_id</code>, <code>correlation_id</code> — per-request, same shape</li>
+<li><code>error="&lt;full message&gt;"</code> — per occurrence; embeds session IDs,
+    file paths, error codes</li>
+<li><code>query_text</code>, <code>path</code> (raw, not route-templated) — varies per call</li>
+</ul>
+<p>These both inflate the active count <em>and</em> contribute high churn. A
+single such label can take a pod from ~840 active series to hundreds
+of thousands — and the storage cost compounds across every customer
+running the app.</p>
+<p><strong>Other things that change the math:</strong></p>
+<ul>
+<li>Doubling the worker replica count doubles the worker active-series
+  contribution per customer (worker side dominates the per-app number).</li>
+<li>An app whose <code>temporal_*</code> metrics fan out across thousands of
+  distinct task queues or build IDs (similar shape to known cardinality
+  bugs on the Temporal <strong>server</strong> side) could grow per-pod active
+  series into the hundreds of thousands. Worth a separate analysis if
+  you see this pattern.</li>
+</ul>
+<h2 id="review-checklist-for-metric-related-prs">Review Checklist for Metric-related PRs</h2>
+<ul>
+<li>[ ] Every label value is drawn from a finite, deployment-known set.</li>
+<li>[ ] No <code>str(e)</code>, <code>repr(e)</code>, or <code>e.args</code> anywhere in a <code>labels=</code> dict.</li>
+<li>[ ] No workflow/run/request/trace/span/correlation IDs in labels.</li>
+<li>[ ] No file paths, table/schema names, query text, or payload bodies in labels.</li>
+<li>[ ] If the metric name appears at multiple emission sites, they all use the
+      same set of label keys.</li>
+<li>[ ] Diagnostic detail (full messages, stack traces) goes to logs via
+      <code>logger.error("...", exc_info=True)</code> — not into metric labels.</li>
+<li>[ ] If a new metric duplicates an existing dimension already covered by
+      <code>MetricsInterceptor</code> or the activity-end log, justify the addition.</li>
+</ul>
+<h2 id="reference-incidents">Reference Incidents</h2>
+<ul>
+<li><strong>Pushgateway 400 from <code>chunks_written</code> label-schema mismatch</strong> (2026-04-30) —
+  the same metric was emitted from two call sites with different label-key sets
+  (<code>{type, mode}</code> vs <code>{type}</code>). The OTel→Prometheus exporter produced two metric
+  families with the same name; Pushgateway rejected the entire push body.</li>
+<li><strong><code>error=str(e)</code> cardinality bomb in storage/formats writers</strong> (2026-04-30) —
+  four sites used the full stringified exception as a metric label. Each unique
+  message (embedding session IDs, table paths, error codes) created a fresh
+  Prometheus time series. Latent until a chunks-written-related backstop was
+  removed; replaced with <code>error_type=type(e).__name__</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

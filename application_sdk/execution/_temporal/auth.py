@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from application_sdk.common._env import env_str
+from application_sdk._env import deployment_name as _deployment_name
 from application_sdk.common.backoff import Backoff, Jitter
 from application_sdk.constants import APPLICATION_NAME, APPLICATION_VERSION, COMMIT_SHA
 from application_sdk.observability.logger_adaptor import get_logger
@@ -330,7 +330,7 @@ class TemporalAuthManager:
             )
 
             app_name = APPLICATION_NAME
-            deployment_name = env_str("ATLAN_DEPLOYMENT_NAME", app_name)
+            deployment_name = _deployment_name()
             now = time.time()
             expires_at_ts = expires_at.timestamp() if expires_at else 0.0
             remaining = max(0.0, expires_at_ts - now)

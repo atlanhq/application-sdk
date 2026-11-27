@@ -319,8 +319,11 @@ def env_duration(key: str, default: str, *, report: Reporter | None = None) -> s
 
 __all__ = [
     "FALSE_VALUES",
+    "LOCAL_DEPLOYMENT_NAME",
     "Reporter",
     "TRUE_VALUES",
+    "dapr_components_path",
+    "deployment_name",
     "env_bool",
     "env_choice",
     "env_duration",
@@ -328,6 +331,7 @@ __all__ = [
     "env_int",
     "env_str",
     "is_duration",
+    "pod_name",
 ]
 
 
@@ -338,14 +342,13 @@ _CONSTANTS_MODULE = "application_sdk.constants"
 def sdk_constant(name: str, read: Callable[[], _T]) -> _T:
     """``application_sdk.constants.<name>`` once that module is loaded, else ``read()``.
 
-    ``constants`` reads every setting once, at import, and imports
-    python-dotenv to load ``./.env`` first. The worker always has it loaded,
-    and tests and the SDK's testing fixtures patch its attributes
+    ``constants`` reads every setting once, at import. The worker always has
+    it loaded, and tests and the SDK's testing fixtures patch its attributes
     (``TEMPORARY_PATH`` above all), so on the worker its value is the one in
     force. The API host ships the object store's read and write path
-    (``application_sdk.storage.ops`` and what it needs) without python-dotenv,
-    so those modules must not import ``constants``. They read a setting
-    through here instead: the worker's value whenever ``constants`` is
+    (``application_sdk.storage.ops`` and what it needs) and keeps that
+    closure to the storage path, so those modules do not import
+    ``constants``. They read a setting through here instead: the worker's value whenever ``constants`` is
     loaded, else *read*, which reads the same variable with the same default.
     ``tests/unit/test_api_distribution.py`` pins that each reader agrees with
     ``constants``.
@@ -365,3 +368,41 @@ def temporary_path() -> str:
     return sdk_constant(
         "TEMPORARY_PATH", lambda: env_str("ATLAN_TEMPORARY_PATH", "./local/tmp/")
     )
+
+
+#: The identity a process carries when ``ATLAN_DEPLOYMENT_NAME`` is unset:
+#: local development. ``application_sdk.constants.LOCAL_ENVIRONMENT`` is this
+#: value.
+LOCAL_DEPLOYMENT_NAME = "local"
+
+
+def deployment_name() -> str:
+    """``ATLAN_DEPLOYMENT_NAME`` as an identity, ``"local"`` when unset or empty.
+
+    The one default for the variable wherever it names this process: object-store
+    prefixes, log tagging, the worker-start and token-refresh events. Temporal
+    queue derivation does not default it: it reads the raw value through
+    :func:`application_sdk.common.task_queue.deployment_name_from_env`, where
+    unset means "no deployment prefix", not ``"local"``.
+    """
+    return env_str("ATLAN_DEPLOYMENT_NAME", LOCAL_DEPLOYMENT_NAME)
+
+
+def dapr_components_path() -> str:
+    """The directory of Dapr component YAMLs (``DAPR_COMPONENTS_PATH``, default ``./components``).
+
+    The shipped image's ``entrypoint.sh`` always exports the variable
+    (``/app/components``, the image's working directory), and
+    ``application_sdk.dev.embedded_dapr`` sets it for local runs, so the default
+    applies only to a process started some other way from the app's root.
+    """
+    return env_str("DAPR_COMPONENTS_PATH", "./components")
+
+
+def pod_name() -> str:
+    """This process's pod name: ``K8S_POD_NAME``, else ``HOSTNAME``, else ``""``.
+
+    ``HOSTNAME`` is the kubelet's own pod-name variable, so a pod without the
+    downward-API ``K8S_POD_NAME`` still names itself the same way everywhere.
+    """
+    return env_str("K8S_POD_NAME", "") or env_str("HOSTNAME", "")

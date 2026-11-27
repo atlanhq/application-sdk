@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 import orjson
 
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
-from application_sdk._env import env_str
+from application_sdk._env import dapr_components_path
 from application_sdk._install import worker_only_missing
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -487,7 +487,7 @@ class AtlanObservability(Generic[T], ABC):
     def _components_dir(cls) -> str:
         # Honour ``DAPR_COMPONENTS_PATH`` so the embedded-Dapr local-dev path
         # finds the auto-generated component YAMLs in the temp dir.
-        return env_str("DAPR_COMPONENTS_PATH", "./components")
+        return dapr_components_path()
 
     @classmethod
     def _get_deployment_store(cls) -> "BoundStore":

@@ -1,0 +1,5710 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/concepts/storage/">
+      
+      
+        <link rel="prev" href="../infrastructure/">
+      
+      
+        <link rel="next" href="../state-secrets-pubsub/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Storage - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#storage" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Storage
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../standards/coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#two-store-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-Store Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#basic-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Basic Operations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Basic Operations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-entry-point-to-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which entry point to use
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#additional-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Additional operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prefix-downloads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefix downloads
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prefix-fan-out-failure-cancellation-mirroring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefix fan-out: failure, cancellation, mirroring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-one-transfer-budget-per-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory: one transfer budget per process
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filereference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FileReference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FileReference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storagetier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageTier
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#app-level-upload-download" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        App-Level Upload / Download
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transfer-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transfer integrity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Transfer integrity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-this-does-not-prove" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this does not prove
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#atomic-artifact-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atomic artifact writes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Atomic artifact writes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#running-out-of-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running out of disk
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backend-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend Selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supported-auth-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported Auth Modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported Auth Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#s3-bindingsawss3-bindingss3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3 (bindings.aws.s3 / bindings.s3)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-blob-bindingsazureblobstorage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Blob (bindings.azure.blobstorage)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gcs-bindingsgcpbucket-bindingsgcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GCS (bindings.gcp.bucket / bindings.gcs)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cloudstore-customer-buckets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudStore (customer buckets)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-cloud-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Cloud Permissions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Required Cloud Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#s3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GCS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-blob-storage-adls-gen2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Blob Storage / ADLS Gen2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-you-do-not-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you do not need
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#two-store-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-Store Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#basic-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Basic Operations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Basic Operations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#which-entry-point-to-use" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Which entry point to use
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#additional-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Additional operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prefix-downloads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefix downloads
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prefix-fan-out-failure-cancellation-mirroring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prefix fan-out: failure, cancellation, mirroring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-one-transfer-budget-per-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory: one transfer budget per process
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filereference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FileReference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="FileReference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storagetier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorageTier
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#app-level-upload-download" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        App-Level Upload / Download
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transfer-integrity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transfer integrity
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Transfer integrity">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-this-does-not-prove" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this does not prove
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#atomic-artifact-writes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atomic artifact writes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Atomic artifact writes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#running-out-of-disk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running out of disk
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backend-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backend Selection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supported-auth-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supported Auth Modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported Auth Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#s3-bindingsawss3-bindingss3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3 (bindings.aws.s3 / bindings.s3)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-blob-bindingsazureblobstorage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Blob (bindings.azure.blobstorage)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gcs-bindingsgcpbucket-bindingsgcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GCS (bindings.gcp.bucket / bindings.gcs)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cloudstore-customer-buckets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CloudStore (customer buckets)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-cloud-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required Cloud Permissions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Required Cloud Permissions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#s3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gcs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GCS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#azure-blob-storage-adls-gen2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Azure Blob Storage / ADLS Gen2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-you-do-not-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What you do not need
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../apps/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="storage">Storage</h1>
+<p>The SDK uses <code>obstore</code> for all object storage operations, bypassing the Dapr sidecar entirely. The same API works with S3, GCS, Azure Blob, and local filesystem backends.</p>
+<hr />
+<h2 id="two-store-architecture">Two-Store Architecture</h2>
+<p>The SDK maintains two distinct object-store references, each serving a different
+purpose:</p>
+<table>
+<thead>
+<tr>
+<th>Dapr component</th>
+<th>SDK reference</th>
+<th>Owner</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>objectstore</code></td>
+<td><code>infra.storage</code></td>
+<td>Customer / deployment</td>
+<td>Task-to-task <code>FileReference</code> durability within a run</td>
+</tr>
+<tr>
+<td><code>atlan-objectstore</code></td>
+<td><code>infra.upstream_storage</code></td>
+<td>Atlan</td>
+<td>Final artifact hand-off to Atlan system apps (publish, QI, lineage)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Task-to-task transfers</strong> use <code>infra.storage</code>. The activity interceptor
+automatically uploads every <code>FileReference</code> returned from a <code>@task</code> to this
+store, keeping all intermediate data inside the customer's deployment perimeter.
+<code>objectstore</code> can be any backend the customer controls (S3, Azure Blob, GCS,
+local disk) — Atlan's infrastructure never reads from it. It is <strong>required</strong>:
+startup fails with <code>DeploymentObjectStoreMissingError</code> when the component is
+absent, which happens when the app's contract sets <code>deploy.dapr.objectstore</code> to
+<code>false</code> (see <a href="../../configuration/#the-deployment-object-store-is-required">Configuration</a>).</p>
+<p><strong>App-to-app hand-off</strong> uses <code>infra.upstream_storage</code>. When a connector's
+extract activity produces artifacts that Atlan's publish or lineage apps must
+consume, the connector calls <code>App.upload()</code> explicitly. In SDR deployments
+<code>upstream_storage</code> points to <code>atlan-objectstore</code> (Atlan's S3-compatible
+blobstorage proxy); in local dev it is <code>None</code> and <code>App.upload()</code> falls back to
+the deployment store.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Connector run (customer's cluster)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  @task extract  ──► FileReference ──► objectstore (infra.storage, customer-owned)
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  @task transform ──► FileReference ──► objectstore
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  run()          ──► App.upload()  ──► atlan-objectstore (infra.upstream_storage, Atlan-owned)
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                                         │
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                         ▼
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                  Atlan publish app reads → Atlas
+</span></code></pre></div>
+<p><strong>The key rule:</strong> rely on the interceptor for intra-run durability; call
+<code>App.upload()</code> explicitly for any data that must cross into Atlan's
+infrastructure. Relying on the interceptor alone for the app-to-app
+hand-off produces a silent failure — all DAG nodes succeed but the publish
+app finds nothing to publish.</p>
+<p>See <a href="../../adr/0014-two-store-storage-architecture/">ADR-0014</a> for the full
+rationale, fallback behaviour, and consequences.</p>
+<hr />
+<h2 id="basic-operations">Basic Operations</h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.storage</span><span class="w"> </span><span class="kn">import</span> <span class="n">upload_file</span><span class="p">,</span> <span class="n">download_file</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Upload a local file to object storage (returns the SHA-256 hex digest of the uploaded file)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">digest</span> <span class="o">=</span> <span class="k">await</span> <span class="n">upload_file</span><span class="p">(</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="s2">"artifacts/my-app/output.json"</span><span class="p">,</span>  <span class="c1"># key: destination object-store path</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="s2">"/tmp/output.json"</span><span class="p">,</span>              <span class="c1"># local_path: source local file</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="p">)</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1"># Download from object storage to a local file</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="k">await</span> <span class="n">download_file</span><span class="p">(</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="s2">"artifacts/my-app/output.json"</span><span class="p">,</span>  <span class="c1"># key: source object-store path</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="s2">"/tmp/output.json"</span><span class="p">,</span>              <span class="c1"># local_path: destination local file</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">)</span>
+</span></code></pre></div>
+<p><code>key</code> is the object-store path. Leading slashes and <code>./local/tmp/...</code> workflow prefixes are stripped automatically by <code>normalize_key</code>. <code>local_path</code> is the local filesystem path.</p>
+<p>Bytes already in memory go through <code>upload_bytes(key, data)</code>, the one byte-put primitive. It runs on the same streaming transport as <code>upload_file</code> (part size, transfer budget, progress marks, telemetry), with the same post-write size check and <code>.sha256</code> sidecar, without staging the bytes on disk. A small payload is still a single PUT. <code>upload_file_from_bytes</code> is a deprecated alias for it, to be removed in v4.0.0.</p>
+<h3 id="which-entry-point-to-use">Which entry point to use</h3>
+<table>
+<thead>
+<tr>
+<th>You have / want</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bytes in memory → one key</td>
+<td><code>upload_bytes(key, data)</code></td>
+</tr>
+<tr>
+<td>A JSON value → one key</td>
+<td><code>put_json(key, obj)</code>: a plain PUT, with no post-write size check and no sidecar</td>
+</tr>
+<tr>
+<td>A local file → one key</td>
+<td><code>upload_file(key, local_path)</code></td>
+</tr>
+<tr>
+<td>One key → a local file</td>
+<td><code>download_file(key, local_path)</code>; <code>download_file_chunked</code> for GB-class objects</td>
+</tr>
+<tr>
+<td>A directory, from a <code>@task</code> or <code>run()</code></td>
+<td><code>App.upload</code> / <code>App.download</code> (adds validation and <code>FileReference</code> tagging)</td>
+</tr>
+<tr>
+<td>A <code>FileReference</code>, outside <code>App</code></td>
+<td><code>transfer.upload</code> / <code>transfer.download</code></td>
+</tr>
+<tr>
+<td>A state directory mirrored as-is (RocksDB, DuckDB, a parquet dataset)</td>
+<td><code>upload_prefix</code> / <code>download_prefix</code> (no local markers, no manifest)</td>
+</tr>
+<tr>
+<td>A customer's own bucket</td>
+<td><code>CloudStore</code></td>
+</tr>
+</tbody>
+</table>
+<p>Every row except <code>put_json</code> ends in the same primitives: <code>upload_file</code> / <code>upload_bytes</code> for writes and <code>download_file</code> / <code>download_file_chunked</code> for reads, so transfer integrity is the same whichever of those you call. <code>put_json</code> writes small configs with a plain PUT and skips both the readback and the sidecar; use <code>upload_bytes(key, orjson.dumps(obj))</code> when a JSON object needs them. The same table is in the <code>application_sdk.storage</code> module docstring.</p>
+<h3 id="additional-operations">Additional operations</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.storage</span><span class="w"> </span><span class="kn">import</span> <span class="n">delete</span><span class="p">,</span> <span class="n">exists</span><span class="p">,</span> <span class="n">list_keys</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="k">await</span> <span class="n">delete</span><span class="p">(</span><span class="s2">"artifacts/my-app/output.json"</span><span class="p">)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">found</span> <span class="o">=</span> <span class="k">await</span> <span class="n">exists</span><span class="p">(</span><span class="s2">"artifacts/my-app/output.json"</span><span class="p">)</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">keys</span> <span class="o">=</span> <span class="k">await</span> <span class="n">list_keys</span><span class="p">(</span><span class="s2">"artifacts/my-app/"</span><span class="p">)</span>  <span class="c1"># returns list[str]</span>
+</span></code></pre></div>
+<p><code>delete_prefix(prefix)</code> removes every object under a prefix and returns the
+number of objects this call actually removed. A key that vanishes between the
+listing and the delete — a concurrent writer removed it first — is benign (the
+desired end state is already true for it): it is logged as a warning naming the
+prefix and excluded from the returned count rather than failing the caller.
+Every other deletion error still raises <code>StorageError</code>.</p>
+<h3 id="prefix-downloads">Prefix downloads</h3>
+<p><code>download_prefix</code> writes one of two layouts, and picking the wrong one is
+silent — the bytes arrive, just not where the reader looks:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.storage</span><span class="w"> </span><span class="kn">import</span> <span class="n">download_prefix</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Default: the full store path is preserved under local_dir.</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># key "artifacts/run/transformed/table/a.json" → "&lt;out&gt;/artifacts/run/transformed/table/a.json"</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="k">await</span> <span class="n">download_prefix</span><span class="p">(</span><span class="s2">"artifacts/run/transformed"</span><span class="p">,</span> <span class="s2">"&lt;out&gt;"</span><span class="p">)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># strip_prefix=True: only the tree *under* the prefix lands in local_dir.</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># key "artifacts/run/transformed/table/a.json" → "&lt;out&gt;/table/a.json"</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="k">await</span> <span class="n">download_prefix</span><span class="p">(</span><span class="s2">"artifacts/run/transformed"</span><span class="p">,</span> <span class="s2">"&lt;out&gt;"</span><span class="p">,</span> <span class="n">strip_prefix</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Use <code>strip_prefix=True</code> whenever <code>local_dir</code> already names the same directory as
+the prefix (the usual shape when recovering a run's <code>transformed/</code> or
+<code>current-state/</code> tree), otherwise the prefix appears twice and a reader keyed on
+a fixed subpath such as <code>&lt;out&gt;/table</code> finds nothing.</p>
+<h3 id="prefix-fan-out-failure-cancellation-mirroring">Prefix fan-out: failure, cancellation, mirroring</h3>
+<p><code>download_prefix</code>, <code>upload_prefix</code> and <code>delete_prefix</code> transfer objects
+concurrently. If one transfer fails, or the caller is cancelled, the rest are
+cancelled and the call <strong>waits for their in-flight file I/O to stop</strong> before it
+propagates the error or cancellation. That includes a sync's index write and
+prune. The error is still a bare <code>StorageError</code>, not an <code>ExceptionGroup</code>.</p>
+<p>The wait lasts only while that I/O is making progress:
+- <strong>It finishes.</strong> When the wait ends because the I/O stopped, nothing is still
+  writing under <code>local_dir</code> (or to the prefix) when the error arrives, so a
+  retry cannot race the previous attempt.
+- <strong>It gives up.</strong> If none of the in-flight calls finishes within the task's
+  no-progress allowance (<code>max_no_progress_seconds</code>, 900s by default), the call
+  stops waiting, logs a WARNING naming them, and propagates anyway. Those calls
+  are still running and <strong>may still write</strong>. A wedged local volume is the usual
+  cause; see the
+  <a href="../../runbooks/stalled-task/#a-storage-fan-out-that-stopped-waiting-for-its-threads">stalled-task runbook</a>.</p>
+<p>This limit is enforced whatever <code>ATLAN_PROGRESS_WATCHDOG</code> is set to, because
+the alternative is an unwind that never finishes.</p>
+<h3 id="memory-one-transfer-budget-per-process">Memory: one transfer budget per process</h3>
+<p>The concurrency limits nest: refs in a task, files in a directory ref, range
+GETs in a file. Their product is what a worker holds in memory, so one byte
+budget bounds it. Every range GET, streaming download and multipart upload
+behind the file transfers (<code>download_file</code>, <code>upload_file</code>, the prefix
+operations, FileReference hand-offs) reserves the buffer bytes it will hold
+before it holds them, <code>CloudStore</code>'s file and prefix transfers included.
+<code>upload_bytes</code> (and so <code>CloudStore.upload_bytes()</code>) streams through the same
+writer and reserves its part buffers too; the payload itself is the caller's
+memory. Whole-object reads and small writes are outside it: <code>put_json</code> and
+<code>CloudStore.get_bytes()</code> hold each object in memory without reserving. A transfer that does not
+fit waits, and keeps marking progress while it waits, so the stall watchdog
+does not kill it. A single transfer larger than the whole budget runs on its
+own. The budget defaults to a quarter of the container memory limit; set
+<code>ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES</code> to change it.</p>
+<p>Both prefix transfers can mirror instead of adding:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># local tree == listing: current files are skipped, unlisted files deleted</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="k">await</span> <span class="n">download_prefix</span><span class="p">(</span><span class="s2">"artifacts/run/state"</span><span class="p">,</span> <span class="s2">"&lt;out&gt;"</span><span class="p">,</span> <span class="n">strip_prefix</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># prefix == local tree: keys this call did not upload are deleted</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">await</span> <span class="n">upload_prefix</span><span class="p">(</span><span class="s2">"&lt;out&gt;"</span><span class="p">,</span> <span class="s2">"artifacts/run/state"</span><span class="p">,</span> <span class="n">prune</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<p><code>sync=True</code> skips an object when the listing's size and etag match what it was
+downloaded at, and its local file still has the size and modification time it
+had right after that download. A local file replaced with different bytes of the
+same size is therefore downloaded again, unless the replacement also restored the
+original modification time (<code>cp -p</code>, <code>touch -r</code>). These values are recorded in a
+<code>.sdk-sync/</code> index inside the mirrored tree, which every walker and
+<code>upload_prefix</code> skip. A listing with an object keyed inside <code>.sdk-sync/</code> (or any
+other SDK working directory) is refused with <code>StorageConfigError</code>, since that
+object would collide with the SDK's own files. Pruning happens only after every
+download succeeds, and only inside the tree the prefix maps to. <code>prune=True</code> deletes nothing if an upload fails, keeps each uploaded key's
+<code>.sha256</code> sidecar, and refuses an empty prefix.</p>
+<hr />
+<h2 id="filereference">FileReference</h2>
+<p><code>FileReference</code> is a serialisable pointer to a file in object storage. Use it in task contracts to pass large data between tasks without embedding it in the Temporal payload (which has a 2 MB limit).</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">FileReference</span><span class="p">,</span> <span class="n">StorageTier</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">ref</span> <span class="o">=</span> <span class="n">FileReference</span><span class="p">(</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="n">storage_path</span><span class="o">=</span><span class="s2">"artifacts/my-app/batch-001.parquet"</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="n">tier</span><span class="o">=</span><span class="n">StorageTier</span><span class="o">.</span><span class="n">TRANSIENT</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="fields">Fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>storage_path</code></td>
+<td><code>str \| None</code></td>
+<td>Object-store key (single file) or prefix (directory)</td>
+</tr>
+<tr>
+<td><code>local_path</code></td>
+<td><code>str \| None</code></td>
+<td>Local filesystem path, set after download</td>
+</tr>
+<tr>
+<td><code>tier</code></td>
+<td><code>StorageTier</code></td>
+<td>Cleanup tier (see below); default <code>TRANSIENT</code></td>
+</tr>
+<tr>
+<td><code>is_durable</code></td>
+<td><code>bool</code></td>
+<td><code>True</code> once the file has been uploaded to the object store; default <code>False</code></td>
+</tr>
+<tr>
+<td><code>file_count</code></td>
+<td><code>int</code></td>
+<td>Number of files this reference covers (default <code>1</code>)</td>
+</tr>
+</tbody>
+</table>
+<p><code>FileReference</code> is safe to include in <code>Output</code> models because it is small (a path string + an enum). The actual file stays in object storage.</p>
+<hr />
+<h2 id="storagetier">StorageTier</h2>
+<p><code>StorageTier</code> controls when <code>cleanup_storage()</code> deletes a file:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Path prefix</th>
+<th>Cleanup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TRANSIENT</code></td>
+<td><code>file_refs/</code></td>
+<td>Always removed at end of run, unless a <code>RETAINED</code>/<code>PERSISTENT</code> ref in the same run points at the same key</td>
+</tr>
+<tr>
+<td><code>RETAINED</code></td>
+<td><code>{run_prefix}/file_refs/</code></td>
+<td>Removed only when <code>include_prefix_cleanup=True</code> (opt-in)</td>
+</tr>
+<tr>
+<td><code>PERSISTENT</code></td>
+<td><code>persistent-artifacts/apps/{app_name}/…</code></td>
+<td>Never deleted by cleanup</td>
+</tr>
+</tbody>
+</table>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">StorageTier</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Intermediate working file — deleted at end of every run</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">FileReference</span><span class="p">(</span><span class="n">storage_path</span><span class="o">=</span><span class="s2">"…"</span><span class="p">,</span> <span class="n">tier</span><span class="o">=</span><span class="n">StorageTier</span><span class="o">.</span><span class="n">TRANSIENT</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Output artifact — kept for downstream consumers, removed on opt-in cleanup</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">FileReference</span><span class="p">(</span><span class="n">storage_path</span><span class="o">=</span><span class="s2">"…"</span><span class="p">,</span> <span class="n">tier</span><span class="o">=</span><span class="n">StorageTier</span><span class="o">.</span><span class="n">RETAINED</span><span class="p">)</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># Connection config or incremental marker — kept forever</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="n">FileReference</span><span class="p">(</span><span class="n">storage_path</span><span class="o">=</span><span class="s2">"…"</span><span class="p">,</span> <span class="n">tier</span><span class="o">=</span><span class="n">StorageTier</span><span class="o">.</span><span class="n">PERSISTENT</span><span class="p">)</span>
+</span></code></pre></div>
+<hr />
+<h2 id="app-level-upload-download">App-Level Upload / Download</h2>
+<p><code>App</code> provides two built-in methods for directory-level transfers with automatic <code>FileReference</code> tracking. Both accept <code>UploadInput</code> / <code>DownloadInput</code> objects:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.contracts</span><span class="w"> </span><span class="kn">import</span> <span class="n">UploadInput</span><span class="p">,</span> <span class="n">DownloadInput</span><span class="p">,</span> <span class="n">StorageTier</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">ExtractionInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ExtractionOutput</span><span class="p">:</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>        <span class="c1"># Upload a local directory; returns UploadOutput with a single FileReference</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>        <span class="n">up</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">upload</span><span class="p">(</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>            <span class="n">UploadInput</span><span class="p">(</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>                <span class="n">local_path</span><span class="o">=</span><span class="s2">"/tmp/output/"</span><span class="p">,</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>                <span class="n">tier</span><span class="o">=</span><span class="n">StorageTier</span><span class="o">.</span><span class="n">TRANSIENT</span><span class="p">,</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>            <span class="p">)</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>        <span class="p">)</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        <span class="c1"># up.ref is a single FileReference (not a list)</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>        <span class="c1"># Later, download back to a local path using a FileReference</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>        <span class="n">dl</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">download</span><span class="p">(</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>            <span class="n">DownloadInput</span><span class="p">(</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>                <span class="n">ref</span><span class="o">=</span><span class="n">up</span><span class="o">.</span><span class="n">ref</span><span class="p">,</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>                <span class="n">local_path</span><span class="o">=</span><span class="s2">"/tmp/downloaded/"</span><span class="p">,</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>            <span class="p">)</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>        <span class="p">)</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>        <span class="o">...</span>
+</span></code></pre></div>
+<p>Tracked <code>FileReference</code> objects are automatically registered for cleanup by <code>cleanup_storage()</code> at the end of the run.</p>
+<p>The ref <code>download()</code> returns gets its tier from <code>DownloadInput.tier</code>. When that is unset, a download that re-materialises <code>ref</code> keeps <code>ref.tier</code>, so the run's own <code>TRANSIENT</code> output is still cleaned up. Any other download (a <code>storage_path</code> the run did not write, such as another app's output or the connection cache) is <code>RETAINED</code>, so end-of-run cleanup never deletes bytes the app does not own.</p>
+<hr />
+<h2 id="cleanup">Cleanup</h2>
+<p><code>App</code> runs two cleanup tasks in <code>on_complete()</code>:</p>
+<ul>
+<li><strong><code>cleanup_files()</code></strong> — removes local temp paths from tracked <code>FileReference</code> objects, then the run's scratch directory (<code>{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}/</code>), or instead the directories listed in <code>ATLAN_CLEANUP_BASE_PATHS</code> when that is set. A <code>download()</code> or materialise with no <code>local_path</code> lands in the run's scratch directory, so the default sweep removes it. <code>ATLAN_CLEANUP_BASE_PATHS</code> replaces that sweep rather than adding to it.</li>
+<li><strong><code>cleanup_storage()</code></strong> — deletes remote files according to their <code>StorageTier</code>. It sees the refs tracked on the worker it runs on and the stored refs the workflow read off every task's input and result, so a <code>TRANSIENT</code> file uploaded by a task on another worker is deleted too. The workflow passes at most 2000 refs, durable ones first; in a run with more, a <code>TRANSIENT</code> ref left out is deleted only if the cleanup runs on the worker that tracked it, and otherwise stays until the store's own expiry.</li>
+</ul>
+<p>Tracked refs live in the run's in-memory app state on the worker that ran the task. Once the run has closed, each worker releases that state: it closes any cached client and, unless <code>APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR</code> is <code>false</code>, deletes the local files of the refs it tracked.</p>
+<p>Both are called automatically by the default <code>on_complete()</code> implementation. Do not call them directly from <code>run()</code> — cleanup is tied to workflow completion, not mid-run state.</p>
+<hr />
+<h2 id="configuration">Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS</code></td>
+<td><code>4</code></td>
+<td>Max concurrent upload/download operations</td>
+</tr>
+<tr>
+<td><code>ATLAN_TEMPORARY_PATH</code></td>
+<td><code>./local/tmp/</code></td>
+<td>Base path for local temporary files</td>
+</tr>
+<tr>
+<td><code>ATLAN_CLEANUP_BASE_PATHS</code></td>
+<td><em>(empty)</em></td>
+<td>Extra prefixes to clean up (comma-separated)</td>
+</tr>
+<tr>
+<td><code>ATLAN_OBSTORE_READ_TIMEOUT</code></td>
+<td><code>90s</code></td>
+<td>Progress-based liveness bound — fail only if no bytes arrive for this long</td>
+</tr>
+<tr>
+<td><code>ATLAN_OBSTORE_TIMEOUT</code></td>
+<td><code>30m</code></td>
+<td>Overall per-request wall-clock backstop</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_RESUME_DOWNLOADS</code></td>
+<td><code>true</code></td>
+<td>Resume interrupted chunked downloads from their checkpoint sidecar</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS</code></td>
+<td><code>30</code></td>
+<td>Heartbeat log interval during long transfers (<code>0</code> disables)</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES</code></td>
+<td><code>8388608</code> (8 MiB)</td>
+<td>Multipart part size for uploads. Raise it when the destination makes part <em>count</em> expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped <code>compose</code> round trips)</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY</code></td>
+<td><code>12</code></td>
+<td>Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES</code></td>
+<td><code>0</code> (derived)</td>
+<td>Transfer buffer bytes the SDK's file transfers may hold at once across the process; <code>put_json</code> and <code>CloudStore.get_bytes</code> are not covered (see <a href="#memory-one-transfer-budget-per-process">Memory</a>). <code>0</code> takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_VERIFY_TRANSFERS</code></td>
+<td><code>true</code></td>
+<td>Validate every transfer's bytes (see <a href="#transfer-integrity">Transfer integrity</a>)</td>
+</tr>
+<tr>
+<td><code>ATLAN_STORAGE_WRITE_SIDECARS</code></td>
+<td><code>true</code></td>
+<td>Emit the <code>{key}.sha256</code> sidecar that downstream verification reads</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>ATLAN_OBSTORE_*_TIMEOUT</code> values are durations such as <code>30s</code> or <code>1h 30m</code>. An empty value, or one that is not a duration (a bare <code>30</code> has no unit; <code>0</code> alone is accepted as zero), keeps the default; the second also logs a warning. Before, either one failed every object-store client construction with <code>failed to parse ... as Duration</code>.</p>
+<hr />
+<h2 id="transfer-integrity">Transfer integrity</h2>
+<p>A producing app that dies part-way through a write — the motivating case was
+<code>ENOSPC</code> during a state carry-forward — leaves a <em>truncated</em> artifact in the
+object store and still reports success. The consuming app then downloads that
+file on every retry and fails inside its parser (<code>Malformed JSON … unexpected
+end of data</code>), burning the whole retry budget on a deterministically corrupt
+input and attributing the failure to the consumer instead of the producer.</p>
+<p>The SDK closes that loop at the byte layer both apps share, so every transfer
+path is covered by the same checks rather than each caller rolling its own:</p>
+<p><strong>On upload</strong> (<code>upload_file</code>, and therefore <code>App.upload</code>, <code>FileReference</code>
+persist, <code>upload_prefix</code>, and the writer chunk uploads):</p>
+<ol>
+<li>the local file must not shrink between the opening <code>stat</code> and the read
+   reaching EOF — a file truncated under the reader would put a prefix of the
+   intended artifact in the store (<code>StorageIntegrityError</code>);</li>
+<li>a HEAD after the writer closes must report the byte count that was sent —
+   this is what catches a backend silently dropping the object (<code>StorageError</code>,
+   retryable);</li>
+<li>the SHA-256 computed during the upload pass is written to <code>{key}.sha256</code>.</li>
+</ol>
+<p><strong>On download</strong> (<code>download_file</code> / <code>download_file_chunked</code>, and therefore
+<code>App.download</code>, <code>FileReference</code> materialize, <code>download_prefix</code>, and the
+incremental-state fetches):</p>
+<ol>
+<li>the bytes written to disk must match the size the store declared for the
+   object — a shortfall is a truncated transfer (<code>StorageError</code>, retryable);</li>
+<li>when <code>{key}.sha256</code> exists, the content must hash to it. A mismatch means
+   the stored object is corrupt at source and raises <code>StorageIntegrityError</code> —
+   <strong>non-retryable</strong>, naming the key and both digests, because a byte-stable
+   corrupt file fails identically on every attempt.</li>
+</ol>
+<p>Sidecars are SDK bookkeeping, never data: every listing helper
+(<code>list_data_keys</code>, <code>list_data_objects</code>, …) excludes them, and <code>download_prefix</code>
+consumes rather than mirrors them, so a directory handed to a reader that globs
+it never contains files the producer did not write.</p>
+<p>Objects written before this protocol existed, or by a non-SDK producer, simply
+have no sidecar; those downloads keep the size check and skip the digest check.</p>
+<p>The consolidated API host's file upload route (<code>POST /workflows/v1/file</code>) is a
+producer too: it writes the same <code>{key}.sha256</code> sidecar beside every upload, so
+a worker that downloads a setup-form file verifies it against the digest the
+host recorded. The host cannot import <code>application_sdk.storage</code>, so the sidecar
+key convention, the failure table and the gateway no-route retry both stacks
+use live in the obstore-free <code>application_sdk/_storage_classify.py</code>.
+The worker-only classifiers, which may name obstore's exception classes, live
+beside the storage package's other private modules in
+<code>application_sdk/storage/_classify.py</code>: the preflight probe's access buckets
+(which the write path also reads to recognise a bucket relocation), the etag
+precondition rule chunked downloads restart on, and the 401/403 evidence
+<code>CloudStore</code> turns into a typed USER error.</p>
+<h3 id="what-this-does-not-prove">What this does not prove</h3>
+<p>The sidecar attests to <strong>the bytes the SDK read at upload time</strong>, not to the
+artifact being semantically complete. A producer that wrote a truncated file to
+disk and <em>then</em> uploaded it gets a sidecar recording the truncated content as
+the expected digest, and every downstream check passes — exactly the intended
+bytes moved, as far as the transfer layer can tell.</p>
+<p>Closing that half is <a href="#atomic-artifact-writes">atomic artifact writes</a> below.
+What the transfer layer buys on top of it is narrower, and still worth having:
+a file truncated <em>while the upload reads it</em> is caught; any corruption after a
+good upload is caught on the next download rather than surfacing as a parser
+error; and the failure is attributed to the artifact and its producing key
+instead of to whichever consumer opened it.</p>
+<hr />
+<h2 id="atomic-artifact-writes">Atomic artifact writes</h2>
+<p>Every SDK writer that produces an app artifact writes it <strong>atomically</strong>: the
+bytes go to a staging file, are flushed to the filesystem, and are renamed onto
+the artifact's path in one step. The artifact's final path therefore either does
+not exist or holds a complete file. A partial artifact is <em>unnameable</em>.</p>
+<p>That matters because a truncated file at an artifact's real name is
+indistinguishable from a correct one. It gets carried forward, uploaded, and
+integrity-checked against its own truncated bytes, and the failure surfaces much
+later inside a consuming app's parser — at a byte offset that is identical on
+every retry, which is what makes it look like a consumer bug.</p>
+<p>Covered writers: the incremental carry-forward state copy, the incremental
+marker, incremental diff metadata, writer chunk output and its statistics
+sidecar, and the local <code>.sha256</code> sidecar. Downloads get the same treatment:
+<code>download_file</code> and <code>download_file_chunked</code> stage in <code>.sdk-partial/</code> and
+publish with <code>os.replace</code>, so a shared <code>local_path</code> never exposes a partial
+file to a concurrent reader (CONNECT-1126). Two consequences of the rename
+publish: the destination is a fresh inode with mode <code>0600</code> on every download
+(previously a pre-existing file kept its inode and mode), and a <code>local_path</code>
+that is a symlink is replaced by a regular file rather than written through. <code>JsonFileWriter</code> chunks are the one
+exception — successive calls append to the same file, and an append cannot be
+staged and renamed without rewriting it — so those get the typed error below
+without the atomicity.</p>
+<p>Staging lives in a <code>.sdk-partial/</code> directory beside the artifact rather than as
+a <code>.tmp</code> suffix next to it, so it is never picked up by a directory listing, a
+directory <code>FileReference</code>, or a prefix upload. <code>safe_list_directory</code> and
+<code>upload_prefix</code> read one shared definition of what to skip (<code>.sdk-partial/</code>,
+<code>.sdk-writer-staging/</code>, and the <code>.sdk-sync/</code> index of a synced download).</p>
+<p>The chunked staging file (<code>.sdk-partial/{name}.part</code>) and its resume checkpoint
+are deterministic functions of the destination, so <code>download_file_chunked</code>
+itself holds a per-destination lock for the whole transfer — two concurrent
+downloads to one <code>local_path</code> serialise no matter which entry point they came
+through (<code>materialize_file_reference</code>, <code>download_prefix</code>, batch, or a direct
+call). A queued waiter marks activity progress on a short interval
+(<code>ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS</code>) so it is never killed as stalled
+behind another activity's multi-GB download.</p>
+<p>An app that opens its own file handle bypasses all of this. The guarantee covers
+the writers the SDK owns, which is where app artifacts actually come from.</p>
+<h3 id="running-out-of-disk">Running out of disk</h3>
+<p>A write that fails for lack of space raises <code>DiskFullError</code> — a
+<code>ResourceExhaustedError</code> leaf naming the path, the step, the bytes needed, and
+the bytes free. A bare <code>OSError</code> is what this replaces: it carries no category,
+so it lands in whatever broad <code>except</code> is in the call stack and the run reports
+some unrelated downstream symptom instead.</p>
+<p>This includes a download: <code>download_file</code> (and <code>download_file_chunked</code> below its
+chunking threshold) raises <code>StorageDiskFullError</code> when the local volume runs out
+of space (<code>ENOSPC</code> / <code>EDQUOT</code>), or has less free space than the store declared
+for the object. It is a <code>DiskFullError</code> (code <code>RESOURCE_EXHAUSTED_DISK_FULL</code>),
+so it names the volume to resize, and also a <code>StorageError</code>, so existing
+<code>except StorageError:</code> blocks and the concurrent-download unwrapping keep
+working. Any other failure writing the downloaded file is still a plain
+<code>StorageError</code>.</p>
+<p>The classification depends on object size today: above the chunking threshold,
+<code>download_file_chunked</code> still reports the same <code>ENOSPC</code> as a plain <code>StorageError</code>
+(tracked in FND-3279), and <code>download_prefix</code> routes every file
+through that entry point, so one prefix download can fail as either type.</p>
+<p><strong>This error is the signal that a deployment needs more ephemeral storage.</strong>
+Requests and limits are deployment configuration and are deliberately not
+requested from the SDK or from app code — neither can know the number. The error
+tells the operator which deployment to raise and roughly by how much.</p>
+<p>Before a large write whose size is known up front, the SDK checks free space
+first, so a plainly undersized volume fails in seconds with <code>needs ~N GiB, has
+M</code> rather than corrupting output forty minutes in. The check is strict — free
+space is not padded with an invented margin — so it catches the impossible write,
+not the marginal one; a marginal write that still runs out is caught during the
+write and reported identically.</p>
+<hr />
+<h2 id="backend-selection">Backend Selection</h2>
+<p>The object-store backend is configured via Dapr component YAML at deploy time (see <code>components/objectstore.yaml</code> in the repo). No code changes are needed to switch between S3, GCS, Azure Blob, or local filesystem. For local development, the default components target a local filesystem path.</p>
+<hr />
+<h2 id="supported-auth-modes">Supported Auth Modes</h2>
+<p><code>create_store_from_binding</code> translates the Dapr component <code>spec.metadata</code> fields into the correct obstore configuration. Supported modes per provider:</p>
+<h3 id="s3-bindingsawss3-bindingss3">S3 (<code>bindings.aws.s3</code> / <code>bindings.s3</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Required fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Static access key</td>
+<td><code>accessKey</code> + <code>secretKey</code> (+ optional <code>sessionToken</code> for temporary/STS-derived base creds)</td>
+</tr>
+<tr>
+<td>AssumeRole via STS</td>
+<td><code>assumeRoleArn</code> (+ optional <code>sessionName</code>, <code>externalId</code> for a trust policy with an <code>sts:ExternalId</code> condition, <code>accessKey</code>/<code>secretKey</code>/<code>sessionToken</code> for base identity)</td>
+</tr>
+<tr>
+<td>Instance profile / IRSA / env vars</td>
+<td>Omit all credential fields</td>
+</tr>
+</tbody>
+</table>
+<p><code>boto3</code> and <code>azure-identity</code> are core SDK dependencies — no extra install is required for these auth modes. The <code>[iam_auth]</code> and <code>[azure]</code> extras install nothing more. They are deprecated and removed in v4.0.0; drop them from <code>pyproject.toml</code> (conformance rule D017 warns on each).</p>
+<h3 id="azure-blob-bindingsazureblobstorage">Azure Blob (<code>bindings.azure.blobstorage</code>)</h3>
+<p>Priority order when multiple modes are present: account key &gt; SAS token &gt; certificate &gt; service principal &gt; workload identity &gt; managed identity.</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Required fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Account key</td>
+<td><code>accountKey</code></td>
+</tr>
+<tr>
+<td>SAS token</td>
+<td><code>sasToken</code> or <code>sasKey</code></td>
+</tr>
+<tr>
+<td>Certificate-based service principal</td>
+<td><code>azureTenantId</code> + <code>azureClientId</code> + (<code>azureCertificateFile</code> or <code>azureCertificate</code>)</td>
+</tr>
+<tr>
+<td>Service principal (client secret)</td>
+<td><code>azureTenantId</code> + <code>azureClientId</code> + <code>azureClientSecret</code></td>
+</tr>
+<tr>
+<td>AKS Workload Identity</td>
+<td><code>azureTenantId</code> + <code>azureClientId</code> (no secret; AAD webhook injects <code>AZURE_FEDERATED_TOKEN_FILE</code>)</td>
+</tr>
+<tr>
+<td>User-assigned managed identity</td>
+<td><code>azureClientId</code> only</td>
+</tr>
+<tr>
+<td>System-assigned MI / DefaultAzureCredential</td>
+<td>Omit all credential fields</td>
+</tr>
+</tbody>
+</table>
+<p>Use <code>azureEnvironment</code> to target sovereign clouds (<code>AzurePublicCloud</code>, <code>AzureChinaCloud</code>, <code>AzureUSGovernmentCloud</code>, <code>AzureGermanCloud</code>).</p>
+<h3 id="gcs-bindingsgcpbucket-bindingsgcs">GCS (<code>bindings.gcp.bucket</code> / <code>bindings.gcs</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Required fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inline service-account key</td>
+<td>Any SA JSON field that includes <code>private_key</code> or <code>private_key_id</code></td>
+</tr>
+<tr>
+<td>ADC / Workload Identity / metadata server</td>
+<td><code>bucket</code> + <code>project_id</code> only (no <code>private_key</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cloudstore-customer-buckets"><code>CloudStore</code> (customer buckets)</h3>
+<p><code>CloudStore.from_credentials</code> reads the <code>csa-connectors-objectstore</code> credential (<code>authType</code>, <code>username</code>, <code>password</code>, <code>token</code>, <code>extra</code>) and builds its store through the same settings as the Dapr binding, so the same credentials give the same store on both paths. For S3:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>username</code> + <code>password</code></td>
+<td>Static access key; <code>token</code> adds the STS session token for temporary credentials</td>
+</tr>
+<tr>
+<td><code>extra.aws_role_arn</code></td>
+<td>AssumeRole via STS (+ optional <code>aws_external_id</code>, <code>aws_role_session_name</code>); <code>username</code>/<code>password</code>/<code>token</code> become the base identity</td>
+</tr>
+<tr>
+<td><code>extra.endpoint</code></td>
+<td>S3-compatible endpoint (MinIO, R2, ...). Must be <code>https://</code>: CloudStore always uses TLS with certificate verification and refuses an <code>http://</code> endpoint. A non-AWS endpoint disables object tagging and skips the bucket-region lookup (an AWS endpoint keeps the lookup)</td>
+</tr>
+<tr>
+<td><code>extra.force_path_style</code>, <code>extra.disable_tagging</code></td>
+<td>Path-style requests; explicit tagging override (wins over the non-AWS auto-detect)</td>
+</tr>
+<tr>
+<td><code>extra.conditional_put</code>, <code>extra.copy_if_not_exists</code>, <code>extra.checksum_algorithm</code></td>
+<td>obstore's <code>aws_conditional_put</code>, <code>aws_copy_if_not_exists</code>, <code>aws_checksum_algorithm</code></td>
+</tr>
+<tr>
+<td><code>extra.server_side_encryption</code>, <code>extra.sse_kms_key_id</code></td>
+<td>Server-side encryption on writes</td>
+</tr>
+</tbody>
+</table>
+<p><code>CloudStore</code> has no transfer code of its own. <code>get_bytes</code> reads through the same primitive as every other small read, so it rides out the gateway's "no Route matched" 404 and fails with the same typed leaves and evidence. <code>upload</code> and <code>upload_bytes</code> call <code>upload_file</code> and <code>upload_bytes</code>, <code>upload_dir</code> runs on the same tree upload as <code>upload_prefix</code>, and <code>download</code> runs on the same engine as <code>download_prefix</code>. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no <code>.sha256</code> is written, and a <code>.sha256</code> file in the bucket or the local directory is moved as ordinary data. Every <code>CloudStore</code> write runs the post-write size check, so the credential must be allowed to HEAD the object it just wrote (<code>s3:GetObject</code>, <code>storage.objects.get</code>, or Blob read). <code>upload</code> and <code>upload_dir</code> have done this since FND-306; <code>upload_bytes</code> now does too. For a bucket whose policy grants PUT only, pass <code>upload_bytes(..., verify=False)</code>, or set <code>ATLAN_STORAGE_VERIFY_TRANSFERS=false</code> to turn the check off for the whole process.</p>
+<p>ADLS also accepts <code>extra.endpoint</code> (<code>https://</code> only). GCS without a <code>password</code> uses Application Default Credentials, including a Workload Identity Federation (<code>external_account</code>) file, as the binding does.</p>
+<p>Store construction lives in <code>application_sdk/_obstore_config.py</code>: each front-end (the Dapr binding, <code>CloudStore</code>, the API host) fills an <code>S3StoreSettings</code>, <code>AzureStoreSettings</code> or <code>GCSStoreSettings</code>, and <code>build_*_store</code> is the only code that turns settings into obstore config. A fix to that translation reaches every path.</p>
+<hr />
+<h2 id="required-cloud-permissions">Required Cloud Permissions</h2>
+<p>The SDK uses a fixed set of object-level operations — no bucket creation, versioning, lifecycle, or presigned-URL generation. The tables below list the minimum permissions the access identity must hold on the target bucket or container.</p>
+<h3 id="s3">S3</h3>
+<p>Apply object-level actions to <code>arn:aws:s3:::BUCKET/*</code> and the list action to <code>arn:aws:s3:::BUCKET</code> in separate IAM statement entries.</p>
+<table>
+<thead>
+<tr>
+<th>IAM action</th>
+<th>Operations covered</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>s3:GetObject</code></td>
+<td>GetObject (full and byte-range), HeadObject</td>
+</tr>
+<tr>
+<td><code>s3:PutObject</code></td>
+<td>PutObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload</td>
+</tr>
+<tr>
+<td><code>s3:AbortMultipartUpload</code></td>
+<td>Abort in-flight multipart upload on error (required for streaming write error paths)</td>
+</tr>
+<tr>
+<td><code>s3:DeleteObject</code></td>
+<td>DeleteObject and DeleteObjects (bulk batch — same IAM action)</td>
+</tr>
+<tr>
+<td><code>s3:ListBucket</code></td>
+<td>ListObjectsV2 — bucket-level permission, not object-level</td>
+</tr>
+</tbody>
+</table>
+<p>Minimal policy skeleton:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">"Version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2012-10-17"</span><span class="p">,</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">"Statement"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">      </span><span class="nt">"Effect"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Allow"</span><span class="p">,</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">      </span><span class="nt">"Action"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">        </span><span class="s2">"s3:GetObject"</span><span class="p">,</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">        </span><span class="s2">"s3:PutObject"</span><span class="p">,</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">        </span><span class="s2">"s3:AbortMultipartUpload"</span><span class="p">,</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">        </span><span class="s2">"s3:DeleteObject"</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="p">],</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="w">      </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:s3:::YOUR-BUCKET/*"</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">      </span><span class="nt">"Effect"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Allow"</span><span class="p">,</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">      </span><span class="nt">"Action"</span><span class="p">:</span><span class="w"> </span><span class="s2">"s3:ListBucket"</span><span class="p">,</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">      </span><span class="nt">"Resource"</span><span class="p">:</span><span class="w"> </span><span class="s2">"arn:aws:s3:::YOUR-BUCKET"</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18" href="#__codelineno-8-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19" href="#__codelineno-8-19"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20" href="#__codelineno-8-20"></a><span class="p">}</span>
+</span></code></pre></div>
+<p><strong>AssumeRole</strong>: when using <code>assumeRoleArn</code>, the caller identity additionally needs <code>sts:AssumeRole</code> on the target role ARN. The role itself holds the bucket policy above.</p>
+<h3 id="gcs">GCS</h3>
+<table>
+<thead>
+<tr>
+<th>IAM permission</th>
+<th>Operations covered</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>storage.objects.get</code></td>
+<td>GetObject (full and byte-range), object metadata / HeadObject equivalent</td>
+</tr>
+<tr>
+<td><code>storage.objects.create</code></td>
+<td>PutObject, resumable / streaming write</td>
+</tr>
+<tr>
+<td><code>storage.objects.delete</code></td>
+<td>DeleteObject (GCS has no native bulk-delete API — <code>delete_prefix</code> issues parallel single-object deletes)</td>
+</tr>
+<tr>
+<td><code>storage.objects.list</code></td>
+<td>ListObjects</td>
+</tr>
+</tbody>
+</table>
+<p>No <code>storage.buckets.*</code> permissions are needed. The smallest predefined role that covers all four is <strong><code>roles/storage.objectAdmin</code></strong> scoped to the bucket. Alternatively, create a custom role with exactly these four permissions.</p>
+<h3 id="azure-blob-storage-adls-gen2">Azure Blob Storage / ADLS Gen2</h3>
+<p><strong>RBAC</strong> — assign at container or storage-account scope:</p>
+<table>
+<thead>
+<tr>
+<th>RBAC action</th>
+<th>Operations covered</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read</code></td>
+<td>GetBlob, GetBlobProperties (HEAD), ListBlobs, byte-range GET</td>
+</tr>
+<tr>
+<td><code>Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write</code></td>
+<td>PutBlob, PutBlock + PutBlockList (streaming / block write)</td>
+</tr>
+<tr>
+<td><code>Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete</code></td>
+<td>DeleteBlob, BlobBatch delete (bulk — up to 256 keys per request)</td>
+</tr>
+</tbody>
+</table>
+<p>The smallest predefined role covering all three is <strong><code>Storage Blob Data Contributor</code></strong>. <code>Storage Blob Data Owner</code> is a superset and is only needed if you additionally require POSIX ACL management on ADLS Gen2.</p>
+<p><strong>SAS token</strong> — minimum permissions at container scope: <code>r</code> (read) + <code>w</code> (write) + <code>d</code> (delete) + <code>l</code> (list), i.e. a container-scoped SAS with <strong><code>rwdl</code></strong>.</p>
+<p><strong>ADLS Gen2 with POSIX ACLs</strong>: if the storage account has hierarchical namespace enabled and you use ACL-based access control instead of RBAC, the principal needs Execute (<code>X</code>) on every parent directory and Read / Write / Delete on the objects in scope. RBAC (<code>Storage Blob Data Contributor</code>) is simpler and is recommended unless you have a specific ACL requirement.</p>
+<h3 id="what-you-do-not-need">What you do not need</h3>
+<p>These are commonly over-provisioned by accident:</p>
+<ul>
+<li>S3: any <code>s3:*Bucket*</code> action beyond <code>s3:ListBucket</code> (no lifecycle, versioning, ACL, tagging, or CORS operations)</li>
+<li>GCS: any <code>storage.buckets.*</code> permission</li>
+<li>Azure: <code>Microsoft.Storage/storageAccounts/blobServices/containers/write</code> (container creation)</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

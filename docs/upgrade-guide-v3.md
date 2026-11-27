@@ -578,6 +578,12 @@ from application_sdk.main import run_dev_combined
 asyncio.run(run_dev_combined(MyMetadataExtractor))
 ```
 
+`run_dev_combined` is the only place the SDK reads `./.env`; importing
+`application_sdk` no longer loads it, so a container never does. Settings
+read at import (log level, OpenTelemetry exporters) miss a `.env` loaded
+that late: start with `uv run --env-file .env python run_dev.py` to apply the
+file to them too. See [The `.env` file](configuration.md#the-env-file).
+
 Three modes are available:
 - `worker` — Temporal worker only (production worker pods)
 - `handler` — HTTP handler only (production handler pods)

@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from application_sdk.common._env import env_str as _env_str
+from application_sdk._env import dapr_components_path
 from application_sdk.errors import DependencyUnavailableError
 from application_sdk.main_errors import DaprNotDetectedError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -416,7 +416,7 @@ async def _create_infrastructure() -> InfrastructureContext:
 
         await wait_for_dapr_sidecar()
         dapr_client = AsyncDaprClient()
-        components_dir = Path(_env_str("DAPR_COMPONENTS_PATH", "./components"))
+        components_dir = Path(dapr_components_path())
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 

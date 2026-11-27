@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from opentelemetry.sdk.resources import Resource
 
+from application_sdk._env import pod_name as read_pod_name
 from application_sdk._install import worker_only_missing
 from application_sdk.constants import (
     APP_SDK_VERSION,
@@ -320,7 +321,7 @@ def build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource:
         resource_attributes["app.published_at"] = PUBLISHED_AT
     if DOMAIN_NAME:
         resource_attributes["k8s.domain.name"] = DOMAIN_NAME
-    pod_name = os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME", "")
+    pod_name = read_pod_name()
     if pod_name:
         resource_attributes["k8s.pod.name"] = pod_name
     if extra_attrs:

@@ -100,6 +100,32 @@ def _build_dev_config(
 _CREDENTIAL_STORES_UNSET = object()
 
 
+def _load_dotenv() -> None:
+    """Load ``./.env`` into the environment, keeping any variable already set.
+
+    The local-dev half of the SDK's ``.env`` support: importing
+    ``application_sdk.constants`` no longer loads the file, so production
+    processes never read one. This runs before :class:`AppConfig` is built, so
+    every runtime setting sees the file; settings ``constants`` froze at import
+    (logging, observability) do not, which the log line says. Names are logged,
+    never values.
+    """
+    from dotenv import (  # noqa: PLC0415 — cold path: local dev entry only
+        load_dotenv,
+    )
+
+    before = set(os.environ)
+    load_dotenv(dotenv_path=".env", override=False)
+    loaded = sorted(set(os.environ) - before)
+    if loaded:
+        logger.info(
+            "Loaded %s from ./.env after the SDK was imported: settings read at "
+            "import keep their earlier values; to apply the file to those too, "
+            "load it before the process starts (uv run --env-file .env ...)",
+            ", ".join(loaded),
+        )
+
+
 async def run_dev_combined(
     app_class: type[App],
     *,
@@ -125,6 +151,9 @@ async def run_dev_combined(
 
     Use this in ``run_dev.py`` scripts; production containers use
     ``run_combined_mode()`` via CLI flags, which goes through Dapr.
+
+    Loads ``./.env`` first, without overriding variables already set. This
+    is the only place the SDK reads a ``.env`` file.
 
     All four connection-shaped kwargs (``host``, ``port``,
     ``temporal_namespace``, ``task_queue``) follow the same precedence as
@@ -181,6 +210,8 @@ async def run_dev_combined(
             },
         ))
     """
+    _load_dotenv()
+
     # Local dev is unconditional: boot an in-process Temporal *and* an
     # embedded ``daprd`` so the entire infrastructure code path is the same
     # one production uses. Both daemons are auto-downloaded and managed by

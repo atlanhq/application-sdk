@@ -159,10 +159,11 @@ class TestEmitTokenRefreshEvent:
             assert "time_until_expiry" in data
             assert "refresh_timestamp" in data
 
-    async def test_deployment_name_falls_back_to_app_name(
+    async def test_deployment_name_defaults_to_local(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When ATLAN_DEPLOYMENT_NAME is unset, deployment_name falls back to app_name."""
+        """Unset ATLAN_DEPLOYMENT_NAME is ``"local"``, the SDK's one identity
+        default for it, never the app name."""
         manager = _make_manager()
         expires_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
@@ -179,7 +180,8 @@ class TestEmitTokenRefreshEvent:
             await manager._emit_token_refresh_event(expires_at)
 
             event = mock_publish.call_args[0][0]
-            assert event.data["deployment_name"] == "fallback-app"
+            assert event.data["application_name"] == "fallback-app"
+            assert event.data["deployment_name"] == "local"
 
     async def test_handles_none_expires_at(self) -> None:
         """When expires_at is None, event still publishes with zero timestamps."""

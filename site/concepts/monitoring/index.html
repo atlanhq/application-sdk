@@ -1,0 +1,6279 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/concepts/monitoring/">
+      
+      
+        <link rel="prev" href="../mcp/">
+      
+      
+        <link rel="next" href="../transformers/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Monitoring - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#monitoring" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Monitoring
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../standards/coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../adr/" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#whats-in-the-metric-body" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's in the metric body
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#atlan_enable_temporal_core_metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ATLAN_ENABLE_TEMPORAL_CORE_METRICS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pushgateway-for-worker-pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pushgateway for worker pods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-temporal-sdk-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Temporal SDK metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-scrape-configuration-combined-handler-pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus scrape configuration (combined / handler pods)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stall-watchdog-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stall-watchdog metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommended-alerts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Alerts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-length-the-run-no-stall-and-no-timeout-catches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run length: the run no stall and no timeout catches
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#distributed-tracing-otlp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distributed Tracing (OTLP)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#structured-logging-and-selflogger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Logging and self.logger
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Structured Logging and self.logger">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#structured-attributes-and-the-otlp-allowlist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured attributes and the OTLP allowlist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-provenance-the-source-field" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log provenance: the source field
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logtrace-correlation-trace_id-span_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log↔trace correlation (trace_id / span_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle-log-lines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle log lines
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Lifecycle log lines">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#build-identity-in-the-app-lifecycle-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build identity in the App lifecycle messages
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#asset-validation-outcome-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asset-validation outcome event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-validation-outcome-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact-validation outcome event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-validation-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact-validation posture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-validation-posture-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact-validation posture event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replay-suppression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay suppression
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#console-output-is-written-off-the-event-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Console output is written off the event loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-pressure-and-oom-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory pressure and OOM diagnostics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Memory pressure and OOM diagnostics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-surfaces-grep-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log surfaces (grep patterns)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-the-limit-comes-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the limit comes from
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnostic-runbook-oom-kill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostic runbook (OOM kill)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#correlation-ids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Correlation IDs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability-store-sink" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability Store Sink
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Observability Store Sink">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-background-flush-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The background flush loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flushing-under-failure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flushing under failure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-activity-cpu-and-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Activity CPU and Memory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#activity-sizing-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Activity Sizing Telemetry
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Activity Sizing Telemetry">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-a-row-contains" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a row contains
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batching-and-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batching and shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#forwarding-daprd-sidecar-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forwarding daprd Sidecar Logs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0018-progress-aware-heartbeat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../adr/0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#whats-in-the-metric-body" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's in the metric body
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#atlan_enable_temporal_core_metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ATLAN_ENABLE_TEMPORAL_CORE_METRICS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pushgateway-for-worker-pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pushgateway for worker pods
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-temporal-sdk-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Temporal SDK metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prometheus-scrape-configuration-combined-handler-pods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prometheus scrape configuration (combined / handler pods)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stall-watchdog-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stall-watchdog metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recommended-alerts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Alerts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#run-length-the-run-no-stall-and-no-timeout-catches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run length: the run no stall and no timeout catches
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#distributed-tracing-otlp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Distributed Tracing (OTLP)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#structured-logging-and-selflogger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured Logging and self.logger
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Structured Logging and self.logger">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#structured-attributes-and-the-otlp-allowlist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured attributes and the OTLP allowlist
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-provenance-the-source-field" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log provenance: the source field
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logtrace-correlation-trace_id-span_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log↔trace correlation (trace_id / span_id)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle-log-lines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle log lines
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Lifecycle log lines">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#build-identity-in-the-app-lifecycle-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build identity in the App lifecycle messages
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#asset-validation-outcome-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asset-validation outcome event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-validation-outcome-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact-validation outcome event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-validation-posture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact-validation posture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#artifact-validation-posture-event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Artifact-validation posture event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replay-suppression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay suppression
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#console-output-is-written-off-the-event-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Console output is written off the event loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-pressure-and-oom-diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory pressure and OOM diagnostics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Memory pressure and OOM diagnostics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-surfaces-grep-patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log surfaces (grep patterns)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#where-the-limit-comes-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the limit comes from
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnostic-runbook-oom-kill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostic runbook (OOM kill)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#correlation-ids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Correlation IDs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#observability-store-sink" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability Store Sink
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Observability Store Sink">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-background-flush-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The background flush loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flushing-under-failure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flushing under failure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-activity-cpu-and-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-Activity CPU and Memory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#activity-sizing-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Activity Sizing Telemetry
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Activity Sizing Telemetry">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-a-row-contains" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a row contains
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batching-and-shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Batching and shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cost" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#forwarding-daprd-sidecar-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forwarding daprd Sidecar Logs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../apps/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="monitoring">Monitoring</h1>
+<p>The Application SDK exposes Prometheus metrics covering workflow / activity
+execution, HTTP server traffic, custom application metrics, and Temporal
+SDK internals — all through a single endpoint per pod. Scrape configuration
+differs by deployment topology (combined-mode pods are scraped directly;
+worker-only pods push to a Pushgateway).</p>
+<h2 id="architecture">Architecture</h2>
+<p>The SDK funnels every metric source into the in-process
+<code>prometheus_client.REGISTRY</code> and exposes that registry to operators by
+one of two transports, depending on pod role:</p>
+<table>
+<thead>
+<tr>
+<th>Pod role</th>
+<th>Transport</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Combined</strong></td>
+<td>Direct scrape</td>
+<td><code>http://&lt;pod&gt;:8000/metrics</code> (FastAPI, including proxied Temporal Rust-core metrics when enabled)</td>
+</tr>
+<tr>
+<td><strong>Handler</strong></td>
+<td>Direct scrape</td>
+<td><code>http://&lt;pod&gt;:8000/metrics</code> (FastAPI in-process metrics; Temporal Rust-core proxy disabled by default)</td>
+</tr>
+<tr>
+<td><strong>Worker</strong> (split deployment)</td>
+<td>Push</td>
+<td>Pushgateway at <code>ATLAN_PROMETHEUS_PUSHGATEWAY_URL</code></td>
+</tr>
+</tbody>
+</table>
+<p>The Temporal SDK's Rust-core Prometheus endpoint (<code>127.0.0.1:9464</code>) is
+bound <strong>loopback only</strong> and is not externally reachable. The FastAPI
+<code>/metrics</code> handler proxies it in-process for combined pods; handler-only
+pods skip that proxy by default because no local worker/runtime is started
+with the handler process. The worker's <code>TemporalCoreCollector</code> reads it
+locally and includes the families in each Pushgateway push. So scrape
+configurations always target the FastAPI port (or the Pushgateway), never
+<code>:9464</code> directly.</p>
+<h3 id="whats-in-the-metric-body">What's in the metric body</h3>
+<p>Every emitted series carries one inlined resource-attribute label —
+<code>app_name</code> — so the most common operator query (filter by connector)
+works without a <code>target_info</code> join. Per-release attributes
+(<code>app_version</code>, <code>app_release_id</code>, <code>app_sdk_version</code>,
+<code>app_release_channel</code>) and the rest of the OTel <code>Resource</code> travel via
+the <code>target_info</code> gauge (one row per pod) and are recovered at query
+time with <code>* on(instance) group_left(...) target_info</code>. See
+<a href="../../standards/metrics/">Metrics Standards</a> for the cardinality rules
+that bound the rest of the label set.</p>
+<p>The FastAPI <code>/metrics</code> endpoint (or a worker push) merges:</p>
+<ul>
+<li><strong>Custom metrics</strong> from <code>record_metric()</code> calls and direct OTel meter
+  use (<code>application_sdk.observability.metrics</code>)</li>
+<li><strong>HTTP server instrumentation</strong> (FastAPIInstrumentor) using stable
+  OTel HTTP semantic conventions: <code>http.request.method</code>, <code>http.route</code>,
+  <code>server.address</code>, <code>network.protocol.version</code>,
+  <code>http.response.status_code</code>. The metric is named
+  <code>http_server_request_duration_seconds</code> (seconds, not milliseconds).
+  Stable conventions are enabled via <code>OTEL_SEMCONV_STABILITY_OPT_IN=http</code>,
+  which the handler service sets itself before instrumenting, so every
+  runtime (chart-deployed, local dev, self-deployed) emits the same names.
+  An explicit value in the environment wins; if you set one, include
+  <code>http</code> (or <code>http/dup</code> to also emit the legacy <code>http_server_duration_milliseconds</code>).</li>
+<li><strong>Temporal SDK</strong> families from <code>MetricsInterceptor</code> (counters and
+  histograms emitted by activity/workflow execution) plus, when enabled
+  and reachable, the Rust-core families proxied from <code>127.0.0.1:9464</code>
+  (<code>temporal_request_*</code>, <code>temporal_workflow_task_*</code>,
+  <code>temporal_sticky_cache_*</code>, <code>temporal_num_pollers</code>, etc.). Every read of
+  that endpoint (this proxy, the worker's <code>TemporalCoreCollector</code> and the
+  poll-state diagnostic) is capped at <code>ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES</code>;
+  an oversize body is skipped, never read whole</li>
+<li><strong><code>prometheus_client</code> defaults</strong> (<code>process_*</code>, <code>python_gc_*</code>,
+  <code>python_info</code>)</li>
+</ul>
+<h3 id="atlan_enable_temporal_core_metrics"><code>ATLAN_ENABLE_TEMPORAL_CORE_METRICS</code></h3>
+<p>This env var <strong>does not gate the FastAPI <code>/metrics</code> route</strong> — that
+endpoint is always registered. The flag controls whether worker/combined
+mode creates a Temporal Runtime that binds <code>127.0.0.1:9464</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>true</code> (default)</td>
+<td>Rust core binds 9464 in worker/combined mode; combined FastAPI proxy + worker <code>TemporalCoreCollector</code> can read it</td>
+</tr>
+<tr>
+<td><code>false</code></td>
+<td>Rust core builds an explicit <code>Runtime</code> with log forwarding but no Prometheus listener; FastAPI <code>/metrics</code> still serves SDK + HTTP + python defaults but lacks the <code>temporal_*</code> Rust-core families</td>
+</tr>
+</tbody>
+</table>
+<p><code>run_dev_combined()</code> proactively sets it to <code>false</code> in local dev so a
+hot-reload-restarted process doesn't fail to bind 9464 (which the
+previous process is still holding in <code>TIME_WAIT</code>).</p>
+<h3 id="pushgateway-for-worker-pods">Pushgateway for worker pods</h3>
+<p>Worker-only pods (split deployment) don't run a FastAPI server, so
+Prometheus has no scrape target. Instead, they push the local registry
+to a Pushgateway every <code>ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS</code>
+(default 30 s) plus a final push on shutdown. Configuration:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_URL</span><span class="o">=</span>http://prometheus-pushgateway.monitoring.svc.cluster.local:9091
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS</span><span class="o">=</span><span class="m">30</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN</span><span class="o">=</span><span class="nb">true</span><span class="w">            </span><span class="c1"># default</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START</span><span class="o">=</span><span class="nb">true</span><span class="w">          </span><span class="c1"># default</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS</span><span class="o">=</span><span class="m">300</span><span class="w">        </span><span class="c1"># default</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS</span><span class="o">=</span><span class="m">10</span><span class="w">            </span><span class="c1"># default; derived from ATLAN_SHUTDOWN_GRACE_SECONDS when set</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nv">ATLAN_PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS</span><span class="o">=</span><span class="m">35</span><span class="w">   </span><span class="c1"># default; derived from ATLAN_SHUTDOWN_GRACE_SECONDS when set</span>
+</span></code></pre></div>
+<p>Hardening behaviors that ship by default: graceful exits DELETE the
+group from the gateway (no leak); each new worker sweeps stale
+predecessor groups left by OOM/eviction; every gateway HTTP call is
+bounded to 10 s; the final push is held for 35 s before DELETE so
+Prometheus has a full scrape window. The final push, hold and DELETE run
+under the post-drain exit deadline. When the pod's grace period is
+declared (<code>ATLAN_SHUTDOWN_GRACE_SECONDS</code>), the timeout and hold are derived
+from it, so a short grace shrinks them and SIGKILL does not land mid-hold. See <a href="../../adr/0012-observability-consolidation/">ADR-0012</a>
+for the design rationale.</p>
+<h3 id="available-temporal-sdk-metrics">Available Temporal SDK metrics</h3>
+<p>A non-exhaustive subset of what flows through the Rust-core path:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>temporal_activity_execution_latency</code></td>
+<td>Activity execution duration (histogram)</td>
+</tr>
+<tr>
+<td><code>temporal_activity_schedule_to_start_latency</code></td>
+<td>Time from activity schedule to start (histogram)</td>
+</tr>
+<tr>
+<td><code>temporal_workflow_completed_total</code></td>
+<td>Total completed workflows (counter)</td>
+</tr>
+<tr>
+<td><code>temporal_workflow_endtoend_latency</code></td>
+<td>End-to-end workflow duration (histogram)</td>
+</tr>
+<tr>
+<td><code>temporal_request_latency</code></td>
+<td>gRPC request latency to Temporal server (histogram)</td>
+</tr>
+<tr>
+<td><code>temporal_long_request_total</code></td>
+<td>gRPC long-poll requests (counter)</td>
+</tr>
+<tr>
+<td><code>temporal_worker_task_slots_available</code></td>
+<td>Available worker task slots (gauge)</td>
+</tr>
+<tr>
+<td><code>temporal_worker_task_slots_used</code></td>
+<td>In-use worker task slots (gauge)</td>
+</tr>
+<tr>
+<td><code>temporal_worker_activity_slots_limit</code></td>
+<td>Activity slots the worker runs with, labelled <code>task_queue</code> and <code>worker_type="ActivityWorker"</code> (gauge). Published by the SDK at worker start, not by the Rust core; read by KEDA (see <a href="../../standards/cross-repo-contracts/">cross-repo contracts</a>)</td>
+</tr>
+<tr>
+<td><code>temporal_sticky_cache_hit_total</code></td>
+<td>Sticky cache hits (counter)</td>
+</tr>
+<tr>
+<td><code>temporal_sticky_cache_size</code></td>
+<td>Current sticky cache size (gauge)</td>
+</tr>
+</tbody>
+</table>
+<p>The full list is defined by the <a href="https://docs.temporal.io/references/sdk-metrics">Temporal Python SDK</a>.</p>
+<h3 id="prometheus-scrape-configuration-combined-handler-pods">Prometheus scrape configuration (combined / handler pods)</h3>
+<p>In Kubernetes the <code>atlan-app</code> chart provisions a ServiceMonitor when
+<code>metrics.enabled: true</code> is set in the app's values. The scrape uses the
+Service's named port <code>http</code>:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">spec</span><span class="p">:</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">endpoints</span><span class="p">:</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http</span><span class="w">        </span><span class="c1"># main Service declares 8000 as `name: http`</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">      </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/metrics</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60s</span><span class="w">     </span><span class="c1"># configurable via metrics.interval</span>
+</span></code></pre></div>
+<p>For raw Prometheus configurations, target the handler port directly:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">scrape_configs</span><span class="p">:</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">job_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;app&gt;-handler</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">static_configs</span><span class="p">:</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">targets</span><span class="p">:</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">          </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;handler-host&gt;:8000</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nt">metrics_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/metrics</span>
+</span></code></pre></div>
+<h3 id="stall-watchdog-metrics">Stall-watchdog metrics</h3>
+<p>The in-process stall watchdog (ADR-0018) emits two histograms, and they have <strong>two
+different audiences</strong>: an app author reading their own work-list, and an operator being
+paged. See <a href="../progress-and-stalls/#reading-your-warn-report">Progress and Stalls</a> for the
+author-side queries.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Records</th>
+<th>Labels</th>
+<th>Read by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_no_progress_gap_seconds</code></td>
+<td>one entry per gap that exceeded <code>max_no_progress_seconds</code></td>
+<td><code>task_name</code>, <code>progress_last_label</code>, <code>watchdog_mode</code></td>
+<td>The author's work-list <strong>and</strong> the <code>AtlanAppTaskStalled</code> alert — while an app is in <code>warn</code>, this is the containment</td>
+</tr>
+<tr>
+<td><code>task_hold_duration_seconds</code></td>
+<td>one entry per hold released — every hold, not only long ones</td>
+<td><code>task_name</code>, <code>hold_label</code>, <code>hold_bounded</code>, <code>hold_lapsed</code></td>
+<td>The author's work-list only — deliberately not alerted</td>
+</tr>
+</tbody>
+</table>
+<p><code>watchdog_mode</code> is what keeps warn-mode observations and enforced kills aggregating
+separately; <code>hold_bounded="false"</code> isolates the sites still relying on the duration
+backstop.</p>
+<p>The accompanying log lines are <strong>INFO by design</strong>, not WARNING: warn mode is a
+fleet-wide default, so one gap observation is an expected observation rather than an
+actionable failure, and alerting off the log level would manufacture exactly the
+fleet-wide noise ADR-0018 exists to reduce. <strong>The alert reads the metric</strong>, and it is
+deliberately not one-gap-sensitive — see the threshold below.</p>
+<ul>
+<li><strong>Alert rule:</strong> <code>AtlanAppTaskStalled</code> in
+  <a href="https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml"><code>atlanhq/atlan-alerts</code></a>.</li>
+<li><strong>Runbook:</strong> <a href="../../runbooks/stalled-task/">Stalled task</a> — how an operator tells a
+  wedge from a healthy-but-quiet spot, and what to do with each.</li>
+<li><strong>Dashboard:</strong> import
+  <a href="../../static/observability/task-stall-dashboard.json"><code>task-stall-dashboard.json</code></a>
+  into Grafana against the Prometheus/VictoriaMetrics datasource.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Split-deployment workers need the Pushgateway to be configured</p>
+<p>Activities run in the worker process, so in a split deployment these series only
+reach VictoriaMetrics if <code>ATLAN_PROMETHEUS_PUSHGATEWAY_URL</code> is set. With it unset the
+worker logs a warning at startup and pushes nothing — no task-level series exists for
+that app, so neither the work-list nor the stall alert works for it.
+Combined-mode pods are covered by the FastAPI <code>/metrics</code> scrape.</p>
+</div>
+<h3 id="recommended-alerts">Recommended Alerts</h3>
+<table>
+<thead>
+<tr>
+<th>Alert</th>
+<th>Condition</th>
+<th>Severity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>High activity failure rate</td>
+<td><code>rate(temporal_activity_execution_failed_total[5m]) &gt; 0.05</code></td>
+<td>Warning</td>
+</tr>
+<tr>
+<td>Worker slots exhausted</td>
+<td><code>temporal_worker_task_slots_available == 0</code></td>
+<td>Critical</td>
+</tr>
+<tr>
+<td>Elevated workflow latency</td>
+<td><code>histogram_quantile(0.99, temporal_workflow_endtoend_latency_bucket) &gt; 300</code></td>
+<td>Warning</td>
+</tr>
+<tr>
+<td>Temporal server errors</td>
+<td><code>rate(temporal_long_request_failure_total[5m]) &gt; 0</code></td>
+<td>Warning</td>
+</tr>
+<tr>
+<td>Task stalled (wedged but alive)</td>
+<td><code>AtlanAppTaskStalled</code> — see below</td>
+<td>High</td>
+</tr>
+<tr>
+<td>Run past its length SLA</td>
+<td><code>increase(task_run_length_over_sla_seconds_count[15m]) &gt; 0</code> — see below</td>
+<td>Warning</td>
+</tr>
+</tbody>
+</table>
+<p>The stall alert is <strong>not optional while an app is in <code>warn</code>.</strong> Warn mode cannot fail an
+activity, so an alert on this metric is what stands in for the kill: a wedged attempt is
+visible within <code>max_no_progress_seconds</code>, but it will hold its worker slot until the 24h
+backstop unless a human intervenes. Once an app runs in <code>enforce</code>, the same series
+measures its kill rate instead.</p>
+<p>It is the one alert here that ships as a real rule rather than a suggestion —
+<code>AtlanAppTaskStalled</code> in <code>atlanhq/atlan-alerts</code>, with the
+<a href="../../runbooks/stalled-task/">stalled-task runbook</a> behind it:</p>
+<div class="language-promql highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">clusterName</span><span class="p">,</span><span class="w"> </span><span class="nv">domainName</span><span class="p">,</span><span class="w"> </span><span class="nv">app_name</span><span class="p">,</span><span class="w"> </span><span class="nv">task_name</span><span class="p">,</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="nv">progress_last_label</span><span class="p">,</span><span class="w"> </span><span class="nv">watchdog_mode</span><span class="o">)</span><span class="w"> </span><span class="o">(</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="kr">increase</span><span class="o">(</span><span class="nv">task_no_progress_gap_seconds_sum</span><span class="p">{</span><span class="nl">app_name</span><span class="o">!=</span><span class="p">"",</span><span class="w"> </span><span class="nl">task_name</span><span class="o">!=</span><span class="p">""}[</span><span class="s">1h</span><span class="p">]</span><span class="o">)</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="o">)</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">3600</span>
+</span></code></pre></div>
+<p><strong>Seconds of silence per hour, not a count of gaps</strong> — and the difference matters. In
+warn mode <em>every</em> app with an uninstrumented quiet spot emits gaps; that is what warn
+mode is for, and paging each one would manufacture the fleet-wide noise ADR-0018 exists
+to reduce. Only <em>sustained</em> silence separates a wedge from a healthy-but-quiet spot,
+because both emit nothing and only the wedge keeps emitting nothing. <code>3600</code> is one
+permanently-silent attempt, and N concurrent wedges reach it N times faster — so the page
+arrives soonest exactly when worker-slot exhaustion is the real risk. A single gap belongs
+on the dashboard and in the app's own work-list, not in an operator's inbox.</p>
+<h3 id="run-length-the-run-no-stall-and-no-timeout-catches">Run length: the run no stall and no timeout catches</h3>
+<p>The stall alert above catches an attempt that goes <em>silent</em>. It cannot catch a run
+that keeps making <strong>some</strong> progress: every progress signal re-arms the watchdog, so
+no gap is ever observed, and with <code>start_to_close</code> raised to a backstop no timeout
+fires either. <code>temporal_workflow_duration_seconds</code> does not help — it is recorded
+when a run <em>ends</em>, so it can never describe a run that has not ended. That run is
+bounded by nothing, which is why ADR-0018 → <em>Bounding total time</em> replaces the
+duration <strong>kill</strong> with a duration <strong>alert</strong>.</p>
+<p>Every executing task attempt compares its run's age against
+<code>ATLAN_RUN_LENGTH_SLA_SECONDS</code> (24 h by default; <code>0</code> disables) on the same tick as
+its heartbeat. Past the SLA it emits:</p>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Shape</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_run_length_over_sla_seconds</code></td>
+<td>Histogram of the run's age, labels <code>task_name</code>, <code>temporal_workflow_type</code>. Recorded <strong>only</strong> while a run is over its SLA, and re-asserted once a minute for as long as it stays over</td>
+</tr>
+<tr>
+<td>One <code>WARNING</code> log line per attempt</td>
+<td>The age, the SLA, the task that was running and the workflow type</td>
+</tr>
+</tbody>
+</table>
+<div class="language-promql highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kr">increase</span><span class="o">(</span><span class="nv">task_run_length_over_sla_seconds_count</span><span class="p">[</span><span class="s">15m</span><span class="p">]</span><span class="o">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</span></code></pre></div>
+<p><strong>A count, here, where the stall alert needs accumulated seconds</strong> — and the
+asymmetry is the point. Gaps are emitted by every warn-mode app with an
+uninstrumented quiet spot, so only sustained silence distinguishes a wedge from a
+healthy pause. This series is emitted <em>only</em> by a run already past the length its
+own operator declared, so there is nothing to threshold: one observation is the
+finding. <code>histogram_quantile</code> over <code>_bucket</code> then answers "how far over". Because
+the observation re-asserts every minute, the window only has to exceed a minute —
+<code>[15m]</code> leaves slack and resolves within one window of the run ending.</p>
+<p><strong>Runbook:</strong> <a href="../../runbooks/long-running-run/">Long-running run</a> — how an operator
+separates healthy-but-slow from wedged, and what to do with each.</p>
+<div class="admonition warning">
+<p class="admonition-title">Same Pushgateway requirement as the stall metric</p>
+<p>This series is emitted from the worker process, so in a split deployment it
+only reaches VictoriaMetrics if <code>ATLAN_PROMETHEUS_PUSHGATEWAY_URL</code> is set.</p>
+</div>
+<p><strong>Blind spot, stated.</strong> The observation rides an activity's heartbeat tick, so a
+run is measured only while at least one of its tasks is executing. A run parked
+between activities, a run whose worker is gone entirely, and a task with
+heartbeating disabled are not covered — those are "no worker / no activity"
+conditions, and the worker-liveness and activity-failure alerts above are what see
+them.</p>
+<hr />
+<h2 id="distributed-tracing-otlp">Distributed Tracing (OTLP)</h2>
+<p>Enable OpenTelemetry trace export to send spans to your cluster's OTLP collector:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">ENABLE_OTLP_LOGS</span><span class="o">=</span><span class="nb">true</span><span class="w">                              </span><span class="c1"># export log records via OTLP</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nv">OTEL_EXPORTER_OTLP_ENDPOINT</span><span class="o">=</span>http://<span class="k">$(</span>K8S_NODE_IP<span class="k">)</span>:4317<span class="w">  </span><span class="c1"># node-local collector</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nv">ATLAN_ENABLE_OTLP_TRACES</span><span class="o">=</span><span class="nb">true</span><span class="w">                      </span><span class="c1"># export trace spans</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># Metrics use the Prometheus path (FastAPI /metrics + Pushgateway).</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># The previous OTLP metric exporter was removed in PR #1573.</span>
+</span></code></pre></div>
+<p><code>run_main</code> installs the process-wide tracer provider at startup, beside the meter provider, so the
+Temporal <code>TraceInterceptor</code> exports workflow and activity spans over OTLP. Spans go to OTLP only.
+To also print them to stdout while developing locally, set <code>ATLAN_ENABLE_TRACES_CONSOLE=true</code>; leave
+it off in deployed pods, where it would put every span on the log stream.</p>
+<p><strong>Who owns the tracer provider.</strong> OpenTelemetry keeps exactly one global tracer provider per
+process, and the first one installed wins. If your process installs its own before <code>run_main</code> (or
+OTel auto-instrumentation does), the SDK uses that provider and attaches none of its exporters: spans
+go wherever your provider sends them. To supply your own, install it with
+<code>opentelemetry.trace.set_tracer_provider(...)</code> before calling <code>run_main</code>.</p>
+<p><strong>Function spans with <code>@observability</code>.</strong> Decorating a sync or async function with
+<code>@observability()</code> (from <code>application_sdk.observability.decorators.observability_decorator</code>) records,
+per call:</p>
+<ul>
+<li>one <code>function_calls</code> counter increment, labelled <code>function</code>, <code>outcome</code> and <code>error_type</code>;</li>
+<li>one span named after the function, from the call's start to its end, as a child of the span current
+  at the call site (for example the Temporal activity span). The span is only created when
+  <code>ATLAN_ENABLE_OTLP_TRACES</code> is on;</li>
+<li>one <code>tracing</code>-level log line, plus an ERROR line with the traceback when the call raises. The
+  exception is re-raised unchanged.</li>
+</ul>
+<p>The span is emitted when the call returns. It is not current while the function runs, so spans the
+function itself opens are siblings of it, not children. Trace records are not buffered or written to
+the object store.</p>
+<p>In Kubernetes, set <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> using the Downward API:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">env</span><span class="p">:</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">K8S_NODE_IP</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">valueFrom</span><span class="p">:</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">fieldRef</span><span class="p">:</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">        </span><span class="nt">fieldPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">status.hostIP</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OTEL_EXPORTER_OTLP_ENDPOINT</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"http://$(K8S_NODE_IP):4317"</span>
+</span></code></pre></div>
+<hr />
+<h2 id="structured-logging-and-selflogger">Structured Logging and <code>self.logger</code></h2>
+<p><code>self.logger</code> is available in both <code>run()</code> and <code>@task</code> methods. It is automatically bound with:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>app_name</code></td>
+<td>The running entry-point's app name (see note below)</td>
+</tr>
+<tr>
+<td><code>workflow_run_id</code></td>
+<td>Temporal workflow run ID (canonical name; <code>run_id</code> is a backwards-compat alias)</td>
+</tr>
+<tr>
+<td><code>correlation_id</code></td>
+<td>Platform-level correlation identifier</td>
+</tr>
+<tr>
+<td><code>source</code></td>
+<td>Which layer emitted the line — <code>sdk</code>, <code>dependency</code>, or the app's own name (see <a href="#log-provenance-the-source-field">Log provenance</a>)</td>
+</tr>
+</tbody>
+</table>
+<p>These fields appear on every log entry without any manual binding — use <code>self.logger</code> directly.</p>
+<blockquote>
+<p><strong><code>app_name</code> is per-entry-point (CNCT-93).</strong> It is resolved from the workflow's
+own input args, which the contract toolkit stamps with each DAG node's own
+<code>app_name</code>. For a single-entry-point connector this is just its kebab-case name
+(e.g. <code>mysql</code>). For a <strong>multi-entry-point bundle</strong> it is the <em>entry-point's</em>
+name — <code>powerbi-crawler</code>, <code>powerbi-miner</code> — <strong>not</strong> the connector-level bundle
+name, so each entry-point's logs are queryable on their own. This is the value
+the run UI queries a node's logs by. When the workflow input carries no
+<code>app_name</code> (an older, not-yet-regenerated app), it falls back to the process-wide
+<code>ATLAN_APPLICATION_NAME</code> env — i.e. prior behaviour. The per-entry-point value
+is a <strong>log-only</strong> field: metrics (both the <code>temporal_*</code> lifecycle families and
+<code>record_metric()</code> custom metrics) and the trace-level <code>app.name</code> (OTel
+Resource) deliberately stay <strong>connector-level</strong>, so for a bundle a metric's or
+trace's <code>app_name</code> may differ from the <code>app_name</code> on its correlated log lines
+— by design. See <a href="../../standards/metrics/">Metrics Standards</a>.</p>
+</blockquote>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyConnector</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="nd">@task</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">fetch_data</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">:</span> <span class="n">FetchInput</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FetchOutput</span><span class="p">:</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"fetching page=</span><span class="si">%d</span><span class="s2">"</span><span class="p">,</span> <span class="n">page_num</span><span class="p">)</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>        <span class="c1"># Emits: {"level":"INFO","msg":"fetching page=3","app_name":"my-connector","workflow_run_id":"...","correlation_id":"..."}</span>
+</span></code></pre></div>
+<p>Use <strong>%-style</strong> message bodies (<code>"fetching page=%d", page_num</code>) rather than keyword arguments. See <a href="../../standards/logging/">Logging Standards</a> and <a href="../../adr/0011-logging-level-guidelines/">ADR-0011</a>.</p>
+<h3 id="structured-attributes-and-the-otlp-allowlist">Structured attributes and the OTLP allowlist</h3>
+<p>Structured kwargs on a log call (e.g. <code>logger.info("event", outcome="clean", assets_total=42)</code>) are
+not forwarded to OTLP wholesale. Only keys on an SDK-side <strong>allowlist</strong>
+(<code>_KNOWN_EXTRA_KEYS</code> in <code>application_sdk/observability/logger_adaptor.py</code>) become <code>LogAttributes</code> on
+the exported record; unlisted keys are dropped. This keeps the exported attribute set intentional —
+adding a new queryable field is a deliberate one-line change next to the emitter. Certain dotted
+prefixes (<code>atlan.</code>, <code>temporal.</code>, <code>failure.</code>, <code>exception.</code>, <code>otel.</code>, <code>tenant.</code>, <code>workflow_run.</code>) pass
+through without being individually listed.</p>
+<p>A dropped key is not silent. Each drop adds 1 to the <code>log.extra_key.dropped</code> counter, labelled with
+the dropped <code>key</code> (at most 64 distinct labels per process; later keys share <code>_other</code>). The first drop
+of each key also logs one DEBUG line naming it; past 1024 distinct keys per process, new keys are
+only counted, so a stream of data-derived keys cannot grow the worker's memory. A unit test (<code>tests/unit/observability/test_log_extra_allowlist.py</code>)
+fails when an SDK log call passes a literal field that is not allowlisted, so in practice the counter
+measures app fields and third-party <code>extra=</code> keys, which the test cannot see.</p>
+<p><code>AtlanLoggerAdapter</code> accepts a stdlib-style <code>extra={...}</code> dict and spreads its entries into the bound
+fields; an explicit keyword field wins over an <code>extra</code> entry with the same name. The SDK installs the
+adapter as Temporal's <code>workflow.logger</code>, so code written for a stdlib logger keeps its fields.</p>
+<h3 id="log-provenance-the-source-field">Log provenance: the <code>source</code> field</h3>
+<p>Every record carries a low-cardinality <code>source</code> attribute answering <em>which layer emitted this line</em>.
+It is stamped centrally — by both <code>AtlanLoggerAdapter</code> and the stdlib-logging bridge — so app authors
+cannot get it wrong, and it is allowlisted for OTLP, so it is queryable alongside <code>app_name</code>:</p>
+<table>
+<thead>
+<tr>
+<th><code>source</code></th>
+<th>Records it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sdk</code></td>
+<td>Anything logged from inside <code>application_sdk</code> — framework internals and the interceptor lifecycle lines</td>
+</tr>
+<tr>
+<td><code>dependency</code></td>
+<td>Known third-party loggers (<code>httpx</code>, <code>daft_io</code>, <code>temporalio</code>, …) and the forwarded <code>daprd</code> sidecar lines</td>
+</tr>
+<tr>
+<td><em>the app label</em></td>
+<td>Everything else — by default the app's own <code>APPLICATION_NAME</code> (e.g. <code>mysql</code>), so a reader sees <em>which</em> app spoke</td>
+</tr>
+</tbody>
+</table>
+<p><code>source</code> answers a different question from <code>app_name</code>: <code>app_name</code> says <em>which app / entry-point</em> the
+record came from (per-entry-point for a bundle — see the note above), <code>source</code> says <em>which layer
+within it</em>. That makes <code>source = sdk</code> the filter for "is this the framework or the connector's own
+code" during triage.</p>
+<p>The app label is overridable with the <code>ATLAN_LOG_SOURCE</code> environment variable — the Automation
+Engine sets <code>ATLAN_LOG_SOURCE=ae</code> so its orchestration lines are attributable to the engine rather
+than to whichever app it happens to be running. Apps should leave it unset. See
+<a href="../common/#configuration">Common Utilities → Logging Configuration</a>.</p>
+<p>An explicit <code>source=</code> kwarg on an individual log call still wins over the derived value.</p>
+<h3 id="logtrace-correlation-trace_id-span_id">Log↔trace correlation (<code>trace_id</code> / <code>span_id</code>)</h3>
+<p>OTLP log records carry real trace context: <code>trace_id</code> and <code>span_id</code> are populated from the span
+active in the emitting thread, so a log line joins to its span in the trace UI. Previously both were
+hard-coded to zero, which made log↔trace correlation impossible.</p>
+<p>When no span is active — which includes the case where trace export is off
+(<code>ATLAN_ENABLE_OTLP_TRACES</code> unset, the current production default) — both fall back to zero and the
+record is exported untraced, exactly as before. Enabling traces is therefore what turns this
+correlation on.</p>
+<p><code>correlation_id</code> remains the business-level join key and is <strong>not</strong> replaced by trace context: it
+spans an entire platform-level operation across process and workflow boundaries, whereas a
+<code>trace_id</code> covers one trace. See <a href="#correlation-ids">Correlation IDs</a>.</p>
+<h3 id="lifecycle-log-lines">Lifecycle log lines</h3>
+<p><code>LogInterceptor</code> emits four lifecycle lines per run, with OTel semantic-convention attributes
+attached. The <strong>event token is the exact message prefix</strong> — that is the stable, greppable contract
+for dashboards and alerts:</p>
+<table>
+<thead>
+<tr>
+<th>Token</th>
+<th>Level</th>
+<th>Message body</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>workflow.started</code></td>
+<td>INFO</td>
+<td><code>workflow.started &lt;WorkflowType&gt;</code></td>
+</tr>
+<tr>
+<td><code>workflow.ended</code></td>
+<td>INFO / WARNING / ERROR</td>
+<td><code>workflow.ended &lt;WorkflowType&gt; OK (&lt;ms&gt;ms)</code>, <code>… BLOCKED (preflight gate): &lt;message&gt;</code>, or <code>… FAILED (&lt;code&gt;): &lt;message&gt; — at &lt;file&gt;:&lt;line&gt; in &lt;fn&gt;</code></td>
+</tr>
+<tr>
+<td><code>activity.started</code></td>
+<td>INFO</td>
+<td><code>activity.started &lt;ActivityType&gt;</code></td>
+</tr>
+<tr>
+<td><code>activity.ended</code></td>
+<td>INFO / WARNING / ERROR</td>
+<td>same three shapes as <code>workflow.ended</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>workflow.started</code> and <code>workflow.ended</code> are logged once per run even when the run spans several
+workflow-instance lifetimes (a cache eviction, or a worker restart that hands the run to another
+worker). <code>workflow.started</code> comes from the lifetime that runs the first workflow task live;
+<code>workflow.ended</code> comes from the lifetime that finishes the run live. A lifetime that rebuilds the run
+by replaying history logs no <code>started</code>, and eviction teardown logs no <code>ended</code>. The <code>(&lt;ms&gt;ms)</code> duration
+and <code>temporal.workflow.duration_ms</code> are history time measured from the run's first workflow task, so
+they stay correct when the finishing worker did not see the start.</p>
+<p>The body after the token is a <strong>human-readable summary, not a contract</strong> — it names the subject and,
+on failure, folds in the first line of the exception message (truncated) and the root-cause frame, so
+a line stays diagnosable in renderers that drop structured attributes. Match on the token prefix and
+the structured attributes, never on the body text.</p>
+<div class="admonition note">
+<p class="admonition-title">Token stability</p>
+<p>The task-level tokens (<code>activity.started</code> / <code>activity.ended</code>) and workflow-level tokens
+(<code>workflow.started</code> / <code>workflow.ended</code>) are a stable contract — dashboard queries, saved log
+searches, and alert rules may match on these literal prefixes. The bodies after the token are
+human-readable summaries and may change; match on the token prefix and the structured
+attributes, not the body text.</p>
+</div>
+<h4 id="build-identity-in-the-app-lifecycle-messages">Build identity in the App lifecycle messages</h4>
+<p>The <code>App started</code> and <code>App completed</code> lines name the build that produced the run, so a run's
+exported logs answer "what was running when this broke?" on their own, with no Temporal access:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>App started sdk=3.37.0 app=0.2.3 commit=184ae7b
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>App completed sdk=3.37.0 app=0.2.3 commit=184ae7b
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Source</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sdk</code></td>
+<td><code>application_sdk.__version__</code></td>
+<td>The application-sdk actually running. Always present.</td>
+</tr>
+<tr>
+<td><code>app</code></td>
+<td>baked <code>app/atlan_build.json</code>, then <code>ATLAN_APPLICATION_VERSION</code></td>
+<td>The app release exactly as Global Marketplace stores it — a release tag for semver apps, a sha7 for CD apps.</td>
+</tr>
+<tr>
+<td><code>commit</code></td>
+<td>baked <code>app/atlan_build.json</code>, then <code>ATLAN_COMMIT_SHA</code></td>
+<td>The git commit the image was built from.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Why the message and not a structured attribute.</strong> The message is the only field that survives
+every hop of the run-logs path. <code>observability.app_logs</code> has a fixed Iceberg schema whose ingest
+pipe maps a known field list onto columns, and the tenant edge then re-projects each record through
+closed structs that declare no attributes bag — so a new attribute reaches neither the run-log panel
+nor the downloaded export without a schema change in two services. A marker in the message needs
+none of that.</p>
+<p>A carrier with no value drops its key rather than emitting a bare <code>app=</code>, which would read as a
+value of its own. <code>sdk</code> is always known, so the marker is never empty and a reader never has to
+tell "no marker" from "no version". Keys are <code>k=v</code> and ASCII so an engineer grepping an exported
+run log for a version actually hits.</p>
+<p>Both boundaries carry it: a run whose logs are truncated from the top still has to answer which
+build produced it, and a failed run may never reach the end. The value is resolved once at import —
+no carrier can change for the life of the container, and both call sites run inside Temporal's
+workflow sandbox where per-call work is a determinism risk.</p>
+<p>See <a href="../../standards/release-flow/#image-identity">Release flow → Image identity</a> for where the
+values come from.</p>
+<h3 id="asset-validation-outcome-event">Asset-validation outcome event</h3>
+<p><code>App.upload()</code>'s warn-only asset validation (see <a href="../apps/#asset-validation-outcome">Apps → Asset-Validation Outcome</a>)
+emits a structured event named <code>"Transformed-asset validation outcome"</code> on <strong>every validated
+upload</strong>, from inside the <code>upload</code> activity — so the Temporal context (<code>workflow_run_id</code>, <code>app_name</code>)
+is auto-stamped and each row joins to the workflow outcome by run id in ClickHouse. The following
+attributes are allowlisted and reach OTLP:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>outcome</code></td>
+<td><code>"clean"</code> or <code>"flagged"</code></td>
+</tr>
+<tr>
+<td><code>assets_total</code></td>
+<td>records seen in the batch</td>
+</tr>
+<tr>
+<td><code>assets_passed</code></td>
+<td>records that passed per-asset <code>.validate()</code></td>
+</tr>
+<tr>
+<td><code>assets_invalid</code></td>
+<td>per-asset validation failures</td>
+</tr>
+<tr>
+<td><code>assets_orphaned</code></td>
+<td>referential-integrity (orphan) failures</td>
+</tr>
+<tr>
+<td><code>assets_undeserializable</code></td>
+<td>records that could not be decoded</td>
+</tr>
+<tr>
+<td><code>asset_validation_matrix</code></td>
+<td>compact JSON array of per-failure detail (bounded rows per axis), <code>JSONExtract</code>-able</td>
+</tr>
+<tr>
+<td><code>asset_validation_summary</code></td>
+<td>JSON array of complete counts per <code>{kind, type_name, detail}</code> over the whole batch (see below)</td>
+</tr>
+<tr>
+<td><code>assets_referential_check</code></td>
+<td>whether the orphan pass ran: <code>ran</code>, <code>not_requested</code> (an incomplete fan-in turned it off) or <code>skipped_unavailable</code> (no spill store). <code>assets_orphaned = 0</code> means "none found" only when this is <code>ran</code></td>
+</tr>
+<tr>
+<td><code>assets_upload_kind</code></td>
+<td><code>upload</code> (one path) or <code>upload_refs</code> (every declared part of a fan-in, validated as one batch)</td>
+</tr>
+<tr>
+<td><code>assets_parts_validated</code></td>
+<td>local paths validated together</td>
+</tr>
+<tr>
+<td><code>assets_parts_not_local</code></td>
+<td>declared transformed parts not on this pod; non-zero turns the orphan pass off</td>
+</tr>
+</tbody>
+</table>
+<p>Emitting <code>outcome="clean"</code> too gives a denominator, so a dashboard can rank connectors by
+flag-rate rather than only seeing failures.</p>
+<p>The matrix is a <strong>sample</strong> (capped per axis); <code>asset_validation_summary</code> is the <strong>aggregate</strong>. Each
+row is <code>{"kind", "type_name", "detail", "count"}</code>:</p>
+<table>
+<thead>
+<tr>
+<th><code>kind</code></th>
+<th><code>detail</code></th>
+<th><code>count</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>invalid</code></td>
+<td>rule key: <code>required:&lt;field&gt;</code>, <code>required_for_creation:&lt;field&gt;</code>, <code>one_of_required_for_creation:&lt;a&gt;\|&lt;b&gt;</code>, <code>pattern:&lt;field&gt;</code>, <code>connection_prefix:&lt;field&gt;</code> (the asset's own <code>qualified_name</code>, or a relationship whose reference lacks <code>default/&lt;connector&gt;/&lt;id&gt;/</code>), or <code>other</code></td>
+<td>assets breaking that rule (an asset breaking several rules counts in each)</td>
+</tr>
+<tr>
+<td><code>undeserializable</code></td>
+<td><code>decode:&lt;reason&gt;</code> — <code>malformed_json</code>, <code>schema_mismatch:&lt;field path&gt;</code> (e.g. <code>schema_mismatch:columnCount</code>), or the exception class; <code>type_name</code> is probed from the raw record</td>
+<td>records</td>
+</tr>
+<tr>
+<td><code>orphan</code></td>
+<td>the relationship the missing target was referenced through; <code>type_name</code> is the missing target's type. Only targets under the referrer's own connection count — cross-connection lineage and unscoped targets (glossary terms) are not orphans</td>
+<td>distinct missing targets, plus <code>references</code></td>
+</tr>
+<tr>
+<td><code>truncated</code></td>
+<td>empty</td>
+<td>summed count of rows past the cap (100), plus <code>references</code> summed over the orphan groups among them</td>
+</tr>
+</tbody>
+</table>
+<p>Rule keys never carry record values (a <code>pattern:</code> row drops the offending qualifiedName). Fleet-wide
+breakdown by app, tenant, type and rule. Two things make it return correct numbers:</p>
+<ul>
+<li>Bound <code>Timestamp</code> and prefix-filter <code>ServiceName</code> first. <code>Body</code> is not indexed, and an unbounded
+  fleet scan of <code>service_logs</code> does not return.</li>
+<li>Re-aggregate in an outer query. A single <code>GROUP BY</code> over <code>service_logs</code> has been observed to
+  return the same key on several rows with partial counts; the outer <code>sum</code> merges them. Distinct
+  workflow runs go through <code>uniqExactState</code> / <code>uniqExactMerge</code> so a run split across partial rows
+  is still counted once.</li>
+</ul>
+<p><code>uploads</code> counts outcome events (one per validated upload, so a run with several uploads counts
+several times); <code>runs</code> counts distinct <code>workflow_run_id</code>s.</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">app</span><span class="p">,</span><span class="w"> </span><span class="n">tenant</span><span class="p">,</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="n">type_name</span><span class="p">,</span><span class="w"> </span><span class="n">detail</span><span class="p">,</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">       </span><span class="k">sum</span><span class="p">(</span><span class="n">n</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">n</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">uploads</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">uploads</span><span class="p">,</span><span class="w"> </span><span class="n">uniqExactMerge</span><span class="p">(</span><span class="n">runs_state</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">runs</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'app_name'</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">app</span><span class="p">,</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">         </span><span class="n">TenantName</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">tenant</span><span class="p">,</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">         </span><span class="n">JSONExtractString</span><span class="p">(</span><span class="k">row</span><span class="p">,</span><span class="w"> </span><span class="s1">'kind'</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">         </span><span class="n">JSONExtractString</span><span class="p">(</span><span class="k">row</span><span class="p">,</span><span class="w"> </span><span class="s1">'type_name'</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">type_name</span><span class="p">,</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">         </span><span class="n">JSONExtractString</span><span class="p">(</span><span class="k">row</span><span class="p">,</span><span class="w"> </span><span class="s1">'detail'</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">detail</span><span class="p">,</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">         </span><span class="k">sum</span><span class="p">(</span><span class="n">JSONExtractUInt</span><span class="p">(</span><span class="k">row</span><span class="p">,</span><span class="w"> </span><span class="s1">'count'</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">n</span><span class="p">,</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">         </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">uploads</span><span class="p">,</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">         </span><span class="n">uniqExactState</span><span class="p">(</span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'workflow_run_id'</span><span class="p">])</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">runs_state</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">otel_logs</span><span class="p">.</span><span class="n">service_logs</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">  </span><span class="nb">ARRAY</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">JSONExtractArrayRaw</span><span class="p">(</span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'asset_validation_summary'</span><span class="p">])</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">row</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">  </span><span class="k">WHERE</span><span class="w"> </span><span class="k">Timestamp</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">now</span><span class="p">()</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nb">INTERVAL</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">DAY</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">ServiceName</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="s1">'atlan-%'</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">Body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'Transformed-asset validation outcome'</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">    </span><span class="k">AND</span><span class="w"> </span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'outcome'</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'flagged'</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">  </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">app</span><span class="p">,</span><span class="w"> </span><span class="n">tenant</span><span class="p">,</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="n">type_name</span><span class="p">,</span><span class="w"> </span><span class="n">detail</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="p">)</span>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">app</span><span class="p">,</span><span class="w"> </span><span class="n">tenant</span><span class="p">,</span><span class="w"> </span><span class="n">kind</span><span class="p">,</span><span class="w"> </span><span class="n">type_name</span><span class="p">,</span><span class="w"> </span><span class="n">detail</span>
+</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="k">DESC</span>
+</span></code></pre></div>
+<p>Uploads with nothing to validate (validation disabled, or
+a non-<code>transformed/</code> path) emit no event.</p>
+<p>Since <a href="../../adr/0020-artifact-validation/">ADR-0020</a> this check is the artifact wrapper's
+NDJSON × <code>ModelSource</code> cell, reached as <code>validate_artifact(target, ModelSource(model=Asset))</code>. <strong>The
+event above is unchanged by that</strong> — name, keys, <code>outcome</code> vocabulary and matrix row keys are all a
+shipped contract, and the fold-in was a refactor behind it. One hand-off emits one row, so this
+upload does not additionally emit <code>"Artifact validation outcome"</code>; the two events are two
+vocabularies, not two checks.</p>
+<h3 id="artifact-validation-outcome-event">Artifact-validation outcome event</h3>
+<p>The generic artifact-validation wrapper (<a href="../../adr/0020-artifact-validation/">ADR-0020</a>) emits
+<code>"Artifact validation outcome"</code> — one row per artifact hand-off, whatever the format and whichever
+schema source declared it.</p>
+<p>Rows are emitted automatically by the activity interceptor. Every <code>@task</code> in every app funnels
+through one seam, and both enforcement points come off the one declaration there:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>  materialize_file_refs(...)   # durable -&gt; local
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>+ validate(ingest)             &lt;- consumer side, re-validate on read
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  result = await task_method(input_data)
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>+ validate(handoff)            &lt;- producer side, BEFORE persist, while the bytes are still local
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>  persist_file_refs(...)          so a flag blames the producer, not whoever reads it three hops on
+</span></code></pre></div>
+<p>The interceptor resolves declarations from the app's generated contract, so every row it emits
+carries <code>artifact_schema_source=contract</code> — NDJSON checked record by record, parquet by diffing the
+file footer with no row read. The <code>model</code> source is reached the other way, from the upload hook's
+asset cell, and that hand-off emits the <em>asset</em> event above rather than this one: one hand-off, one
+row. The single cell that still answers <code>unsupported</code> is parquet x <code>ModelSource</code> — a model carries no
+column mapping, so a footer diff would have nothing to diff against, and it says so out loud rather
+than going quiet.</p>
+<p>Whether a negative outcome <strong>blocks</strong> is the app's own posture, and the default is that it never
+does — see <a href="#artifact-validation-posture">Artifact-validation posture</a> below. Set
+<code>ATLAN_VALIDATE_ARTIFACTS=false</code> to turn the whole hook off for a deployment — note this stops the
+outcome events too, so an app then has no denominator at all.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>outcome</code></td>
+<td><code>clean</code>, <code>flagged</code>, <code>not_declared</code>, <code>unsupported</code> or <code>absent</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>short explanation, chiefly for the three non-scan outcomes</td>
+</tr>
+<tr>
+<td><code>artifact_format</code></td>
+<td><code>ndjson</code>, <code>parquet</code> — empty when nothing was read</td>
+</tr>
+<tr>
+<td><code>artifact_schema_source</code></td>
+<td><code>contract</code> or <code>model</code></td>
+</tr>
+<tr>
+<td><code>artifact_field</code></td>
+<td>output-contract field the artifact came from; with <code>entrypoint</code> this keys the declaration</td>
+</tr>
+<tr>
+<td><code>artifact_side</code></td>
+<td><code>ingest</code> (consumer side, after materialise) or <code>handoff</code> (producer side, before persist)</td>
+</tr>
+<tr>
+<td><code>artifact_unit</code></td>
+<td>what the counts count: <code>record</code> (streaming scan) or <code>column</code> (footer diff)</td>
+</tr>
+<tr>
+<td><code>artifact_total</code></td>
+<td>units examined — always the whole artifact, never a sample</td>
+</tr>
+<tr>
+<td><code>artifact_passed</code></td>
+<td>units with no failure</td>
+</tr>
+<tr>
+<td><code>artifact_failed</code></td>
+<td>units that failed</td>
+</tr>
+<tr>
+<td><code>artifact_undecodable</code></td>
+<td>units that could not be parsed at all</td>
+</tr>
+<tr>
+<td><code>artifact_fields_declared</code></td>
+<td>fields the declaration named (0 for a model declaration)</td>
+</tr>
+<tr>
+<td><code>boundary</code></td>
+<td>whether the hand-off sits on an entrypoint's public interface</td>
+</tr>
+<tr>
+<td><code>artifact_classification</code></td>
+<td><code>verdict</code>, <code>artifact_unverifiable</code> or <code>validator_broken</code> — see below</td>
+</tr>
+<tr>
+<td><code>artifact_validation_mode</code></td>
+<td>the app's resolved posture: <code>hard</code> or <code>soft</code></td>
+</tr>
+<tr>
+<td><code>artifact_enforcement</code></td>
+<td><code>blocked</code>, <code>would_block</code>, or empty when the outcome was never blockable</td>
+</tr>
+<tr>
+<td><code>artifact_validation_matrix</code></td>
+<td>compact JSON array of per-failure detail (bounded rows), <code>JSONExtract</code>-able</td>
+</tr>
+</tbody>
+</table>
+<p>Two properties are worth relying on. <strong>Every hand-off emits</strong>, the negative outcomes included — a
+check that reports nothing is indistinguishable from a check that passed, so <code>not_declared</code>,
+<code>unsupported</code> and <code>absent</code> are rows, not silence. And <strong>every attribute is present on every
+outcome</strong>, the matrix as <code>"[]"</code> when there is nothing to show, so a consumer parses it
+unconditionally instead of branching on presence.</p>
+<p><code>boundary</code> is what makes <code>not_declared</code> actionable. An entry point's <code>input_type</code>/<code>output_type</code> are a
+public interface, so a missing declaration there is a finding against the app; the same gap on an
+internal <code>@task</code> contract is informational. The set of boundary contract classes is resolved once at
+worker build, so the attribute costs nothing per hand-off.</p>
+<p>The event body and its attribute keys are a pinned contract, like the three preflight events and
+the asset-validation one; all six names live in <code>application_sdk/observability/events.py</code>.</p>
+<h3 id="artifact-validation-posture">Artifact-validation posture</h3>
+<p>An app declares whether an artifact-validation outcome may fail the activity, exactly as it does for
+the preflight gate:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">MyApp</span><span class="p">(</span><span class="n">App</span><span class="p">):</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>    <span class="n">artifact_validation_mode</span> <span class="o">=</span> <span class="s2">"hard"</span>   <span class="c1"># default: "soft"</span>
+</span></code></pre></div>
+<p><code>ATLAN_ARTIFACT_VALIDATION_MODE</code> overrides the declaration at deploy time, so a fleet that starts
+flagging can be stood down without an app release. <strong>Only the literal <code>hard</code> enforces</strong> — a typo, a
+<code>true</code>, an unset variable all resolve to soft, so a run is never blocked by accident. Both the
+attribute and the variable are read <strong>once at worker build</strong> and baked into the activity closure, so
+a worker's blocking behaviour cannot change under a running activity.</p>
+<p>In hard mode a blockable outcome raises <code>ArtifactValidationBlockedError</code>, which the activity path
+translates into a non-retryable <code>ApplicationError</code> carrying <code>FailureDetails</code> — the field, the side
+and the declared-vs-found detail land in the red activity pane without anyone parsing a message. In
+soft mode the identical outcome emits <code>artifact_enforcement="would_block"</code> and the hand-off
+continues. Both values come off one call on one report, so the soft rows are an exact forecast of
+what hard mode would have done: that is what makes graduating a measured decision.</p>
+<p><code>artifact_classification</code> is the second axis, and it is what keeps hard mode safe:</p>
+<table>
+<thead>
+<tr>
+<th>Classification</th>
+<th>Meaning</th>
+<th>Subject to posture?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>verdict</code></td>
+<td>a scan ran and answered</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>artifact_unverifiable</code></td>
+<td>nothing on the SDK's side broke; there was nothing to check, or nothing to check against</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>validator_broken</code></td>
+<td>the SDK's own plumbing failed — a plug-in raised, a declaration file was unreadable</td>
+<td><strong>no, always fails open</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Every plumbing failure degrades to <code>outcome=absent</code>, which it shares with the honest "the artifact
+was not there", so the outcome alone cannot separate them — the classification can, and only one of
+the two is ever allowed to block. One more outcome is exempt: <code>not_declared</code> off a public boundary
+never blocks, because declaration is deliberately optional on app-internal <code>@task</code> contracts.</p>
+<p>To find every hand-off a hard-mode graduation would break, without graduating:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'app_name'</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">app</span><span class="p">,</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">       </span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'artifact_field'</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">field</span><span class="p">,</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">       </span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'artifact_side'</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">side</span><span class="p">,</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">       </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">n</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">FROM</span><span class="w"> </span><span class="n">otel_logs</span><span class="p">.</span><span class="n">service_logs</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">Body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'Artifact validation outcome'</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">LogAttributes</span><span class="p">[</span><span class="s1">'artifact_enforcement'</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">'would_block'</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">app</span><span class="p">,</span><span class="w"> </span><span class="n">field</span><span class="p">,</span><span class="w"> </span><span class="n">side</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="k">DESC</span>
+</span></code></pre></div>
+<h3 id="artifact-validation-posture-event">Artifact-validation posture event</h3>
+<p><code>"Artifact validation posture"</code> fires <strong>once per registered app at worker build</strong> — soft apps and
+switched-off deployments included. It carries <code>app_name</code>, <code>asset_validation_on_upload</code>
+(<code>on</code>/<code>off</code> — whether <code>App.upload()</code> runs the transformed-asset check on this deployment, so an
+app with no asset outcome rows can be told apart from one with that check off) and <code>artifact_validation_mode</code>
+(<code>hard</code>/<code>soft</code>/<code>off</code>, where <code>off</code> means <code>ATLAN_VALIDATE_ARTIFACTS</code> is down for that deployment).</p>
+<p>It exists because the outcome events cannot supply a denominator. An app whose tasks hand off no
+artifacts, or whose worker never runs one, emits no outcome row at all — so from outcomes alone a
+hard-mode app that has never blocked anything is indistinguishable from one that is not registered.
+This row is what makes adoption and posture drift measurable rather than a code-search artifact.</p>
+<h3 id="replay-suppression">Replay suppression</h3>
+<p><code>self.logger</code> suppresses log output during Temporal workflow replay by default, matching the behaviour of Temporal's native <code>workflow.logger</code>. This prevents duplicate bare lines (missing <code>workflow_id</code>/<code>run_id</code>) that would otherwise appear in Grafana when a worker replays history after a sticky-cache eviction.</p>
+<p>If you need replay logs — for example when using <code>temporalio.worker.Replayer</code> locally to inspect workflow history — re-enable them in two ways:</p>
+<ul>
+<li><strong>Per-instance</strong> (in-code): <code>self.logger.log_during_replay = True</code></li>
+<li><strong>Globally</strong> (env flag): <code>ENABLE_WORKFLOW_REPLAY_LOGS=true</code></li>
+</ul>
+<h3 id="console-output-is-written-off-the-event-loop">Console output is written off the event loop</h3>
+<p>Console lines (WARNING and below to stdout, ERROR and above to stderr) are formatted on the thread that logs, so trace and correlation ids are captured where they're set. A background thread then writes them. A stalled stdout or stderr, such as a full pipe or a slow log collector, delays console output but can't block the event loop or the activity heartbeats.</p>
+<ul>
+<li>The queue holds up to 10,000 lines. When it's full, the <strong>oldest</strong> line is dropped. Drops are counted, and at most once every 30 seconds a line like <code>console log queue full: dropped N records (total M)</code> is written once the stream accepts writes again.</li>
+<li><code>logger.error()</code> / <code>critical()</code> called on a thread with no running event loop waits up to 1 second for the queue to drain, which gives the error a chance to reach the console before the call returns. It's a best-effort wait: if stdout or stderr is still stalled after 1 second, the call returns with the line still queued. On the event loop it doesn't wait.</li>
+<li>At interpreter exit the queue gets up to 2 seconds to drain.</li>
+<li><code>application_sdk.observability.console_sink.flush_console_logs(timeout)</code> drains on demand, for example in tests that read <code>capsys</code>. <code>console_log_drop_count()</code> returns the drop total.</li>
+</ul>
+<p>The OTLP and object-store sinks are unaffected.</p>
+<hr />
+<h2 id="memory-pressure-and-oom-diagnostics">Memory pressure and OOM diagnostics</h2>
+<p>OOM kills produce no application-level log — the kernel sends SIGKILL and the
+process vanishes silently. The SDK surfaces four log signals so operators have
+a clear evidence trail and a short time-to-diagnosis.</p>
+<h3 id="log-surfaces-grep-patterns">Log surfaces (grep patterns)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>When</th>
+<th>Level</th>
+<th>Where</th>
+<th>Grep</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Worker/combined/handler startup</td>
+<td><code>INFO</code></td>
+<td>pod log (first lines)</td>
+<td><code>"Process memory at start"</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td>During an active task while RSS ≥ 80 % of limit — on crossing, on each 5-point band climbed, and every 5 min in between</td>
+<td><code>WARNING</code></td>
+<td>pod log</td>
+<td><code>"Memory pressure on task"</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Immediately after pod restart, if <code>exitCode == 137</code></td>
+<td><code>CRITICAL</code></td>
+<td>pod log (first lines of new pod)</td>
+<td><code>"exit code 137 = SIGKILL"</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td>When Temporal re-dispatches an activity after worker loss</td>
+<td><code>WARNING</code></td>
+<td>workflow log</td>
+<td><code>"re-dispatched after worker eviction"</code></td>
+</tr>
+</tbody>
+</table>
+<p>Signal 1 establishes a baseline (RSS at startup, limit, %) so you can see
+where memory stood when the pod was last healthy. Signal 2 fires on crossing
+80 %, again each time the ratio climbs another 5 points (85 / 90 / 95 %), and
+every 5 minutes while it stays within a band. A warned band re-arms once the
+ratio falls a full band below it, so a fall and second climb warns again, and
+the warning fully re-arms once the ratio drops below 75 %. Each repeat carries the change since the previous line (e.g.
+<code>+0.60 GiB in 40s</code>), so a fast climb to a kill shows its rate, and the
+container's cgroup usage (<code>container 0.95 GiB</code>), which also counts child
+processes such as the offload pool that the process RSS misses. The throttle is
+per process, not per activity: concurrent activities share it. Together these
+give pre-kill leading indicators in the killed pod's log. Signal 3 fires in the <strong>replacement</strong> pod's
+entrypoint immediately on restart — before any Temporal heartbeat timeout — so
+the first thing you see in <code>kubectl logs</code> is the exit code, along with the
+diagnostic commands to run. Signal 4 names OOM kill (pod exit 137) explicitly
+alongside KEDA scale-down, spot preemption, and rolling deploys.</p>
+<h3 id="where-the-limit-comes-from">Where the limit comes from</h3>
+<p>Signal 2 and signal 1's percentage need the container's memory limit. The SDK
+reads the enforced cgroup limit (<code>/sys/fs/cgroup/memory.max</code>, or
+<code>memory/memory.limit_in_bytes</code> on cgroup v1) first. No pod-spec wiring is
+needed, and because the heartbeat re-reads it every minute, a VPA resize
+(including an in-place one mid-activity) is picked up. Only when the cgroup reports no limit does it fall back
+to <code>K8S_POD_MEMORY_LIMIT</code>, which can still be injected via the Downward API:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">env</span><span class="p">:</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">K8S_POD_MEMORY_LIMIT</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span><span class="nt">valueFrom</span><span class="p">:</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">      </span><span class="nt">resourceFieldRef</span><span class="p">:</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">        </span><span class="nt">resource</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">limits.memory</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">        </span><span class="nt">divisor</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span><span class="w">          </span><span class="c1"># raw bytes; parse_pod_memory_limit() also accepts Ki/Mi/Gi suffixes</span>
+</span></code></pre></div>
+<p>When neither supplies a limit the memory-pressure warning is silently disabled
+(no false positives in local dev / non-Kubernetes environments).</p>
+<h3 id="diagnostic-runbook-oom-kill">Diagnostic runbook (OOM kill)</h3>
+<ol>
+<li><strong>Check exit code in the new pod</strong> (<code>kubectl logs &lt;pod&gt;</code> — look for the exit-137 CRITICAL line at the top, or the process memory at start line showing a high baseline).</li>
+<li><strong>Confirm OOM kill</strong> — <code>kubectl describe pod &lt;pod&gt;</code> → <code>lastState.terminated.reason: OOMKilled</code>.</li>
+<li><strong>Check cluster events</strong> — <code>kubectl get events -n &lt;namespace&gt; --field-selector=reason=OOMKilling</code>.</li>
+<li><strong>Review memory trajectory</strong> — search the killed pod's log for <code>Memory pressure on task</code> lines to see how fast RSS climbed before the kill.</li>
+<li><strong>Check eviction retries</strong> — search the workflow log for <code>re-dispatched after worker eviction</code> to understand how many attempts Temporal made.</li>
+</ol>
+<hr />
+<h2 id="correlation-ids">Correlation IDs</h2>
+<p>The <code>correlation_id</code> propagates automatically across:</p>
+<ul>
+<li>The handler (set by the incoming request from Heracles)</li>
+<li>All <code>@task</code> log entries (bound by the framework)</li>
+<li>Cross-app correlation (propagated via <code>correlation_id</code> when one App's output triggers another via Automation Engine DAG)</li>
+</ul>
+<p>In Grafana/Loki, filter by <code>correlation_id</code> to see the full trace of a multi-phase connector run across all apps.</p>
+<p>Access the current correlation ID programmatically:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.observability</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_correlation_context</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="n">ctx</span> <span class="o">=</span> <span class="n">get_correlation_context</span><span class="p">()</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="n">cid</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">correlation_id</span> <span class="k">if</span> <span class="n">ctx</span> <span class="k">else</span> <span class="kc">None</span>  <span class="c1"># str (empty when unset) or None when ctx is None</span>
+</span></code></pre></div>
+<hr />
+<h2 id="observability-store-sink">Observability Store Sink</h2>
+<p>By default, logs and metrics are also written to gzip-compressed NDJSON files (<code>.json.gz</code>) in the object store under <code>artifacts/apps/observability/{sdr|non-sdr}/{logs|metrics|sizing}/year=YYYY/month=MM/day=DD/hour=HH/</code>. Traces are never written to the object store; they leave as spans through the tracer provider (OTLP, plus stdout when the development-only <code>ATLAN_ENABLE_TRACES_CONSOLE</code> is on). <code>sdr</code> is used when <code>ENABLE_ATLAN_UPLOAD</code> is true, <code>non-sdr</code> otherwise. Each file name carries the deployment and app names. This enables historical querying even when the live pipelines (OTLP for logs/traces, Prometheus scrape / Pushgateway push for metrics) are unavailable.</p>
+<p>Control with:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nv">ATLAN_ENABLE_OBSERVABILITY_STORE_SINK</span><span class="o">=</span><span class="nb">true</span><span class="w">   </span><span class="c1"># default: true</span>
+</span></code></pre></div>
+<p>Batching:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nv">ATLAN_LOG_BATCH_SIZE</span><span class="o">=</span><span class="m">100</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nv">ATLAN_LOG_FLUSH_INTERVAL_SECONDS</span><span class="o">=</span><span class="m">10</span>
+</span></code></pre></div>
+<p>The SDK never deletes exported files; retention is the bucket owner's job, by design (see <a href="../../adr/0012-observability-consolidation/#addendum-retention-of-exported-files-belongs-to-the-bucket-not-the-sdk-fnd-4889">ADR-0012</a>). To bound how long they are kept, add a lifecycle rule to the bucket that expires objects under <code>artifacts/apps/observability/</code>. The <code>ATLAN_LOG_*</code>, <code>ATLAN_METRICS_*</code> and <code>ATLAN_SIZING_*</code> <code>RETENTION_DAYS</code> / <code>CLEANUP_ENABLED</code> variables are no longer read; setting one logs a startup warning.</p>
+<p>See <a href="../../configuration/#logging">Configuration</a> for all observability variables.</p>
+<h3 id="the-background-flush-loop">The background flush loop</h3>
+<p>Every periodic flush (logs, metrics, sizing) and the Segment sender run on one daemon thread, <code>atlan-observability-loop</code>, with one event loop. It starts on first use, not at import. At interpreter exit it stops everything within one bound, <code>ATLAN_OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS</code> (default 10): each periodic flush makes its final flush, then the Segment sender sends its last batch, and a batch flush already writing is waited for, not cancelled. A process forked after the loop started gets its own loop, with every sink's periodic flush restarted on it. Past the bound the rest is abandoned and the process exits.</p>
+<p>The console writer stays a separate thread on purpose. It does blocking writes to stdout and stderr, and on the shared loop a stalled pipe would stall every flush.</p>
+<h3 id="flushing-under-failure">Flushing under failure</h3>
+<p>A full batch is written by a background flush task. At most four run per signal at once; while an object-store outage holds them, new records wait in the buffer and the next flush takes them. Shutdown (<code>AtlanObservability.flush_all()</code>) waits for in-flight flushes before writing what is left, so the last records before a worker drains are not lost. A failed periodic flush is logged and retried on the next interval.</p>
+<p>An unhandled asyncio exception schedules a flush too, but only one at a time and at most one every 5 seconds, so an exception storm against an unreachable OTLP collector does not pile up flushes or <code>otlp-log-flush</code> threads. Only one <code>otlp-log-flush</code> thread is alive at a time; a flush that finds an earlier one still exporting waits for it within its own timeout instead of starting another.</p>
+<p>Segment metrics are bounded twice: at most 10,000 events (<code>max_queue_size</code>) wait to be handed to the client's worker loop, and at most 10,000 sit in its queue. Past either cap, new events are dropped and counted (<code>SegmentClient.dropped_count</code>), with one warning per overflow episode. A negative <code>max_queue_size</code> raises <code>ValueError</code>. A flush sends the backlog in <code>ATLAN_SEGMENT_BATCH_SIZE</code> chunks. After <code>close()</code>, further metrics are dropped.</p>
+<hr />
+<h2 id="per-activity-cpu-and-memory">Per-Activity CPU and Memory</h2>
+<p><code>MetricsInterceptor</code> emits <code>temporal_activity_cpu_seconds</code> and <code>temporal_activity_mem_gib_seconds</code> for every activity whose start and end could both be sampled; where process sampling is unavailable (Windows), neither is emitted. A worker runs many activities in one process, and the OS cannot say which of them used a given CPU second, so these are <strong>fair shares</strong>: the process is sampled at every activity start and end, and what it consumed between two boundaries is split evenly across the activities in flight.</p>
+<ul>
+<li>They never exceed the process total, so they are safe to add up for cost. When every boundary sample succeeds, the sum equals what the process used while at least one activity ran. A failed sample drops that activity's value while it still counted toward the split, so the sum falls short by its share.</li>
+<li>With one activity at a time the value is exact. Under concurrency, a CPU-heavy activity running beside idle ones is under-charged and the idle ones over-charged: read per-type values as an even split, not a profile.</li>
+<li>For what one activity needs from its container (peak memory, throttling), use <a href="#activity-sizing-telemetry">Activity Sizing Telemetry</a> below and its <code>is_attributable</code> flag.</li>
+</ul>
+<p>Earlier SDK versions charged each activity with the whole process's consumption over its own window, which over-counted by the number of concurrent activities. Dashboards built on these series drop by that factor after the upgrade.</p>
+<hr />
+<h2 id="activity-sizing-telemetry">Activity Sizing Telemetry</h2>
+<p>Records what one activity execution actually consumed — peak container memory, CPU time and throttling, input bytes, duration, outcome — so pod sizing can be derived from measurements instead of guesswork. Collection only: nothing in this path reads or changes how an activity is routed.</p>
+<p><strong>Off by default.</strong> A version bump alone changes nothing, and being enabled is not on its own enough — the allow-list must name the activities to measure:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nv">APPLICATION_SDK_ENABLE_SIZING_TELEMETRY</span><span class="o">=</span><span class="nb">true</span><span class="w">          </span><span class="c1"># master switch (default: false)</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nv">APPLICATION_SDK_SIZING_TELEMETRY_ACTIVITIES</span><span class="o">=</span>merge<span class="w">     </span><span class="c1"># comma-separated; "*" for all</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="nv">APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS</span><span class="o">=</span><span class="m">1</span>.0<span class="w">     </span><span class="c1"># peak-memory poll interval</span>
+</span></code></pre></div>
+<p>The allow-list is <strong>fail-closed</strong>: with the switch on and the list empty, nothing is collected and the worker logs a warning at startup saying so. Names match either the bare task name (<code>merge</code>) or the qualified form (<code>my-app:merge</code>).</p>
+<p>Attached as a Temporal <code>ActivityInboundInterceptor</code>, so an app is covered without changing any code — but only for the activities it names. Measure the ones whose resource use varies with their data; rows from fixed-cost activities add nothing to the dataset a tier table is fitted from.</p>
+<h3 id="what-a-row-contains">What a row contains</h3>
+<p>One row per activity execution, emitted two ways: six OTel histograms under <code>activity.sizing.*</code> for dashboards, and a <code>sizing</code> prefix in the object store (see <a href="#observability-store-sink">Observability Store Sink</a>) plus one <code>activity_sizing_observation</code> JSON log line for offline fitting.</p>
+<p>Four fields decide how a row may be used:</p>
+<table>
+<thead>
+<tr>
+<th>field</th>
+<th>why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>peak_delta_bytes</code></td>
+<td>Peak <strong>above</strong> the memory already resident when the activity started. Fit multipliers on this. <code>memory.current</code> is pod-wide and cumulative, and allocators do not return freed pages promptly, so the Nth activity in a pod starts from whatever the (N−1)th left pooled — pooling absolute peaks across pods with different histories fits the slope to that carryover as much as to the workload.</td>
+</tr>
+<tr>
+<td><code>peak_memory_bytes</code></td>
+<td>The absolute peak. <strong>Provision on this</strong>, because it is the number the OOM killer compares. Both travel together for that reason.</td>
+</tr>
+<tr>
+<td><code>is_attributable</code></td>
+<td><code>False</code> means the peak is pod-wide rather than this activity's, because other activities shared the process (<code>concurrency_max &gt; 1</code>). Still useful — for fitting a <em>pod</em> envelope, not an activity's. Written out rather than left to be derived, since a consumer that forgets it pools two different quantities.</td>
+</tr>
+<tr>
+<td><code>peak_source</code></td>
+<td><code>watermark</code> (kernel high-water mark, catches a spike of any duration), <code>poll</code> (background sampling, blind to sub-interval spikes), or <code>unavailable</code> (no cgroup). A tier fitted to a silent mix of the first two is fitted to an unknown error profile.</td>
+</tr>
+</tbody>
+</table>
+<p><code>input_bytes</code> is the driver variable: peak memory alone says a tier is wrong, but not what to key it on. The SDK's own file readers report it automatically; an app fetching data another way calls <code>report_input_bytes()</code> directly:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">application_sdk.observability.sizing_inputs</span><span class="w"> </span><span class="kn">import</span> <span class="n">report_input_bytes</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="n">report_input_bytes</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">payload</span><span class="p">))</span>
+</span></code></pre></div>
+<p>Every reader returns <code>None</code> rather than a guessed <code>0</code> — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Sizing the input happens after the activity returns, still inside its attempt, so it is bounded. It gets at most 10 seconds and never more than the attempt has left before its <code>start_to_close</code> or <code>schedule_to_close</code> deadline (less a 1-second margin), or half its heartbeat timeout. Past that, the row is recorded with input size unknown. The walk runs on its own single thread, so a walk stuck on an unresponsive filesystem cannot take threads from other offloaded work. While a walk is still running, later rows skip it and record input size unknown.</p>
+<p><strong>Telemetry never changes an activity's outcome.</strong> The row is recorded after the activity has finished, and an error there, or a cancel arriving then (for example a worker shutdown past its graceful timeout), drops the row with a WARNING. The activity's result or original error is what Temporal sees, so a completed activity is never retried because of its own measurement.</p>
+<p>Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.</p>
+<h3 id="batching-and-shutdown">Batching and shutdown</h3>
+<p>Rows are buffered and flushed on a timer as well as on batch size, because these workers commonly handle a handful of activities and then scale to zero — a size-only trigger would leave a pod's whole buffer unflushed. <strong>Worker shutdown flushes the last batch</strong>, which on a low-rate workload is otherwise most of the data.</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="nv">ATLAN_SIZING_BATCH_SIZE</span><span class="o">=</span><span class="m">500</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="nv">ATLAN_SIZING_FLUSH_INTERVAL_SECONDS</span><span class="o">=</span><span class="m">60</span>
+</span></code></pre></div>
+<p>This signal writes to the object store even when <code>ATLAN_ENABLE_OBSERVABILITY_STORE_SINK</code> is off. That switch covers logs, metrics and traces together, and an app disabling it to stop shipping those would otherwise silently lose a dataset it explicitly opted into — with an empty prefix as the only symptom. Collection is already gated twice, by the switch and the allow-list, so nothing is written unless an operator asked for it by name.</p>
+<h3 id="cost">Cost</h3>
+<p>About four file reads per activity plus two per poll tick, and no RPC — all local <code>/sys/fs/cgroup</code> reads. Telemetry never fails the activity it measures: every failure path costs the observation, not the activity's real outcome, and a failed shutdown flush does not block shutdown.</p>
+<hr />
+<h2 id="forwarding-daprd-sidecar-logs">Forwarding daprd Sidecar Logs</h2>
+<p>The <code>daprd</code> sidecar's own logs go straight to the container's stdout/stderr and don't enter the SDK observability pipeline on their own.</p>
+<ul>
+<li><strong>On atlan-infra</strong> (<code>ENABLE_ATLAN_UPLOAD=false</code>) this is fine: a node-level filelog collector scrapes every container's stdout — daprd included — and ships it to the central log backend.</li>
+<li><strong>In SDR mode</strong> (<code>ENABLE_ATLAN_UPLOAD=true</code>, i.e. customer infra) there is <strong>no</strong> such node-level collector, so daprd's logs would be invisible to Atlan — only present in the customer's own pod logs.</li>
+</ul>
+<p>So in SDR mode the SDK <strong>automatically</strong> forwards daprd's logs through its own pipeline (the same path as the app's logs, so they land in the lakehouse <code>app_logs</code> table with <code>app_name</code> / <code>is_sdr</code> populated), while still echoing them to the container's own logs. No configuration is required — it is gated on <code>ENABLE_ATLAN_UPLOAD</code>. Under the hood the container entrypoint runs daprd under <code>application_sdk.observability.dapr_log_forwarder</code>, which streams each daprd log line into a <code>dapr.runtime</code> logger and forwards <code>SIGTERM</code> so graceful shutdown is unaffected.</p>
+<blockquote>
+<p><strong>Note (<code>kubectl logs</code> format in SDR mode):</strong> In SDR mode daprd's stdout/stderr is piped into the forwarder, so <code>kubectl logs</code> shows the SDK's re-emitted format (with level, <code>app_name</code>, timestamp) rather than daprd's raw <code>--log-as-json</code> lines. The content is the same; only the format differs.</p>
+</blockquote>
+<p>daprd is chatty, so control the volume at the source with its log level:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nv">DAPR_LOG_LEVEL</span><span class="o">=</span>info<span class="w">   </span><span class="c1"># the base image default; raise to warn or error to drop the rest</span>
+</span></code></pre></div>
+<p><code>DAPR_LOG_LEVEL</code> is a minimum-severity floor — <code>warn</code> captures both warnings <strong>and</strong> errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse. The base image sets it to <code>info</code> (<code>ENV DAPR_LOG_LEVEL=info</code> in the SDK Dockerfile); the entrypoint's own <code>warn</code> fallback only applies when the variable has been unset.</p>
+<p>Setting it <strong>below</strong> the app's <code>LOG_LEVEL</code> also works, and is how to see why a Dapr API call failed — the Dapr HTTP API logs the reason for a failed output-binding invoke (upstream status code, dial/TLS error) only at <code>debug</code>. The forwarder runs as its own process and gates itself at the more verbose of <code>LOG_LEVEL</code> and <code>DAPR_LOG_LEVEL</code>, so a daprd <code>debug</code> line arrives as a real <code>DEBUG</code> record in the container log, in OTel <code>severity_number</code>, and in the lakehouse <code>level</code> column. The app process is a sibling and keeps its own <code>LOG_LEVEL</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nv">DAPR_LOG_LEVEL</span><span class="o">=</span>debug<span class="w">  </span><span class="c1"># daprd debug lines reach kubectl logs and the lakehouse at DEBUG</span>
+</span></code></pre></div>
+<p>"More verbose wins" applies to <code>ATLAN_LOG_LEVEL</code> too: if you have quietened the app with <code>ATLAN_LOG_LEVEL=ERROR</code> and left <code>DAPR_LOG_LEVEL=debug</code>, the forwarder process still gates itself at <code>DEBUG</code> for daprd's lines. The override is scoped to that one process — the app process is a sibling and stays at <code>ERROR</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

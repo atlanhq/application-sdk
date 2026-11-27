@@ -1,0 +1,6251 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Docs for application-sdk">
+      
+      
+        <meta name="author" content="App Framework Team">
+      
+      
+        <link rel="canonical" href="https://k.atlan.dev/application-sdk/adr/0018-progress-aware-heartbeat/">
+      
+      
+        <link rel="prev" href="../0017-native-execution-isolation/">
+      
+      
+        <link rel="next" href="../0019-runtime-substrate-layer/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts - application-sdk</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../static/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#adr-0018-progress-aware-stall-watchdog-and-duration-backstop-timeouts" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-header__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            application-sdk
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../setup/MAC/" class="md-tabs__link">
+          
+  
+  
+  Setup
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guides/getting-started/" class="md-tabs__link">
+          
+  
+  
+  Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/apps/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../whats-new-v3/" class="md-tabs__link">
+          
+  
+  
+  Migration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agents/project-structure/" class="md-tabs__link">
+          
+  
+  
+  Agent Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../standards/coding/" class="md-tabs__link">
+          
+  
+  
+  Standards
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+  Architecture Decisions
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../runbooks/stalled-task/" class="md-tabs__link">
+          
+  
+  
+  Runbooks
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-tabs__link">
+          
+  
+  
+  Postmortems
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-tabs__link">
+        
+  
+  
+    
+  
+  API Reference
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://k.atlan.dev/application-sdk" title="application-sdk" class="md-nav__button md-logo" aria-label="application-sdk" data-md-component="logo">
+      
+  <img src="../../static/assets/logo.svg" alt="logo">
+
+    </a>
+    application-sdk
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/atlanhq/application-sdk" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    application-sdk
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/MAC/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Mac
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/LINUX/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Linux
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/WINDOWS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Windows
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../setup/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/build-your-first-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build Your First Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sql-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Creating an SQL Application
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/contract-toolkit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contract Toolkit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/rest-api-application-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building a REST API Connector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/atlantis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Frontends with Atlantis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/secretstores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Secret Stores
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/pkl-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PKL Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/deployment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/multi-app-coordination/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/runtime-interactions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Interactions (Signal/Query/Update)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/best-practices/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Best Practices
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integration Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/integration-fixtures/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shared Integration Fixtures
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/golden-corpus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Golden-Corpus Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/credentials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credentials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/infrastructure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/storage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/state-secrets-pubsub/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State, Secrets, Pub/Sub & Bindings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/entry-points/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Entry Points
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/progress-and-stalls/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Progress & Stalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/clients/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Clients
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/common/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Common
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/mcp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/transformers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Transformers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/file-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    FileReference & App.upload()
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whats-new-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What's New in v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../upgrade-guide-v3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Guide v3
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Agent Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/project-structure/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Structure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/dev-commands/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/coding-standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding Standards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/commits-prs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits and PRs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/docs-updates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation Updates
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/review/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Code Review
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/sdk-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Capability Manifest
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agents/canonical-apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Canonical Apps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Standards
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Standards
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/coding/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coding
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/commits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Commits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/logging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Logging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/exceptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Exception Handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/performance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Performance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/documentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/build-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Security
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/deepwiki/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DeepWiki MCP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/review-checklist/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review Checklist
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/cross-repo-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cross-Repo Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/release-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/v3-readiness/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v3 Readiness
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Authoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/symbols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Symbol Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/env-vars/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Env Var Removal & Rename
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/api-distribution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Distribution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/app-certification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    App Certification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/credential-leak-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Credential Leak Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/unit-tests-gate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Unit-Tests Gate
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/connector-ci-e2e/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Connector CI (SDR + Full-DAG E2E)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standards/preflight-conformance-spec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preflight Conformance Spec
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Decisions
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture Decisions
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Index
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0001-per-app-handlers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0001: Per-App Handlers vs Uber-Handler
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0002-per-app-workers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0002: Per-App Workers vs Uber-Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0003-per-app-observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0003: Per-App Observability with Correlation-Based Tracing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0004-build-time-type-safety/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0004: Build-Time Type Safety Over Runtime Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0005-infrastructure-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0005: Abstraction of Underlying Infrastructure
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0006-schema-driven-contracts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0006: Schema-Driven Contracts with Additive Evolution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0007-apps-as-coordination-unit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0007: Apps as the Unit of Inter-App Coordination
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0008-payload-safe-bounded-types/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0008: Payload-Safe Bounded Types in Contracts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0009-separate-handler-worker-deployments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0009: Separate Handler and Worker Deployments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0010-async-first-blocking-code/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0010: Async-First Design and Blocking Code Pitfalls
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0011-logging-level-guidelines/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0011: Logging Level Guidelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0012-observability-consolidation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0012: Observability Consolidation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0013-error-hierarchy-and-failure-taxonomy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0013: Error Hierarchy and Failure Taxonomy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0014-two-store-storage-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0014: Two-Store Storage Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0015-directory-listing-race-fix/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0015: Directory Listing Race Fix
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0016-multi-pool-worker-routing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0016: Multi-Pool Worker Routing — Apps Self-Route Activities to Differently-Scaled Task Queues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0017-native-execution-isolation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0017: Native Execution Isolation (best-effort work in an isolated process)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Context">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#problem-1-start_to_close-is-an-unguessable-number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem 1: start_to_close is an unguessable number
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#problem-2-heartbeat-timeouts-are-the-larger-failure-mode-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem 2: heartbeat timeouts are the larger failure mode today
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-a-large-start_to_close-is-unsafe-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why a large start_to_close is unsafe today
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-mental-model-make-quiet-spots-observable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mental model: make quiet spots observable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-watchdog-runs-in-process-and-heartbeat_timeout-keeps-its-meaning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The watchdog runs in-process, and heartbeat_timeout keeps its meaning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-counts-as-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What counts as "progress"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-progress-tracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The progress tracker
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-watchdog-in-the-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The watchdog in the loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warn-mode-the-watchdog-is-its-own-audit-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warn mode: the watchdog is its own audit tool
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Warn mode: the watchdog is its own audit tool">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warn-mode-is-the-default-fleet-wide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warn mode is the default, fleet-wide
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failing-the-activity-and-what-the-failure-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failing the activity, and what the failure looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#feeding-the-tracker-three-mechanisms-most-automatic-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feeding the tracker (three mechanisms, most-automatic first)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#holds-the-sdk-never-invents-a-duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Holds: the SDK never invents a duration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-allowance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing the allowance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-async-escape-hatch-and-the-asymmetry-that-makes-it-common" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The async escape hatch — and the asymmetry that makes it common
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bounding-total-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bounding total time
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-automation-engine-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Automation Engine layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options Considered
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Options Considered">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-raise-the-start_to_close-default-to-24h-and-delete-per-task-tuning-rejected-as-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Raise the start_to_close default to 24h and delete per-task tuning (Rejected as-is)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-keep-guessing-tune-per-task-durations-harder-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Keep guessing, tune per-task durations harder (Rejected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-3-in-process-stall-watchdog-duration-backstop-chosen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 3: In-process stall watchdog + duration backstop (Chosen)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-4-manual-heartbeating-only-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 4: Manual heartbeating only (Rejected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-5-progress-gate-the-heartbeat-and-let-heartbeat_timeout-kill-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 5: Progress-gate the heartbeat and let heartbeat_timeout kill (Rejected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rationale
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rationale">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-asymmetry-that-makes-the-inversion-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The asymmetry that makes the inversion work
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-detection-is-preserved-or-improved-for-every-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure detection is preserved or improved for every mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-authors-tune-afterward" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What authors tune afterward
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-backward-compatibility-what-if-i-do-nothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration &amp; backward compatibility — "what if I do nothing?"
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rollout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decisions-taken" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decisions taken
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0019-runtime-substrate-layer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0019: A Dependency-Neutral Runtime Substrate (application_sdk._runtime)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0020-artifact-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0020: Artifact Validation — One Wrapper, Per-Format Validators, App-Owned Declarations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0021-source-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0021: Source Validation — Canonical Probes, Ordered by Layer, Declared by the App
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0022-skipped-record-capture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0022: Skipped-Record Capture — One Helper, One File per Run, Status from the Count
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0023-consolidated-api-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ADR-0023: Consolidated API Host for Hosted Apps' Handlers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Runbooks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/stalled-task/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stalled Task
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runbooks/long-running-run/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Long-Running Run
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postmortems
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_11">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Postmortems
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../rca-shutdown-drain-delay-2026-03-27/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Shutdown Drain Delay (2026-03-27)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://k.atlan.dev/application-sdk/main/api" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Context
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Context">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#problem-1-start_to_close-is-an-unguessable-number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem 1: start_to_close is an unguessable number
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#problem-2-heartbeat-timeouts-are-the-larger-failure-mode-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Problem 2: heartbeat timeouts are the larger failure mode today
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-a-large-start_to_close-is-unsafe-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why a large start_to_close is unsafe today
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-mental-model-make-quiet-spots-observable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mental model: make quiet spots observable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-watchdog-runs-in-process-and-heartbeat_timeout-keeps-its-meaning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The watchdog runs in-process, and heartbeat_timeout keeps its meaning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-counts-as-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What counts as "progress"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-progress-tracker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The progress tracker
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-watchdog-in-the-loop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The watchdog in the loop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warn-mode-the-watchdog-is-its-own-audit-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warn mode: the watchdog is its own audit tool
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Warn mode: the watchdog is its own audit tool">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warn-mode-is-the-default-fleet-wide" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warn mode is the default, fleet-wide
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failing-the-activity-and-what-the-failure-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failing the activity, and what the failure looks like
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#feeding-the-tracker-three-mechanisms-most-automatic-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Feeding the tracker (three mechanisms, most-automatic first)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#holds-the-sdk-never-invents-a-duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Holds: the SDK never invents a duration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-allowance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing the allowance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-async-escape-hatch-and-the-asymmetry-that-makes-it-common" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The async escape hatch — and the asymmetry that makes it common
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bounding-total-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bounding total time
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-automation-engine-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Automation Engine layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options Considered
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Options Considered">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-raise-the-start_to_close-default-to-24h-and-delete-per-task-tuning-rejected-as-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Raise the start_to_close default to 24h and delete per-task tuning (Rejected as-is)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-keep-guessing-tune-per-task-durations-harder-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Keep guessing, tune per-task durations harder (Rejected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-3-in-process-stall-watchdog-duration-backstop-chosen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 3: In-process stall watchdog + duration backstop (Chosen)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-4-manual-heartbeating-only-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 4: Manual heartbeating only (Rejected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-5-progress-gate-the-heartbeat-and-let-heartbeat_timeout-kill-rejected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 5: Progress-gate the heartbeat and let heartbeat_timeout kill (Rejected)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rationale" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rationale
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Rationale">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-asymmetry-that-makes-the-inversion-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The asymmetry that makes the inversion work
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#failure-detection-is-preserved-or-improved-for-every-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Failure detection is preserved or improved for every mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-authors-tune-afterward" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What authors tune afterward
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-backward-compatibility-what-if-i-do-nothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration &amp; backward compatibility — "what if I do nothing?"
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rollout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rollout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#consequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consequences
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decisions-taken" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decisions taken
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Architecture Decisions
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="adr-0018-progress-aware-stall-watchdog-and-duration-backstop-timeouts">ADR-0018: Progress-Aware Stall Watchdog and Duration-Backstop Timeouts</h1>
+<h2 id="status">Status</h2>
+<p><strong>Accepted</strong> — signed off in review on application-sdk PR #2865 (FND-38), including
+both positions in <em>Decisions taken</em>. Implementation lands in the stages described in
+<em>Rollout</em>.</p>
+<h2 id="context">Context</h2>
+<p>Every SDK <code>@task</code> becomes a Temporal activity carrying two timeouts (see
+<code>application_sdk/app/task.py</code>, <code>application_sdk/execution/_temporal/activities.py</code>):</p>
+<ul>
+<li><strong><code>start_to_close</code></strong> — the hard bound on a single activity attempt. Temporal
+  <em>requires</em> either this or <code>schedule_to_close</code> on every activity; the SDK makes
+  <code>timeout_seconds</code> non-nullable and defaults it to <strong>600s</strong> (<code>ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS</code>).</li>
+<li><strong><code>heartbeat_timeout</code></strong> — the max gap allowed between heartbeats. Optional in
+  Temporal; the SDK defaults it to <strong>60s</strong> (<code>ATLAN_HEARTBEAT_TIMEOUT_SECONDS</code>) and
+  runs a background <strong>auto-heartbeat loop</strong> every 10s so app authors get liveness
+  for free (<code>auto_heartbeat_loop</code> in <code>execution/heartbeat.py</code>).</li>
+</ul>
+<p>The two timeouts catch <em>different</em> failure modes and neither subsumes the other:</p>
+<ul>
+<li><code>heartbeat_timeout</code> detects <strong>nothing is beating</strong> — process crash, OOM kill,
+  node loss, network partition, event-loop starvation. It fires ~<code>heartbeat_timeout</code>
+  after the worker stops being able to beat.</li>
+<li><code>start_to_close</code> detects <strong>taking too long while beating</strong>. It is the <em>only</em>
+  bound on a healthy-but-slow or wedged-but-alive attempt.</li>
+</ul>
+<h3 id="problem-1-start_to_close-is-an-unguessable-number">Problem 1: <code>start_to_close</code> is an unguessable number</h3>
+<p><code>start_to_close</code> forces app authors to answer <em>"how long should this whole
+activity take?"</em> — a number that scales with tenant size from seconds to days and
+is data-dependent. In practice authors guess it, weight-class it, and still guess
+wrong at the tail. A production failure dashboard (13-day window) showed a steady
+trickle of <code>activity StartToClose timeout</code> failures across multiple connectors —
+extraction, query-history, and processing activities — despite each app having
+already tuned per-task timeouts (e.g. 5-minute "light", 2-hour "medium", 6-hour
+"heavy" classes). The tuning is educated guessing, and the tail always exceeds it.</p>
+<h3 id="problem-2-heartbeat-timeouts-are-the-larger-failure-mode-today">Problem 2: heartbeat timeouts are the <em>larger</em> failure mode today</h3>
+<p>This ADR must be honest that <code>StartToClose</code> is the smaller half of the evidence.
+Per FND-165, the <code>activity Heartbeat timeout</code> pattern re-alerted <strong>18× since
+Aug 3</strong>, hitting <strong>five connectors/tenants in a trailing 24h</strong>, and <strong>at least
+nine teams</strong> have independently re-tuned a heartbeat or timeout number since March
+rather than fixing the mechanism (CONNECT-728 ThoughtSpot, CONNECT-141 dbt,
+SHA-838/1318 publish, CAS-61/62 Context Agents — which needed <strong>30 minutes</strong>,
+SHA-327 QI, LH-1097 Lakehouse).</p>
+<p>Those heartbeat timeouts are, today, overwhelmingly <em>event-loop starvation</em>: the
+auto-loop cannot run because blocking work is holding the loop, so no beat is sent
+even though the activity is healthy. That is an ADR-0010 adoption problem, not a
+timeout-semantics problem, and <strong>it is not what this ADR fixes.</strong> It matters here
+for sequencing: any design that puts more weight on the heartbeat mechanism lands
+on top of a mechanism that is already the top failure. See <em>Rollout</em>.</p>
+<h3 id="why-a-large-start_to_close-is-unsafe-today">Why a large <code>start_to_close</code> is unsafe today</h3>
+<p>The auto-heartbeat is an <strong>unconditional keepalive</strong>: <code>heartbeat_keepalive()</code>
+calls <code>activity.heartbeat()</code> every 10s regardless of whether the activity is
+making any real progress. It proves the <em>event loop is alive</em>, not that <em>work is
+advancing</em>. Consequences:</p>
+<ol>
+<li>Nothing catches a <strong>wedged-but-alive</strong> activity (an infinite async retry loop,
+   a fetch that streams forever, a driver stuck in a yield-friendly wait).
+   Heartbeats keep arriving, so only <code>start_to_close</code> ever stops it.</li>
+<li>Therefore, if we raise <code>start_to_close</code> to 24h and change nothing else, a
+   wedged activity is guarded by <strong>nothing</strong> for a full day → worker-slot
+   exhaustion (Temporal's Python worker defaults to ~100 concurrent activity
+   slots; a handful of stuck activities can starve the pool) and day-long
+   non-detection.</li>
+</ol>
+<p>The number that is genuinely hard to guess (total duration) cannot simply be made
+huge unless <em>something else</em> reliably kills a stuck activity fast. Today nothing
+does.</p>
+<h2 id="decision">Decision</h2>
+<h3 id="the-mental-model-make-quiet-spots-observable">The mental model: make quiet spots observable</h3>
+<p>The core realization: <strong>a healthy-but-quiet task is indistinguishable from a
+wedged one.</strong> Both emit nothing. A watchdog that kills on silence cannot tell them
+apart — so the only durable fix is to make every quiet spot <em>observable</em>, i.e.
+emit a signal of forward progress that the watchdog can see.</p>
+<p>The SDK already ships one observability primitive for this: the manual beat
+(<code>context.heartbeat()</code>). This ADR does <strong>not</strong> invent a new concept — it extends
+that same observability <em>holistically and, wherever possible, automatically</em>:</p>
+<ul>
+<li><strong>Automatic (no developer action):</strong> built-in progress signals on the paths the
+  SDK already owns — the streaming writer/emission/transfer loops, and anything
+  run through <code>run_in_thread</code>.</li>
+<li><strong>Explicit (developer chooses one mechanism):</strong> for the spots the SDK cannot see
+  — a custom async loop, or an opaque single <code>await</code> against the connector's own
+  source client — the developer makes it observable with a manual beat or a scoped
+  hold. This is not a rare edge: because the async source path has no mandatory
+  SDK seam (unlike blocking calls, which all go through <code>run_in_thread</code>), the
+  explicit hold is expected in nearly every connector (see <em>The async escape
+  hatch</em> below).</li>
+</ul>
+<p>This framing matters for expectations: <strong>the residual work never disappears.</strong> The
+ADR shrinks it to a small, auditable set and automates the common paths, but a task
+that does long work through code the SDK can't see will still need one of the three
+mechanisms. "Zero effort" is true only for the covered paths; everything else is a
+deliberate, one-line observability choice.</p>
+<h3 id="the-watchdog-runs-in-process-and-heartbeat_timeout-keeps-its-meaning">The watchdog runs in-process, and <code>heartbeat_timeout</code> keeps its meaning</h3>
+<p>Given a progress signal, the obvious move is to make the heartbeat <em>conditional</em> —
+beat only on progress, and let Temporal's <code>heartbeat_timeout</code> do the killing. This
+ADR deliberately <strong>does not</strong> do that (see <em>Option 5</em>, rejected). Instead:</p>
+<ol>
+<li>The auto-heartbeat loop keeps sending its <strong>unconditional</strong> keepalive.
+   <code>heartbeat_timeout</code> keeps its current meaning and its current 60s default: it
+   detects <em>nothing is beating</em> — crash, OOM kill, node loss, partition,
+   event-loop starvation.</li>
+<li>The same loop gains a <strong>stall watchdog</strong>: it tracks a progress token, and when
+   the token has been flat for <strong><code>max_no_progress_seconds</code></strong> it <strong>fails the
+   activity itself, in-process</strong>, with a typed error naming the last progress
+   signal and the elapsed stall.</li>
+<li><code>start_to_close</code> becomes a <strong>pure backstop</strong> (e.g. 24h) that authors never tune.</li>
+<li>Long single operations that emit no progress — one big query, one slow API call,
+   blocking or async — are covered by an explicit scoped <strong>hold</strong>
+   (<code>holding_progress()</code>), which vouches for them for a duration the author
+   declares. The SDK never derives or invents that duration (see <em>Holds</em>).</li>
+</ol>
+<p>Why one operator concept and two enforcement points: <em>"it stopped doing anything"</em>
+is a single idea, and the operator should see a single failure story. But the two
+underlying situations want very different reaction times, and one number would have
+to be the slower of the two:</p>
+<ul>
+<li>Nothing will ever beat again (OOM, SIGKILL, node loss): the attempt is already
+  dead. Reclaim and retry <strong>now</strong> — 60s.</li>
+<li>Wedged-but-alive, or healthy-but-quiet: a legitimate quiet spell must be waited
+  out first — <strong>minutes</strong>.</li>
+</ul>
+<p>Collapsing these into one knob means a crash-killed worker's activities sit idle
+for the whole no-progress budget before Temporal reclaims them. Graceful evictions
+(KEDA scale-down, VPA, spot reclaim) don't pay that cost — the SIGTERM path
+(<code>WORKER_EVICTED_TYPE</code>, <code>execution/_temporal/eviction_retry.py</code>) fires immediately
+— but SIGKILL/OOM/node-loss has no path other than <code>heartbeat_timeout</code>. OOM is a
+leading failure mode for exactly these connectors, so keeping 60s crash detection
+is not conservatism; it is the point.</p>
+<p>Keeping the two enforcement points separate also means the mechanisms cover each
+other's blind spot exactly: the in-process watchdog cannot fire when the event loop
+is starved — and that is precisely when <code>heartbeat_timeout</code> does.</p>
+<p>This shifts tuning off the hard knob (duration) onto two answerable ones: <em>"how
+long is no progress acceptable?"</em> (roughly workload-independent, one default) and
+<em>"how long should this one operation take?"</em> (declared at the one call site that
+knows).</p>
+<h3 id="what-counts-as-progress">What counts as "progress"</h3>
+<p>Progress is defined operationally, not by intuition — this is the question a
+reviewer asks first, so it must be crisp:</p>
+<blockquote>
+<p><strong>Progress = one observable unit of work completing</strong> — a batch written, a chunk
+or file transferred, a page fetched, or an explicit <code>context.heartbeat()</code>.</p>
+</blockquote>
+<p>It is emphatically <strong>not</strong> wall-clock time and <strong>not</strong> event-loop liveness — that
+is what the unconditional keepalive already proves, and it is why the keepalive
+cannot double as the stall detector. The single rule an author needs follows
+directly from the definition:</p>
+<blockquote>
+<p><strong>If any one step can run longer than the no-progress budget
+(<code>max_no_progress_seconds</code>) without emitting a signal, that step must be made
+observable</strong> — it is already covered by a framework hook, or the author adds a
+manual beat or a hold.</p>
+</blockquote>
+<p>By construction, <strong>any gap between progress signals longer than the budget is
+treated as a stall.</strong> That is the intended behavior, not a corner case: it is
+exactly how a wedged-but-quiet activity gets caught. The design's job is to ensure
+the <em>legitimate</em> quiet spots are the small, known set that the automatic hooks and
+holds already cover.</p>
+<h3 id="the-progress-tracker">The progress tracker</h3>
+<p>Progress tracking is a <strong>new object, not a change to <code>HeartbeatController</code>.</strong> The
+controller's job (send beats to Temporal) is unchanged, so its Protocol and
+<code>NoopHeartbeatController</code> keep their current contract. The tracker has no Temporal
+dependency, which means local and test execution exercise the same code path as
+production — and, usefully, a task with <code>heartbeat_timeout_seconds=None</code> still gets
+a stall watchdog.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">_Hold</span><span class="p">:</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">label</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">started_at</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">deadline</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>   <span class="c1"># None = unbounded</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="k">class</span><span class="w"> </span><span class="nc">ProgressTracker</span><span class="p">:</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="sd">"""Observed forward progress for one activity attempt."""</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">clock</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        <span class="c1"># Injected clock, not a patched global: an asyncio loop shares</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>        <span class="c1"># time.monotonic, so patching it globally in tests makes the loop itself</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="c1"># misbehave.</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_clock</span> <span class="o">=</span> <span class="n">clock</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_last_label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_last_at</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">clock</span><span class="p">()</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_holds</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">_Hold</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_next_token</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">mark_progress</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">        </span><span class="sd">"""Framework + app signal for real forward progress."""</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_last_at</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clock</span><span class="p">()</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>        <span class="k">if</span> <span class="n">label</span><span class="p">:</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">_last_label</span> <span class="o">=</span> <span class="n">label</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">enter_hold</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">        </span><span class="sd">"""Vouch for an in-flight opaque operation. Returns a token."""</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>        <span class="n">token</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_next_token</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_next_token</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>        <span class="n">now</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clock</span><span class="p">()</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">_holds</span><span class="p">[</span><span class="n">token</span><span class="p">]</span> <span class="o">=</span> <span class="n">_Hold</span><span class="p">(</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>            <span class="n">label</span><span class="p">,</span> <span class="n">now</span><span class="p">,</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">timeout</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">now</span> <span class="o">+</span> <span class="n">timeout</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a>        <span class="p">)</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a>        <span class="k">return</span> <span class="n">token</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">exit_hold</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">token</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a>        <span class="c1"># Keyed by token, not popped off a stack: concurrent holds in one</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a>        <span class="c1"># activity (asyncio.gather over several run_in_thread calls) must not</span>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a>        <span class="c1"># release each other's deadlines.</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a>        <span class="n">hold</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_holds</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">token</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a>        <span class="k">if</span> <span class="n">hold</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a>            <span class="c1"># A completed operation *is* progress. The observed duration also</span>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a>            <span class="c1"># feeds the warn-mode report: a long *unbounded* hold is a site that</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a>            <span class="c1"># wants an explicit allowance (see Warn mode).</span>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a>            <span class="n">_observe_hold_closed</span><span class="p">(</span><span class="n">hold</span><span class="p">,</span> <span class="n">duration</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_clock</span><span class="p">()</span> <span class="o">-</span> <span class="n">hold</span><span class="o">.</span><span class="n">started_at</span><span class="p">)</span>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a>            <span class="bp">self</span><span class="o">.</span><span class="n">mark_progress</span><span class="p">(</span><span class="n">hold</span><span class="o">.</span><span class="n">label</span><span class="p">)</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a>
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">held</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+</span><span id="__span-0-50"><a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a>        <span class="n">now</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clock</span><span class="p">()</span>
+</span><span id="__span-0-51"><a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a>        <span class="k">return</span> <span class="nb">any</span><span class="p">(</span>
+</span><span id="__span-0-52"><a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a>            <span class="n">h</span><span class="o">.</span><span class="n">deadline</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">h</span><span class="o">.</span><span class="n">deadline</span> <span class="o">&gt;</span> <span class="n">now</span> <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_holds</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+</span><span id="__span-0-53"><a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a>        <span class="p">)</span>
+</span><span id="__span-0-54"><a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a>
+</span><span id="__span-0-55"><a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">stalled_for</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="__span-0-56"><a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a><span class="w">        </span><span class="sd">"""Seconds since the last observable progress, 0 while vouched-for."""</span>
+</span><span id="__span-0-57"><a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a>        <span class="n">now</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_clock</span><span class="p">()</span>
+</span><span id="__span-0-58"><a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a>        <span class="n">since</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_last_at</span>
+</span><span id="__span-0-59"><a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a>        <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_holds</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+</span><span id="__span-0-60"><a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a>            <span class="k">if</span> <span class="n">h</span><span class="o">.</span><span class="n">deadline</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">h</span><span class="o">.</span><span class="n">deadline</span> <span class="o">&gt;</span> <span class="n">now</span><span class="p">:</span>
+</span><span id="__span-0-61"><a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a>                <span class="k">return</span> <span class="mf">0.0</span>
+</span><span id="__span-0-62"><a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a>            <span class="c1"># A *lapsed* bounded hold resumes the clock from its deadline, not</span>
+</span><span id="__span-0-63"><a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a>            <span class="c1"># from the progress signal before it: the allowance vouched for</span>
+</span><span id="__span-0-64"><a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a>            <span class="c1"># everything up to the deadline, which is what makes the kill time</span>
+</span><span id="__span-0-65"><a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a>            <span class="c1"># for a wedged held call `timeout + budget` (see Holds) rather than</span>
+</span><span id="__span-0-66"><a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a>            <span class="c1"># firing the instant the allowance lapses.</span>
+</span><span id="__span-0-67"><a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a>            <span class="n">since</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">since</span><span class="p">,</span> <span class="n">h</span><span class="o">.</span><span class="n">deadline</span><span class="p">)</span>
+</span><span id="__span-0-68"><a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a>        <span class="k">return</span> <span class="n">now</span> <span class="o">-</span> <span class="n">since</span>
+</span></code></pre></div>
+<h3 id="the-watchdog-in-the-loop">The watchdog in the loop</h3>
+<p>The existing send, event-loop-block warning and memory sampling are unchanged. The
+watchdog is additive:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">while</span> <span class="ow">not</span> <span class="n">stop_event</span><span class="o">.</span><span class="n">is_set</span><span class="p">():</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="o">...</span>  <span class="c1"># existing wait_for(stop_event) + block-detection warning + memory sampling</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">hb</span><span class="o">.</span><span class="n">heartbeat_keepalive</span><span class="p">()</span>          <span class="c1"># unchanged, unconditional: the crash detector</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">stalled</span> <span class="o">=</span> <span class="n">progress</span><span class="o">.</span><span class="n">stalled_for</span><span class="p">()</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="k">if</span> <span class="n">budget_seconds</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">stalled</span> <span class="o">&gt;=</span> <span class="n">budget_seconds</span><span class="p">:</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="c1"># Always a metric; the log level differs by mode. In warn mode this is an</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        <span class="c1"># expected observation on a fleet-wide default, so it must NOT be WARNING</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>        <span class="c1"># — see "Warn mode is the default".</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="n">_no_progress_gap</span><span class="o">.</span><span class="n">record</span><span class="p">(</span><span class="n">stalled</span><span class="p">,</span> <span class="n">task</span><span class="o">=</span><span class="n">task_name</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">progress</span><span class="o">.</span><span class="n">last_label</span><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>        <span class="k">if</span> <span class="n">mode</span> <span class="ow">is</span> <span class="n">Mode</span><span class="o">.</span><span class="n">ENFORCE</span><span class="p">:</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>            <span class="n">logger</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>                <span class="s2">"Task '</span><span class="si">%s</span><span class="s2">' made no observable progress for </span><span class="si">%.0f</span><span class="s2">s (budget </span><span class="si">%.0f</span><span class="s2">s); "</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>                <span class="s2">"last signal was '</span><span class="si">%s</span><span class="s2">' — failing the activity"</span><span class="p">,</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>                <span class="n">task_name</span><span class="p">,</span> <span class="n">stalled</span><span class="p">,</span> <span class="n">budget_seconds</span><span class="p">,</span> <span class="n">progress</span><span class="o">.</span><span class="n">last_label</span> <span class="ow">or</span> <span class="s2">"&lt;none&gt;"</span><span class="p">,</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>            <span class="p">)</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>            <span class="n">on_stall</span><span class="p">(</span><span class="n">stalled</span><span class="p">,</span> <span class="n">progress</span><span class="o">.</span><span class="n">last_label</span><span class="p">)</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>            <span class="k">return</span>   <span class="c1"># cancel-and-return: the activity's finally awaits this task</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>            <span class="s2">"Task '</span><span class="si">%s</span><span class="s2">' made no observable progress for </span><span class="si">%.0f</span><span class="s2">s (budget </span><span class="si">%.0f</span><span class="s2">s); last "</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>            <span class="s2">"signal was '</span><span class="si">%s</span><span class="s2">' — not failing (warn mode)"</span><span class="p">,</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>            <span class="n">task_name</span><span class="p">,</span> <span class="n">stalled</span><span class="p">,</span> <span class="n">budget_seconds</span><span class="p">,</span> <span class="n">progress</span><span class="o">.</span><span class="n">last_label</span> <span class="ow">or</span> <span class="s2">"&lt;none&gt;"</span><span class="p">,</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        <span class="p">)</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>        <span class="n">progress</span><span class="o">.</span><span class="n">mark_progress</span><span class="p">()</span>   <span class="c1"># re-arm so warn mode reports each gap once</span>
+</span></code></pre></div>
+<p><code>on_stall</code> is injected by <code>activities.py</code>, the same way <code>heartbeat_fn</code> already is,
+so <code>heartbeat.py</code> stays free of activity/Temporal semantics and the watchdog is
+unit-testable without a worker.</p>
+<h3 id="warn-mode-the-watchdog-is-its-own-audit-tool">Warn mode: the watchdog is its own audit tool</h3>
+<p>The obvious question from any app author is <em>"how do I find every place in my
+codebase that needs a hold, and what allowance do I put on each one?"</em> Answering
+that with "audit your code" would reintroduce this ADR's own problem one level down:
+a per-site number, guessed up front, by hand.</p>
+<p>So the flag has <strong>three states, not two</strong> — <code>off</code>, <code>warn</code>, <code>enforce</code>:</p>
+<ul>
+<li><strong><code>off</code></strong> — hooks are inert, nothing observes anything. Byte-identical to today.
+  Retained as a kill-switch, not as the normal state.</li>
+<li><strong><code>warn</code></strong> — the watchdog runs and reports, but can never fail an activity. This is
+  the audit tool, and the <strong>default</strong>.</li>
+<li><strong><code>enforce</code></strong> — as described above.</li>
+</ul>
+<p>Warn mode emits the two things an author needs, and they map to the two shapes that
+need action:</p>
+<ol>
+<li><strong>No-progress gaps with no hold in force</strong> — task, last progress signal, gap
+   duration. These are the sites that need a beat or a hold.</li>
+<li><strong>Long <em>unbounded</em> holds</strong> — recorded by <code>exit_hold</code> above. Without this, a
+   blocking call through <code>run_in_thread</code> would be invisible to the audit precisely
+   because it is auto-vouched-for; these are the sites that want an explicit
+   allowance instead of relying on the backstop.</li>
+</ol>
+<p>A run against a large tenant therefore produces a ranked work-list, and the author
+wraps the sites that exceeded the budget and ignores the rest — which is most of the
+app. The whole-codebase audit collapses into reading a report.</p>
+<h4 id="warn-mode-is-the-default-fleet-wide">Warn mode is the default, fleet-wide</h4>
+<p>Because warn mode cannot fail an activity, there is no reason to make apps opt into
+it — and two reasons not to:</p>
+<ul>
+<li><strong>It removes a per-app coordination step from the critical path.</strong> Asking ~20
+  connector teams to each turn a flag on is exactly the shape of work that FND-165
+  documents stalling (nine teams independently re-tuning a number over five months).
+  Defaulting to <code>warn</code> means the evidence arrives without anyone being asked to care.</li>
+<li><strong>It makes the migration an <em>eventual optimisation</em> rather than an upgrade task.</strong>
+  On upgrade an app does nothing, and keeps doing nothing until someone chooses to
+  look at its report. <code>holding_progress()</code> becomes work you do when you want the
+  stronger guarantee, not a precondition for taking the version.</li>
+</ul>
+<p>Two constraints come with defaulting it on:</p>
+<ul>
+<li><strong>Warn-mode findings must not be WARNING-level.</strong> A stall observation in warn mode
+  is an expected observation on a fleet-wide default, not an actionable failure.
+  Emitting it at WARNING would manufacture fleet-wide alert noise — the same class of
+  noise this ADR is trying to reduce. It is a metric plus an INFO log; dashboards and
+  the per-app report read the metric.</li>
+<li><strong>Hooks go on batch, chunk and page boundaries — never per record.</strong> <code>mark_progress()</code>
+  is cheap, but "cheap" in a per-record loop is still a hot-path cost for no extra
+  signal: one batch is already the unit of observable work.</li>
+</ul>
+<p>"No behaviour change on upgrade" is therefore precise rather than absolute: no
+activity fails differently, no knob changes meaning, and the added cost is telemetry.
+<code>off</code> exists for anyone who needs even that gone.</p>
+<p>The same telemetry settles every sizing parameter at once — where holds go, what each
+allowance should be, what <code>max_no_progress_seconds</code> should be, and whether long stalls
+occur in practice at all (currently argued from recollection on both sides). None of
+those are design questions — they are measurements; see <em>Decisions taken</em>.</p>
+<h3 id="failing-the-activity-and-what-the-failure-looks-like">Failing the activity, and what the failure looks like</h3>
+<p><code>activities.py</code> captures <code>asyncio.current_task()</code> before it creates the heartbeat
+task (<code>activities.py:196-207</code>), and <code>on_stall</code> flags the tracker and cancels that
+task. The cancellation lands at the activity's next <code>await</code> and hits the existing
+<code>except asyncio.CancelledError</code> handler (<code>activities.py:259</code>).</p>
+<p>That handler gains a branch <strong>ahead of</strong> the <code>is_worker_shutting_down()</code> check,
+which raises a typed <code>AppError</code> — a new <code>TaskStalledError</code> alongside
+<code>AppTimeoutError</code> in <code>errors/leaves.py</code> — carrying <code>stalled_for_seconds</code> and
+<code>last_progress_label</code> as dataclass fields, so redaction stays at the
+<code>FailureDetails</code> wire layer rather than being achieved by withholding context.</p>
+<p>Three details that matter:</p>
+<ul>
+<li><strong>Flag-check order.</strong> A stall and a SIGTERM can coincide. The stall branch must
+  come first, or a stalled activity is mislabelled <code>WorkerEvicted</code> and re-dispatched
+  by the eviction-retry loop (<code>app/base.py:2447</code>) <em>outside</em> the normal retry budget.</li>
+<li><strong>Cancel and return.</strong> The watchdog <em>is</em> <code>heartbeat_task</code>, and the activity's
+  <code>finally</code> (<code>activities.py:334-347</code>) sets <code>stop_event</code> and awaits it with a 1s
+  bound. The watchdog must return immediately after cancelling, not keep looping.</li>
+<li><strong>Translation is shared, not duplicated.</strong> The <code>AppError → ApplicationError(*FailureDetails)</code>
+  translation in the <code>except Exception</code> branch (<code>activities.py:299-331</code>) already
+  handles the non-serialisable-evidence guard, <code>_sever_cause_chain</code> (BLDX-1512) and
+  <code>non_retryable=not e.effective_retryable</code>. Factor it into a helper both branches
+  call.</li>
+</ul>
+<p><strong><code>TaskStalledError</code> is retryable.</strong> The instinct is to make it non-retryable — a
+wedge re-wedges, and without checkpointing (REQ-1609) a retry restarts from zero. That
+instinct is wrong about what a stall usually <em>is</em>. Sort the causes:</p>
+<table>
+<thead>
+<tr>
+<th>Cause of the stall</th>
+<th>Retry outcome</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source-side hang: dropped connection, source overloaded, socket read with no timeout, exhausted pool</td>
+<td><strong>Usually succeeds.</strong> The likely majority: apps whose error handling never surfaced a transient source problem, so the symptom is silence rather than an exception.</td>
+</tr>
+<tr>
+<td>Genuine code wedge: infinite retry loop, app-level deadlock</td>
+<td>Re-stalls, costing up to 3 × <code>max_no_progress_seconds</code> (minutes) — not 3 × the backstop</td>
+</tr>
+<tr>
+<td>Timing-dependent deadlock on a shared resource</td>
+<td>May well succeed on different timing</td>
+</tr>
+<tr>
+<td>Missing instrumentation (healthy, quiet, no hold declared)</td>
+<td><strong>False kill, amplified</strong> — retries waste the same partial work again</td>
+</tr>
+</tbody>
+</table>
+<p>The dominant category is transient and self-heals on retry, and the failure the fleet
+actually sees today is exactly that shape: a source stops responding and the app has no
+way to say so. Refusing to retry would convert those into failed runs needing a manual
+re-run — which restarts from zero anyway, just slower and with a human in the loop. So
+non-retryable buys nothing there and costs a lot.</p>
+<p>That leaves the last row as the real risk, and it is bounded by process rather than by
+policy: eliminating missing instrumentation is precisely what the warn-mode pass does
+before an app enforces.</p>
+<p>A refinement worth considering later, not for v1: a stall <em>inside a lapsed hold</em> means
+the source exceeded an allowance a human declared for it — almost definitionally the
+transient case — whereas a stall with no hold at all is likelier to be missing
+instrumentation. The two could carry different retry policies.</p>
+<p>Detection latency is <code>max_no_progress_seconds</code> plus at most one loop tick (10s).</p>
+<h3 id="feeding-the-tracker-three-mechanisms-most-automatic-first">Feeding the tracker (three mechanisms, most-automatic first)</h3>
+<ol>
+<li><strong>Framework hooks (automatic, no app action).</strong> Call <code>mark_progress()</code> wherever
+   the SDK already loops over units of work. This covers the streaming majority —
+   the bulk of connector runtime — with no code change in the app. Each hook
+   reaches the attempt's tracker through <code>current_progress_tracker()</code> (FND-287),
+   which outside an activity returns the inert tracker — so every hook below is a
+   no-op until <code>activities.py</code> binds one. As landed (FND-288), the hooked set is:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>Where</th>
+<th>Unit</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>storage/formats/__init__.py</code> — <code>Writer._flush_buffer</code></td>
+<td>one buffer chunk written</td>
+<td><code>writer.flush_buffer</code></td>
+</tr>
+<tr>
+<td><code>storage/formats/__init__.py</code> — <code>Writer._write_statistics</code></td>
+<td>statistics sidecar emitted at <code>close()</code></td>
+<td><code>writer.statistics</code></td>
+</tr>
+<tr>
+<td><code>storage/formats/parquet.py</code> — <code>_write_chunk_to_temp_folder</code></td>
+<td>one accumulated chunk</td>
+<td><code>writer.accumulate_chunk</code></td>
+</tr>
+<tr>
+<td><code>storage/formats/parquet.py</code> — <code>_consolidate_current_folder</code></td>
+<td>one consolidated file</td>
+<td><code>writer.consolidate_chunk</code></td>
+</tr>
+<tr>
+<td><code>storage/rolling.py</code> — <code>RollingFileWriter._flush_locked</code></td>
+<td>one rolled chunk</td>
+<td><code>writer.rolling_flush</code></td>
+</tr>
+<tr>
+<td><code>storage/ops.py</code> — <code>upload_file</code> / <code>download_file</code></td>
+<td>one multipart part / streamed chunk</td>
+<td><code>storage.upload_part</code>, <code>storage.download_chunk</code></td>
+</tr>
+<tr>
+<td><code>storage/chunked.py</code> — <code>_fetch_chunk</code></td>
+<td>one range GET at its offset</td>
+<td><code>storage.download_range</code></td>
+</tr>
+<tr>
+<td><code>storage/transfer.py</code> — <code>_upload_one</code> / <code>_upload_from_store</code> / <code>_download_one</code></td>
+<td>one file transferred <em>or</em> skipped on a hash match</td>
+<td><code>storage.upload_file</code>, <code>storage.copy_file</code>, <code>storage.download_file</code></td>
+</tr>
+<tr>
+<td><code>storage/cloud.py</code> — <code>CloudStore.upload</code></td>
+<td>one part to an external store</td>
+<td><code>cloudstore.upload_part</code></td>
+</tr>
+<tr>
+<td><code>storage/file_ref_sync.py</code> — <code>_replace_refs</code></td>
+<td>one <code>FileReference</code> persisted / materialised</td>
+<td><code>file_ref.persist</code>, <code>file_ref.materialize</code></td>
+</tr>
+<tr>
+<td><code>templates/sql_app.py</code> — <code>extract_entity</code></td>
+<td>one fetched page written to raw JSONL</td>
+<td><code>extract.page</code></td>
+</tr>
+<tr>
+<td><code>templates/sql_metadata_extractor.py</code> — <code>fetch_databases</code> / <code>fetch_schemas</code> / <code>fetch_tables</code> / <code>fetch_columns</code></td>
+<td>one fetched page</td>
+<td><code>fetch_*.page</code></td>
+</tr>
+</tbody>
+</table>
+<p>Two grains on purpose: <strong>per part/chunk</strong> inside the byte loops, so a single
+   multi-GB object is never one long quiet window, and <strong>per file</strong> at the
+   orchestration boundaries, so <code>last_label</code> tells an operator <em>which</em> loop went
+   quiet rather than only that bytes were moving. A hash-match skip counts as
+   progress — an idempotent retry over a large prefix pays a digest and a sidecar
+   GET per file, and reading that as silence would manufacture a stall.</p>
+<p><code>storage/ops.py</code>, <code>storage/rolling.py</code>, <code>storage/cloud.py</code> and the template page
+   loops are additions to this ADR's original three-file sketch, each because a
+   single step there can outlast the budget with nothing else to carry its signal:
+   <code>ops</code> owns the actual byte loops the other modules delegate to;
+   <code>RollingFileWriter</code> is the <em>recommended</em> replacement for the v4.0-deprecated
+   writers and is not a <code>Writer</code> subclass, so it inherits no hook; and the
+   <code>fetch_*</code> page loops accumulate in memory rather than streaming to a writer, so
+   there is no write side to cover for them.</p>
+<p><strong>Where mechanism 1 stops and mechanism 2 starts.</strong> A hook only helps a loop
+   that yields <em>and</em> has a boundary worth marking. <code>SqlApp.transform_entity</code> has
+   neither: rollout step 1 (FND-282) offloaded its whole record map into a single
+   <code>run_in_thread</code> hop, and the loop inside is line-by-line with no batch
+   boundary — the only boundary available is the per-record one this rule
+   forbids. It needs no hook, because the auto-hold below vouches for the entire
+   offloaded call. Coverage there is mechanism 2, and the residual is the 24h
+   backstop that warn mode is meant to surface.</p>
+<p>The general rule: <strong>a synchronous loop that holds the event loop cannot be
+   fixed with a mark</strong> — the watchdog coroutine cannot tick to read one. That is
+   loop starvation, <code>heartbeat_timeout</code>'s job, and an ADR-0010 offload is the
+   fix. Offload first, then decide whether the offloaded call wants a hook
+   (a yielding batch loop) or a hold (one opaque hop).
+2. <strong><code>run_in_thread</code> auto-holds (automatic for blocking work).</strong> Anything offloaded
+   through <code>run_in_thread</code> is wrapped in an <strong>unbounded</strong> hold by the SDK, so a
+   legitimate long blocking call is never false-killed and behaviour on upgrade is
+   unchanged. An unbounded hold means the stall watchdog is inactive for the
+   duration of the call and the 24h backstop is the only bound — a real, documented
+   residual. Warn mode surfaces each one with its observed duration, and the
+   conformance rule keeps them visible afterwards.</p>
+<p>As landed (FND-290), the hold wraps the <em>single</em> implementation all three
+   public entry points funnel into — the module-level <code>run_in_thread</code>, the
+   <code>TaskExecutionContext</code> wrapper and <code>App.run_in_thread</code> — so a blocking call
+   gets exactly one hold no matter which one an app reaches for. It starts before
+   the executor dispatch, so it also covers time queued behind a saturated
+   <code>sdk-blocking-</code> pool, and it is released in a <code>finally</code>: an offload that
+   raises, and an activity cancelled mid-offload, must release their <em>own</em> token,
+   because a leaked unbounded hold vouches for the rest of the attempt and
+   silences the watchdog for good. Holds are keyed by token, so concurrent
+   offloads under one <code>asyncio.gather</code>, and an auto-hold nested inside an
+   author's declared <code>holding_progress</code>, never release each other.</p>
+<p>The label is <code>run_in_thread.&lt;callable qualname&gt;</code> — the offloaded callable's
+   own name, never an argument, so warn mode ranks <em>sites</em>
+   (<code>run_in_thread.Cursor.execute</code>, p99 40min, unbounded) instead of collapsing
+   an app's blocking work into one bucket, and no query, path or credential can
+   reach a log or metric label through this route.</p>
+<p><code>run_fault_isolated</code> — the SDK's other offload seam, and <code>run_best_effort</code>'s
+   mechanism — is held on the same grounds: an isolated call emits nothing at all
+   until the child returns, and the SDK's own default allowance for the upload
+   validation scan is 600s, well past any plausible no-progress budget. Its hold
+   is <strong>bounded by its own <code>timeout</code></strong> where <code>run_in_thread</code>'s is unbounded, and
+   that is not the derived bound rejected above: what is rejected is inferring an
+   allowance from the <em>callee's</em> per-operation kwargs, whereas
+   <code>run_fault_isolated(timeout=...)</code> is this function's own parameter, enforced
+   here as a wall-clock kill of the child — which is exactly what an allowance
+   means. <code>timeout=None</code> still yields an unbounded hold, matching its "wait
+   forever" semantics.
+3. <strong>Manual <code>context.heartbeat(...)</code> or <code>holding_progress(...)</code> (explicit, app
+   action).</strong> The residual: a custom async loop, or an opaque single <code>await</code>
+   against the connector's own source client (see the asymmetry below — this is
+   <em>not</em> a rare case). <code>context.heartbeat()</code> already exists and now also marks
+   progress (still carrying resume details for <code>get_last_heartbeat_details()</code>).</p>
+<p>The tracker reaches <code>run_in_thread</code> and <code>holding_progress</code> through a ContextVar set
+by <code>activities.py</code>. There is no such ContextVar today — the controller is passed
+into <code>TaskExecutionContext</code> — so this is new plumbing, and it must cover the
+module-level <code>run_in_thread</code> (implemented in <code>_runtime/offload.py</code> since
+<a href="../0019-runtime-substrate-layer/">ADR-0019</a>; <code>execution/heartbeat.py</code> when this
+was written), not only the <code>TaskExecutionContext</code> wrapper, since both are used.</p>
+<h3 id="holds-the-sdk-never-invents-a-duration">Holds: the SDK never invents a duration</h3>
+<p>One mechanism covers both blocking and async opaque work:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># async: the connector's own client</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">async</span> <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">holding_progress</span><span class="p">(</span><span class="s2">"snapshot metadata query"</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">1800</span><span class="p">):</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="n">long_single_query</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># blocking: the same wrapper around the offload</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="k">async</span> <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">holding_progress</span><span class="p">(</span><span class="s2">"full table scan"</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">7200</span><span class="p">):</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">rows</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">run_in_thread</span><span class="p">(</span><span class="n">cursor</span><span class="o">.</span><span class="n">execute</span><span class="p">,</span> <span class="n">sql</span><span class="p">)</span>
+</span></code></pre></div>
+<p>It lives on <code>TaskExecutionContext</code> next to <code>run_in_thread</code>, with the same
+<code>App</code>-level shorthand (<code>self.holding_progress(...)</code> /
+<code>self.task_context.holding_progress(...)</code>), and as a module-level
+<code>application_sdk.execution.progress.holding_progress</code> for app code that sits
+outside the app class. <code>timeout</code> is keyword-only and <strong>required</strong>: declaring
+nothing is spelled <code>timeout=None</code>, so an unbounded hold is a statement in the
+source rather than an omission, and no default can quietly reintroduce a
+derived duration.</p>
+<p>An earlier draft of this ADR proposed <em>deriving</em> the hold's bound from the
+<code>timeout=</code> kwarg the call already carries, on the theory that ADR-0010 already
+mandates that number and reusing it avoids inventing a new one. <strong>That is rejected</strong>,
+for two reasons:</p>
+<ol>
+<li><strong><code>timeout=</code> almost never means "wall-clock bound on this call."</strong> It is
+   per-operation: <code>requests</code>' read timeout bounds the gap between socket reads (a
+   streaming download legitimately runs for hours without exceeding it), <code>httpx</code>
+   is the same shape, DB <code>statement_timeout</code> is per <em>statement</em> (a call issuing
+   forty statements is bounded at forty times the limit), socket timeouts are per
+   recv. A successfully derived number is therefore systematically <em>smaller</em> than
+   the call's legitimate duration, so bracketing on it false-kills healthy work.</li>
+<li><strong>A derived bound is a total-duration guess wearing a disguise</strong> — the exact
+   knob this ADR exists to abolish, reintroduced for blocking calls.</li>
+</ol>
+<p>The dominant real shape makes it worse: <code>run_in_thread(cursor.execute, sql)</code> has
+no <code>timeout=</code> kwarg at all (the bound lives on the connection), so derivation
+fails and a fallback takes over. Any fallback tight enough to be useful as a
+watchdog — "a small multiple of the no-progress budget" — is <em>tighter than the
+status quo</em>, where the same call is bounded by the task's <code>start_to_close</code> of 2h or
+6h. Opt-in would then make legitimate long blocking work fail sooner than before,
+in precisely the apps most likely to opt in.</p>
+<p>(As a mechanical note, <code>blocking_timeout=</code> could not have been a <code>run_in_thread</code>
+kwarg anyway: <code>run_in_thread(func, *args, **kwargs)</code> forwards every kwarg to
+<code>func</code>, so the name would collide. The context manager sidesteps that too.)</p>
+<p>So there are exactly two honest paths at a call the SDK cannot see into, both
+explicit and both greppable:</p>
+<ul>
+<li>The author declares a real wall-clock allowance and <code>holding_progress</code> honours it.
+  Past it, the hold lapses, the watchdog resumes, and the stall fires
+  <code>max_no_progress_seconds</code> later. Effective kill time for a wedged call is
+  <code>timeout + budget</code> instead of 24h.</li>
+<li>The author declares nothing, the hold is unbounded, and the 24h backstop owns it —
+  an accepted residual, surfaced by the conformance rule rather than hidden.</li>
+</ul>
+<p>Opaque operations are the one place a duration bound is genuinely unavoidable,
+because there is nothing to observe from outside a blocked thread. The ADR's
+position is to say so, and to let a human state the number at the one site that
+knows it — never to let the SDK guess it.</p>
+<h3 id="choosing-the-allowance">Choosing the allowance</h3>
+<p>Asking an author for a number is only defensible if the question is answerable, so
+it has to be framed precisely. The allowance is <strong>not</strong> a prediction of how long the
+operation takes. It is <em>how long you would let this one operation run before you
+would rather it failed.</em> That is answerable at the call site in a way that "how long
+should this whole activity take?" never was, because it is a property of one
+operation against one resource rather than of a tenant's data volume.</p>
+<p>Two things make it safe to answer:</p>
+<ul>
+<li><strong>Warn mode gives you the evidence.</strong> Use the observed p99 for that site plus
+  headroom, rather than a number invented at the desk.</li>
+<li><strong>The error is asymmetric, so err generous.</strong> Too generous only delays detection
+  toward the backstop — mildly worse observability. Too tight kills a healthy run, and
+  because stall kills retry, a too-tight allowance burns the same wasted work up to
+  three times before failing. Anyone unsure should round up.</li>
+</ul>
+<h3 id="the-async-escape-hatch-and-the-asymmetry-that-makes-it-common">The async escape hatch — and the asymmetry that makes it common</h3>
+<p><strong>Q: "Making people use it <em>always</em> might become a problem."</strong> This is the most
+important open ergonomics question, and we should not pretend it away. There is a
+real asymmetry between the blocking and async paths:</p>
+<ul>
+<li><strong>Blocking source calls are auto-held.</strong> <code>run_in_thread</code> is a <em>mandatory seam</em> —
+  every blocking call already goes through it (ADR-0010), so the SDK holds for the
+  author with no extra code.</li>
+<li><strong>Async source calls have no equivalent mandatory seam.</strong> A connector connects
+  to its <em>own</em> source system with its <em>own</em> async client (an async SQLAlchemy
+  engine, an <code>httpx.AsyncClient</code>, a vendor SDK). <strong>The SDK's internal SQL/HTTP
+  clients are for the SDK's own purposes; they do not, and are not meant to, sit on
+  the connector→source path</strong> — so there is no SDK-owned wrapper we can transparently
+  instrument for that call. Auto-holding "the SDK clients" would cover almost none
+  of the real source I/O.</li>
+</ul>
+<p>Two things soften this, but neither eliminates it:</p>
+<ol>
+<li><strong>Interleaved streaming reads are already covered by the write side.</strong> The
+   common extraction shape — fetch a page, write a batch, repeat — marks progress
+   on every batch write, so the read loop is covered as long as one fetch+write
+   cycle stays under the budget. <code>holding_progress()</code> is <em>not</em> needed there.</li>
+<li>The residual is the genuinely <strong>opaque single async call</strong> — one large metadata
+   query, one slow list/export API call that returns everything at once. Those
+   emit nothing until they complete.</li>
+</ol>
+<p>So the honest expectation: <strong><code>holding_progress()</code> will very likely be needed in
+almost every connector</strong>, because almost every connector makes at least one such
+opaque async call against its source. It is a <em>standard part of writing a
+long-running async task</em>, not a rare escape hatch. We make that acceptable by (a)
+keeping it a one-line context manager, (b) documenting it as expected rather than
+exceptional, and (c) never asking anyone to find these by reading code — warn mode
+names the sites and sizes their allowances, and the conformance rule keeps them
+visible afterwards. A forgotten hold false-kills at the tail (see <em>Migration</em>), so
+for such calls it is <strong>required</strong>, not advisory.</p>
+<h2 id="bounding-total-time">Bounding total time</h2>
+<p>Removing the duration knob removes the only wall-clock bound the system has, and
+the ADR must say what replaces it — "nothing" is not an answer that survives an
+incident.</p>
+<p><strong>Retries multiply the backstop, and we are accepting that product as-is to start.</strong>
+The activity dispatch path (<code>_create_task_activity_wrapper</code> in <code>app/base.py</code>) passes only
+<code>start_to_close_timeout</code> and a retry policy — <strong>no <code>schedule_to_close</code></strong>. With the
+default <code>retry_max_attempts=3</code>, a 24h backstop is a <strong>72h worst case per activity,
+where today that product is 30 minutes.</strong> A <code>StartToClose</code> timeout is retryable in
+Temporal, so a wedge that survives to the ceiling three times really does consume the
+full 72h.</p>
+<p><strong>Decision: start there deliberately, rather than bounding it up front.</strong> The number
+looks alarming in isolation, and is defensible for three reasons:</p>
+<ol>
+<li><strong>Nobody is blind for 72h.</strong> From the first release the stall metric makes a wedge
+   visible within <code>max_no_progress_seconds</code> and alerts on it. The 72h is the outer
+   bound on <em>automatic</em> termination, not on <em>detection</em> — and it replaces a world where
+   a wedge is never diagnosed at all, only accidentally killed by a small ceiling.</li>
+<li><strong>The product collapses once an app enforces.</strong> An enforcing app's wedge is caught
+   at <code>max_no_progress_seconds</code> per attempt, so the worst case becomes 3 × minutes
+   rather than 3 × 24h — roughly 45 minutes at a 900s budget. The 72h is the warn-mode
+   worst case, and it shrinks by three orders of magnitude as apps enforce.</li>
+<li><strong>Bounding it now would be another guessed number.</strong> Picking a <code>schedule_to_close</code>
+   budget today means guessing a total duration — the exact move this ADR exists to
+   remove. The warn-mode data gives a real distribution to size it from, if it turns
+   out to need sizing at all.</li>
+</ol>
+<p>If the data shows the product matters, the fix is already scoped: set
+<code>schedule_to_close</code> as the real backstop and let <code>start_to_close</code> bound one attempt,
+following the budget-shaped pair the SDK already uses in <code>gate_timeouts</code>
+(<code>app/base.py:1902</code>), or cap attempts at 1 for backstop-class tasks.</p>
+<p><strong>Retries without checkpointing are expensive, but not uniquely so.</strong> Without
+REQ-1609 (activity-level checkpointing), a stall kill at hour 5 of a 6-hour extraction
+restarts from zero. The watchdog makes failure <em>faster to detect</em> without making it
+<em>cheaper to recover</em>. This is the main reason the tail-profile verification in <em>Rollout</em>
+is a gate rather than a suggestion.</p>
+<p>It is worth being precise about what checkpointing does and does not gate, though.
+Restarting from zero is what already happens on every <code>StartToClose</code> retry today, and
+it is also what happens when a human re-runs a failed workflow — so it is not a cost
+this ADR introduces, and it is not an argument for refusing to retry stalls (see
+<em>Failing the activity</em>). REQ-1609 makes both the existing and the new paths cheaper.
+That downgrades it from a correctness gate to an efficiency one.</p>
+<p><strong>A run with no duration bound anywhere still needs a duration signal.</strong> Once the
+AE layer drops its timeouts (below) and <code>start_to_close</code> is a 24h backstop, a run
+that wedges while dribbling small amounts of progress is effectively unbounded. The
+replacement for a duration <em>kill</em> is a duration <em>alert</em> — an SLA on run length in
+the observability stack — so "remove the timeouts" does not quietly become "nobody
+notices for a week."</p>
+<h2 id="the-automation-engine-layer">The Automation Engine layer</h2>
+<p>An earlier draft declared the AE-orchestrated DAG-node timeouts out of scope. That
+is wrong in effect: the failures operators actually report — a connector run killed
+at exactly 2h — come from <em>that</em> layer, not from <code>@task</code>. Scoping it out while the
+symptom lives there makes this ADR look like a fix for something it does not touch.</p>
+<p><strong>AE should hold no duration opinion at all.</strong> Connector DAG nodes are child-workflow
+invocations, not activities: <code>DAGNode.nodeType</code> defaults to <code>"workflow"</code>
+(<code>contract-toolkit/src/App.pkl:686</code>) because <code>renderNode</code> always emits
+<code>activity_name = "execute_workflow"</code>, and the toolkit <em>rejects</em>
+<code>heartbeatTimeoutSeconds</code> on workflow nodes (<code>App.pkl:716-720</code>) precisely because
+it is activity-only. Temporal requires no timeout on a workflow —
+<code>workflow_execution_timeout</code> and <code>workflow_run_timeout</code> both default to unlimited;
+only <code>workflow_task_timeout</code> has a mandatory default, and that bounds task dispatch,
+not run duration. So there is nothing structurally forcing a number, and the
+unguessability argument applies with full force one layer up.</p>
+<p>Three pieces of work follow, none of which are <code>@task</code> changes:</p>
+<ol>
+<li><strong>AE drops its default.</strong> The toolkit cannot fix this by omission: setting
+   <code>errorHandling = null</code> falls back to <em>AE's own source default of 2h</em>
+   (<code>App.pkl:706-714</code>) — the number the toolkit already raised to 1d/72h to work
+   around. AE has to stop applying a duration to workflow nodes.</li>
+<li><strong>The toolkit floors the override.</strong> <code>startToCloseTimeoutSeconds</code> is currently
+   <code>Int(isBetween(1, 864000))</code> (<code>App.pkl:740</code>) — a cap with no floor, which is how
+   an app ships 7200. Give it a floor so an app cannot tune <em>below</em> the generous
+   default.</li>
+<li><strong>A conformance rule makes it permanent.</strong> A rule that flags an app-level node
+   timeout below the floor runs across every connector repo in seconds, reports
+   through connector-pulse, and is a regression guard forever — rather than a
+   one-off sweep repeated by hand each time this resurfaces. The same rule carries
+   the <code>@task</code> side: opaque <code>run_in_thread</code> / source-await sites with no declared
+   hold (see <em>Holds</em>).</li>
+</ol>
+<p>With all three, the picture is consistent at every layer: <strong>no layer holds a
+duration opinion; the only watchdog is progress, inside the app; duration is an
+alert, not a kill.</strong></p>
+<h2 id="options-considered">Options Considered</h2>
+<h3 id="option-1-raise-the-start_to_close-default-to-24h-and-delete-per-task-tuning-rejected-as-is">Option 1: Raise the <code>start_to_close</code> default to 24h and delete per-task tuning (Rejected as-is)</h3>
+<p>The originating proposal: stop guessing durations by making the default enormous
+and removing the per-task constants.</p>
+<p><strong>Why rejected on its own:</strong> with today's unconditional keepalive and no stall
+watchdog, nothing kills a wedged-but-alive activity for 24h → worker-slot
+exhaustion and day-long non-detection (see Context). It also does not even fix the
+observed failures: the apps in the dashboard <em>already</em> override the default on
+every task, so bumping the default reaches none of them. This option is the
+<em>cosmetic half</em> of the real fix and is only safe once Option 3 is in place.</p>
+<h3 id="option-2-keep-guessing-tune-per-task-durations-harder-rejected">Option 2: Keep guessing, tune per-task durations harder (Rejected)</h3>
+<p>Continue the status quo — better per-task <code>timeout_seconds</code> guesses.</p>
+<p><strong>Cons:</strong> the number is fundamentally unguessable (scales with tenant/data); the
+dashboard shows thoughtful guesses still failing at the tail; FND-165 documents
+nine teams doing this independently without convergence. Unbounded tuning that
+never converges.</p>
+<h3 id="option-3-in-process-stall-watchdog-duration-backstop-chosen">Option 3: In-process stall watchdog + duration backstop (Chosen)</h3>
+<p>Keep the unconditional keepalive and <code>heartbeat_timeout</code> as-is; add a progress
+tracker and an in-process watchdog on its own budget; make <code>start_to_close</code> a
+backstop. Detailed above.</p>
+<p><strong>Pros:</strong>
+- Eliminates the unguessable knob; the surviving knobs don't scale with tenant size.
+- Kills wedged activities in minutes instead of a day → no slot exhaustion.
+- Crash/OOM reclaim stays at 60s.
+- No semantic change to an existing knob, so no "same field, new meaning"
+  migration and no coupled default bump.
+- The failure is a typed SDK error naming the last progress signal, not Temporal's
+  generic timeout string — which is also what makes the rollout measurable.
+- Streaming work and <code>run_in_thread</code> blocking work keep working with no code
+  changes; the residual shrinks to a small, conformance-auditable set.</p>
+<p><strong>Cons:</strong>
+- Cancelling the activity task from a sibling task technically violates asyncio's
+  cancellation protocol — the same trade-off, with the same rationale, that
+  <code>activities.py:259-291</code> already documents for the worker-shutdown path.
+- A CPU-bound wedge with no <code>await</code> cannot receive the cancellation (covered by
+  <code>heartbeat_timeout</code>, which is exactly why it is kept).
+- A wedged blocking thread is still not killable — the hold lapses, the slot is
+  reclaimed, the thread is orphaned. Unchanged from today; <code>run_fault_isolated</code> is
+  the only tool that kills.
+- Requires framework hooks at the right loops and an audit of opaque calls
+  (migration cost).</p>
+<h3 id="option-4-manual-heartbeating-only-rejected">Option 4: Manual heartbeating only (Rejected)</h3>
+<p>Disable auto-heartbeat; require <code>context.heartbeat()</code> everywhere. Rejected for the
+same reasons as ADR-0010 Option 3 — easy to forget, and it cannot heartbeat during
+a single long opaque call. The chosen option keeps the manual beat as one of three
+mechanisms but removes the tax on the common paths.</p>
+<h3 id="option-5-progress-gate-the-heartbeat-and-let-heartbeat_timeout-kill-rejected">Option 5: Progress-gate the heartbeat and let <code>heartbeat_timeout</code> kill (Rejected)</h3>
+<p>The most tempting variant, and the one an earlier draft of this ADR chose: send a
+beat only when the progress token advanced, redefine <code>heartbeat_timeout</code> as "max
+acceptable time making zero forward progress," and raise its default from 60s to
+300s in the same change.</p>
+<p>It does work mechanically. Temporal's Rust Core spawns local heartbeat and
+<code>start_to_close</code> timers per activity task specifically so that "activities can still
+get cleaned up even if the user isn't heartbeating"
+(<code>sdk-core/src/worker/activities.rs</code>), issuing a cancel with reason
+<code>ActivityCancelReason::TimedOut</code>. That behaviour is present across the SDK's
+declared <code>temporalio&gt;=1.25.0</code> floor (verified in 1.23 and 1.30), so withholding
+beats really does get the activity cancelled and the slot reclaimed — this is not
+the reason it is rejected.</p>
+<p><strong>Why rejected:</strong></p>
+<ul>
+<li><strong>It spends crash-recovery latency to buy the semantic merge.</strong> One knob must be
+  sized for the <em>slower</em> case, so raising it to 300s (or the 1800s some apps have
+  needed) is also raising the time an OOM-killed worker's activities sit
+  unreclaimed, from 60s to the whole budget. OOM is a leading failure mode for
+  these connectors.</li>
+<li><strong>It loads more weight onto the mechanism that is already the top failure.</strong>
+  Heartbeat timeout is the dominant production alert (Problem 2). Progress-gating
+  adds a second, independent way to trip the same timeout, and the resulting
+  failure is indistinguishable from the existing loop-starvation one — precisely
+  when CNCT-10 is trying to split timeout subtypes apart.</li>
+<li><strong>The kill produces a bare <code>CancelledError</code>.</strong> <code>activities.py:259</code> only
+  translates cancellation for worker shutdown, so a stall would surface with no
+  explanation, no last-progress context, and no way to measure the rollout.</li>
+<li><strong>The migration is riskier for no gain.</strong> Redefining a live knob's meaning forces
+  a coupled default bump, and apps that never touched <code>heartbeat_timeout</code> are the
+  <em>most</em> exposed rather than the least. An in-process watchdog on its own new knob
+  needs neither.</li>
+<li><strong>It silently changes what existing constraints mean.</strong> The toolkit caps
+  <code>heartbeatTimeoutSeconds</code> at 3600 and asserts <code>heartbeat &lt; startToClose</code>
+  (<code>App.pkl:742-748</code>); both were written against the current meaning.</li>
+</ul>
+<p>Under Option 3, Core's local timers remain a useful backstop-of-the-backstop for
+the case the in-process watchdog cannot cover (a starved loop), which is exactly
+the division of labour we want.</p>
+<h2 id="rationale">Rationale</h2>
+<h3 id="the-asymmetry-that-makes-the-inversion-work">The asymmetry that makes the inversion work</h3>
+<p><em>"How long should the whole thing take?"</em> is workload-specific and unbounded.
+<em>"How long is it acceptable to make zero forward progress?"</em> is roughly
+workload-independent — a few minutes for almost any connector. One sane global
+number can express the second; no global number can express the first. That
+asymmetry is the entire reason a large <code>start_to_close</code> default becomes safe once a
+stall watchdog exists.</p>
+<h3 id="failure-detection-is-preserved-or-improved-for-every-mode">Failure detection is preserved or improved for every mode</h3>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Before</th>
+<th>After</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Worker OOM-killed / node lost / partition</td>
+<td>killed at <code>heartbeat_timeout</code> (60s)</td>
+<td><strong>unchanged (60s)</strong> — keepalive stays unconditional</td>
+</tr>
+<tr>
+<td>Graceful pod eviction (SIGTERM)</td>
+<td><code>WorkerEvicted</code> → re-dispatched</td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td>Event loop fully blocked (no <code>run_in_thread</code>)</td>
+<td>auto-loop starved → killed at <code>heartbeat_timeout</code></td>
+<td>unchanged — still correct, still the only detector for this</td>
+</tr>
+<tr>
+<td>Streaming work, healthy</td>
+<td>beats unconditionally</td>
+<td>beats unconditionally; hooks mark progress</td>
+</tr>
+<tr>
+<td>Wedged-but-looping async (the gap today)</td>
+<td>only <code>start_to_close</code> (→ 24h under Option 1)</td>
+<td><strong><code>TaskStalledError</code> at <code>max_no_progress_seconds</code></strong></td>
+</tr>
+<tr>
+<td>Legit long opaque call, hold declared</td>
+<td>keepalive keeps it alive; bounded by <code>start_to_close</code></td>
+<td>hold vouches to the declared allowance; then stall fires</td>
+</tr>
+<tr>
+<td>Legit long opaque call, no hold declared</td>
+<td>bounded by <code>start_to_close</code></td>
+<td>unbounded hold → 24h backstop; flagged by conformance</td>
+</tr>
+<tr>
+<td>Wedged blocking call in <code>run_in_thread</code>, hold declared</td>
+<td>keepalive beats forever → only <code>start_to_close</code></td>
+<td>killed at <code>timeout + budget</code>; thread orphaned, slot reclaimed</td>
+</tr>
+<tr>
+<td><code>run_best_effort</code> child-process work (ADR-0017)</td>
+<td>parent awaits; keepalive beats</td>
+<td>parent's await is inside a hold</td>
+</tr>
+</tbody>
+</table>
+<h3 id="what-authors-tune-afterward">What authors tune afterward</h3>
+<table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Before</th>
+<th>After</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start_to_close</code></td>
+<td>the number everyone guesses wrong</td>
+<td>24h backstop, never tuned (with <code>schedule_to_close</code> bounding the retry product)</td>
+</tr>
+<tr>
+<td><code>heartbeat_timeout</code></td>
+<td>"how often do I beat"</td>
+<td><strong>unchanged</strong> — 60s, "nothing is beating"</td>
+</tr>
+<tr>
+<td><code>max_no_progress_seconds</code></td>
+<td>—</td>
+<td><strong>new</strong>: "max no-progress window", roughly app-independent</td>
+</tr>
+<tr>
+<td>opaque-operation allowance</td>
+<td>none / <code>start_to_close</code></td>
+<td>declared once, at the call site, in <code>holding_progress(timeout=…)</code></td>
+</tr>
+<tr>
+<td>AE node duration</td>
+<td>app-set, often <em>below</em> the toolkit default</td>
+<td>none (see <em>The Automation Engine layer</em>)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="migration-backward-compatibility-what-if-i-do-nothing">Migration &amp; backward compatibility — "what if I do nothing?"</h2>
+<p>The first question every consumer asks: <em>if I don't touch my code, what changes?</em></p>
+<p><strong>On upgrade you land in warn mode, and nothing fails differently.</strong> No activity is
+killed that wasn't before, <code>heartbeat_timeout</code> keeps its meaning and its 60s default,
+<code>start_to_close</code> keeps its 600s default, and there is no coupled default bump because
+no existing knob changes meaning. What you gain is a report about your own code. This
+is the main practical advantage over Option 5, which could not be defaulted on at all.</p>
+<p><strong>So there is no migration task on upgrade — only an eventual optimisation.</strong> An app
+does nothing, indefinitely, and stays correct: warn mode cannot fail an activity, and
+the pre-existing timeouts still apply. Declaring holds is work an app takes on when it
+wants the stronger guarantee (a wedge caught in minutes instead of at the backstop), at
+a time of its choosing, guided by its own report. Nothing about taking the SDK version
+requires touching connector code.</p>
+<p><strong>In enforce mode, whether unchanged code survives depends on its shape.</strong> For the
+last two rows, do-nothing code <em>will</em> hit stall kills, and that is the design working
+as intended — those paths emit nothing the SDK can see, i.e. a healthy-but-quiet task
+it cannot distinguish from a wedged one:</p>
+<table>
+<thead>
+<tr>
+<th>Existing code shape</th>
+<th>Warn mode</th>
+<th>Enforce mode</th>
+<th>Author action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Streaming through SDK batch writers / stats / <code>ObjectStore</code> transfer</td>
+<td>silent</td>
+<td>Covered — hooks mark progress</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Already calls <code>context.heartbeat()</code></td>
+<td>silent</td>
+<td>Covered — marks progress</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Opaque blocking call via <code>run_in_thread</code></td>
+<td>reported as a long unbounded hold</td>
+<td>Covered — unbounded auto-hold; backstop is the only bound</td>
+<td>declare an allowance to get a real bound</td>
+</tr>
+<tr>
+<td><strong>Custom async loop doing its own I/O, never through an instrumented SDK path</strong></td>
+<td>reported as a no-progress gap</td>
+<td><strong>False-killed</strong> if any gap &gt; budget</td>
+<td>add a beat or a hold</td>
+</tr>
+<tr>
+<td><strong>Opaque single <code>await</code> against the source (connector's own async client)</strong></td>
+<td>reported as a no-progress gap</td>
+<td><strong>False-killed</strong> at the tail</td>
+<td>wrap in <code>holding_progress()</code> — expected in ~every connector</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The <code>start_to_close</code> backstop lands <em>with</em> warn mode, not after it.</strong> This is a
+deliberate change of position and the one place this ADR accepts a real regression, so
+it deserves the argument in full.</p>
+<p>Coupling the backstop to <code>enforce</code> would mean warn mode delivers no relief at all:
+apps would still be killed at their guessed 2h/6h ceilings while the fleet gathers
+data, so every team keeps tuning numbers — precisely the loop FND-165 documents. The
+"no upgrade task" property would buy nobody anything.</p>
+<p>What coupling it to warn costs: today's small <code>start_to_close</code> is <em>accidentally</em> the
+only thing that kills a wedged activity. Raising it to 24h removes that accident, and
+warn mode cannot kill. So a wedge holds a worker slot until the backstop, and the
+containment is an alert on the stall metric plus a human, rather than an automatic
+kill. That is worse than today for a wedge, and better than today for every
+legitimate long run.</p>
+<p>Why it is an acceptable trade, and bounded:</p>
+<ul>
+<li>The exposure scales with the <strong>wedge rate</strong>, which is the exact unknown warn mode
+  exists to measure. If wedges turn out to be common, the data says so within days and
+  enforcement follows; if they are rare — the position argued in the RFC thread — the
+  exposure was never real.</li>
+<li>Detection does not regress even though containment does: a wedge is <em>visible</em> within
+  <code>max_no_progress_seconds</code> via the stall metric, where today nothing detects it at all
+  (it dies at <code>start_to_close</code> by luck, not by diagnosis).</li>
+<li>Slot exhaustion needs roughly a hundred concurrent wedges on one worker. That is a
+  function of the same rate, and the metric is the early warning.</li>
+</ul>
+<p>The alert on the stall metric is therefore <strong>not optional</strong> while the fleet is in warn
+— it is what stands in for the kill. The global default change and retiring the flag
+still come at the very end.</p>
+<p><strong>Flipping to <code>enforce</code> must be verified against a large-tenant / tail profile, not a
+smoke test.</strong> A small tenant's fast steps hide the very gaps that only open at the
+tail — the same tail that produced the original failures. Flipping on the strength of a
+small run would just relocate the tail failure, and because stall kills retry, an
+under-instrumented app would burn the same wasted work up to three times before failing.
+Warn mode is what makes this checkable rather than aspirational.</p>
+<h2 id="rollout">Rollout</h2>
+<ol>
+<li><strong>Fix the loop-starvation failures first.</strong> Heartbeat timeout is today's
+   dominant alert (Problem 2) and it is an ADR-0010 adoption gap, not a semantics
+   gap. Audit and fix the blocking-on-the-loop sites before adding a second
+   mechanism on top. This is sequencing, not scope creep: the warn-mode signal in
+   step 3 is unreadable while starvation dominates it.</li>
+<li><strong>Ship the framework <code>mark_progress()</code> hooks</strong> (writers, emission, transfer
+   loops) so the streaming majority is covered before anything observes anything.
+   Land CNCT-10's timeout-subtype classification alongside, so stall kills are
+   distinguishable from starvation kills in the fleet-wide numbers.</li>
+<li><strong>Ship <code>warn</code> as the default, together with the 24h <code>start_to_close</code> backstop — no
+   per-app step.</strong> Warn mode cannot fail an activity, so it needs no opt-in: on upgrade
+   every app starts producing its own work-list (no-progress gaps, long unbounded
+   holds) and contributing to the fleet-wide gap distribution that sets the
+   <code>max_no_progress_seconds</code> value. The backstop ships here because this is where the
+   relief is (see <em>Migration</em>), at the accepted 72h retry product (see <em>Bounding total
+   time</em>). One hard prerequisite of this step: <strong>the stall metric must be alertable</strong>,
+   since it stands in for the kill while nothing enforces. <code>off</code> ships alongside as an
+   env kill-switch.</li>
+</ol>
+<p>That prerequisite landed as FND-293, and it is three artifacts across two
+   repositories: the <code>AtlanAppTaskStalled</code> rule in
+   <a href="https://github.com/atlanhq/atlan-alerts/blob/main/alerting/rules/App-Platform/atlan-apps-task-stall-alerts.yaml"><code>atlanhq/atlan-alerts</code></a>,
+   the <a href="../../runbooks/stalled-task/">stalled-task runbook</a>, and the panels in
+   <code>docs/static/observability/task-stall-dashboard.json</code>. The threshold is
+   <em>seconds of silence accumulated per hour</em> rather than a count of gaps, because
+   that is the exposure this step accepts: silent attempt-time holding worker
+   slots. One permanently-silent attempt reaches it in about an hour; N concurrent
+   wedges reach it N times faster, so the page arrives soonest exactly when slot
+   exhaustion is the real risk. A <em>single</em> gap is deliberately not paged — that is
+   the warn-mode work-list, and paging it fleet-wide would manufacture the noise
+   this ADR exists to reduce. Because the alert and the panels live outside this
+   repository, the exported Prometheus contract is pinned by
+   <code>tests/unit/execution/test_progress_telemetry_exposition.py</code> so a rename here
+   cannot silently disable the containment.</p>
+<p>The step itself landed as FND-296. Two details of the shape are worth recording
+   because they are not obvious from the description above:</p>
+<ul>
+<li><strong>The flag carries a declaration, not a resolved mode.</strong> <code>TaskMetadata.progress_watchdog</code>
+     and the <code>TaskContext</code> field are <code>None</code> for a task that declares nothing, and the
+     activity worker resolves <code>None</code> against <code>ATLAN_PROGRESS_WATCHDOG</code> on its own side.
+     That is what makes <code>off</code> a kill-switch an operator can throw on a worker without
+     re-dispatching in-flight runs, and what makes a run dispatched by a workflow
+     predating the field land on the fleet default rather than on nothing. <code>off</code> in the
+     environment beats a per-task <code>enforce</code> for the same reason; the allowance
+     (<code>ATLAN_MAX_NO_PROGRESS_SECONDS</code>) deliberately has no such override, since an env
+     var that could silently shrink a declared allowance would be a fleet-wide
+     false-kill generator.</li>
+<li><strong><code>app/</code> cannot import <code>execution/</code> at module scope</strong> (<code>execution/__init__</code> →
+     <code>_temporal</code> → <code>app.registry</code> → <code>app.base</code> → <code>app.task</code>), so <code>app/task.py</code> reaches
+     <code>ProgressWatchdogMode</code> only inside the validation path that an explicit declaration
+     triggers. This is why the enum stays where <a href="../0019-runtime-substrate-layer/">ADR-0019</a>
+     put it and the default resolution lives in <code>execution/progress.py</code> rather than
+     beside the other <code>@task</code> env defaults.</li>
+<li><strong>Ship the conformance rule and the toolkit floor.</strong> Both are independent of the
+   <code>@task</code> work and both deliver immediately: the floor stops the next app shipping
+   a 2h node timeout, and the rule keeps un-held opaque sites visible once teams
+   start working through their reports. Pair with the AE ask to drop its own
+   default.</li>
+<li><strong>Read the fleet data before committing to <code>enforce</code> at all.</strong> If long stalls
+   turn out to be rare, that is an argument for a generous budget — or for leaving
+   the fleet in warn and taking only the AE/backstop half of this ADR. Deciding this
+   from measurement rather than from either side's recollection is the point of
+   getting warn out early.</li>
+<li><strong>Flip per-app to <code>enforce</code> when that app wants the guarantee</strong> — its remaining
+   gaps inside declared holds or under budget, verified against a <strong>large-tenant /
+   tail profile</strong>, not a smoke test. The flag is <code>progress_watchdog</code> on <code>@task</code> /
+   <code>TaskMetadata</code>.</li>
+<li><strong>Retire the flag and the per-task duration constants</strong> once enforcement is
+   universal (or once the warn data justifies enforcing fleet-wide with a generous
+   budget, which may make step 6 a formality rather than twenty separate flips).</li>
+</ul>
+<p>Per the "delete v3-prep workarounds" discipline, the flag is temporary and its
+removal is part of the work, not a follow-up.</p>
+<h2 id="consequences">Consequences</h2>
+<p><strong>Positive:</strong>
+- App authors stop guessing an unguessable duration; <code>start_to_close</code> becomes a
+  set-and-forget backstop, at both the <code>@task</code> and AE layers.
+- Wedged-but-alive activities are <em>detected</em> in minutes fleet-wide from the first
+  release, and <em>killed</em> in minutes wherever an app enforces.
+- Crash/OOM detection latency is unchanged, and no existing knob changes meaning.
+- Relief arrives on upgrade rather than after a per-app migration: the backstop lands
+  with warn mode, so legitimately long runs stop dying at a guessed ceiling
+  immediately.
+- Stalls surface as a typed error naming the last progress signal, which is both
+  better for the operator and what makes the rollout measurable.
+- The per-app migration is mechanical rather than manual, and it is not on the
+  upgrade path at all: warn mode ships on by default, produces the work-list and the
+  evidence for each allowance, and declaring holds becomes an optimisation an app
+  takes on when it wants the stronger guarantee.
+- Whether long stalls actually happen becomes a measured question rather than an
+  argued one, fleet-wide, before anything can be killed for it.
+- Streaming connectors get correct behavior with no code changes.
+- Change is localized to <code>execution/heartbeat.py</code> (tracker + loop + hold plumbing;
+  the tracker and the offload holds since moved to <code>_runtime/</code> — <a href="../0019-runtime-substrate-layer/">ADR-0019</a>),
+  the <code>activities.py</code> wiring and cancellation branch, one new error leaf, and
+  one-line <code>mark_progress()</code> calls in existing SDK write/transfer loops.</p>
+<p><strong>Negative:</strong>
+- <strong>Wedge containment regresses while the fleet is in warn.</strong> Today's small
+  <code>start_to_close</code> is accidentally the only thing that kills a wedged activity;
+  raising it to a backstop replaces that automatic kill with an alert and a human
+  until an app enforces. Accepted deliberately, bounded by measurement — see
+  <em>Migration</em>. It makes the stall-metric alert mandatory, not optional, and it
+  buys containment at the cost of latency: a wedge is <em>visible</em> one budget in and
+  <em>paged</em> about an hour in (<code>AtlanAppTaskStalled</code>, see <em>Rollout</em> step 3), against
+  a 24h backstop. Two residuals survive that alert and are stated in the runbook
+  rather than hidden: a wedge inside an <strong>unbounded hold</strong> emits no gap at all
+  (the hold is vouching for it, by design), and a split-deployment worker with no
+  Pushgateway configured emits nothing the alert can read.
+- Opaque single-operation calls need a declared hold to get the stronger guarantee,
+  and <code>holding_progress()</code> is expected in nearly every connector rather than being a
+  rare escape hatch — though this is now optional work an app schedules for itself,
+  not a migration gate.
+- A third timeout-ish knob exists (<code>max_no_progress_seconds</code>), and the docs must be
+  clear that it is <em>not</em> the beat interval and <em>not</em> a duration budget.
+- Cancelling the activity task from the watchdog carries the documented asyncio
+  protocol caveat.
+- Stall kills retry, so a false kill in an under-instrumented app repeats the same
+  wasted work up to three times before failing. Warn mode exists to clear that
+  category before an app enforces.
+- During rollout the flag adds a temporary branch that must be removed.</p>
+<h2 id="decisions-taken">Decisions taken</h2>
+<p>Two positions carried the review, and everything else in this ADR follows from them.</p>
+<ol>
+<li><strong>We start with a 24h attempt and the existing 3-attempt retry policy — a 72h
+   worst case per activity, where today it is 30 minutes.</strong> Detection stays in minutes
+   via the stall metric, the product collapses to a single attempt wherever an app
+   enforces, and bounding it up front would mean guessing a total duration (see
+   <em>Bounding total time</em>).</li>
+<li><strong>We remove connector time-bounds from AE entirely</strong> — no execution or run timeout
+   on connector DAG nodes, which are child-workflow invocations that Temporal requires
+   no timeout for. Duration becomes an alert, not a kill. The toolkit floor and the
+   conformance rule exist to stop the bound creeping back in per-app (see <em>The
+   Automation Engine layer</em>). This one needs a cross-team owner to land.</li>
+</ol>
+<p>REQ-1609 (checkpointing) is no longer framed as a gate on either of these. Retrying
+from zero is what already happens on every <code>StartToClose</code> retry and on every manual
+re-run, so checkpointing makes the existing and the new paths cheaper without deciding
+whether the new path is correct (see <em>Bounding total time</em>).</p>
+<p>Parameters set by measurement, recorded here so nobody tries to settle them by
+argument:</p>
+<ul>
+<li><strong><code>max_no_progress_seconds</code>.</strong> Starts at <strong>900s</strong> (300s was an earlier proposal;
+  FND-165's evidence of apps needing 1800s under the <em>easier</em> unconditional regime
+  argues for something larger, and a too-tight value is a false-kill generator at the
+  tail). The warn-mode gap distribution sets the final value before anything enforces.</li>
+<li><strong>Per-site hold allowances.</strong> Set from each site's observed p99 — see <em>Choosing the
+  allowance</em>.</li>
+<li><strong>Whether long stalls occur at all</strong>, and therefore whether fleet-wide enforcement
+  is warranted or a generous budget suffices.</li>
+</ul>
+<h2 id="related">Related</h2>
+<ul>
+<li><strong>ADR-0010</strong> — Async-First Design and Blocking Code Pitfalls (blocking code owns
+  its timeout; <code>run_in_thread</code> keeps the loop responsive). This ADR builds directly
+  on it, and <em>Holds</em> explains why ADR-0010's per-operation timeout cannot be reused
+  as a wall-clock bound.</li>
+<li><strong>ADR-0017</strong> — Native Execution Isolation (<code>run_best_effort</code> / <code>run_fault_isolated</code>).</li>
+<li><strong>REQ-1609</strong> — Activity-level checkpointing. Governs how expensive a retry is —
+  including, but not only, a stall kill's retry. An efficiency dependency, not a
+  correctness one.</li>
+<li><strong>CNCT-10</strong> — Timeout-error subtype classification. The measurement dependency.</li>
+<li><strong>FND-165</strong> — The production evidence for both failure modes.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      App Framework Team © 2025
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/atlanhq/application-sdk" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.top", "navigation.tracking", "navigation.path"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

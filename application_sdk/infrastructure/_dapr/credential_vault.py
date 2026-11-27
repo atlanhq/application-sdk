@@ -14,7 +14,7 @@ import orjson
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation
-from application_sdk.common._env import env_str
+from application_sdk._env import dapr_components_path
 from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreachableError is a re-export kept for importers of this module (shipped surface)
     ColdStartRaceError,
     DaprSidecarUnreachableError,
@@ -148,7 +148,7 @@ class DaprCredentialVault:
                 is_binding_configured,
             )
 
-            components_dir = Path(env_str("DAPR_COMPONENTS_PATH", "./components"))
+            components_dir = Path(dapr_components_path())
             upstream_configured = is_binding_configured(
                 UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
             )

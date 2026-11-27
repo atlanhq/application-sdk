@@ -1,6 +1,7 @@
 """Unit tests for env-var loaders in :mod:`application_sdk.constants`."""
 
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -646,3 +647,39 @@ class TestDeprecatedApplicationMode:
     def test_unknown_name_still_raises_attribute_error(self):
         with pytest.raises(AttributeError):
             constants.NOT_A_CONSTANT  # noqa: B018 — the access is the test
+
+
+def test_import_does_not_load_dotenv(tmp_path: Path) -> None:
+    """Importing ``constants`` reads the environment and nothing else: a
+    ``./.env`` in the working directory is not loaded (FND-4265)."""
+    (tmp_path / ".env").write_text("FND_4265_DOTENV_SENTINEL=loaded\n")
+    script = (
+        "import os, sys\n"
+        "import application_sdk.constants\n"
+        "print(os.environ.get('FND_4265_DOTENV_SENTINEL', 'unset'))\n"
+        "print('dotenv' in sys.modules)\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        },
+        timeout=120,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.split() == ["unset", "False"]
+
+
+def test_deployment_name_identity_default_is_local_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``DEPLOYMENT_NAME``'s default is the one ``_env.deployment_name`` reads."""
+    from application_sdk import _env
+
+    monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+    assert _env.deployment_name() == constants.LOCAL_ENVIRONMENT == "local"
