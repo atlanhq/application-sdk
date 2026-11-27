@@ -872,6 +872,146 @@ class TestFailureMessageIsRedactedAtTheActivityBoundary:
         assert "pw@" not in app_err.details[0].message
 
 
+class _ChainWrapperError(Exception):
+    """The middle link: a wrapper whose own text is harmless."""
+
+
+def _secret_bearing_chain() -> BaseException:
+    """A cause chain whose secret sits two links down, as a driver error would."""
+    wrapper = _ChainWrapperError("source call failed")
+    wrapper.__cause__ = RuntimeError("connect postgres://svc:hunter2@db/x?token=abc123")
+    return wrapper
+
+
+class TestEveryTranslatingBranchRedactsTheCauseChain:
+    """FND-5481: every branch that translates a failure chains the redacted mirror.
+
+    The activity wrapper translates five kinds of failure into an
+    ``ApplicationError``: a stall kill, a worker eviction, an ``AppError``, an
+    escaped ``RecordSkipped`` and a read-only ``OSError``. Each must raise
+    ``from _redacted_cause_chain(e)``. ``from e`` hands Temporal the raw chain,
+    and its failure converter writes every link's text into workflow history
+    verbatim. The redaction primitive is tested on its own in
+    :class:`TestRedactedCauseChain`; this pins the wiring on each branch, by
+    serialising the raised failure exactly as the worker would.
+    """
+
+    @staticmethod
+    async def _run_branch(branch: str) -> BaseException:
+        import asyncio
+        import contextlib
+        import errno
+
+        from application_sdk.execution import shutdown as shutdown_module
+        from application_sdk.execution.errors import ApplicationError
+        from application_sdk.execution.progress import ProgressWatchdogMode
+        from application_sdk.outputs import BlankIdentity
+        from application_sdk.storage.errors import StorageError
+
+        def _raise_for_branch() -> None:
+            if branch == "app_error":
+                raise StorageError("upload failed") from _secret_bearing_chain()
+            if branch == "record_skipped":
+                raise BlankIdentity(
+                    {"id": "t1"}, record_id="t1", entity_type="Table"
+                ) from _secret_bearing_chain()
+            if branch == "unwritable_oserror":
+                raise OSError(
+                    errno.EROFS, "Read-only file system", "artifacts"
+                ) from _secret_bearing_chain()
+            # stall and eviction: a cancellation carrying the chain, as when
+            # cleanup code re-raises the cancel from the error it was handling.
+            raise asyncio.CancelledError() from _secret_bearing_chain()
+
+        class _ChainApp(App):
+            @task(timeout_seconds=60)
+            async def crawl(self, input: _AfnIn) -> _AfnOut:
+                if branch == "stall":
+                    try:
+                        # The watchdog below cancels this wait.
+                        await asyncio.sleep(3600)
+                    except asyncio.CancelledError:
+                        _raise_for_branch()
+                _raise_for_branch()
+                return _AfnOut()
+
+            async def run(self, input: _AfnIn) -> _AfnOut:
+                return await self.crawl(input)
+
+        async def _stalling_watchdog(*, on_stall, **_kwargs) -> None:  # type: ignore[no-untyped-def]
+            on_stall(120.0, "")
+
+        app_slug = "_chain-app"
+        tasks = TaskRegistry.get_instance().get_tasks_for_app(app_slug)
+        activity_fn = create_activity_from_task(
+            next(t for t in tasks if t.name == "crawl")
+        )
+        stall = branch == "stall"
+        ctx = TaskContext(
+            app_name=app_slug,
+            task_name="crawl",
+            run_id="run-1",
+            heartbeat_timeout_seconds=60 if stall else None,
+            auto_heartbeat_seconds=10 if stall else None,
+            progress_watchdog=ProgressWatchdogMode.ENFORCE if stall else None,
+        )
+        shutdown_module.reset_worker_shutting_down()
+        if branch == "eviction":
+            shutdown_module.mark_worker_shutting_down()
+        try:
+            with (
+                mock.patch.object(
+                    activities_module.activity,
+                    "info",
+                    return_value=mock.MagicMock(workflow_id="wf-chain"),
+                ),
+                mock.patch(
+                    "application_sdk.infrastructure.context.get_infrastructure",
+                    return_value=None,
+                ),
+                (
+                    mock.patch(
+                        "application_sdk.execution.heartbeat.auto_heartbeat_loop",
+                        new=_stalling_watchdog,
+                    )
+                    if stall
+                    else contextlib.nullcontext()
+                ),
+                pytest.raises(ApplicationError) as exc_info,
+            ):
+                await activity_fn(ctx, _AfnIn(name="x"))
+        finally:
+            shutdown_module.reset_worker_shutting_down()
+        return exc_info.value
+
+    @pytest.mark.parametrize(
+        ("branch", "wire_type"),
+        [
+            ("stall", "TaskStalledError"),
+            ("eviction", "WorkerEvicted"),
+            ("app_error", "StorageError"),
+            ("record_skipped", "InternalError"),
+            ("unwritable_oserror", "LocalVolumeUnwritableError"),
+        ],
+    )
+    async def test_no_link_of_the_serialised_failure_carries_the_secret(
+        self, branch: str, wire_type: str
+    ) -> None:
+        app_err = await self._run_branch(branch)
+        # The branch under test is the one that fired.
+        assert getattr(app_err, "type", None) == wire_type
+
+        text = TestFailureMessageIsRedactedAtTheActivityBoundary._history_text(app_err)
+
+        assert "hunter2" not in text
+        assert "abc123" not in text
+        # Non-vacuous: the converter walked down to the secret's link, and kept
+        # Temporal's shape there, so the secret's absence is the redaction's.
+        assert 'type: "_ChainWrapperError"' in text
+        assert 'type: "RuntimeError"' in text
+        assert "connect postgres://" in text
+
+
 class TestRedactedCauseChain:
     """``_redacted_cause_chain`` mirrors a chain the way Temporal walks it."""
 
