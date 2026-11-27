@@ -240,6 +240,29 @@ def test_main_passes_when_every_step_passes(
     for node in gate.DESELECT:
         assert pytest_argv[pytest_argv.index(f"tests/{node}") - 1] == "--deselect"
     assert not pytest_cwd.is_relative_to(gate.REPO_ROOT)
+    overrides = gate.ini_overrides()
+    start = pytest_argv.index("-o")
+    assert pytest_argv[start : start + len(overrides)] == overrides
+
+
+def test_ini_overrides_read_the_package_pyproject(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        "[tool.pytest.ini_options]\n"
+        'asyncio_mode = "strict"\n'
+        'asyncio_default_fixture_loop_scope = "module"\n'
+    )
+    assert gate.ini_overrides(pyproject) == [
+        "-o", "asyncio_mode=strict",
+        "-o", "asyncio_default_fixture_loop_scope=module",
+    ]  # fmt: skip
+
+
+def test_ini_overrides_cover_the_real_package_config() -> None:
+    assert gate.ini_overrides() == [
+        "-o", "asyncio_mode=auto",
+        "-o", "asyncio_default_fixture_loop_scope=function",
+    ]  # fmt: skip
 
 
 def test_main_fails_and_skips_slice_when_smoke_fails(

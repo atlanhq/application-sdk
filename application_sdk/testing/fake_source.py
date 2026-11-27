@@ -641,9 +641,10 @@ class HttpFakeSource:
                 # False) so a TCP peer that never speaks TLS cannot stall
                 # serve_forever, and therefore stop(), inside accept(). TLS 1.2
                 # is the floor: a test fake has no reason to speak 1.0/1.1, and
-                # leaving them enabled trips CodeQL py/insecure-protocol.
+                # leaving them enabled trips CodeQL py/insecure-protocol. Set it
+                # through minimum_version only: ssl.OP_NO_TLS* is deprecated, and
+                # the suite fails a DeprecationWarning raised from SDK code.
                 tls = self.ssl_context
-                tls.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
                 if tls.minimum_version < ssl.TLSVersion.TLSv1_2:
                     tls.minimum_version = ssl.TLSVersion.TLSv1_2
                 server.socket = tls.wrap_socket(  # codeql[py/insecure-protocol]

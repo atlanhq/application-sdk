@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Sequence
 
@@ -84,6 +85,19 @@ SLICE = (
 DESELECT = (
     "test_deprecations_manifest.py::test_committed_manifest_matches_fresh_scan",
 )
+
+
+#: ``[tool.pytest.ini_options]`` keys the slice must run under. The copied tests
+#: have no config file beside them, so each reaches pytest as ``-o key=value``,
+#: read from the package's pyproject so the gate cannot drift from the PR job.
+#: ``asyncio_default_fixture_loop_scope`` unset is a PytestDeprecationWarning at
+#: configure time, which aborts any ``-W error::DeprecationWarning`` run (FND-5474).
+INI_KEYS = ("asyncio_mode", "asyncio_default_fixture_loop_scope")
+
+
+def ini_overrides(pyproject: Path = PACKAGE_DIR / "pyproject.toml") -> list[str]:
+    ini = tomllib.loads(pyproject.read_text())["tool"]["pytest"]["ini_options"]
+    return [arg for key in INI_KEYS for arg in ("-o", f"{key}={ini[key]}")]
 
 
 def _run(argv: Sequence[str], cwd: Path) -> None:
@@ -161,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = subprocess.run(
             [
                 str(python), "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                "-o", "asyncio_mode=auto",
+                *ini_overrides(),
                 *(arg for node in DESELECT for arg in ("--deselect", f"tests/{node}")),
                 *(f"tests/{name}" for name in SLICE),
             ],
