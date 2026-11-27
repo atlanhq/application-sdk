@@ -1765,7 +1765,7 @@ jobs:
           version: "0.13.9"
           enable-cache: true
 
-      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@sachipatankar/fnd-5377
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}

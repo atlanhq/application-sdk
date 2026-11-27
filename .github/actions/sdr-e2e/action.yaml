@@ -739,7 +739,7 @@ runs:
     # Everything reaches the shell through env:, nothing through `${{ }}` inside
     # run:, per docs/standards/ci.md.
     - name: Verify workflow-setup routes resolve
-      if: false
+      if: inputs.expected-app-version != ''
       shell: bash
       env:
         SDR_E2E_ROOT: ${{ github.action_path }}
