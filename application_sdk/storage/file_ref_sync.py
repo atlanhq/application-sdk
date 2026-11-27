@@ -65,6 +65,7 @@ from application_sdk.storage._local_marker import (
     read_local_marker,
     trusted_digest,
 )
+from application_sdk.storage.reference import _write_local_sidecar
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -211,10 +212,6 @@ async def _rehash_matches_marker(local_path: str) -> bool:
     hand-off on this pod trusts it without hashing — this is also how a
     digest-only marker from an older SDK gets upgraded.
     """
-    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _write_local_sidecar,
-    )
-
     try:
         marker = await run_in_thread(read_local_marker, local_path)
         if marker is None:

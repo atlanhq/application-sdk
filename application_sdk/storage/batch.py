@@ -52,6 +52,7 @@ from application_sdk.common._listing import (
 from application_sdk.common.atomic import atomic_write
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._concurrency import _run_bounded, _run_drained
+from application_sdk.storage.errors import StorageConfigError
 
 # Sidecar naming is owned by ``storage.integrity`` — the module that also reads
 # and writes them. Re-exported here (``batch.SIDECAR_SUFFIX`` /
@@ -808,10 +809,6 @@ def _reject_internal_keys(root: Path, destinations: list[str]) -> None:
     walker skips those directories, so it would then vanish from uploads and
     reads too. Silently skipping it would be the same loss, so the sync fails.
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageConfigError,
-    )
-
     for dest in destinations:
         rel = _sync_relpath(root, dest)
         if rel is not None and has_internal_component(rel):
@@ -948,10 +945,6 @@ async def upload_prefix(
     if normalize and prefix:
         prefix = normalize_key(prefix)
     if prune and not prefix.strip("/"):
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageConfigError,
-        )
-
         raise StorageConfigError(
             "upload_prefix(prune=True) needs a non-empty prefix; an empty one "
             "would delete every key in the store that this call did not upload."

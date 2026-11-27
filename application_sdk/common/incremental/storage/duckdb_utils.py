@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 from application_sdk._runtime.offload import current_cancel_handle
+from application_sdk.common.incremental.incremental_errors import (
+    DuckDbConnectionClosedError,
+)
 from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
     DUCKDB_DEFAULT_MEMORY_LIMIT,
@@ -246,10 +249,6 @@ class DuckDBConnectionManager:
     def connection(self) -> DuckDBPyConnection:
         """Get the underlying DuckDB connection."""
         if self._is_closed:
-            from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-                DuckDbConnectionClosedError,
-            )
-
             raise DuckDbConnectionClosedError()
         return self._connection
 

@@ -74,12 +74,20 @@ from obstore.exceptions import (  # noqa: F401 — importable from here in past 
 from obstore.store import ObjectStore
 
 from application_sdk import _deprecation
+from application_sdk._obstore_config import (
+    AzureStoreSettings,
+    GCSStoreSettings,
+    build_azure_store,
+    build_gcs_store,
+    endpoint_is_aws,
+)
 from application_sdk.storage._classify import (  # noqa: F401 — _DENIED_* importable from here in past releases
     _DENIED_ERROR_STATUS,
     _DENIED_STATUSES,
 )
 from application_sdk.storage._classify import denied_evidence as _denied_evidence
 from application_sdk.storage.batch import DataObject, _download_listed, _upload_tree
+from application_sdk.storage.binding import _with_gcs_adc_provider
 from application_sdk.storage.errors import (
     StorageAuthError,
     StorageConfigError,
@@ -774,8 +782,6 @@ def _needs_region_lookup(extra: dict[str, Any]) -> bool:
     still does, since S3 needs the bucket's own region to sign for it. The
     ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT`` env vars skip the lookup as before.
     """
-    from application_sdk._obstore_config import endpoint_is_aws  # noqa: PLC0415
-
     return not extra.get("region") and not (
         not endpoint_is_aws((extra.get("endpoint") or "").strip())
         or os.environ.get("AWS_ENDPOINT_URL")
@@ -993,11 +999,6 @@ def _create_gcs_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create a GCS store from credentials."""
-    from application_sdk._obstore_config import (  # noqa: PLC0415
-        GCSStoreSettings,
-        build_gcs_store,
-    )
-
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
         raise StorageConfigError("GCS bucket is required (extra.gcs_bucket)")
@@ -1005,10 +1006,6 @@ def _create_gcs_store(
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"X-Goog-Storage-Class": storage_class} if storage_class else None
-    )
-
-    from application_sdk.storage.binding import (  # noqa: PLC0415
-        _with_gcs_adc_provider,
     )
 
     # No key: Application Default Credentials, with the google-auth provider
@@ -1023,11 +1020,6 @@ def _create_azure_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an Azure (ADLS) store from credentials."""
-    from application_sdk._obstore_config import (  # noqa: PLC0415
-        AzureStoreSettings,
-        build_azure_store,
-    )
-
     storage_account = extra.get("storage_account_name", "")
     container = extra.get("adls_container", "objectstore")
     if not storage_account:

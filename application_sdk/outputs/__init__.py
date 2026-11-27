@@ -27,10 +27,15 @@ Architecture:
       on the activity result.
 """
 
-import contextvars
-
 from application_sdk import _deprecation
-from application_sdk.outputs.collector import OutputCollector
+
+# ``current_outputs`` and ``get_outputs`` live in ``collector`` so the
+# submodules below can import them without importing this package (FND-4260).
+from application_sdk.outputs.collector import (
+    OutputCollector,
+    current_outputs,
+    get_outputs,
+)
 from application_sdk.outputs.fetch_failures import (
     FetchFailureReason,
     record_fetch_failure,
@@ -46,34 +51,6 @@ from application_sdk.outputs.skipped import (
     UnsupportedType,
     skip_record,
 )
-
-current_outputs: contextvars.ContextVar[OutputCollector | None] = (
-    contextvars.ContextVar("workflow_outputs", default=None)
-)
-
-
-def get_outputs() -> OutputCollector:
-    """Get the output collector for the current execution context.
-
-    Call add_metric() / add_artifact() on the returned collector.
-    The SDK interceptor handles everything else automatically.
-
-    Returns:
-        OutputCollector: The collector for the current activity or workflow.
-            Creates a new collector if one doesn't exist for this context.
-
-    Example:
-        >>> from application_sdk.outputs import get_outputs, Metric, Artifact
-        >>> outputs = get_outputs()
-        >>> outputs.add_metric(Metric(name="tables-extracted", value=150))
-        >>> outputs.add_artifact(Artifact(name="debug-logs", path="artifacts/debug.tgz"))
-    """
-    collector = current_outputs.get()
-    if collector is None:
-        collector = OutputCollector()
-        current_outputs.set(collector)
-    return collector
-
 
 #: name -> (replacement, why), served by ``__getattr__`` below (PEP 562).
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {

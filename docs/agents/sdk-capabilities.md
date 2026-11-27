@@ -8105,7 +8105,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Import:** `from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION`
 - **Signature:** `SIZING_SCHEMA_VERSION`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/observability/sizing.py`
+- **Defined in:** `application_sdk/observability/sizing_sink.py`
 
 #### `THREAD_NAME`
 
@@ -8268,9 +8268,10 @@ Output collectors and record models for Automation Engine
 #### `get_outputs`
 
 - **Import:** `from application_sdk.outputs import get_outputs`
-- **Signature:** `get_outputs() -> OutputCollector`
+- **Also importable from:** `application_sdk.outputs.collector`
+- **Signature:** `get_outputs()`
 - **Summary:** Get the output collector for the current execution context.
-- **Defined in:** `application_sdk/outputs/__init__.py`
+- **Defined in:** `application_sdk/outputs/collector.py`
 
 #### `merge_run_log`
 
@@ -8343,9 +8344,10 @@ Output collectors and record models for Automation Engine
 #### `current_outputs`
 
 - **Import:** `from application_sdk.outputs import current_outputs`
+- **Also importable from:** `application_sdk.outputs.collector`
 - **Signature:** `current_outputs: contextvars.ContextVar[OutputCollector | None]`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/outputs/__init__.py`
+- **Defined in:** `application_sdk/outputs/collector.py`
 
 #### `current_skipped_records`
 

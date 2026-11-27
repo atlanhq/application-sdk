@@ -27,6 +27,15 @@ from application_sdk.storage.formats import (
     Writer,
     _close_batch_source,
 )
+from application_sdk.storage.formats.format_errors import (
+    FormatPathRequiredError,
+    FormatReadError,
+    ReaderClosedError,
+    ReplacePrefixEmptyError,
+    SingleFilePathWithFileNamesError,
+    TempFolderPathMissingError,
+    UnsupportedDataframeTypeError,
+)
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
     _download_files,
@@ -236,10 +245,6 @@ class ParquetFileReader(Reader):
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(PARQUET_FILE_EXTENSION) and file_names:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                SingleFilePathWithFileNamesError,
-            )
-
             raise SingleFilePathWithFileNamesError(path=path)
 
         # Initialise the Reader base class so `_is_closed` and
@@ -274,19 +279,11 @@ class ParquetFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                ReaderClosedError,
-            )
-
             raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         else:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                UnsupportedDataframeTypeError,
-            )
-
             raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     def read_batches(
@@ -308,19 +305,11 @@ class ParquetFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                ReaderClosedError,
-            )
-
             raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         else:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                UnsupportedDataframeTypeError,
-            )
-
             raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _get_dataframe(self) -> "pd.DataFrame":
@@ -395,10 +384,6 @@ class ParquetFileReader(Reader):
             raise
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatReadError,
-            )
-
             raise FormatReadError(cause=e) from e
 
     async def _get_batched_dataframe(
@@ -483,10 +468,6 @@ class ParquetFileReader(Reader):
             raise
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatReadError,
-            )
-
             raise FormatReadError(cause=e) from e
 
 
@@ -630,10 +611,6 @@ class ParquetFileWriter(Writer):
             self.chunk_count = self.chunk_start + self.chunk_count
 
         if not self.path:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatPathRequiredError,
-            )
-
             raise FormatPathRequiredError()
         # Create output directory. When typename is set, behaviour matches
         # main exactly (`<path>/<typename>/`). When typename is absent AND
@@ -655,10 +632,6 @@ class ParquetFileWriter(Writer):
 
         normalized_prefix = normalize_key(self.path)
         if not normalized_prefix:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                ReplacePrefixEmptyError,
-            )
-
             raise ReplacePrefixEmptyError()
 
         try:
@@ -833,10 +806,6 @@ class ParquetFileWriter(Writer):
     async def _write_chunk_to_temp_folder(self, chunk: "pd.DataFrame"):
         """Write a chunk to the current temp folder."""
         if self.current_temp_folder_path is None:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                TempFolderPathMissingError,
-            )
-
             raise TempFolderPathMissingError()
 
         # Generate file name for this chunk within the temp folder

@@ -15,6 +15,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import duckdb
+from application_sdk.common.incremental.incremental_errors import (
+    ColumnBatchInputError,
+    JsonScanError,
+)
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
@@ -47,10 +51,6 @@ def get_backfill_tables(
     if not previous_current_state_dir or not previous_current_state_dir.exists():
         logger.info("No previous state available - returning None (should be full run)")
         return None
-
-    from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-        ColumnBatchInputError,
-    )
 
     try:
         with DuckDBConnectionManager() as conn_manager:
@@ -136,10 +136,6 @@ def _load_tables_to_duckdb(
         if table_dir.exists():
             json_files = [f.resolve() for f in table_dir.glob("*.json")]
     except OSError as e:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            JsonScanError,
-        )
-
         raise JsonScanError(base_dir=str(base_dir), cause=e) from e
 
     if not json_files:

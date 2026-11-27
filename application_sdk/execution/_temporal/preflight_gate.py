@@ -50,6 +50,11 @@ from temporalio.exceptions import TimeoutType
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation
+from application_sdk.app.registry import get_activity_name
+from application_sdk.infrastructure.credential_vault import (
+    CredentialConfigNotFoundError,
+)
+from application_sdk.infrastructure.secrets import SecretNotFoundError
 
 with workflow.unsafe.imports_passed_through():
     from application_sdk.constants import (
@@ -865,10 +870,6 @@ def preflight_gate_activity_name(app_name: str) -> str:
     ``_run`` and the worker registration must derive the name from the same
     ``app_name``.
     """
-    from application_sdk.app.registry import (  # noqa: PLC0415 — avoid import cycle at module load
-        get_activity_name,
-    )
-
     return get_activity_name(app_name, "preflight")
 
 
@@ -880,10 +881,6 @@ def preflight_warmup_activity_name(app_name: str) -> str:
     names by the same worker guard as ``{app}:preflight``. Dispatched only when
     a run's first probe was not ``READY``.
     """
-    from application_sdk.app.registry import (  # noqa: PLC0415 — avoid import cycle at module load
-        get_activity_name,
-    )
-
     return get_activity_name(app_name, "preflight_warmup")
 
 
@@ -1678,13 +1675,6 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
     raised only after the object store's not-found re-read ladder is exhausted.
     Anything else is a collapsed plumbing failure and fails open.
     """
-    from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — avoid import cycle at module load
-        CredentialConfigNotFoundError,
-    )
-    from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — avoid import cycle at module load
-        SecretNotFoundError,
-    )
-
     if not isinstance(exc, CredentialNotFoundError):
         return False
     cause = exc.__cause__ or exc.cause

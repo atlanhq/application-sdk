@@ -38,6 +38,7 @@ from application_sdk.common.incremental.helpers import (
 from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix as _get_persistent_s3_prefix,
 )
+from application_sdk.common.incremental.incremental_errors import StateDownloadError
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.common.incremental.state.incremental_diff import (
     create_incremental_diff,
@@ -177,10 +178,6 @@ async def materialize_previous_state(
         return await store.materialize(snapshot, dest)
     # conformance: ignore[E004] re-raises as typed StateDownloadError; exception propagates to caller
     except Exception as e:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            StateDownloadError,
-        )
-
         raise StateDownloadError(cause=e) from e
 
 

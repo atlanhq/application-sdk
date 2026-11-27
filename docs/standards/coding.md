@@ -94,6 +94,12 @@ This document outlines the development standards for the Application SDK, includ
 - **Testing Standards**
     - Testing standards are defined in [testing.md](testing.md)
 
+- **Imports**
+    - Import at the top of the module. In `application_sdk/` an import inside a function needs a reason a reader can check: an optional dependency, a module absent on an api-only install, a Temporal sandbox constraint, or a measured import-time cost. "Circular" is not one: break the cycle instead, by moving the shared piece into a module both sides can import or by passing the dependency in at bootstrap (as observability receives its object-store sink).
+    - `tests/unit/test_import_cycles.py` builds the import graph from source, in-function imports included, and fails on any cycle. Its `_DEFERRED_CYCLE_EDGES` lists the few that remain, each with its reason; the list only shrinks. It also holds a ceiling on the number of in-function imports, which only goes down.
+    - A package `__init__` that re-exports heavy siblings serves them lazily through `application_sdk._install.lazy_getattr` (see `app`, `execution`, `storage`, `infrastructure`), so importing one leaf of the package does not import all of it.
+    - The `Import Isolation` job in `sdk-gate.yaml` imports every module of `application_sdk` in a fresh interpreter, so a module that only imports after another one has loaded fails CI.
+
 - **Logging Standards**
     - Logging standards are defined in [logging.md](logging.md)
 

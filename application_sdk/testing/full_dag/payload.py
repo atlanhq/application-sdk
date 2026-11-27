@@ -32,6 +32,8 @@ from typing import Any
 import orjson
 from typing_extensions import deprecated
 
+from application_sdk.testing.full_dag._errors import AgentSpecRequiredError
+
 
 @deprecated(
     "application_sdk.testing.full_dag.payload.RunMode is deprecated; use "
@@ -418,10 +420,6 @@ def build_ae_payload(
         ``/api/service/package-workflows?submit=true``.
     """
     if mode is RunMode.AGENT and agent is None:
-        from application_sdk.testing.full_dag._errors import (  # noqa: PLC0415
-            AgentSpecRequiredError,
-        )
-
         raise AgentSpecRequiredError()
 
     label_key = f"orchestration.atlan.com/default-{connector_short_name}-{run_id}"

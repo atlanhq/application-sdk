@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     import pandas as pd
     import pyarrow as pa
 
+from application_sdk.common.incremental.storage.duckdb_utils import (
+    DuckDBConnectionManager,
+)
 from application_sdk.common.yaml_templates import flatten_yaml_columns
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -762,9 +765,6 @@ class QueryBasedTransformer(TransformerInterface):
         )
 
         # run the SQL on the table via DuckDB
-        from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415
-            DuckDBConnectionManager,
-        )
 
         logger.debug(
             "Running transformer for asset typename=%s sql=%s",

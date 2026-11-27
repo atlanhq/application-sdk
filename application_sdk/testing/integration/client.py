@@ -29,6 +29,7 @@ from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.integration._errors import (
+    HttpClientInputError,
     LocalVaultResponseInvariantError,
     LocalVaultUnavailableError,
 )
@@ -198,10 +199,6 @@ class IntegrationTestClient:
         elif api_lower == "config":
             return self._call_config(args)
         else:
-            from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-                HttpClientInputError,
-            )
-
             raise HttpClientInputError(
                 message=(
                     f"Unsupported API type: '{api}'. "

@@ -107,6 +107,13 @@ from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
+from application_sdk.execution._temporal._activity_errors import RunTempDirEscapeError
+from application_sdk.execution.errors import ApplicationError
+from application_sdk.execution.retry import RetryPolicy as _RP
+from application_sdk.execution.retry import (
+    _to_temporal_retry_policy,
+    resolve_activity_time_bounds,
+)
 from application_sdk.handler.contracts import PreflightGateMode
 
 # Fixed event name for the structured, queryable transformed-asset validation
@@ -121,6 +128,17 @@ from application_sdk.handler.contracts import PreflightGateMode
 from application_sdk.observability.events import ASSET_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.outputs import Metric, get_outputs
+from application_sdk.outputs.fetch_failures import (
+    FETCH_FAILURES_LAYOUT,
+    FETCH_FAILURES_METRIC,
+    FETCH_FAILURES_TRUNCATED_METRIC,
+    FETCH_FAILURES_UNPERSISTED_METRIC,
+)
+from application_sdk.outputs.skipped import (
+    SKIPPED_RECORDS_METRIC,
+    SKIPPED_RECORDS_UNPERSISTED_METRIC,
+)
 from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
@@ -2718,9 +2736,6 @@ class App(ABC):
             CLEANUP_BASE_PATHS,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            RunTempDirEscapeError,
-        )
         from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             run_temp_dir,
         )
@@ -3052,7 +3067,6 @@ class App(ABC):
         from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: as above
             run_temp_dir,
         )
-        from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
         from application_sdk.outputs.skipped import (  # noqa: PLC0415
             SKIPPED_RECORDS_TRUNCATED_METRIC,
             merge_run_skips,
@@ -3089,11 +3103,6 @@ class App(ABC):
         )
         from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: as above
             run_temp_dir,
-        )
-        from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
-        from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
-            FETCH_FAILURES_LAYOUT,
-            FETCH_FAILURES_TRUNCATED_METRIC,
         )
         from application_sdk.outputs.skipped import merge_run_log  # noqa: PLC0415
 
@@ -3435,12 +3444,6 @@ async def _merge_skipped_records(app_instance: "App") -> None:
     Fails open: a merge failure is logged and every skip not already counted
     as unpersisted is recorded as ``skipped-records-unpersisted``.
     """
-    from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
-    from application_sdk.outputs.skipped import (  # noqa: PLC0415
-        SKIPPED_RECORDS_METRIC,
-        SKIPPED_RECORDS_UNPERSISTED_METRIC,
-    )
-
     outputs = get_outputs()
     skipped = int(outputs.numeric_metric(SKIPPED_RECORDS_METRIC))
     if skipped <= 0:
@@ -3477,12 +3480,6 @@ async def _merge_fetch_failures(app_instance: "App") -> None:
     merge failure is logged and every failure not already counted as
     unpersisted is recorded as ``fetch-failures-unpersisted``.
     """
-    from application_sdk.outputs import Metric, get_outputs  # noqa: PLC0415
-    from application_sdk.outputs.fetch_failures import (  # noqa: PLC0415
-        FETCH_FAILURES_METRIC,
-        FETCH_FAILURES_UNPERSISTED_METRIC,
-    )
-
     outputs = get_outputs()
     failures = int(outputs.numeric_metric(FETCH_FAILURES_METRIC))
     if failures <= 0:
@@ -4145,9 +4142,6 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         # it was validated at construction, so re-validation would be redundant.
         return _demote_upstream_refs(raw_input)
 
-    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
-    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
-
     try:
         return _demote_upstream_refs(input_type.model_validate(raw_input))
     # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
@@ -4193,9 +4187,6 @@ def _lift_non_retryable_activity_failure(
         The lifted error, or ``None`` when ``exc`` is not an ``ActivityError``
         whose direct cause is a non-retryable, non-eviction ``ApplicationError``.
     """
-    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
-    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
-
     if not isinstance(exc, ActivityError):
         return None
     cause = exc.cause
@@ -4437,27 +4428,6 @@ def generate_workflow_class(
                     error_type=type(e).__name__,
                     exc_info=True,
                 )
-            # deferred import: circular dependency
-            # Raw Python exceptions (e.g. ValueError raised directly in an
-            # entrypoint) must be wrapped in ApplicationError so Temporal
-            # treats them as a clean workflow execution failure.  Without this,
-            # Temporal sees a non-FailureError and marks the workflow *task*
-            # as failed, causing the server to retry the task indefinitely
-            # instead of failing the workflow execution.
-            # FailureError subclasses (ActivityError, CancelledError, …) are
-            # already handled natively by Temporal and must not be rewrapped —
-            # except an ActivityError whose cause is non-retryable, which is
-            # lifted so the workflow-level RetryPolicy does not re-run the
-            # workflow (see _lift_non_retryable_activity_failure).
-            #
-            # All raw exceptions are non-retryable: any Python exception raised
-            # directly from an entrypoint (not through a @task activity) is
-            # deterministic — retrying will never fix a KeyError or TypeError.
-            # Transient failures (network, timeout) should be modelled as @task
-            # activities with their own retry policy, not raised directly here.
-            from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-                ApplicationError,
-            )
 
             lifted = _lift_non_retryable_activity_failure(e)
             if lifted is not None:
@@ -4740,13 +4710,6 @@ def _create_task_activity_wrapper(
     # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
     # "heavy") never collide on the same Temporal queue.
     pool_queue: str | None = resolve_pool_queue(pool) if pool else None
-    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-        RetryPolicy as _RP,
-    )
-    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-        _to_temporal_retry_policy,
-        resolve_activity_time_bounds,
-    )
 
     # Resolved once, outside the wrapper: the pair is fixed for the task's
     # lifetime, so a dispatch does no arithmetic.

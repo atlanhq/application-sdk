@@ -34,6 +34,7 @@ from typing import Any, ClassVar
 
 from typing_extensions import deprecated
 
+from application_sdk.testing.full_dag._errors import AdminRoleNotResolvedError
 from application_sdk.testing.full_dag.base import BaseFullDAGE2ETest
 from application_sdk.testing.full_dag.payload import AgentSpec, ConnectionSpec, RunMode
 
@@ -172,10 +173,6 @@ class SQLAppE2EFullTest(BaseFullDAGE2ETest):
         )
         guid = client.role_cache.get_id_for_name("$admin")
         if guid is None:
-            from application_sdk.testing.full_dag._errors import (  # noqa: PLC0415
-                AdminRoleNotResolvedError,
-            )
-
             raise AdminRoleNotResolvedError(
                 message=(
                     "pyatlan role_cache could not resolve `$admin` role GUID "

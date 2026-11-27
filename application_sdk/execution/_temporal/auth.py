@@ -26,6 +26,10 @@ from application_sdk import _deprecation
 from application_sdk._env import deployment_name as _deployment_name
 from application_sdk.common.backoff import Backoff, Jitter
 from application_sdk.constants import APPLICATION_NAME, APPLICATION_VERSION, COMMIT_SHA
+from application_sdk.execution._temporal._activity_errors import (
+    TemporalAuthConfigError,
+    TemporalAuthTokenAcquireError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -122,10 +126,6 @@ class TemporalAuthManager:
             access_token = await self._get_token_service().get_token(force_refresh=True)
         # conformance: ignore[E004] re-raises immediately as typed TemporalAuthTokenAcquireError; no swallowing occurs
         except Exception as exc:
-            from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-                TemporalAuthTokenAcquireError,
-            )
-
             raise TemporalAuthTokenAcquireError(cause=exc) from exc
 
         expires_at = self._get_token_service().current_expires_at
@@ -228,9 +228,6 @@ class TemporalAuthManager:
         if self.config.base_url:
             base = self.config.base_url.rstrip("/")
             return f"{base}/auth/realms/default/protocol/openid-connect/token"
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            TemporalAuthConfigError,
-        )
 
         raise TemporalAuthConfigError(
             message="Either token_url or base_url must be set", field="token_url"

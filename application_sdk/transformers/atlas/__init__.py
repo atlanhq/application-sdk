@@ -25,6 +25,15 @@ from application_sdk.common.last_sync import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
+from application_sdk.transformers.atlas.sql import (
+    Column,
+    Database,
+    Function,
+    Procedure,
+    Schema,
+    Table,
+    TagAttachment,
+)
 from application_sdk.transformers.common.utils import (
     _process_text as process_text,
 )
@@ -92,15 +101,6 @@ class AtlasTransformer(TransformerInterface):
             "will be removed in v4.0. See docs/upgrade-guide-v3.md.",
             DeprecationWarning,
             stacklevel=2,
-        )
-        from application_sdk.transformers.atlas.sql import (  # noqa: PLC0415 — circular: transformers/atlas/__init__.py loads sibling sql submodule
-            Column,
-            Database,
-            Function,
-            Procedure,
-            Schema,
-            Table,
-            TagAttachment,
         )
 
         self.current_epoch = kwargs.get("current_epoch", "0")

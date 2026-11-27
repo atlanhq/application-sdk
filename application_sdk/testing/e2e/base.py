@@ -101,6 +101,7 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.binding import create_store_from_binding_optional
+from application_sdk.testing._mustache import apply_mustache_subs
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
@@ -3764,10 +3765,6 @@ class BaseE2ETest:
         Delegates to the shared walker (``application_sdk.testing._mustache``) so
         the e2e and SDR harnesses share one implementation and cannot drift.
         """
-        from application_sdk.testing._mustache import (  # noqa: PLC0415
-            apply_mustache_subs,
-        )
-
         return apply_mustache_subs(obj, subs)
 
     # ------------------------------------------------------------------

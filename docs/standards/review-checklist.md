@@ -83,7 +83,7 @@ Review for critical issues first - these take priority over everything else.
 
 **Import Organization Standards:**
 
-- Imports must be at the top of files (flag any imports inside functions unless required)
+- Imports must be at the top of files. Flag an import inside a function unless its comment gives a checkable reason (optional dependency, api-only install, sandbox, measured import cost); "circular" is not one (see [coding.md](coding.md#code-formatting) and `tests/unit/test_import_cycles.py`)
 - Import order: standard library -> third-party -> local application
 - Group imports by source and separate with blank lines
 - Remove unused imports immediately

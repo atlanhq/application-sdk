@@ -161,8 +161,10 @@ import pytest
 import pytest_asyncio
 from typing_extensions import deprecated
 
+from application_sdk import constants
 from application_sdk.common._env import FALSE_VALUES
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.testing.fake_source import HttpFakeSourceFactory
 from application_sdk.testing.integration._errors import (
     AppNameMismatchError,
@@ -430,9 +432,6 @@ def _verify_app_name(app_cls: type[App], app_name: str) -> None:
     """
     if os.environ.get(APPLICATION_NAME_ENV) is None:
         return
-    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling guards import it the same way
-        constants,
-    )
 
     configured = constants.APPLICATION_NAME
     if configured == app_name:
@@ -806,9 +805,6 @@ def kit_infrastructure(
         InfrastructureContext,
         clear_infrastructure,
         set_infrastructure,
-    )
-    from application_sdk.observability.observability import (  # noqa: PLC0415 — deferred: observability pulls the storage/binding chain
-        AtlanObservability,
     )
     from application_sdk.storage import (  # noqa: PLC0415 — deferred: keeps obstore off the conftest's import path
         create_local_store,

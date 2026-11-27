@@ -20,10 +20,12 @@ Console scripts are read from the installed distribution's metadata, not from
 a list here, so a newly declared script is covered without touching this file
 — and a wheel that lost its ``entry_points.txt`` fails for having none.
 
-It runs in two places:
+It runs in three places:
 
 * ``packages/conformance/tests/test_import_smoke.py`` against the source tree,
   so the conformance PR checks (sdk-gate → conformance-suite-tests) catch it;
+* ``sdk-gate.yaml`` (Import Isolation) against ``application_sdk`` from the
+  source tree, with every extra installed (FND-4260);
 * ``conformance-release.yml`` and ``conformance-publish.yml`` against the
   built wheel in a clean venv outside the checkout. There ``--outside`` names
   the checkout, and the run fails if the package resolves from inside it:
