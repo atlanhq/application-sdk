@@ -15,6 +15,7 @@ from application_sdk.testing.e2e._errors import (
     RouteNotReadyError,
 )
 from application_sdk.testing.e2e.route import RouteE2ETest
+from tests.unit.private_stdlib import private_stdlib
 
 BASE_URL = "https://tenant.example.com"
 API_KEY = "e2e-key"
@@ -56,14 +57,15 @@ def tenant_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+def clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
     """Freeze time: ``sleep`` advances a fake clock instead of waiting."""
     now = [0.0]
-    monkeypatch.setattr(route_mod.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(
-        route_mod.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
-    )
-    return now
+    with private_stdlib(route_mod, "time") as local_time:
+        monkeypatch.setattr(local_time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(
+            local_time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+        )
+        yield now
 
 
 def _ok(request: httpx.Request) -> httpx.Response:
@@ -269,7 +271,7 @@ class TestCleanup:
 
 
 @pytest.mark.usefixtures("tenant_env")
-class TestExpectStatus:
+class TestAssertStatus:
     def _response(self, status: int, **kwargs: Any) -> httpx.Response:
         request = httpx.Request("PUT", f"{BASE_URL}/demo-app/api/v1/steps/x")
         return httpx.Response(status, request=request, **kwargs)
