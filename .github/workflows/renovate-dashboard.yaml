@@ -174,6 +174,7 @@ jobs:
           version: "0.13.9"
 
       - name: Run Renovate scanner
+        id: scan
         run: |
           set -euo pipefail
           mkdir -p /tmp/renovate-output
@@ -260,3 +261,19 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/renovate_refusal_alarm.py \
             --out-dir /tmp/renovate-output
+
+      # This repo's own lock refresh merges several times a day when it works,
+      # and when it stops nothing goes red: the PR sits open with auto-merge
+      # armed (22 days in FND-5471). Fails on a lock-maintenance PR here that
+      # is 7+ days old, whatever stuck it. Stale lock PRs in other repos are
+      # printed and warned on, never fatal; see the script's docstring.
+      #
+      # Runs even when the refusal alarm above failed, so one alarm never hides
+      # the other, but not when the scan did not produce output to read.
+      - name: Alarm on a stale lock-maintenance PR
+        if: ${{ !cancelled() && !inputs.repo && steps.scan.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/renovate_stale_lock_alarm.py \
+            --out-dir /tmp/renovate-output \
+            --fail-repo "$GITHUB_REPOSITORY"
