@@ -470,8 +470,8 @@ requires-dist = [
     { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<9.0.0" },
     { name = "rocksdict", specifier = ">=0.3.0,<0.4.0" },
     { name = "rocksdict", marker = "extra == 'storage'", specifier = ">=0.3.0,<0.4.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36,<3.0.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.42,<3.0.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.42,<3.0.0" },
     { name = "temporalio", specifier = ">=1.35.0,<2.0.0" },
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.35.0,<2.0.0" },
     { name = "typing-extensions", specifier = ">=4.12.2,<5" },
@@ -545,7 +545,7 @@ requires-dist = [
     { name = "python-dotenv", marker = "extra == 'aws'", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-multipart", specifier = ">=0.0.26" },
-    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.42,<3.0.0" },
     { name = "typing-extensions", specifier = ">=4.12.2,<5" },
 ]
 provides-extras = ["sql", "pandas", "aws", "obstore", "pyatlan"]

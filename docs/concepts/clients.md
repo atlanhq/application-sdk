@@ -91,6 +91,8 @@ class SnowflakeClient(BaseSQLClient):
 **Simplified Flow:**
 `@task method` → creates `BaseSQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
 
+`get_results` and `get_batched_results` read through `pd.read_sql_query`, passing the query as a SQLAlchemy `text()` clause (literal colons escaped) on the SQLAlchemy connection. There is no raw DBAPI path. pandas uses SQLAlchemy only when the installed sqlalchemy meets its own minimum, which is why the `[sql]` extra requires `sqlalchemy>=2.0.42`.
+
 ### Cancelling a running query
 
 `get_results`, `get_batched_results` and `run_query` run the driver call on a worker thread through `run_in_thread(handle.bind(...), ...)` (see [Tasks](tasks.md#cancelling-a-blocking-call-at-the-driver)). When the awaiting task is cancelled:

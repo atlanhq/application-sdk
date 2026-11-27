@@ -146,6 +146,14 @@ than the `large_string` pandas 3 converts to by default. Two exceptions:
   its schema is yours. `DataFrame.to_parquet` under pandas 3 writes text as
   `large_string`.
 
+The `[sql]` extra (and the deprecated `[sqlalchemy]`) requires
+`sqlalchemy>=2.0.42`, the minimum pandas 3 needs for its SQLAlchemy path.
+`get_results` and `get_batched_results` always pass pandas the query as a
+SQLAlchemy `text()` clause on the SQLAlchemy connection. Before, with
+sqlalchemy 2.0.36 to 2.0.41 and pandas 3, they silently passed the raw query
+string to the raw DBAPI connection instead. An app locked to sqlalchemy below
+2.0.42 must raise it when it upgrades the SDK.
+
 ### Install by app type
 
 | App type | Install command |
