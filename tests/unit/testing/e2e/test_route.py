@@ -12,6 +12,7 @@ from application_sdk.testing.e2e import route as route_mod
 from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
+    OffTenantRequestError,
     RouteNotReadyError,
 )
 from application_sdk.testing.e2e.route import RouteE2ETest
@@ -35,13 +36,13 @@ def _suite(
             *,
             base_url: str,
             timeout: httpx.Timeout,
-            headers: dict[str, str] | None = None,
+            auth: httpx.Auth | None = None,
         ) -> httpx.Client:
             return httpx.Client(
                 transport=httpx.MockTransport(handler),
                 base_url=base_url,
                 timeout=timeout,
-                headers=headers,
+                auth=auth,
             )
 
     for name, value in attrs.items():
@@ -109,6 +110,62 @@ class TestSetup:
         assert str(seen[1].url) == f"{BASE_URL}/demo-app/index.html"
         assert "Authorization" not in seen[1].headers
         assert suite.base_url == BASE_URL
+
+    @pytest.mark.usefixtures("tenant_env")
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "https://attacker.example/collect",
+            "http://tenant.example.com/demo-app/api/v1/state",
+            "https://tenant.example.com:8443/demo-app/api/v1/state",
+        ],
+    )
+    def test_api_refuses_to_send_the_key_off_the_tenant(self, target: str) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200)
+
+        suite = _suite(handler)()
+        suite.setup_method(None)
+        with pytest.raises(OffTenantRequestError) as raised:
+            suite.api.get(target)
+        suite.teardown_method(None)
+
+        assert seen == []
+        assert raised.value.tenant_origin == BASE_URL
+        assert API_KEY not in str(raised.value)
+
+    @pytest.mark.usefixtures("tenant_env")
+    def test_api_signs_an_absolute_url_on_the_tenant(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200)
+
+        suite = _suite(handler)()
+        suite.setup_method(None)
+        suite.api.get(f"{BASE_URL}:443/other-app/api/v1/state")
+        suite.teardown_method(None)
+
+        assert seen[0].headers["Authorization"] == f"Bearer {API_KEY}"
+
+    @pytest.mark.usefixtures("tenant_env")
+    def test_absolute_off_tenant_readiness_path_fails_setup_unsent(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200)
+
+        suite = _suite(handler, readiness_path="https://attacker.example/ready")()
+        with pytest.raises(OffTenantRequestError):
+            suite.setup_method(None)
+        assert seen == []
+        assert suite.api.is_closed
+        assert suite.anonymous.is_closed
 
 
 @pytest.mark.usefixtures("tenant_env")
@@ -201,6 +258,64 @@ class TestReadiness:
             suite.setup_method(None)
         assert suite.api.is_closed
         assert suite.anonymous.is_closed
+
+    def test_a_2xx_after_the_deadline_does_not_count(self, clock: list[float]) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            clock[0] += 13.0
+            return httpx.Response(200)
+
+        suite_cls = _suite(
+            handler,
+            readiness_path="/v1/state",
+            readiness_timeout_seconds=12.0,
+            readiness_interval_seconds=5.0,
+        )
+        with pytest.raises(RouteNotReadyError) as raised:
+            suite_cls().setup_method(None)
+        assert raised.value.last_error == "HTTP 200 after the deadline"
+        assert raised.value.attempts == 1
+        assert not suite_cls._route_ready
+
+    def test_each_probe_timeout_is_cut_to_the_time_left(
+        self, clock: list[float]
+    ) -> None:
+        del clock
+        read_timeouts: list[float] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            read_timeouts.append(request.extensions["timeout"]["read"])
+            return httpx.Response(503)
+
+        suite_cls = _suite(
+            handler,
+            readiness_path="/v1/state",
+            readiness_timeout_seconds=12.0,
+            readiness_interval_seconds=5.0,
+            request_timeout_seconds=30.0,
+        )
+        with pytest.raises(RouteNotReadyError):
+            suite_cls().setup_method(None)
+        assert read_timeouts == [12.0, 7.0, 2.0]
+
+    def test_a_stalled_probe_ends_the_wait_at_the_deadline(
+        self, clock: list[float]
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            clock[0] += request.extensions["timeout"]["read"]
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        suite_cls = _suite(
+            handler,
+            readiness_path="/v1/state",
+            readiness_timeout_seconds=12.0,
+            readiness_interval_seconds=5.0,
+            request_timeout_seconds=30.0,
+        )
+        with pytest.raises(RouteNotReadyError) as raised:
+            suite_cls().setup_method(None)
+        assert clock[0] == 12.0
+        assert raised.value.attempts == 1
+        assert raised.value.last_error == "ReadTimeout: timed out"
 
     def test_transport_errors_count_as_not_ready(self, clock: list[float]) -> None:
         del clock
@@ -302,3 +417,12 @@ def test_run_label(monkeypatch: pytest.MonkeyPatch) -> None:
     assert suite.run_label == "e2e run 12345"
     monkeypatch.delenv("GITHUB_RUN_ID")
     assert suite.run_label == "e2e run local"
+
+
+def test_route_base_is_exported_from_the_e2e_package() -> None:
+    from application_sdk.testing import e2e
+    from application_sdk.testing.e2e import RouteE2ETest as exported
+
+    assert exported is RouteE2ETest
+    assert "RouteE2ETest" in e2e.__all__
+    assert e2e.route is route_mod

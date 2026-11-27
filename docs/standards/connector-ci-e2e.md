@@ -126,20 +126,30 @@ the tenant's ingress, the same way the UI does.
 
 - Declare `ingress_path`, the app's ingress prefix on the tenant (for example
   `"/launchpad-app/api"`). `self.api` is an `httpx.Client` on
-  `<ATLAN_BASE_URL><ingress_path>` that sends the e2e API key as a bearer token;
+  `<ATLAN_BASE_URL><ingress_path>` that sends the e2e API key as a bearer token.
+  The key is bound to the tenant's origin: a request on `self.api` to any other
+  scheme, host or port raises `OffTenantRequestError` before it is sent.
   `self.anonymous` is a client on the tenant base URL with no credentials, for
   pages and for checking that a route refuses anonymous calls.
 - Optionally declare `readiness_path`, a route below `ingress_path` that answers
   2xx once the app serves. The first test of the class waits for it (up to
   `readiness_timeout_seconds`, default 300), so a pod still reconciling or
-  waking from zero is not read as a failure. If it never answers 2xx, the test
-  fails with `RouteNotReadyError`, which carries the last answer seen.
+  waking from zero is not read as a failure. The wait ends at the deadline:
+  each probe's timeout is cut to the time left (never more than
+  `request_timeout_seconds`), and a 2xx that lands after the deadline does not
+  count. If it never answers 2xx in time, the test fails with
+  `RouteNotReadyError`, which carries the last answer seen.
 - Register undo steps with `self.add_cleanup(fn, *args)`. They run after each
   test, last added first, even when the test failed.
 - `self.assert_status(response, status)` asserts the status with the method,
   path and body in the failure message, and returns the response.
 - `RouteE2ETest` is not a `BaseE2ETest` subclass: it submits no DAG, creates no
-  Connection and declares no `mode`. Put the suite in its own file under
+  Connection and declares no `mode`. Subclassing would break a route suite:
+  pytest would collect the inherited `test_full_dag_runs_end_to_end`,
+  `setup_method` would raise for the unset `argo_package_name` and
+  `argo_template_name`, and teardown would track connections and AE runs that
+  never exist. The shared tenant auth comes from `application_sdk.testing.harness`
+  instead. Put the suite in its own file under
   `tests/e2e/`; CI runs each file as its own leg, after installing this PR's
   build on the tenant and checking the running pod's build identity.
 

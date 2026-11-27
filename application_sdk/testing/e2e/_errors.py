@@ -60,6 +60,7 @@ __all__ = [
     "MissingHarnessClassAttrError",
     "MissingHarnessEnvError",
     "NoWorkerOnTaskQueueError",
+    "OffTenantRequestError",
     "ProgressWatchdogUnreachableError",
     "RequestDelivery",
     "RouteNotReadyError",
@@ -380,3 +381,23 @@ class RouteNotReadyError(PreconditionError):
     attempts: int | None = None
     elapsed_seconds: float | None = None
     last_error: str | None = None
+
+
+@dataclass(kw_only=True)
+class OffTenantRequestError(InvalidInputError):
+    """A route suite's authenticated client was asked to call another host.
+
+    Raised by :class:`~application_sdk.testing.e2e.route.RouteE2ETest` before
+    the request is sent, so the e2e API key never leaves the tenant. An absolute
+    URL (or an absolute ``readiness_path``) on ``self.api`` names a different
+    scheme, host or port than ``ATLAN_BASE_URL``; use ``self.anonymous`` or a
+    client of the suite's own for anything off the tenant.
+
+    Attributes:
+        url: Scheme, host and port the request named (no path, no query).
+        tenant_origin: Scheme, host and port of ``ATLAN_BASE_URL``.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_OFF_TENANT_REQUEST"
+    url: str | None = None
+    tenant_origin: str | None = None

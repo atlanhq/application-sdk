@@ -8,7 +8,13 @@ routes through the tenant's ingress, the same way the UI or an agent does, and
 checks the answers.
 
 It submits no DAG and creates no Connection, so it is not a
-:class:`BaseE2ETest` subclass and declares no ``mode``. CI installs this PR's
+:class:`BaseE2ETest` subclass and declares no ``mode``. Subclassing would not
+just be unneeded, it would break a route suite: pytest would collect the
+inherited ``test_full_dag_runs_end_to_end`` and submit a DAG the app does not
+have; ``setup_method`` would raise for the unset ``argo_package_name`` and
+``argo_template_name``; and teardown would track seeded connections and AE runs
+that never exist. What the two bases share (tenant auth) lives in
+:mod:`application_sdk.testing.harness`, not on :class:`BaseE2ETest`. CI installs this PR's
 build on the tenant and checks the running pod's build identity before every
 leg (``e2e_tenant_app.py verify``), so the suite starts against the right code.
 
@@ -19,13 +25,19 @@ What a suite declares:
 * ``readiness_path`` — optional. A route, relative to ``ingress_path``, that
   answers 2xx once the app serves. The first test of the class waits for it,
   so a pod still reconciling or waking from zero is not read as a failure.
-  If it never answers, the rest of the class fails at once instead of waiting
-  again.
+  The wait ends at ``readiness_timeout_seconds``: each probe's timeout is cut
+  to the time left, and an answer that lands after the deadline does not
+  count. If it never answers, the rest of the class fails at once instead of
+  waiting again.
 
 What a suite gets:
 
 * ``self.api`` — an ``httpx.Client`` on ``<base_url><ingress_path>`` that sends
-  the e2e API key as a bearer token.
+  the e2e API key as a bearer token. The key is bound to the tenant's origin: a
+  request to any other scheme, host or port (an absolute URL, or an absolute
+  ``readiness_path``) raises
+  :class:`~application_sdk.testing.e2e._errors.OffTenantRequestError` before
+  anything is sent.
 * ``self.anonymous`` — an ``httpx.Client`` on the tenant base URL with no
   credentials, for pages and for checking that a route refuses anonymous calls.
 * :meth:`RouteE2ETest.add_cleanup` — undo steps that run after each test,
@@ -40,7 +52,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import ClassVar, ParamSpec
 
 import httpx
@@ -49,6 +61,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
+    OffTenantRequestError,
     RouteNotReadyError,
 )
 from application_sdk.testing.harness._errors import MissingTenantEnvError
@@ -61,6 +74,43 @@ __all__ = ["RouteE2ETest"]
 _BODY_EXCERPT_CHARS = 500
 
 _P = ParamSpec("_P")
+
+
+def _origin(url: httpx.URL) -> str:
+    """``scheme://host[:port]`` of *url*; httpx drops a scheme's default port."""
+    port = f":{url.port}" if url.port is not None else ""
+    return f"{url.scheme}://{url.host}{port}"
+
+
+class _TenantBearerAuth(httpx.Auth):
+    """Bearer auth that only ever signs requests to the tenant's own origin.
+
+    A client-level ``Authorization`` header rides on every request the client
+    sends, including one to an absolute URL on another host. Signing here
+    instead checks each request first and refuses one that leaves the tenant,
+    so the e2e API key cannot be sent anywhere else.
+    """
+
+    def __init__(self, api_key: str, tenant: httpx.URL) -> None:
+        self._header = f"Bearer {api_key}"
+        self._origin = _origin(tenant)
+
+    def auth_flow(
+        self, request: httpx.Request
+    ) -> Generator[httpx.Request, httpx.Response, None]:
+        origin = _origin(request.url)
+        if origin != self._origin:
+            raise OffTenantRequestError(
+                message=(
+                    f"Refusing to send the e2e API key to {origin}: self.api only "
+                    f"calls the tenant ({self._origin}). Use self.anonymous or a "
+                    "client of your own for other hosts."
+                ),
+                url=origin,
+                tenant_origin=self._origin,
+            )
+        request.headers["Authorization"] = self._header
+        yield request
 
 
 class RouteE2ETest:
@@ -85,6 +135,8 @@ class RouteE2ETest:
             MissingHarnessEnvError: ``ATLAN_BASE_URL`` or ``ATLAN_API_KEY`` is
                 absent or blank.
             MissingHarnessClassAttrError: ``ingress_path`` is not set.
+            OffTenantRequestError: ``readiness_path`` is an absolute URL on
+                another host.
             RouteNotReadyError: ``readiness_path`` never answered 2xx within
                 ``readiness_timeout_seconds``, in this test or an earlier one of
                 the same class.
@@ -114,7 +166,7 @@ class RouteE2ETest:
         self.base_url = auth.base_url
         self.api = self._client(
             base_url=f"{auth.base_url}{prefix}",
-            headers={"Authorization": f"Bearer {auth.api_key}"},
+            auth=_TenantBearerAuth(auth.api_key, httpx.URL(auth.base_url)),
             timeout=timeout,
         )
         self.anonymous = self._client(base_url=auth.base_url, timeout=timeout)
@@ -127,6 +179,9 @@ class RouteE2ETest:
                 self._wait_until_ready(prefix)
             except RouteNotReadyError as exc:
                 cls._route_not_ready = exc
+                self._close_clients()
+                raise
+            except BaseException:
                 self._close_clients()
                 raise
             cls._route_ready = True
@@ -185,9 +240,9 @@ class RouteE2ETest:
         *,
         base_url: str,
         timeout: httpx.Timeout,
-        headers: dict[str, str] | None = None,
+        auth: httpx.Auth | None = None,
     ) -> httpx.Client:
-        return httpx.Client(base_url=base_url, timeout=timeout, headers=headers)
+        return httpx.Client(base_url=base_url, timeout=timeout, auth=auth)
 
     def _close_clients(self) -> None:
         for name in ("api", "anonymous"):
@@ -196,30 +251,46 @@ class RouteE2ETest:
                 client.close()
 
     def _wait_until_ready(self, prefix: str) -> None:
+        """Probe ``readiness_path`` until it answers 2xx, within the deadline.
+
+        The deadline is ``readiness_timeout_seconds`` from the first probe. Each
+        probe's timeout is the smaller of ``request_timeout_seconds`` and the
+        time left, so a stalled endpoint cannot hold the wait past it, and a 2xx
+        that lands after it does not count.
+        """
         cls = type(self)
         path = cls.readiness_path or ""
         url = f"{self.base_url}{prefix}{path}"
         started = time.monotonic()
+        deadline = started + cls.readiness_timeout_seconds
         attempts = 0
-        last_error = ""
+        last_error = "no probe fit in the timeout"
         while True:
-            attempts += 1
-            try:
-                response = self.api.get(path)
-            except httpx.HTTPError as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-            else:
-                if response.is_success:
-                    logger.info(
-                        "Route e2e: %s answered %s after %d attempt(s)",
-                        url,
-                        response.status_code,
-                        attempts,
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                attempts += 1
+                probe_timeout = httpx.Timeout(
+                    min(cls.request_timeout_seconds, remaining)
+                )
+                try:
+                    response = self.api.get(path, timeout=probe_timeout)
+                except httpx.HTTPError as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    late = time.monotonic() > deadline
+                    if response.is_success and not late:
+                        logger.info(
+                            "Route e2e: %s answered %s after %d attempt(s)",
+                            url,
+                            response.status_code,
+                            attempts,
+                        )
+                        return
+                    last_error = f"HTTP {response.status_code}" + (
+                        " after the deadline" if late else ""
                     )
-                    return
-                last_error = f"HTTP {response.status_code}"
-            elapsed = time.monotonic() - started
-            if elapsed + cls.readiness_interval_seconds > cls.readiness_timeout_seconds:
+            now = time.monotonic()
+            if now + cls.readiness_interval_seconds > deadline:
                 raise RouteNotReadyError(
                     message=(
                         f"{url} did not answer 2xx within "
@@ -227,7 +298,7 @@ class RouteE2ETest:
                     ),
                     url=url,
                     attempts=attempts,
-                    elapsed_seconds=round(elapsed, 1),
+                    elapsed_seconds=round(now - started, 1),
                     last_error=last_error,
                 )
             time.sleep(cls.readiness_interval_seconds)
