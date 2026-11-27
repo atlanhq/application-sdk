@@ -81,6 +81,7 @@ application_sdk/handler/request_contract.py
 application_sdk/handler/routes.py
 application_sdk/handler/service_errors.py
 application_sdk/server/__init__.py
+application_sdk/server/fastapi/__init__.py
 application_sdk/server/fastapi/models.py
 application_sdk/storage/__init__.py
 application_sdk/storage/_budget.py

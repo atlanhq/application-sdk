@@ -32,7 +32,7 @@ def _public_modules() -> list[str]:
             continue  # a private module or package promises nothing
         if parts[1:2] == ("testing",):
             continue  # test tooling, out of scope for FND-4259
-        modules.append(str(path.relative_to(_PACKAGE_ROOT.parent)))
+        modules.append(path.relative_to(_PACKAGE_ROOT.parent).as_posix())
     return modules
 
 
