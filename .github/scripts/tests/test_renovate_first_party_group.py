@@ -62,3 +62,15 @@ def test_re_resolving_lanes_rebase_when_behind_base() -> None:
         r for r in rules if r.get("matchUpdateTypes") == ["lockFileMaintenance"]
     ]
     assert [r.get("rebaseWhen") for r in lock_rules] == ["behind-base-branch"]
+
+
+def test_first_party_lanes_are_exempt_from_concurrency_caps() -> None:
+    # FND-5513: open npm/docker PRs plus a red lock-refresh branch filled the
+    # repo's 8 branch slots, so the framework branch was never created.
+    # Renovate's calcLimit treats a branch as unlimited when any upgrade in it
+    # carries 0, so every member rule carries it (a single-member branch too).
+    rules: list[dict[str, object]] = _first_party_rules()
+    assert len(rules) == 3
+    for rule in rules:
+        assert rule["prConcurrentLimit"] == 0, rule
+        assert rule["branchConcurrentLimit"] == 0, rule

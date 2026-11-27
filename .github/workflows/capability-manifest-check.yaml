@@ -12,10 +12,10 @@
 #   - Run `uv run poe regen-capabilities` locally and push.
 #   - Run the `/capability-manifest` Claude Code skill locally and push.
 #
-# source-sha / source-date header lines are excluded from the diff.
-# These fields reflect the last commit that touched application_sdk/ and are
-# squash-merge-incompatible during a PR (the final squash SHA doesn't exist yet).
-# They are updated whenever the manifest is regenerated post-merge.
+# The manifest carries no commit SHA, date or SDK version (FND-4274): its whole
+# content is a function of the source, so the check is a plain byte diff and the
+# same command tells anyone, on any checkout, whether it is current:
+#   uv run poe regen-capabilities && git diff --exit-code -- docs/agents/sdk-capabilities.md
 #
 # Noop for: bump-version-* branches (they only touch version/lockfile artefacts).
 # No comment posted for: fork PRs (no ORG_PAT_GITHUB access anyway).
@@ -85,22 +85,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.ctx.outputs.release == 'false'
         with:
-          # Check out the PR branch HEAD, not the synthetic merge commit.
-          # The default pull_request checkout is the GitHub-created test merge of
-          # the PR into the base, so `git log -1 -- application_sdk/` can return a
-          # commit from main that is newer than this branch — making an up-to-date
-          # manifest look stale. Pinning to the PR head SHA gives a deterministic
-          # view of exactly what the contributor pushed.
+          # Check out the PR branch HEAD, not the synthetic merge commit, so the
+          # diff is of exactly what the contributor pushed: on the test merge, a
+          # surface change that landed on main since the branch point would show
+          # up as drift the PR cannot fix by regenerating.
           ref: ${{ github.event.pull_request.head.sha }}
-          # Full history required: extractor.py resolves source-sha via
-          # `git log -1 --format=%H -- application_sdk/`, which fails on shallow clones
-          # when the most recent SDK commit is below the shallow boundary.
-          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         if: steps.ctx.outputs.release == 'false'
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       - name: Regenerate capability manifest
         if: steps.ctx.outputs.release == 'false'
@@ -109,35 +103,10 @@ jobs:
       - name: Check for drift
         id: drift
         if: steps.ctx.outputs.release == 'false'
-        run: |
-          # source-sha / source-date / sdk-version are excluded: with squash
-          # merges the final SHA doesn't exist during the PR, so source-sha/
-          # source-date are always stale until post-merge regeneration.
-          # sdk-version is excluded for the same reason: release PRs (bump-
-          # version-* branches) bump application_sdk/version.py, which the
-          # extractor reads to produce this header. In the merge queue the
-          # synthetic commit already has the new version, so the header would
-          # differ from the committed manifest even though no API surface changed.
-          # Excluding these three metadata-only header fields avoids false drift
-          # failures without hiding real API-surface changes.
-          # || true: grep exits 1 on no matches; with pipefail that would kill the
-          # script before the [ -z ] check, producing a false drift failure.
-          SEMANTIC=$(git diff -- docs/agents/sdk-capabilities.md \
-            | grep '^[+-]' \
-            | grep -v '^+++\|^---' \
-            | grep -v '^[+-]source-sha:\|^[+-]source-date:\|^[+-]sdk-version:' \
-            || true)
-          if [ -z "$SEMANTIC" ]; then
-            echo "status=clean" >> "$GITHUB_OUTPUT"
-          else
-            echo "status=drift" >> "$GITHUB_OUTPUT"
-            echo "Manifest is stale. Lines changed:"
-            git diff --stat -- docs/agents/sdk-capabilities.md
-            exit 1
-          fi
+        run: git diff --exit-code --stat -- docs/agents/sdk-capabilities.md
 
       - name: Post sticky comment on drift
-        if: failure() && steps.drift.outputs.status == 'drift' && github.event.pull_request.head.repo.fork == false
+        if: failure() && steps.drift.outcome == 'failure' && github.event.pull_request.head.repo.fork == false
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: capability-manifest-drift

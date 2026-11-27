@@ -23,11 +23,9 @@ import re
 from pathlib import Path
 from typing import cast
 
-import yaml
+from _workflows import ACTIONS, REPO_ROOT, load_workflow
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 GITHUB = REPO_ROOT / ".github"
-ACTIONS = GITHUB / "actions"
 COMPOSITE = ACTIONS / "trivy-image-scan" / "action.yaml"
 
 Mapping = dict[str, object]
@@ -48,13 +46,9 @@ IMAGE_SCANNERS = {
 COMPOSITE_CALLERS = ("sdk-trivy-scan", "secure-build-push-apps")
 
 
-def _load(path: Path) -> Mapping:
-    return cast(Mapping, yaml.safe_load(path.read_text(encoding="utf-8")))
-
-
 def _ci_files() -> list[Path]:
     files: list[Path] = []
-    for sub in ("actions", "workflows", "workflow-templates"):
+    for sub in ("actions", "workflows"):
         files.extend(
             p
             for p in sorted((GITHUB / sub).rglob("*"))
@@ -80,12 +74,12 @@ def _rel(path: Path) -> str:
 
 
 def _composite_steps() -> list[Mapping]:
-    return _steps(_load(COMPOSITE))
+    return _steps(load_workflow(COMPOSITE))
 
 
 def _canonical_setup_trivy() -> tuple[str, str]:
     """(uses, version) the composite installs Trivy with."""
-    doc = _load(COMPOSITE)
+    doc = load_workflow(COMPOSITE)
     inputs = cast(dict[str, Mapping], doc["inputs"])
     version = str(inputs["trivy-version"]["default"])
     install = next(
@@ -108,7 +102,8 @@ def test_no_ci_file_uses_the_bundled_trivy_action() -> None:
         _rel(p)
         for p in _ci_files()
         if any(
-            str(s.get("uses", "")).startswith(TRIVY_ACTION) for s in _steps(_load(p))
+            str(s.get("uses", "")).startswith(TRIVY_ACTION)
+            for s in _steps(load_workflow(p))
         )
     ]
     assert not offenders, (
@@ -126,7 +121,7 @@ def test_every_setup_trivy_matches_the_composite_pin() -> None:
     for path in _ci_files():
         if path == COMPOSITE:
             continue
-        for step in _steps(_load(path)):
+        for step in _steps(load_workflow(path)):
             if not str(step.get("uses", "")).startswith(SETUP_TRIVY):
                 continue
             seen += 1
@@ -135,7 +130,7 @@ def test_every_setup_trivy_matches_the_composite_pin() -> None:
                 mismatched.append(f"{_rel(path)}: {step['uses']} version={got_version}")
     # Guards the guard: the inline copies exist, so a parse change that found
     # none would pass vacuously.
-    assert seen >= 3, f"expected the inline setup-trivy copies, found {seen}"
+    assert seen >= 2, f"expected the inline setup-trivy copies, found {seen}"
     assert not mismatched, (
         f"setup-trivy must be {uses} at {version}, the trivy-image-scan "
         "composite's pin. Bump them together:\n  " + "\n  ".join(mismatched)
@@ -146,7 +141,7 @@ def test_only_the_known_files_run_trivy_image() -> None:
     runners = {
         _rel(p)
         for p in _ci_files()
-        if any("trivy image" in str(s.get("run", "")) for s in _steps(_load(p)))
+        if any("trivy image" in str(s.get("run", "")) for s in _steps(load_workflow(p)))
     }
     assert runners == IMAGE_SCANNERS, (
         "a new Trivy image scan belongs in the trivy-image-scan composite. "
@@ -157,7 +152,7 @@ def test_only_the_known_files_run_trivy_image() -> None:
 
 def test_the_sdk_actions_scan_through_the_composite() -> None:
     for name in COMPOSITE_CALLERS:
-        steps = _steps(_load(ACTIONS / name / "action.yaml"))
+        steps = _steps(load_workflow(ACTIONS / name / "action.yaml"))
         uses = [str(s.get("uses", "")) for s in steps]
         assert "./.github/actions/trivy-image-scan" in uses, name
         assert not any(u.startswith(SETUP_TRIVY) for u in uses), (
@@ -179,7 +174,7 @@ def test_every_trivy_step_has_the_db_fallback_repositories() -> None:
     expected = {key: str(canonical_env[key]).split(",") for key in keys}
     assert all(len(repos) >= 2 for repos in expected.values()), expected
     for path in sorted(IMAGE_SCANNERS):
-        for step in _steps(_load(REPO_ROOT / path)):
+        for step in _steps(load_workflow(REPO_ROOT / path)):
             run = str(step.get("run", ""))
             if "trivy image" not in run:
                 continue
@@ -213,7 +208,7 @@ def _referenced_inputs(path: Path) -> set[str]:
 
 
 def _declared_inputs(path: Path) -> set[str]:
-    return set(cast(Mapping, _load(path)["inputs"]))
+    return set(cast(Mapping, load_workflow(path)["inputs"]))
 
 
 def test_scan_actions_read_only_inputs_they_declare() -> None:
@@ -237,13 +232,13 @@ def test_secure_build_push_apps_enforcement_is_an_input() -> None:
     assert "ENFORCEMENT_MODE" not in text
     scan = next(
         s
-        for s in _steps(_load(_SBPA))
+        for s in _steps(load_workflow(_SBPA))
         if s.get("uses") == "./.github/actions/trivy-image-scan"
     )
     fail_severity = str(cast(Mapping, scan["with"])["fail-severity"])
     assert "inputs.fail-on-vulns" in fail_severity
     # The push must come after the scan, so a failed gate stops it.
-    steps = _steps(_load(_SBPA))
+    steps = _steps(load_workflow(_SBPA))
     order = [s.get("id") or s.get("uses") for s in steps]
     assert order.index("./.github/actions/trivy-image-scan") < order.index(
         "docker_push"
@@ -257,7 +252,7 @@ def test_secure_build_push_apps_callers_pass_only_declared_inputs() -> None:
     declared = _declared_inputs(_SBPA)
     callers = 0
     for path in _ci_files():
-        for step in _steps(_load(path)):
+        for step in _steps(load_workflow(path)):
             if "secure-build-push-apps" not in str(step.get("uses", "")):
                 continue
             callers += 1

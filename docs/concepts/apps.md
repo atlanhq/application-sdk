@@ -31,6 +31,25 @@ class MyConnector(App):
 - Calling `await self.fetch_data(input)` inside `run()` routes through Temporal activities automatically -- no `execute_activity_method` needed.
 - `App.__init_subclass__` applies Temporal decorators under the hood. You never import from `temporalio`.
 
+### Configuration settings are checked at class definition
+
+The configuration settings in the table below are checked when the class is defined, and a bad value warns (a `DeprecationWarning` plus a logged WARNING naming the class, attribute and value). The readers still coerce it as before, so a run is never aborted by a typo, but the typo is no longer silent. In v4.0.0 each warning becomes an `EntryPointDeclarationError`.
+
+| Setting | Accepted |
+|---|---|
+| `preflight_gate_mode`, `artifact_validation_mode` | `"hard"` or `"soft"` (or `PreflightGateMode`). Anything else resolves to soft. |
+| `preflight_gate_timeout_seconds` | `int`, 5-300 |
+| `preflight_gate_max_attempts` | `int`, 1-3 |
+| `preflight_warmup_ceiling_seconds` | `int`, at least 30 |
+| `preflight_warmup_probe_timeout_seconds` | `int`, 1 up to the ceiling |
+| `preflight_verify_storage` | `bool` (`"no"` is truthy) |
+| `name` | `str` of letters, digits, `.`, `_`, `-` |
+| `version`, `description` | `str` |
+| `tags` | `dict[str, str]` or `None` |
+| `passthrough_modules` | a set of module names, never a bare `str` (`"pandas"` would read as five letters) |
+
+Other settings, such as `asset_validation_rules` and `preflight_warmup_mode`, are not checked. Only a class's own declarations are checked, so an inherited bad value is reported once, at the class that wrote it. A concrete `SqlApp` subclass also warns when `sql_client_class` is unset or not a `BaseSQLClient` subclass, unless it overrides client construction.
+
 ### Multiple Entry Points
 
 If your connector needs more than one independently-triggerable workflow (e.g. metadata extraction *and* query mining), decorate each entry method with `@entrypoint` instead of overriding `run()`:
@@ -78,7 +97,7 @@ GET  /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>      
 
 The `core.py` hook runs on the worker only: the consolidated API host serves the handler, not `core.py`, and `gen_app_api.py check` refuses an app that has one. An app served by the host computes the manifest in its handler instead, with [`Handler.compute_manifest`](handlers.md#manifestinput-and-compute_manifest), which both the worker and the host call (a `core.py` hook for the same entry point wins on the worker).
 
-The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop via the SDK's `run_in_thread()` (never the shared default executor — see conformance rule P031). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
+The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop via the SDK's `run_in_thread()` (never the shared default executor — see conformance rule P031). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler and core modules](entry-points.md#per-entry-point-handler-and-core-modules) for the module-naming convention.
 
 > **Use `POST` when you send `fe_inputs`.** On `GET`, `fe_inputs` rides in the query string and is bounded by the request line. The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large`, *before* the hook runs, so oversize surfaces as a clear error instead of an opaque truncation. That cap is not conservative padding: past **~64 KB of request line** the URL is silently mangled by the HTTP parser — the app receives a fragment and answers `200` on a corrupt value — which is strictly worse than a rejection. A near-"select-all" asset-export-advanced submission decodes to ~11 KB and hit exactly this (CSA-539). `POST` puts the payload in the body, where neither limit applies. `GET` remains supported and uncapped for requests that send no `fe_inputs` at all — static manifest fetches, the app playground, and AE/marketplace registration probes.
 
@@ -129,82 +148,45 @@ You never register tasks or apps manually. When Python imports your `App` subcla
 
 The SDK provides pre-built `App` subclasses for common patterns. Override only the tasks you need to customize.
 
-### SqlMetadataExtractor
+### SqlApp
 
-Deprecated (removal in v4.0.0): subclass `SqlApp` instead (reference: atlan-mysql-app). The example below is the legacy API, kept for apps that still use it; new and migrating apps do not copy it.
-
-Extracts metadata (databases, schemas, tables, columns, procedures) from SQL sources:
+Extracts metadata (databases, schemas, tables and columns) from SQL sources. Set the client and the SQL templates, and write one `map_*` function per entity; the default `run()` extracts those four entities in parallel, transforms each through its mapper, and verifies the output before publish (reference: atlan-mysql-app):
 
 ```python
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    FetchDatabasesInput, FetchDatabasesOutput,
-    ExtractionInput, ExtractionOutput,
-)
-from application_sdk.app import task
+from application_sdk.templates import SqlApp
 
-class MyExtractor(SqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_databases(
-        self, input: FetchDatabasesInput
-    ) -> FetchDatabasesOutput:
-        # Custom database fetching logic
-        return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
+class MyExtractor(SqlApp):
+    sql_client_class = MyClient
+
+    fetch_database_sql = "SELECT ..."
+    fetch_schema_sql = "SELECT ..."
+    fetch_table_sql = "SELECT ..."
+    fetch_column_sql = "SELECT ..."
+
+    def map_database(self, record, connection_qn):
+        from pyatlan_v9.model.assets import Database
+        return Database.creator(
+            name=record["database_name"],
+            connection_qualified_name=connection_qn,
+        )
+
+    # map_schema / map_table / map_column likewise. All four are required for
+    # the default run(): the base ones raise Map*UnimplementedError.
 ```
 
-### SqlQueryExtractor
+The default `run()` never calls the view and procedure tasks: setting `fetch_view_sql` or `fetch_procedure_sql` alone extracts nothing. A connector that needs them, whose fetches must run in sequence, or that adds another entity overrides `run()` and calls the `extract_*` / `transform_*` tasks itself, ending in `finalize_extraction`. Views go through `map_table` (a View is a Table specialisation); procedures through `map_procedure`. The `SqlApp` class docstring lists that override surface, and the [SQL application guide](../guides/sql-application-guide.md) shows the hand-off to publish in an SDR deployment.
 
-Extracts query history/logs from SQL sources:
+### Deprecated SQL templates
 
-```python
-from application_sdk.templates import SqlQueryExtractor
-from application_sdk.templates.contracts import (
-    QueryBatchInput, QueryBatchOutput,
-    QueryFetchInput, QueryFetchOutput,
-)
-from application_sdk.app import task
+`SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are deprecated (removal in v4.0.0):
 
-class MyQueryExtractor(SqlQueryExtractor):
-    @task(timeout_seconds=600)
-    async def get_query_batches(
-        self, input: QueryBatchInput
-    ) -> QueryBatchOutput: ...
-
-    @task(timeout_seconds=3600)
-    async def fetch_queries(
-        self, input: QueryFetchInput
-    ) -> QueryFetchOutput: ...
-```
-
-### IncrementalSqlMetadataExtractor
-
-Deprecated (removal in v4.0.0): subclass `SqlApp` and override `run()` with the incremental phases as `@task` methods. The phases and example below are the legacy API, kept for apps that still use it; new and migrating apps do not copy them.
-
-Runs a 5-phase incremental extraction:
-
-1. **Prerequisites** — fetch the prior run marker and the previous state snapshot.
-2. **Base extraction** — extract databases, schemas (in parallel), then tables.
-3. **Incremental columns** — batch preparation followed by parallel column discovery.
-4. **Write state** — create and upload the new current-state snapshot.
-5. **Update marker** — persist the new run marker after the state write succeeds.
-
-```python
-from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    FetchColumnsIncrementalInput, FetchColumnsOutput,
-)
-from application_sdk.app import task
-
-class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_columns(
-        self, input: FetchColumnsIncrementalInput
-    ) -> FetchColumnsOutput: ...
-```
+- **`SqlMetadataExtractor`**: subclass `SqlApp` as above.
+- **`IncrementalSqlMetadataExtractor`**: subclass `SqlApp` and override `run()`, writing the incremental phases (marker, fetch, diff, state write) as `@task` methods. See [Step 3 of the upgrade guide](../upgrade-guide-v3.md#step-3-upgrade-incremental-sql-extraction).
+- **`SqlQueryExtractor`**: still the target for query-log connectors, because `SqlApp` has no query-log capability yet (FND-4313). See [Step 2 of the upgrade guide](../upgrade-guide-v3.md#step-2-upgrade-sql-query-extraction).
 
 ### BaseMetadataExtractor
 
-Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
+Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task.
 
 ## Offloading Blocking Work (`run_in_thread` and auto-holds)
 
@@ -264,6 +246,8 @@ class MyConnector(App):
         await self.notify_downstream()
         await super().on_complete()  # preserves built-in file/storage cleanup
 ```
+
+Whether the built-in cleanup runs is `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`, read once when the worker starts and pinned on each run at its first workflow task. A run keeps the value it started with wherever it continues or replays, so changing the variable on a rollout affects new runs only. The event interceptor's `APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR` is pinned the same way. Outside a workflow (a direct `on_complete()` call in a unit test), the variable is read at the call.
 
 ### Run Scratch Directory (`self.run_scratch_dir`)
 
@@ -458,7 +442,7 @@ either inline (``value:``) or via a ``secretKeyRef:`` that names a secret in the
 ``auth.secretStore``.  On the secure k8s SDR path the chart deliberately omits the matching
 environment variables and resolves credentials only through the secret store.
 
-At startup ``_create_infrastructure`` (in ``application_sdk.main``) reads each store's
+At startup ``_create_infrastructure`` (in ``application_sdk.infrastructure._bootstrap``) reads each store's
 ``secretKeyRef`` entries via ``read_binding_secret_refs``, fetches the referenced secrets from
 the Dapr sidecar (``_fetch_binding_secrets``), and hands them to the synchronous store
 factories (``create_store_from_binding*``) as the ``secrets=`` keyword.  The same secrets are
@@ -1001,6 +985,71 @@ This is not asset validation: [Asset-Validation Outcome](#asset-validation-outco
 the app *did* emit that look wrong; `skip_record` records what the app *chose not to* emit. See
 [ADR-0022](../adr/0022-skipped-record-capture.md).
 
+### Recording Per-Item Fetch Failures (`record_fetch_failure`)
+
+An app that fetches items in parallel — one request per report, page or dashboard — records each
+*expected* per-item failure where it happens, inside the per-item coroutine:
+
+```python
+import asyncio
+
+from application_sdk.outputs import FetchFailureReason, record_fetch_failure
+
+async def fetch_report(report_id: str) -> Report | None:
+    try:
+        return await client.get_report(report_id)
+    except ReportNotFound as exc:          # typed and expected: record it here
+        record_fetch_failure(
+            FetchFailureReason.NOT_FOUND,
+            entity_type="Report",
+            record_id=report_id,
+            endpoint="/reports/{id}",
+            http_status=404,
+            detail=str(exc),
+        )
+        return None
+
+@task
+async def extract(self, input: ExtractInput) -> ExtractOutput:
+    async with asyncio.TaskGroup() as tg:  # anything unexpected fails the task
+        tasks = [tg.create_task(fetch_report(r)) for r in report_ids]
+    reports = [t.result() for t in tasks if t.result() is not None]
+    if report_ids and not reports:          # every item failed: an outage, not a partial run
+        raise SourceUnavailableError(...)
+    ...
+```
+
+Three rules make the pattern work:
+
+- **Record at the item, not after the batch.** `gather(..., return_exceptions=True)` followed by an
+  `isinstance(result, Exception)` loop has lost which item failed. Catch inside the per-item
+  coroutine, where the id is in hand.
+- **Catch only typed, expected failures.** Anything else propagates — use `TaskGroup`, or `gather`
+  *without* `return_exceptions` — so the task fails and Temporal retries it.
+- **Raise past a threshold.** The SDK applies none, because only the app knows its denominator. A
+  run where every item failed is an outage and must fail, not end `PARTIAL_SUCCESS`.
+
+`reason` is a closed `FetchFailureReason`: `SOURCE_UNAVAILABLE`, `NOT_FOUND`, `FORBIDDEN`,
+`RATE_LIMITED`. Put specifics in `detail`, and give `endpoint` as a template (`/reports/{id}`), not
+a URL with ids or query strings; both reach the file only.
+
+`record_fetch_failure` is a plain function, not a coroutine. It is safe from the event loop, from
+`gather`/`TaskGroup` child tasks, and from a sync function run through `run_in_thread`, which
+copies the activity's context into the thread. (A thread started some other way does not see the
+activity's sink.) A line holds ids only, so the activity's lines stay in memory until it returns.
+
+When the task returns, the SDK adds `fetch-failures` and `fetch-failures-<reason>` to its metrics
+and uploads its lines. A task that raises records nothing: its retry records its own. After
+`run()` returns, the framework task `merge_fetch_failures` merges every task's lines into
+`{run prefix}/fetch-failures.ndjson`, adds the run artifact `fetch-failures`, and a `SUCCESS`
+result is marked `PARTIAL_SUCCESS`. A run that records nothing is unchanged. Bounding and
+fail-open storage are as for `skip_record`: `MAX_SKIPPED_RECORDS` caps the lines and warnings, and
+`fetch-failures-truncated` / `fetch-failures-unpersisted` account for every failure not in the file.
+
+Use `skip_record` for a record the app *received* and chose not to emit; use
+`record_fetch_failure` when there is no record because the fetch failed. See
+[ADR-0022](../adr/0022-skipped-record-capture.md).
+
 ### Asset-Validation Outcome
 
 `App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
@@ -1127,7 +1176,7 @@ The marker does two things at once, and neither of them is "turn the check off":
 
 **You almost certainly do not need to write this.** `ExtractionOutput.transformed_files` is the
 SDK's own field — declared by the SDK, populated by `SqlApp.run()`, written by
-`SqlApp._transform_entity` — so every SQL connector inherits the marker and needs no
+`SqlApp.transform_entity` — so every SQL connector inherits the marker and needs no
 `artifactSchemas` entry for it. Your `MyExtractionOutput(ExtractionOutput)` is covered with no
 change, and stays covered if you **redeclare** the field to narrow its type or attach your own
 `Field(...)`: the marker is resolved across the contract's MRO, so a subclass cannot silently
@@ -1284,7 +1333,7 @@ from application_sdk.common.sql_filters import read_sql_files
 
 SQL_QUERIES = read_sql_files("/path/to/queries")
 
-class MyExtractor(SqlMetadataExtractor):
+class MyExtractor(SqlApp):
     fetch_database_sql = SQL_QUERIES.get("FETCH_DATABASES")
     fetch_table_sql = SQL_QUERIES.get("FETCH_TABLES")
 ```
@@ -1451,21 +1500,28 @@ class MyConnector(App):
 **Queue resolution** (evaluated at workflow-run time):
 
 1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override. Hyphens in the pool name are normalised to underscores: `pool="cold-tier"` looks up `ATLAN_POOL_COLD_TIER_QUEUE`.
-2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent.
+2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent. Unless `ATLAN_TASK_QUEUE` is set, the base queue is the SDK's derived one: `atlan-{app}-{deployment}` in a deployed app, or the bare app name when `ATLAN_DEPLOYMENT_NAME` is unset (so `dbt-heavy` locally). See [Task-queue naming](../configuration.md#task-queue-naming). A pool queue inherits a pinned value too. Do not pin `ATLAN_TASK_QUEUE` in a deploy or pool env: the on-demand (`-od`) worker breaks (K031).
 3. If neither is set, a warning is emitted at startup and the activity falls back to the default queue.
 
-**Pkl contract:** every pool used in `@task` must be declared in the app contract so the contract-toolkit can generate the correct deployment manifest:
+**Pkl contract:** every pool used in `@task` must be declared in `deploy.pools` of the app contract, so the contract-toolkit deploys a worker pool that polls its queue. The **first** key is the app's main worker: it polls the base queue and runs every task without `pool=`. Only keys after the first get a dedicated worker pool, so a `pool=` must name one of those. The one exception is a pool you route with a non-empty `ATLAN_POOL_<POOL>_QUEUE` override (step 1 above) in the main worker's env (the first pool's `env`; the workflow runs there, so a dedicated pool's env never reaches it) to a queue a worker you deploy yourself polls; that pool needs no `deploy.pools` key:
 
 ```pkl
-pools {
-  ["heavy"] = new Pool {
-    keda { minReplicaCount = 2 }
-  }
-  ["cold-tier"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 600 }
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {   // main worker: tasks without pool=
+      keda { minReplicaCount = 1 }
+    }
+    ["heavy"] = new Pool {     // @task(pool="heavy")
+      keda { minReplicaCount = 2 }
+    }
+    ["cold-tier"] = new Pool { // @task(pool="cold-tier")
+      keda { minReplicaCount = 0; cooldownPeriod = 600 }
+    }
   }
 }
 ```
+
+Conformance checks the two sides agree. K032 (blocking) fails a `pool=` that names no dedicated pool (a typo, a removed pool, or the first key), because nothing polls its queue and the task's activities hang until they time out. K033 (warning) flags a dedicated pool that no `@task(pool=)` names.
 
 See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design including rollout-drain requirements.
 
@@ -1489,6 +1545,8 @@ class MyConnector(App):
     @task(retry_policy=RetryPolicy(max_attempts=10, backoff_coefficient=1.5))
     async def fetch_flaky_api(self, input: FetchInput) -> FetchOutput: ...
 ```
+
+A `retry_policy` replaces the `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds` arguments: the task is dispatched with the policy and those three are never read. Put the values on the policy instead. Passing any of them together with `retry_policy` warns at decoration today and raises `TaskDeclarationError` from v4.0.0.
 
 `RetryPolicy` is a frozen dataclass with fluent builder methods:
 

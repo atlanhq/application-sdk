@@ -29,6 +29,16 @@ import time
 from collections import deque
 from typing import Callable, TextIO
 
+__all__ = [
+    "console_log_drop_count",
+    "CONSOLE_QUEUE_MAX_RECORDS",
+    "console_writer",
+    "ConsoleWriter",
+    "DROP_WARNING_INTERVAL_SECONDS",
+    "flush_console_logs",
+]
+
+
 # The most records allowed to wait for the writer thread. At a typical
 # 200-byte line this caps the queue at about 2 MB.
 CONSOLE_QUEUE_MAX_RECORDS = 10_000
@@ -54,7 +64,11 @@ class ConsoleWriter:
 
     def _init_state(self) -> None:
         self._pid = os.getpid()
-        self._cond = threading.Condition(threading.Lock())
+        # Re-entrant: a garbage-collector finalizer can run inside put()'s
+        # critical section, and asyncio reports a destroyed pending task through
+        # logging, which comes straight back into put() on the same thread. A
+        # plain Lock deadlocks that thread for good.
+        self._cond = threading.Condition(threading.RLock())
         self._queue: deque[tuple[TextIO, str]] = deque()
         # Counts a record popped off the queue but not yet written, so
         # flush() doesn't return while a write is still in progress.
@@ -95,10 +109,16 @@ class ConsoleWriter:
                 self._dropped += 1
             self._queue.append((stream, text))
             if self._thread is None:
-                self._thread = threading.Thread(
+                thread = threading.Thread(
                     target=self._run, name="atlan-console-log-writer", daemon=True
                 )
-                self._thread.start()
+                # A finalizer that logs while the Thread is being built re-enters
+                # put(), still sees no thread, and starts one. Keep that one: a
+                # second writer would drain alongside it, and _in_flight tracks
+                # only one write, so flush() could return early.
+                if self._thread is None:
+                    self._thread = thread
+                    thread.start()
             self._cond.notify_all()
 
     def flush(self, timeout: float) -> bool:

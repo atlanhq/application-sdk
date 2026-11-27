@@ -1,0 +1,412 @@
+{
+  "application_sdk/_obstore_config.py": {
+    "C901": [
+      "s3_store_args"
+    ]
+  },
+  "application_sdk/_runtime/offload.py": {
+    "C901": [
+      "run_fault_isolated"
+    ]
+  },
+  "application_sdk/app/_ep_registration.py": {
+    "C901": [
+      "_build_entry_points"
+    ]
+  },
+  "application_sdk/app/base.py": {
+    "C901": [
+      "App._upload_impl",
+      "App._verify_refs_impl",
+      "App.cleanup_files",
+      "App.cleanup_storage",
+      "_collect_interaction_relays",
+      "_demote",
+      "_release_slot",
+      "_run_preflight_gate",
+      "generate_workflow_class",
+      "generate_workflow_class._run"
+    ],
+    "PLR0915": [
+      "App._verify_refs_impl",
+      "App.cleanup_storage",
+      "_run_preflight_gate",
+      "generate_workflow_class",
+      "generate_workflow_class._run"
+    ]
+  },
+  "application_sdk/app/context.py": {
+    "C901": [
+      "_WorkflowSafeLogger._log"
+    ]
+  },
+  "application_sdk/clients/azure/client.py": {
+    "C901": [
+      "AzureClient.load"
+    ]
+  },
+  "application_sdk/clients/sql.py": {
+    "C901": [
+      "BaseSQLClient.run_query"
+    ]
+  },
+  "application_sdk/common/filter_matching.py": {
+    "C901": [
+      "_to_patterns"
+    ]
+  },
+  "application_sdk/common/incremental/state/incremental_diff.py": {
+    "C901": [
+      "create_incremental_diff"
+    ]
+  },
+  "application_sdk/common/sql_filters.py": {
+    "C901": [
+      "extract_database_names_from_regex_common",
+      "validate_filter_no_sql_injection",
+      "validate_filter_regex_syntax"
+    ]
+  },
+  "application_sdk/contracts/base.py": {
+    "C901": [
+      "Input._log_summary",
+      "PublishInputMixin._derive_publish_paths",
+      "_is_forbidden_type",
+      "canonical_type_str"
+    ]
+  },
+  "application_sdk/credentials/requirements.py": {
+    "C901": [
+      "canonical_credential"
+    ]
+  },
+  "application_sdk/credentials/spec.py": {
+    "C901": [
+      "_declared_sources_json_schema"
+    ]
+  },
+  "application_sdk/dev/_dapr.py": {
+    "C901": [
+      "embedded_dapr"
+    ],
+    "PLR0915": [
+      "embedded_dapr"
+    ]
+  },
+  "application_sdk/dev/_runner.py": {
+    "PLR0915": [
+      "_run_dev_combined_inner"
+    ]
+  },
+  "application_sdk/errors/base.py": {
+    "C901": [
+      "redact_wire_value"
+    ]
+  },
+  "application_sdk/execution/_temporal/activities.py": {
+    "C901": [
+      "create_activity_from_task",
+      "create_activity_from_task.activity_fn"
+    ],
+    "PLR0915": [
+      "create_activity_from_task",
+      "create_activity_from_task.activity_fn"
+    ]
+  },
+  "application_sdk/execution/_temporal/interceptors/events.py": {
+    "C901": [
+      "_send_lifecycle_event_to_segment"
+    ]
+  },
+  "application_sdk/execution/_temporal/interceptors/log.py": {
+    "C901": [
+      "_LogActivityInboundInterceptor.execute_activity",
+      "_LogWorkflowInboundInterceptor._resolve_correlation_id"
+    ],
+    "PLR0915": [
+      "_LogActivityInboundInterceptor.execute_activity"
+    ]
+  },
+  "application_sdk/execution/_temporal/preflight_gate.py": {
+    "C901": [
+      "_append_storage_checks",
+      "build_preflight_gate_activity",
+      "build_preflight_gate_activity.preflight_gate"
+    ],
+    "PLR0915": [
+      "build_preflight_gate_activity",
+      "build_preflight_gate_activity.preflight_gate"
+    ]
+  },
+  "application_sdk/execution/_temporal/sdr.py": {
+    "C901": [
+      "build_sdr_activities"
+    ]
+  },
+  "application_sdk/execution/_temporal/supervisor.py": {
+    "C901": [
+      "_observe_worker_poll_state",
+      "_supervise_worker"
+    ]
+  },
+  "application_sdk/execution/_temporal/worker.py": {
+    "C901": [
+      "create_worker"
+    ],
+    "PLR0915": [
+      "create_worker"
+    ]
+  },
+  "application_sdk/execution/heartbeat.py": {
+    "C901": [
+      "auto_heartbeat_loop"
+    ]
+  },
+  "application_sdk/handler/metadata_routes.py": {
+    "C901": [
+      "credential_gaps",
+      "register_metadata_routes",
+      "register_metadata_routes.get_configmap"
+    ],
+    "PLR0915": [
+      "register_metadata_routes"
+    ]
+  },
+  "application_sdk/handler/object_routes.py": {
+    "C901": [
+      "RequestBodyLimitMiddleware.__call__",
+      "register_object_routes"
+    ],
+    "PLR0915": [
+      "register_object_routes"
+    ]
+  },
+  "application_sdk/handler/routes.py": {
+    "C901": [
+      "register_handler_routes",
+      "register_handler_routes.preflight_check"
+    ],
+    "PLR0915": [
+      "register_handler_routes"
+    ]
+  },
+  "application_sdk/handler/service.py": {
+    "C901": [
+      "_register_workflow_routes",
+      "_register_workflow_routes.get_result",
+      "create_app_handler_service"
+    ],
+    "PLR0915": [
+      "_register_workflow_routes",
+      "create_app_handler_service"
+    ]
+  },
+  "application_sdk/infrastructure/_dapr/credential_vault.py": {
+    "C901": [
+      "DaprCredentialVault._fetch_credential_config"
+    ]
+  },
+  "application_sdk/main.py": {
+    "C901": [
+      "run_combined_mode",
+      "run_worker_mode"
+    ],
+    "PLR0915": [
+      "run_combined_mode",
+      "run_worker_mode"
+    ]
+  },
+  "application_sdk/observability/_objectstore_metric_exporter.py": {
+    "C901": [
+      "_serialize_metrics_data"
+    ]
+  },
+  "application_sdk/observability/logger_adaptor.py": {
+    "C901": [
+      "AtlanLoggerAdapter.__init__",
+      "_apply_atlan_context"
+    ]
+  },
+  "application_sdk/observability/observability.py": {
+    "C901": [
+      "AtlanObservability._flush_records"
+    ]
+  },
+  "application_sdk/observability/utils.py": {
+    "C901": [
+      "build_otel_resource"
+    ]
+  },
+  "application_sdk/storage/_concurrency.py": {
+    "C901": [
+      "_run_bounded"
+    ]
+  },
+  "application_sdk/storage/binding.py": {
+    "C901": [
+      "_build_azure_config"
+    ]
+  },
+  "application_sdk/storage/chunked.py": {
+    "C901": [
+      "_download_chunked_locked"
+    ],
+    "PLR0915": [
+      "_download_chunked_locked"
+    ]
+  },
+  "application_sdk/storage/file_ref_sync.py": {
+    "C901": [
+      "_replace_refs",
+      "_replace_refs._collect",
+      "_replace_refs._scatter"
+    ],
+    "PLR0915": [
+      "_replace_refs"
+    ]
+  },
+  "application_sdk/storage/formats/json.py": {
+    "C901": [
+      "JsonFileReader._get_batched_dataframe"
+    ]
+  },
+  "application_sdk/storage/ops.py": {
+    "C901": [
+      "download_file"
+    ],
+    "PLR0915": [
+      "download_file"
+    ]
+  },
+  "application_sdk/storage/reference.py": {
+    "C901": [
+      "_materialize_directory",
+      "_materialize_single_file"
+    ],
+    "PLR0915": [
+      "_materialize_directory",
+      "_materialize_single_file"
+    ]
+  },
+  "application_sdk/storage/transfer.py": {
+    "C901": [
+      "upload"
+    ],
+    "PLR0915": [
+      "upload"
+    ]
+  },
+  "application_sdk/templates/contracts/sql_metadata.py": {
+    "C901": [
+      "ExtractionInput._normalize_ae_payload"
+    ]
+  },
+  "application_sdk/templates/incremental_sql_metadata_extractor.py": {
+    "PLR0915": [
+      "IncrementalSqlMetadataExtractor.prepare_column_extraction_queries"
+    ]
+  },
+  "application_sdk/testing/e2e/base.py": {
+    "C901": [
+      "BaseE2ETest._seed_dag_from_manifest"
+    ]
+  },
+  "application_sdk/testing/e2e/payload.py": {
+    "C901": [
+      "build_ae_payload"
+    ]
+  },
+  "application_sdk/testing/fake_source.py": {
+    "C901": [
+      "_make_handler_class"
+    ]
+  },
+  "application_sdk/testing/full_dag/base.py": {
+    "C901": [
+      "BaseFullDAGE2ETest._seed_dag_from_manifest"
+    ]
+  },
+  "application_sdk/testing/harness/automation_engine/client.py": {
+    "C901": [
+      "AEClient._post_with_retry"
+    ]
+  },
+  "application_sdk/testing/harness/teardown/__init__.py": {
+    "C901": [
+      "delete_connection"
+    ]
+  },
+  "application_sdk/testing/harness/waiting.py": {
+    "C901": [
+      "poll_until"
+    ]
+  },
+  "application_sdk/testing/integration/comparison.py": {
+    "C901": [
+      "compare_metadata"
+    ]
+  },
+  "application_sdk/testing/integration/output_schema.py": {
+    "C901": [
+      "_check_value",
+      "_column_rule",
+      "_parquet_value_pass",
+      "_translate_check"
+    ]
+  },
+  "application_sdk/testing/integration/runner.py": {
+    "C901": [
+      "BaseIntegrationTest._build_scenario_args",
+      "BaseIntegrationTest._execute_scenario"
+    ],
+    "PLR0915": [
+      "BaseIntegrationTest._execute_scenario"
+    ]
+  },
+  "application_sdk/testing/integration/source.py": {
+    "C901": [
+      "DataForgeSource.from_env"
+    ]
+  },
+  "application_sdk/testing/parity/report.py": {
+    "C901": [
+      "generate_markdown"
+    ],
+    "PLR0915": [
+      "generate_markdown"
+    ]
+  },
+  "application_sdk/transformers/atlas/sql.py": {
+    "C901": [
+      "Table.get_attributes"
+    ],
+    "PLR0915": [
+      "Column.get_attributes",
+      "Table.get_attributes",
+      "TagAttachment.get_attributes"
+    ]
+  },
+  "application_sdk/validation/assets.py": {
+    "C901": [
+      "validate_transformed_dir"
+    ],
+    "PLR0915": [
+      "validate_transformed_dir"
+    ]
+  },
+  "application_sdk/validation/ndjson.py": {
+    "C901": [
+      "_trace_fan_out"
+    ]
+  },
+  "application_sdk/validation/parquet.py": {
+    "C901": [
+      "ParquetFooterValidator.validate"
+    ]
+  },
+  "application_sdk/validation/wrapper.py": {
+    "C901": [
+      "validate_artifact"
+    ]
+  }
+}

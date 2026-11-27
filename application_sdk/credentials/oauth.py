@@ -30,6 +30,12 @@ from application_sdk.credentials.types import OAuthClientCredential
 from application_sdk.errors.leaves import AuthError
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "OAuthTokenError",
+    "OAuthTokenService",
+]
+
+
 logger = get_logger(__name__)
 
 # Refresh the token this many seconds before it actually expires.

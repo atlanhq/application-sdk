@@ -13,7 +13,6 @@ from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage import ops
 from application_sdk.storage._local_marker import read_local_marker
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put, get_file_meta
 from application_sdk.storage.reference import (
     _materialize_single_file,
@@ -21,11 +20,6 @@ from application_sdk.storage.reference import (
     materialize_file_reference,
     persist_file_reference,
 )
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 def _hash_bytes(data: bytes) -> str:

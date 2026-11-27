@@ -20,14 +20,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 import types
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import renovate_pkl_sync as mod
 
 STALE_MANIFEST = '{"app_name": "{app_name}"}\n'
@@ -40,19 +36,42 @@ TOOLKIT_CONNECTOR_CONFIG = '{"credential": "toolkit-default"}\n'
 CANONICAL_CONNECTOR_CONFIG = '{"credential": "hand-maintained"}\n'
 
 
+def _git_out(repo: Path, *args: str) -> str:
+    """Run git in *repo* and return its stdout; on failure, fail with git's
+    own stderr. `check=True` reported only the exit status, which left a CI
+    failure of `git add -A` (exit 128) with no stated cause."""
+    result = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, (
+        f"git {' '.join(args)} exited {result.returncode} in {repo}\n"
+        f"stderr:\n{result.stderr}\nstdout:\n{result.stdout}"
+    )
+    return result.stdout
+
+
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+    _git_out(repo, *args)
 
 
 def _commit_count(repo: Path) -> int:
-    out = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=repo,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return int(out.stdout.strip())
+    return int(_git_out(repo, "rev-list", "--count", "HEAD").strip())
+
+
+def test_a_failed_git_call_reports_gits_stderr(tmp_path: Path) -> None:
+    """A fixture git failure must name its cause: FND-5416's CI failure gave
+    only `exit status 128`. A stale index.lock is a real exit-128 failure."""
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".git" / "index.lock").write_text("")
+    (tmp_path / "f").write_text("x")
+
+    with pytest.raises(AssertionError) as exc:
+        _git(tmp_path, "add", "-A")
+
+    message = str(exc.value)
+    assert "git add -A exited 128" in message
+    assert "index.lock" in message
+    assert "File exists" in message
 
 
 @pytest.fixture

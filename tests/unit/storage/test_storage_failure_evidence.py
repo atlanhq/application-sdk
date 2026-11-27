@@ -196,13 +196,12 @@ def test_azure_condition_not_met_also_stays_retryable() -> None:
 
 
 def test_a_real_outage_stays_retryable_even_when_the_key_contains_412() -> None:
-    """The reason the classifier does not reuse ``_is_precondition``.
+    """Status routing reads the parsed status, never the digits in the text.
 
-    That helper falls back to ``"412" in msg``, and object keys and run GUIDs
-    appear in every obstore message — roughly 1 artifact key in 94 contains the
-    digits 412. Routing on the substring would turn a transient outage into a
-    permanent failure and stop the orchestrator retrying something that would
-    have succeeded.
+    Object keys and run GUIDs appear in every obstore message — roughly 1
+    artifact key in 94 contains the digits 412. Routing on the substring would
+    turn a transient outage into a permanent failure and stop the orchestrator
+    retrying something that would have succeeded.
     """
     key = "artifacts/apps/example-app/runs/01a0412f-5c0c-7195-8d7e-4174674032eb/t.json"
     err = _storage_error_for(

@@ -5,6 +5,11 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from typing_extensions import deprecated
 
+__all__ = [
+    "TaskResult",
+    "TaskStatistics",
+]
+
 
 @dataclass
 class TaskStatistics:

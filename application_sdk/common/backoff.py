@@ -59,6 +59,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeVar
 
+__all__ = [
+    "Backoff",
+    "Jitter",
+    "retry_async",
+    "RetryExhausted",
+    "SPREAD_BOUNDS",
+]
+
+
 _T = TypeVar("_T")
 
 #: Exponent clamp. A raised attempt count or budget must never compute a huge

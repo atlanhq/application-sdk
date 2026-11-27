@@ -31,14 +31,10 @@ from application_sdk.storage.ops import (
     get_file_size,
     normalize_key,
     put_json,
+    upload_bytes,
     upload_file,
 )
 from tests.unit.private_stdlib import private_stdlib
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 class TestPutAndGet:
@@ -373,6 +369,119 @@ class TestDownloadFile:
         dest = tmp_path / "out.bin"
         await download_file("perm.bin", dest, store)
         assert dest.stat().st_mode & 0o077 == 0
+
+
+class TestUploadBytes:
+    """The byte-put primitive: same write-side integrity as upload_file."""
+
+    async def test_writes_bytes_and_sidecar_returns_digest(self, store) -> None:
+        sha = await upload_bytes("out/blob.bin", b"payload", store)
+        assert sha == hashlib.sha256(b"payload").hexdigest()
+        assert await _get_bytes("out/blob.bin", store) == b"payload"
+        assert await _get_bytes("out/blob.bin.sha256", store) == sha.encode()
+
+    async def test_normalises_staging_path_by_default(self, store) -> None:
+        staging = os.path.join(constants.TEMPORARY_PATH, "out/staged.bin")
+        await upload_bytes(staging, b"x", store)
+        assert await _get_bytes("out/staged.bin", store, normalize=False) == b"x"
+
+    async def test_compute_hash_false_writes_no_sidecar(self, store) -> None:
+        assert await upload_bytes("ext/x.bin", b"x", store, compute_hash=False) is None
+        assert await _get_bytes("ext/x.bin", store) == b"x"
+        assert await _get_bytes("ext/x.bin.sha256", store) is None
+
+    async def test_empty_payload(self, store) -> None:
+        sha = await upload_bytes("out/zero.bin", b"", store)
+        assert sha == hashlib.sha256(b"").hexdigest()
+        assert await _get_bytes("out/zero.bin", store) == b""
+
+    async def test_object_absent_after_put_raises(self, store) -> None:
+        """A store that drops the object is caught by the readback HEAD."""
+        with patch.object(obstore, "open_writer_async", _DiscardingWriter):
+            with pytest.raises(StorageError, match="absent from the store"):
+                await upload_bytes("out/dropped.bin", b"data", store, verify=True)
+        assert await _get_bytes("out/dropped.bin.sha256", store) is None
+
+    async def test_bound_store_put_attributes_reach_the_writer(self, store) -> None:
+        from application_sdk.storage.ops import BoundStore
+
+        real_open = obstore.open_writer_async
+        seen: list[object] = []
+
+        def _open_spy(st, key, **kwargs):
+            seen.append(kwargs.get("attributes"))
+            kwargs.pop("attributes", None)  # MemoryStore keeps no attributes
+            return real_open(st, key, **kwargs)
+
+        attrs = {"Storage-Class": "STANDARD_IA"}
+        with patch.object(obstore, "open_writer_async", _open_spy):
+            await upload_bytes(
+                "k.bin", b"v", BoundStore(store, attrs), compute_hash=False
+            )
+        assert seen == [attrs]
+
+    async def test_large_payload_streams_like_a_file(self, store, monkeypatch) -> None:
+        """Same transport as upload_file: deployment part size, budget, marks.
+
+        The old temp-file path got these from upload_file; a bare put_async
+        would skip all three.
+        """
+        from application_sdk.storage import ops as ops_module
+        from application_sdk.storage._budget import transfer_budget
+
+        part = 1024 * 1024
+        monkeypatch.setattr(constants, "STORAGE_UPLOAD_PART_SIZE_BYTES", part)
+        monkeypatch.setattr(constants, "STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", True)
+        marks: list[str] = []
+        tracker = MagicMock()
+        tracker.mark_progress.side_effect = marks.append
+        monkeypatch.setattr(ops_module, "current_progress_tracker", lambda: tracker)
+        real_open = obstore.open_writer_async
+        buffer_sizes: list[int] = []
+
+        def _open_spy(st, key, **kwargs):
+            buffer_sizes.append(kwargs["buffer_size"])
+            return real_open(st, key, **kwargs)
+
+        data = os.urandom(3 * part + 17)
+        with patch.object(obstore, "open_writer_async", _open_spy):
+            sha = await upload_bytes("big.bin", data, store)
+
+        assert sha == hashlib.sha256(data).hexdigest()
+        assert await _get_bytes("big.bin", store) == data
+        assert buffer_sizes == [part]
+        assert marks == ["storage.upload_part"] * 4
+        assert transfer_budget().peak > 0
+
+    async def test_upload_failure_emits_storage_telemetry(self, store) -> None:
+        from application_sdk.storage import ops as ops_module
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("store unavailable")
+
+        with (
+            patch.object(obstore, "open_writer_async", _boom),
+            patch.object(ops_module, "_log_storage_event") as event,
+            pytest.raises(StorageError),
+        ):
+            await upload_bytes("k.bin", b"v", store)
+        assert event.call_args.kwargs["outcome"] == "failure"
+
+
+class _DiscardingWriter:
+    """An ``open_writer_async`` stand-in that accepts every byte and stores none."""
+
+    def __init__(self, *_args: object, **_kwargs: object) -> None:
+        pass
+
+    async def __aenter__(self) -> _DiscardingWriter:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def write(self, buffer: bytes | memoryview) -> int:
+        return len(buffer)
 
 
 class TestPutJson:
@@ -1629,10 +1738,14 @@ class TestTransferProgressHeartbeat:
         assert "in_progress" in args[1]
         assert "50%" in args[1]
         # Structured fields promote to OTLP attributes (all in _KNOWN_EXTRA_KEYS).
-        assert kwargs["storage_op"] == "download"
-        assert kwargs["outcome"] == "in_progress"
-        assert kwargs["size_bytes"] == 50 * 1024 * 1024
-        assert kwargs["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
+        # Passed as stdlib ``extra``, which both loggers take: the SDK logger
+        # spreads it into the bound fields, a stdlib one (the API host) sets
+        # them on the record.
+        extra = kwargs["extra"]
+        assert extra["storage_op"] == "download"
+        assert extra["outcome"] == "in_progress"
+        assert extra["size_bytes"] == 50 * 1024 * 1024
+        assert extra["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
 
     def test_no_total_omits_percentage(self) -> None:
         from application_sdk.storage._telemetry import _log_transfer_progress
@@ -1995,14 +2108,6 @@ class TestResolvePutAttributes:
     - unrelated store: returns None.
     - no infra context: returns None.
     """
-
-    @pytest.fixture(autouse=True)
-    def _clear_infra(self):
-        from application_sdk.infrastructure.context import clear_infrastructure
-
-        clear_infrastructure()
-        yield
-        clear_infrastructure()
 
     def _make_infra(
         self, store, put_attrs, *, upstream_store=None, upstream_put_attrs=None

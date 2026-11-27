@@ -34,6 +34,20 @@ DOCS = "docs only"
 
 DEPENDENCY_BOTS = ("atlan-app-fleet[bot]", "renovate[bot]", "dependabot[bot]")
 DEPENDENCY_BRANCHES = ("renovate/", "dependabot/")
+# The vulnerability agent's dependency fixes (FND-5321). The same App also
+# opens code pull requests on other branches, so it is exempt only on these
+# branches, only when it wrote every commit, and only when every changed
+# file is a dependency manifest or lock: a vuln branch carrying code is
+# reviewed.
+VULN_BOTS = ("connectivity-ai[bot]",)
+VULN_BRANCHES = ("vuln-agent/",)
+DEPENDENCY_FILES = (
+    "uv.lock",
+    "pyproject.toml",
+    "contract/PklProject",
+    "contract/PklProject.deps.json",
+    "contract_schema.lock.json",
+)
 RESYNC_BOTS = ("atlan-conformance-sync[bot]",)
 VERSION_BUMP_BRANCHES = ("bump-version",)
 # What `atlan-application-sdk-conformance bootstrap` writes, removes or merges
@@ -65,6 +79,15 @@ BOOTSTRAP_MANAGED = (
     ".github/workflows/update-dashboard.yml",
     ".github/workflows/renovate-auto-approve.yml",
     ".github/workflows/porter-bundle-cnab.yaml",
+    # Never bootstrap-managed: bootstrap never wrote it and only removes it (a per-repo
+    # caller of atlanhq/.github's reusable-dep-cooldown.yml; see render.py).
+    ".github/workflows/dep-cooldown.yml",
+    # Never bootstrap-managed: hand-copied callers of marketplace-releases' dev-tenant
+    # Playwright workflows; bootstrap only removes them (see render.py).
+    ".github/workflows/e2e-pr-init-check.yaml",
+    ".github/workflows/e2e-tests-feature.yaml",
+    # Never bootstrap-managed: a hand-written weekly uv-upgrade job Renovate replaces.
+    ".github/workflows/update-deps.yml",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
     ".github/actions/run-conformance-detect/**",
@@ -97,6 +120,9 @@ class ExemptConfig:
     dependency_branches: list[str] = field(
         default_factory=lambda: list(DEPENDENCY_BRANCHES)
     )
+    vuln_bots: list[str] = field(default_factory=lambda: list(VULN_BOTS))
+    vuln_branches: list[str] = field(default_factory=lambda: list(VULN_BRANCHES))
+    dependency_files: list[str] = field(default_factory=lambda: list(DEPENDENCY_FILES))
     resync_bots: list[str] = field(default_factory=lambda: list(RESYNC_BOTS))
     bootstrap_managed: list[str] = field(
         default_factory=lambda: list(BOOTSTRAP_MANAGED)
@@ -151,6 +177,19 @@ def classify(
         return Exemption(
             DEPENDENCY,
             f"opened by {author} on `{head_ref}`, and every commit is a dependency bot's",
+        )
+    if (
+        author in cfg.vuln_bots
+        and head_ref.startswith(tuple(cfg.vuln_branches))
+        and by
+        and by <= set(cfg.vuln_bots)
+        and paths
+        and all(any(glob_match(p, g) for g in cfg.dependency_files) for p in paths)
+    ):
+        return Exemption(
+            DEPENDENCY,
+            f"opened by {author} on `{head_ref}`, every commit is its own, and all "
+            f"{len(paths)} changed file(s) are dependency manifests or locks",
         )
     if (
         author in cfg.resync_bots

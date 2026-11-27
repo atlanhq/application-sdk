@@ -41,11 +41,11 @@ from typing import TYPE_CHECKING
 import obstore
 import orjson
 
+from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.atomic import ensure_free_space
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._locks import PathLockRegistry
 from application_sdk.storage._telemetry import _log_transfer_progress
@@ -54,6 +54,11 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.storage.ops import BoundStore
+
+__all__ = [
+    "download_file_chunked",
+]
+
 
 logger = get_logger(__name__)
 
@@ -708,6 +713,10 @@ async def _download_chunked_locked(
     ``os.replace`` publish — so the deterministic staging files are only ever
     touched by one writer at a time.
     """
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: ops imports this module at top level
+        _settings,
+        integrity,
+    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked for back-compat
         _exc_class_name,
         _is_not_found,
@@ -717,19 +726,11 @@ async def _download_chunked_locked(
     )
 
     if resume is None:
-        from application_sdk.constants import STORAGE_RESUME_DOWNLOADS  # noqa: PLC0415
-
-        resume = STORAGE_RESUME_DOWNLOADS
-
-    from application_sdk.storage import (  # noqa: PLC0415 — circular: ops imports this module at top level
-        integrity,
-    )
+        resume = _settings.resume_downloads()
 
     verifying = integrity.verification_enabled(verify)
 
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-    )
+    _progress_interval = _settings.progress_log_interval_seconds()
 
     attempt = 0
     while True:

@@ -14,6 +14,9 @@ from __future__ import annotations
 
 from application_sdk import _deprecation
 
+__all__: list[str] = []
+
+
 #: name -> (replacement, why). Served by ``__getattr__`` below (PEP 562), which
 #: returns the ``common`` object itself so a patch or an identity check sees one
 #: object, not two.

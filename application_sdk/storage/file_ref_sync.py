@@ -69,6 +69,16 @@ from application_sdk.storage._local_marker import (
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+__all__ = [
+    "has_refs_to_materialize",
+    "has_refs_to_persist",
+    "iter_named_file_refs",
+    "materialize_file_refs",
+    "NamedFileRef",
+    "persist_file_refs",
+]
+
+
 logger = get_logger(__name__)
 
 #: A model a persist/materialize pass returns as the same class: a changed

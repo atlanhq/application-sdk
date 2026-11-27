@@ -26,18 +26,25 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
+from _workflows import (
+    ACTIONS,
+    job,
+    load_workflow,
+    steps,
+    tier_job,
+    tier_jobs,
+    triggers,
+)
 
 # The recheck ships inside a composite action, so it is not importable the way
 # the other scripts under test are. The guard is imported alongside it because
 # the pair share a cross-repo ref contract that only a test can hold together.
-sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "e2e-dispatch-recheck")
 )
 
-import e2e_dispatch_guard  # noqa: E402
-from e2e_dispatch_recheck import (  # noqa: E402
+import e2e_dispatch_guard
+from e2e_dispatch_recheck import (
     REF_NAMESPACE,
     claim_ref,
     is_superseded,
@@ -380,25 +387,10 @@ def test_the_token_never_reaches_the_command_line(http: FakeHTTP) -> None:
 # --- wiring -----------------------------------------------------------------
 
 
-def _workflow() -> dict:
-    path = Path(__file__).parent.parent.parent / "workflows" / "tests-reusable.yaml"
-    return yaml.safe_load(path.read_text())
-
-
-def _action() -> dict:
-    path = (
-        Path(__file__).parent.parent.parent
-        / "actions"
-        / "e2e-dispatch-recheck"
-        / "action.yaml"
-    )
-    return yaml.safe_load(path.read_text())
-
-
 def test_the_recheck_runs_before_the_lease_and_not_after() -> None:
     """Asked as late as the DAG allows, because the answer is only worth as much
     as its freshness — and strictly before anything takes a tenant."""
-    jobs = _workflow()["jobs"]
+    jobs = tier_jobs()
 
     assert "sdk-head-recheck" in jobs["lease-tenant"]["needs"]
     assert "lease-tenant" not in jobs["sdk-head-recheck"]["needs"]
@@ -409,7 +401,7 @@ def test_the_lease_reads_the_output_not_the_job_result() -> None:
     make an infrastructure failure of the recheck SKIP the lease — and a skipped
     lease skips the install and greens the run vacuously. The output is empty
     when the job did not answer, so `!= 'true'` leases exactly as before."""
-    gate = _workflow()["jobs"]["lease-tenant"]["if"]
+    gate = tier_job("lease-tenant")["if"]
 
     assert "needs.sdk-head-recheck.outputs.superseded != 'true'" in gate
     assert "needs.sdk-head-recheck.result" not in gate
@@ -421,11 +413,14 @@ def test_the_lease_gate_lifts_the_implicit_success_check() -> None:
     the gate is read, so a failed recheck would skip the lease — the exact
     fail-CLOSED behaviour the output check exists to avoid. And because always()
     lifts the check for the other needs too, they have to be named explicitly."""
-    gate = _workflow()["jobs"]["lease-tenant"]["if"]
+    gate = tier_job("lease-tenant")["if"]
 
     assert "always()" in gate
-    assert "needs.discover-e2e.result == 'success'" in gate
     assert "needs.merge-e2e-image.result == 'success'" in gate
+    # Discovery lives in tests-reusable.yaml since FND-4676, which calls the
+    # e2e tier only once it succeeded — so its clause moved to the caller job.
+    caller = job(load_workflow("tests-reusable.yaml"), "e2e")["if"]
+    assert "needs.discover-e2e.result == 'success'" in caller
 
 
 def test_the_legs_stand_down_with_the_lease() -> None:
@@ -435,7 +430,7 @@ def test_the_legs_stand_down_with_the_lease() -> None:
     against a tenant nobody installed onto with expected-app-version empty — a
     silently passing wrong-version run, which is the FND-31 failure the lease was
     built to make impossible."""
-    e2e = _workflow()["jobs"]["e2e"]
+    e2e = tier_job("e2e")
 
     assert "sdk-head-recheck" in e2e["needs"]
     assert "needs.sdk-head-recheck.outputs.superseded != 'true'" in e2e["if"]
@@ -445,7 +440,7 @@ def test_the_install_and_the_release_cascade_off_the_lease() -> None:
     """Neither needs its own clause: both already gate on lease-tenant having
     RUN, and a superseded run skips it. Pinned so that gating is not later
     loosened to `always()` without noticing it carries the stand-down too."""
-    jobs = _workflow()["jobs"]
+    jobs = tier_jobs()
 
     for name in ("prepare-tenant", "release-tenant"):
         assert "needs.lease-tenant.result != 'skipped'" in jobs[name]["if"], name
@@ -456,7 +451,7 @@ def test_the_recheck_is_keyed_on_the_repo_name_not_the_app_name() -> None:
     is what its dispatch matrix iterates over. `inputs.app-name` is the short
     form ("openapi", not "atlan-openapi-app") and would find no claim at all —
     a check that silently never fires."""
-    step = _workflow()["jobs"]["sdk-head-recheck"]["steps"][0]
+    step = steps(tier_job("sdk-head-recheck"))[0]
 
     assert step["with"]["app"] == "${{ github.event.repository.name }}"
     assert step["with"]["sdk-ref"] == "${{ inputs.application-sdk-ref }}"
@@ -466,7 +461,7 @@ def test_the_recheck_is_consumed_at_main() -> None:
     """Same reason the tenant lease is: this reads a ref layout the dispatching
     SDK run wrote, so the protocol must not vary with whichever ref a connector
     happened to check out."""
-    step = _workflow()["jobs"]["sdk-head-recheck"]["steps"][0]
+    step = steps(tier_job("sdk-head-recheck"))[0]
 
     assert step["uses"].endswith("/e2e-dispatch-recheck@main")
 
@@ -482,32 +477,33 @@ def test_both_gate_evaluations_are_told_about_the_stand_down() -> None:
     Both call sites, because the two are meant to be one decision evaluated
     twice: a gate told and a callback not told would disagree, which is the
     drift the shared driver exists to remove."""
-    jobs = _workflow()["jobs"]
+    jobs = load_workflow("tests-reusable.yaml")["jobs"]
 
     for name in ("tests-passed", "report-to-sdk"):
         step = next(s for s in jobs[name]["steps"] if s.get("id") == "gate")
         assert step["uses"].endswith("/verify-test-gate@main"), name
         assert (
             step["with"]["superseded"]
-            == "${{ needs.sdk-head-recheck.outputs.superseded }}"
+            == "${{ needs.e2e.outputs.sdk-head-recheck-superseded }}"
         ), name
         # The expression above renders EMPTY unless the job declares the need,
         # and empty reads as "unexplained" — the anomaly would fire silently.
-        assert "sdk-head-recheck" in jobs[name]["needs"], name
+        assert "e2e" in jobs[name]["needs"], name
+    # ...and the e2e tier has to surface the recheck's answer (FND-4676).
+    outputs = triggers(load_workflow("e2e-tests-reusable.yaml"))["workflow_call"][
+        "outputs"
+    ]
+    assert (
+        outputs["sdk-head-recheck-superseded"]["value"]
+        == "${{ jobs.sdk-head-recheck.outputs.superseded }}"
+    )
 
 
 def test_the_gate_input_is_optional_and_defaults_to_unexplained() -> None:
     """The driver is consumed cross-repo at @main. A required input would break
     every connector the instant it merged, and a default of "true" would let any
     unexplained skipped matrix green the gate — the anomaly's whole purpose."""
-    gate_action = yaml.safe_load(
-        (
-            Path(__file__).parent.parent.parent
-            / "actions"
-            / "verify-test-gate"
-            / "action.yaml"
-        ).read_text()
-    )
+    gate_action = load_workflow(ACTIONS / "verify-test-gate" / "action.yaml")
     superseded = gate_action["inputs"]["superseded"]
 
     assert superseded["required"] is False
@@ -517,7 +513,8 @@ def test_the_gate_input_is_optional_and_defaults_to_unexplained() -> None:
 def test_the_action_needs_no_write_permission() -> None:
     """Every read is of public data in another repository, so the job runs on
     contents:read. A check that quietly required more would fail open forever."""
-    job = _workflow()["jobs"]["sdk-head-recheck"]
+    recheck = tier_job("sdk-head-recheck")
 
-    assert job["permissions"] == {"contents": "read"}
-    assert _action()["runs"]["using"] == "composite"
+    assert recheck["permissions"] == {"contents": "read"}
+    action = load_workflow(ACTIONS / "e2e-dispatch-recheck" / "action.yaml")
+    assert action["runs"]["using"] == "composite"

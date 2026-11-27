@@ -16,6 +16,16 @@ from application_sdk.common.incremental.storage.rocksdb_utils import (
     create_states_db,
 )
 
+__all__ = [
+    "ConnectionInfo",
+    "EntityType",
+    "IncrementalDiffResult",
+    "IncrementalWorkflowArgs",
+    "TableScope",
+    "TableState",
+    "WorkflowMetadata",
+]
+
 
 class EntityType(StrEnum):
     """Metadata entity types used across the extraction workflow.

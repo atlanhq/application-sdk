@@ -1,9 +1,10 @@
 ---
 name: local-dev-bootstrap
 description: >
-  One-shot local development bootstrap. Ensures Dapr + Temporal are running,
-  generates .env from .env.example if absent, and runs the app in combined mode
-  via run_dev_combined(). Diagnoses and fixes common startup failures.
+  One-shot local development bootstrap. Generates .env from .env.example if
+  absent and runs the app in combined mode via run_dev_combined(), which starts
+  its own embedded Dapr + Temporal; only the CLI option starts external ones.
+  Diagnoses and fixes common startup failures.
 mandatory_triggers:
   - "/local-dev-bootstrap"
   - "bootstrap local dev"
@@ -13,13 +14,11 @@ optional_triggers:
   - "get running locally"
   - "run the app locally"
 owner: connector-platform-team
-last_updated: "2026-04-30"
-staleness_days: 60
 inputs:
   - app_class_path: string — optional, e.g. "app.connector:MyApp" (auto-detected if absent)
 outputs:
   - .env file (if absent)
-  - Running Temporal + Dapr + app (in user's terminal)
+  - Running app (in user's terminal), plus external Temporal + Dapr for Option B only
 gates: []
 ---
 
@@ -32,21 +31,27 @@ infrastructure, configures `.env`, and launches the app.
 
 ### 1. Verify prerequisites
 
-Check that each tool is installed:
+The prerequisites are listed once, in the SDK's
+[Setup Overview](../../../docs/standards/setup.md). The recommended path
+(Option A in step 7, `run_dev_combined()`) needs only Python and uv: it starts
+its own embedded Dapr runtime and in-process Temporal server. Check both:
 
 ```bash
-python --version          # must be 3.11+
+python --version          # 3.11 to 3.14
 uv --version
-temporal --version        # temporal CLI
 ```
+
+Only Option B (the CLI against a standalone Temporal server and Dapr sidecar)
+also needs the Temporal CLI (`temporal --version`). Do not ask for it, or run
+steps 4 and 5, unless the user chose Option B.
 
 > No Dapr CLI is required. The `daprd` runtime is fetched and pinned by the SDK
 > (`application_sdk.dev._dapr`) and invoked directly — see step 5.
 
 If any are missing, point the user to the platform setup guide:
-- [macOS](../../docs/setup/MAC.md)
-- [Linux](../../docs/setup/LINUX.md)
-- [Windows](../../docs/setup/WINDOWS.md)
+- [macOS](../../../docs/setup/MAC.md)
+- [Linux](../../../docs/setup/LINUX.md)
+- [Windows](../../../docs/setup/WINDOWS.md)
 
 ### 2. Install Python dependencies
 
@@ -74,7 +79,9 @@ ATLAN_LOG_LEVEL=DEBUG
 EOF
 ```
 
-### 4. Check / start Temporal
+### 4. Check / start Temporal (Option B only)
+
+Skip this step for Option A: `run_dev_combined()` starts its own Temporal server.
 
 ```bash
 # Check if already running
@@ -89,7 +96,9 @@ fi
 
 Temporal UI: http://localhost:8233
 
-### 5. Check / start Dapr
+### 5. Check / start Dapr (Option B only)
+
+Skip this step for Option A: `run_dev_combined()` starts its own `daprd`.
 
 ```bash
 # Check if Dapr sidecar is already running
@@ -132,9 +141,10 @@ If the user didn't specify `app_class_path`:
 
 **Option A — `run_dev_combined` (recommended):**
 
-Check if `run_dev.py` exists. If so, run it:
+Needs no running infrastructure (steps 4 and 5 are skipped). Check if
+`run_dev.py` exists. If so, run it:
 ```bash
-DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 uv run python run_dev.py
+uv run python run_dev.py
 ```
 
 If `run_dev.py` doesn't exist, generate it:
@@ -168,10 +178,10 @@ asyncio.run(
 
 Then run:
 ```bash
-DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 uv run python run_dev.py
+uv run python run_dev.py
 ```
 
-**Option B — CLI:**
+**Option B — CLI** (needs steps 4 and 5 first):
 ```bash
 DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 \
   uv run application-sdk --mode combined --app {app_class_path}
@@ -186,8 +196,8 @@ DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 \
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `Connection refused :7233` | Temporal not running | Run `temporal server start-dev` in a separate terminal |
-| `Connection refused :3500` | Dapr not running | Start Dapr sidecar (Step 5) |
+| `Connection refused :7233` | Option B: Temporal not running | Run `temporal server start-dev` in a separate terminal (Step 4) |
+| `Connection refused :3500` | Option B: Dapr not running | Start Dapr sidecar (Step 5) |
 | `No module named 'app'` | Not in the project root | `cd` to the project root before running |
 | `ATLAN_APP_MODULE not set` | Missing env var | Set it in `.env` or pass `--app` flag |
 | `components/ not found` | Missing Dapr components | Copy from the SDK repo |

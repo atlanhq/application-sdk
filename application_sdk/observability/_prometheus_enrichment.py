@@ -3,12 +3,12 @@
 OTel's default Prometheus exporter exposes resource attributes via a single
 ``target_info`` series, requiring consumers to JOIN at query time:
 
-    rate(http_server_duration_milliseconds_count[5m])
+    rate(http_server_request_duration_seconds_count[5m])
         * on (instance) group_left(app_name) target_info
 
 For ergonomics, we eagerly inline a bounded subset of resource attributes
 onto every emitted series so that simple PromQL like
-``http_server_duration_milliseconds_count{app_name="teradata"}`` works
+``http_server_request_duration_seconds_count{app_name="teradata"}`` works
 without joins.
 
 Cardinality discipline: only attributes with bounded *per-process*

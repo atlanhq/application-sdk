@@ -1,0 +1,182 @@
+# Hourly. Named daily-security-scan.yml until FND-4674; renamed to match its
+# cadence. reconcile_allowlist.py, vuln_triage/effects.py and
+# vuln-reconcile-on-release.yml look it up by this exact filename
+# (`gh run list --workflow hourly-security-scan.yml`), so rename them together.
+# Runs from before the rename stay under the old workflow and are not read.
+name: Hourly Security Scan — app-runtime-base + SDK Python Deps
+
+on:
+  schedule:
+    - cron: '17 * * * *' # Hourly at minute 17 (off-peak slot for GitHub runners)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # dispatch vuln-triage.yml for newly-created tickets
+
+jobs:
+  scan-and-ticket:
+    name: Scan SDK for vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Scan recipe (pull image → trivy image → uv sync → trivy fs) lives in the
+      # shared composite so the hourly scan and the release reconcile
+      # (vuln-reconcile-on-release.yml) can never drift. Leaves
+      # trivy-image-results.json + trivy-fs-results.json in the working dir.
+      # The target image is the composite's default (single source of truth);
+      # the parse step reads it back via the step's `target-image` output.
+      - name: Scan SDK with Trivy
+        id: scan
+        uses: ./.github/actions/sdk-trivy-scan
+
+      # ── Parse results ─────────────────────────────────────────────────────
+
+      - name: Upload raw scan results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-scan-raw-results
+          path: |
+            trivy-image-results.json
+            trivy-fs-results.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Counting + summary logic lives in parse_scan_results.py (tested) rather
+      # than inlined here — see docs/standards/ci.md. It emits total_actionable
+      # for the Linear step's gate and writes the workflow summary directly.
+      - name: Parse scan results + publish summary
+        id: parse
+        if: always()
+        env:
+          TARGET_IMAGE: ${{ steps.scan.outputs.target-image }}
+        run: python3 .github/scripts/parse_scan_results.py
+
+      # ── Create Linear issues (one per severity, deduped against open
+      #    issues carrying the "vulnerabilities" label so we don't refile
+      #    the same vulns every day). New issues land in the team's
+      #    "Backlog" state.
+      - name: Create Linear issue (deduped)
+        id: linear
+        if: steps.parse.outputs.total_actionable != '0'
+        env:
+          LINEAR_API_KEY:      ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_TEAM_ID:      ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
+          LINEAR_PROJECT_ID:   ${{ vars.LINEAR_SECURITY_SCAN_PROJECT_ID }}
+          LINEAR_MILESTONE_ID: ${{ vars.LINEAR_SECURITY_SCAN_MILESTONE_ID }}
+          LINEAR_ASSIGNEE_ID:  ${{ vars.LINEAR_SECURITY_SCAN_ASSIGNEE_ID }}
+          RUN_URL:             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export SCAN_DATE=$(date -u +%Y-%m-%d)
+          python3 .github/scripts/security_scan_create_linear.py
+
+      # ── Dispatch the deterministic vuln triage (vuln-triage.yml) once per
+      #    newly-created ticket (one per severity). Only fires when a *new*
+      #    (non-deduped) issue was filed this run. SCAN_RUN_ID makes the triage
+      #    read this run's artifacts, not whatever the next hourly scan uploads.
+      #    The loop lives in dispatch_vuln_triage.py (tested) rather than inlined
+      #    here — see docs/standards/ci.md.
+      - name: Dispatch vuln triage (one per new ticket)
+        if: steps.linear.outputs.new_issues != '' && steps.linear.outputs.new_issues != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_ISSUES: ${{ steps.linear.outputs.new_issues }}
+          GH_REF: ${{ github.ref_name }}
+          SCAN_RUN_ID: ${{ github.run_id }}
+        run: python3 .github/scripts/dispatch_vuln_triage.py
+
+  # ── Endor Labs scan of the same base image (report-only) ────────────────────
+  #
+  # Second opinion on the exact image the Trivy job above scans. Kept as a
+  # SEPARATE job, not a step in scan-and-ticket, so it cannot delay or fail the
+  # Linear ticketing path that the fleet's allowlist reconciliation depends on.
+  # No ticket filing from here yet: until we've compared a few weeks of Endor
+  # output against Trivy's, findings go to the Endor dashboard only.
+  #
+  # This scan is what gives every app image correct base-vs-app blame: Endor
+  # attributes a base image either from an org.opencontainers.image.base.name
+  # label (our app images carry no labels at all today) or by having scanned the
+  # base first. This job is the "scanned the base first" half.
+  endor-base-scan:
+    name: Endor scan of app-runtime-base
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      # Credential gate and tarball prep are the same tested script the fleet's
+      # build-and-scan.yaml uses (docs/standards/ci.md: no branching in inlined
+      # shell). This workflow runs in the SDK repo itself, so a sparse checkout
+      # of the current ref is enough -- no cross-repo pin needed.
+      - name: Fetch Endor scan prep script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts/endor_scan_prep.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Check Endor credentials
+        id: creds
+        env:
+          ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+        run: python3 .github/scripts/endor_scan_prep.py credentials
+
+      # Duplicates the sdk-trivy-scan composite's `target-image` default rather
+      # than reading it: the composite is a docker-pull + trivy recipe and has no
+      # "just tell me the image" mode. Nothing enforces the pairing, so bump both
+      # together — the composite is the source of truth.
+      - name: Materialise image tarball
+        id: image
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          # The script's prebuilt path: pull + save with an explicit --platform
+          # (Docker 29 rejects `docker save` on a multi-arch reference without
+          # it, and endorctl shells out to `docker save`).
+          PREBUILT: registry.atlan.com/public/app-runtime-base:3
+          TARBALL: /tmp/base-image.tar
+        run: python3 .github/scripts/endor_scan_prep.py materialise
+
+      # image-type / finding-tags travel as ENV, not as `additional_args`.
+      # Verified on run 33856478534: the action ACCEPTS additional_args for a
+      # container scan and then drops it -- the endorctl command it actually
+      # ran carried no --image-type and no --finding-tags. The consequence is
+      # not cosmetic: without image-type nothing is classified app-vs-base, so
+      # container_metadata.base_image stays empty and the Containers view has
+      # nothing to group or filter on. endorctl reads every flag from its own
+      # ENDOR_* variable, and the action does not strip those, so this is the
+      # reliable channel. Re-verify by grepping a run log for the printed
+      # `endorctl container scan ...` line, not by trusting the `with:` block.
+      - name: Endor Labs container scan
+        if: steps.creds.outputs.configured == 'true'
+        env:
+          ENDOR_CONTAINER_SCAN_IMAGE_TYPE: base
+          ENDOR_CONTAINER_SCAN_FINDING_TAGS: ${{ steps.image.outputs.ref }}
+        uses: endorlabs/github-action@f46ffb04c928a9c9c356f9627bd60b710ed0963e # v1.1.13
+        with:
+          namespace: atlan
+          api_key: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
+          api_secret: ${{ secrets.ENDOR_API_CREDENTIALS_SECRET }}
+          enable_github_action_token: false
+          scan_dependencies: false
+          scan_container: true
+          image: ${{ steps.image.outputs.ref }}
+          image_tar: /tmp/base-image.tar
+          project_name: app-runtime-base
+          # See the as_ref note in build-and-scan.yaml: --as-ref files results
+          # under CONTEXT_TYPE_REF, which the Containers view does not show.
+          as_ref: false
+          pr: false
+          scan_summary_output_type: table
+
+  # NOTE: reconciliation (allowlist-entry removal + Linear ticket close/update)
+  # is intentionally NOT a job here. It runs on `release: released` (not
+  # `published` — that fires for `-rc` prereleases too) in
+  # vuln-reconcile-on-release.yml — an allowlist entry must persist until the
+  # fix is *released*, because downstream connector build gates check out
+  # .security/base-allowlist.json from SDK `main` while their images still carry
+  # the CVE from the last released SDK. Removing an entry the moment this hourly
+  # scan of `main` goes clean (fix merged, not yet released) would strip their
+  # coverage and break check_allowlist.py. See vuln-reconcile-on-release.yml.

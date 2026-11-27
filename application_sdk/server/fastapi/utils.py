@@ -18,9 +18,29 @@ from fastapi import UploadFile, status
 from fastapi.responses import JSONResponse
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.storage.batch import upload_file_from_bytes
+from application_sdk.storage.ops import upload_bytes
+
+__all__ = [
+    "internal_server_error_handler",
+    "upload_file_to_object_store",
+]
+
+
+#: name -> (replacement, why). Importable from here only as a side effect of
+#: an import that is gone; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "upload_file_from_bytes": (
+        "application_sdk.storage.batch.upload_file_from_bytes",
+        "it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 @deprecated(
@@ -74,7 +94,7 @@ def _build_object_store_key(stored_filename: str, prefix: Optional[str]) -> str:
 @deprecated(
     "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's "
     "POST /workflows/v1/file route instead, or "
-    "application_sdk.storage.batch.upload_file_from_bytes to write the bytes "
+    "application_sdk.storage.upload_bytes to write the bytes "
     "yourself — will be removed in v4.0."
 )
 async def upload_file_to_object_store(
@@ -112,10 +132,7 @@ async def upload_file_to_object_store(
     stored_filename = f"{file_id}{extension}"
     object_store_key = _build_object_store_key(stored_filename, prefix)
 
-    await upload_file_from_bytes(
-        content=content_bytes,
-        key=object_store_key,
-    )
+    await upload_bytes(key=object_store_key, data=content_bytes)
 
     now_ms = int(time.time() * 1000)
 

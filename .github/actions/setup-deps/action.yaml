@@ -163,12 +163,12 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.tool_cache }}/uv
-        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.13.8
+        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.13.9
 
     - name: Install uv
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
-        version: "0.13.8"
+        version: "0.13.9"
         enable-cache: true
         cache-dependency-glob: "uv.lock"
         github-token: ${{ github.token }}
@@ -179,19 +179,16 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .venv
-        # Hash the whole importable conformance package, not just uv.lock: it is
-        # a non-editable path dependency baked into .venv as a wheel, and
-        # `uv sync` only runs on a cache miss (see below). Keyed on uv.lock
-        # alone, a source-only change reuses a stale build, so type-checks/tests
-        # run against outdated code. Hash `conformance/**` (not just `*.py`) so
-        # bundled non-.py wheel assets the rules read at runtime — data/*.json
-        # (e.g. toolkit_baseline.json), suite/schema/*.json, bootstrap/templates/*
-        # — also bust the cache. The sibling tests/, pyproject.toml, and README
-        # are outside conformance/ and correctly excluded (not in the wheel).
+        # Keyed on uv.lock alone. In this repo the conformance package used to
+        # be a non-editable path dependency baked into .venv as a wheel, so its
+        # source was hashed too or a source-only change reused a stale build.
+        # It is now an editable uv workspace member (FND-4671), like the SDK
+        # itself: .venv points at the checkout, so a source change needs no
+        # rebuild and hashing it only cost cache misses.
         #
         # `pyc` marks entries that carry bytecode (see Install dependencies). It
         # was added so entries saved before that were never restored again.
-        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-pyc-${{ hashFiles('uv.lock', 'packages/conformance/conformance/**') }}
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-pyc-${{ hashFiles('uv.lock') }}
         lookup-only: ${{ inputs.lookup-only }}
 
     - name: Install dependencies

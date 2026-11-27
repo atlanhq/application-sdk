@@ -158,14 +158,15 @@ _SERIES_META: list[SeriesMeta] = [
         ),
         output_filename="prescriptions.md",
         checker=(
-            "`suite.checks.prescriptions` (P001–P003, P008–P015, P059), "
+            "`suite.checks.prescriptions` (P001–P003, P008–P015, P059; "
+            "P068 gated on the app's locked SDK), "
             "`suite.checks.orchestration` (P004–P007, scans test files too), "
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.httpx_proxy` (P066), "
             "`suite.checks.error_seam` (P043/P045, scans test files too), "
-            "`suite.checks.determinism` (P020–P024, P031, P036, P054), "
+            "`suite.checks.determinism` (P020–P024, P031, P036, P054, P069), "
             "`suite.checks.app_name_alignment` (P025), "
             "`suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), "
             "`suite.checks.transform_templates` (P040, scans template YAML), "
@@ -574,6 +575,11 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
 # "# conformance: ignore[E012] intentional: stdlib interop".
 _SUPPRESSION_ID_RE = re.compile(r"^(.*?ignore\s*\[)[^\]]*\]")
 
+# Rules of a ``//``-directive series (K) whose findings anchor only on Python
+# source, where a ``//`` directive is a SyntaxError: their by-id example uses
+# ``#``.  A rule that anchors on both pkl and Python keeps the series form.
+_PYTHON_ANCHORED_RULES: frozenset[str] = frozenset({"K032"})
+
 
 def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
     """The series' suppression directive, re-pointed at exactly ``rule``.
@@ -592,7 +598,10 @@ def _rule_suppression_example(meta: SeriesMeta, rule: RuleDefinition) -> str:
             f"series {meta.prefix} suppression_example has no ignore[...] id: "
             f"{meta.suppression_example!r}"
         )
-    return f"{m.group(1)}{rule.id}] intentional: <why this is deliberate here>"
+    prefix = m.group(1)
+    if rule.id in _PYTHON_ANCHORED_RULES:
+        prefix = re.sub(r"^//", "#", prefix)
+    return f"{prefix}{rule.id}] intentional: <why this is deliberate here>"
 
 
 def _render_rule_file(meta: SeriesMeta, rule: RuleDefinition) -> str:

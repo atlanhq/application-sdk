@@ -7,6 +7,7 @@ Canonical API (v3.x+)::
         FailureCategory,
         Audience,
         FailureDetails,
+        error_from_failure_details, register_wire_leaf,
         AuthError,
         AppPermissionDeniedError, AppTimeoutError,
         NotFoundError, AlreadyExistsError,
@@ -71,7 +72,12 @@ from application_sdk.errors.leaves import (
     TaskStalledError,
     UnimplementedError,
 )
-from application_sdk.errors.wire import FailureDetails
+from application_sdk.errors.wire import (
+    FailureDetails,
+    degraded_failure_details,
+    error_from_failure_details,
+    register_wire_leaf,
+)
 
 # ── Legacy ErrorCode + AAF-* constants (deprecated — removed v4.0.0) ────────
 #
@@ -376,6 +382,9 @@ __all__ = [
     "Audience",
     "FailureCategory",
     "FailureDetails",
+    "degraded_failure_details",
+    "error_from_failure_details",
+    "register_wire_leaf",
     "AlreadyExistsError",
     "AppPermissionDeniedError",
     "AppTimeoutError",

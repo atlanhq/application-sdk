@@ -226,6 +226,40 @@ class TestInitSqlClientGuidRoute:
 
 
 # ---------------------------------------------------------------------------
+# extract_* / transform_* timing — the env defaults reach them (FND-5224)
+# ---------------------------------------------------------------------------
+
+_SCALING_TASKS = tuple(
+    f"{verb}_{entity}"
+    for verb in ("extract", "transform")
+    for entity in ("databases", "schemas", "tables", "columns", "views", "procedures")
+)
+
+
+@pytest.mark.parametrize("name", _SCALING_TASKS)
+def test_scaling_tasks_take_the_process_wide_timing_defaults(name: str) -> None:
+    """Runtime scales with source size, so the operator's env knobs must win.
+
+    A hard-coded value here made ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` and
+    ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` dead settings for every SqlApp, and
+    killed a large ``extract_columns`` at 30 minutes.
+    """
+    from application_sdk.app.task import (
+        _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+        _DEFAULT_TIMEOUT_SECONDS,
+        get_task_metadata,
+    )
+
+    meta = get_task_metadata(getattr(SqlApp, name))
+    assert meta is not None
+    assert meta.timeout_seconds == _DEFAULT_TIMEOUT_SECONDS
+    assert meta.heartbeat_timeout_seconds == _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
+    # Unlike the two above, the beat interval has no env knob; the bare
+    # ``@task()`` default is what a large source gets.
+    assert meta.auto_heartbeat_seconds == 10
+
+
+# ---------------------------------------------------------------------------
 # extract_* tasks — SQL stream → raw JSONL (no parquet)
 # ---------------------------------------------------------------------------
 
@@ -398,7 +432,7 @@ class TestExtractEmitsRawFileReference:
         # is_durable=False (the activity interceptor flips it after
         # the activity returns), but storage_path is pre-set to the
         # canonical run-scoped key — see the comment in
-        # ``_extract_entity``'s emission site for why we pin the
+        # ``extract_entity``'s emission site for why we pin the
         # storage key here instead of letting the interceptor
         # auto-generate a ``file_refs/<uuid>`` path. The persist
         # mechanism honours the pre-set key.
@@ -443,7 +477,7 @@ class TestExtractEmitsRawFileReference:
 
 
 class TestCanonicalStoragePaths:
-    """Regression guard: ``_extract_entity`` / ``_transform_entity``
+    """Regression guard: ``extract_entity`` / ``transform_entity``
     emit ``FileReference`` objects whose ``storage_path`` resolves to
     the canonical entity-typed key
     (``<run_prefix>/raw/<entity>/records.json`` /
@@ -1461,7 +1495,7 @@ class TestPrepareSql:
             (app.fetch_table_sql, f"AND T.TABLE_NAME NOT REGEXP {regex}"),
             (app.fetch_column_sql, f"AND C.TABLE_NAME NOT REGEXP {regex}"),
         ):
-            # _extract_entity strips the template before rendering.
+            # extract_entity strips the template before rendering.
             rendered = app._prepare_sql(template.strip(), task_input)
             live = self._live_sql(rendered)
             assert clause in live
@@ -3130,7 +3164,7 @@ class TestPrimeFailureClassification:
             return FailureDetails(**kwargs)
 
         with patch(
-            "application_sdk.templates.sql_app.FailureDetails",
+            "application_sdk.errors.wire.FailureDetails",
             side_effect=_rejects_any_evidence,
         ):
             result = await self._probe(
@@ -3257,7 +3291,7 @@ class TestPrimeFailureClassification:
 # Mapper result serialisation (FND-2056)
 # ---------------------------------------------------------------------------
 #
-# ``_transform_entity`` used to probe ``to_nested_dict`` / ``model_dump`` /
+# ``transform_entity`` used to probe ``to_nested_dict`` / ``model_dump`` /
 # ``dict`` on the mapper's return value and, finding none, write the raw source
 # row. A pyatlan_v9 asset — the type ``map_<entity>()`` is annotated to return —
 # has none of those three, so the entity file filled with unmapped SQL rows and
@@ -3486,7 +3520,7 @@ class TestTransformStampsLastSync:
 # Entity envelope (FND-2137)
 # ---------------------------------------------------------------------------
 #
-# ``_transform_entity`` owns three framework injections now: connectionName
+# ``transform_entity`` owns three framework injections now: connectionName
 # (FND-2056), lastSync* (FND-2097), and the envelope the finished line takes.
 # These pin that the declared policy and the per-record hook actually reach
 # ``entity_bytes`` — a seam nothing threads is the same as no seam.
@@ -3647,3 +3681,169 @@ def test_output_template_reexport_is_a_deprecated_alias() -> None:
     with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
         value = sql_app.WORKFLOW_OUTPUT_PATH_TEMPLATE
     assert value == constants.WORKFLOW_OUTPUT_PATH_TEMPLATE
+
+
+# ---------------------------------------------------------------------------
+# FND-4686: the per-entity engine is public; the underscore names are shims
+# ---------------------------------------------------------------------------
+
+
+class TestPerEntityEngineRename:
+    """``extract_entity`` / ``transform_entity`` / ``resolve_output_path`` are
+    the supported names, and the underscore names connectors call today
+    delegate to them with a ``DeprecationWarning`` until v4.0.0."""
+
+    async def test_extract_tasks_route_through_the_public_name(self, app) -> None:
+        sentinel = ExtractionTaskOutput(typename="database", total_record_count=0)
+        with patch.object(
+            TestSqlApp, "extract_entity", AsyncMock(return_value=sentinel)
+        ) as public:
+            assert await app.extract_databases(_make_task_input()) is sentinel
+        public.assert_awaited_once()
+
+    async def test_transform_tasks_route_through_the_public_name(self, app) -> None:
+        sentinel = TransformOutput(typename="table", total_record_count=0)
+        with patch.object(
+            TestSqlApp, "transform_entity", AsyncMock(return_value=sentinel)
+        ) as public:
+            result = await app.transform_tables(_make_task_input())
+        assert result is sentinel
+        public.assert_awaited_once()
+
+    async def test_extract_entity_shim_warns_and_delegates(self, app) -> None:
+        task_input = _make_task_input()
+        sentinel = ExtractionTaskOutput(typename="table", total_record_count=0)
+        with patch.object(
+            TestSqlApp, "extract_entity", AsyncMock(return_value=sentinel)
+        ) as public:
+            with pytest.warns(DeprecationWarning, match="SqlApp.extract_entity"):
+                result = await app._extract_entity(
+                    entity_type="table", sql_template="SELECT 1", input=task_input
+                )
+        assert result is sentinel
+        public.assert_awaited_once_with(
+            entity_type="table", sql_template="SELECT 1", input=task_input
+        )
+
+    async def test_transform_entity_shim_warns_and_delegates(self, app) -> None:
+        transform_input = _make_task_input()
+        sentinel = TransformOutput(typename="table", total_record_count=0)
+        with patch.object(
+            TestSqlApp, "transform_entity", AsyncMock(return_value=sentinel)
+        ) as public:
+            with pytest.warns(DeprecationWarning, match="SqlApp.transform_entity"):
+                result = await app._transform_entity(
+                    entity_type="table", mapper_fn=app.map_table, input=transform_input
+                )
+        assert result is sentinel
+        public.assert_awaited_once_with(
+            entity_type="table", mapper_fn=app.map_table, input=transform_input
+        )
+
+    def test_resolve_output_path_shim_warns_and_delegates(self) -> None:
+        task_input = _make_task_input(output_path="/tmp/explicit")
+        with pytest.warns(DeprecationWarning, match="SqlApp.resolve_output_path"):
+            assert SqlApp._resolve_output_path(task_input) == "/tmp/explicit"
+        assert SqlApp.resolve_output_path(task_input) == "/tmp/explicit"
+
+
+class TestResolveCredentialRefConnectionFallback:
+    """The task path falls back to the connection's GUID exactly as the gate does."""
+
+    @staticmethod
+    def _input(**fields: Any) -> Any:
+        from application_sdk.templates.contracts.sql_query import (  # noqa: PLC0415
+            QueryExtractionInput,
+        )
+
+        payload: dict[str, Any] = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {
+                    "qualifiedName": "default/postgres/1",
+                    "name": "example",
+                    "defaultCredentialGuid": "conn-guid",
+                },
+            },
+        }
+        payload.update(fields)
+        return QueryExtractionInput.model_validate(payload)
+
+    def test_connection_guid_used_when_input_names_no_credential(self) -> None:
+        ref = SqlApp().resolve_credential_ref(self._input())
+        assert ref is not None
+        assert ref.credential_guid == "conn-guid"
+
+    def test_explicit_credential_guid_wins(self) -> None:
+        ref = SqlApp().resolve_credential_ref(self._input(credential_guid="explicit"))
+        assert ref is not None
+        assert ref.credential_guid == "explicit"
+
+    def test_agent_mode_is_not_sent_to_the_vault(self) -> None:
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        agent_mode = SimpleNamespace(
+            extraction_method="agent",
+            credential_guid="",
+            agent_json=None,
+            credential_ref=None,
+            connection=self._input().connection,
+        )
+        assert SqlApp().resolve_credential_ref(agent_mode) is None  # type: ignore[arg-type]
+
+    def test_agent_spec_without_agent_method_is_not_sent_to_the_vault(self) -> None:
+        # A populated agent spec with no extraction_method: the gate skips the
+        # fallback, so the task path must too.
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        from application_sdk.credentials.ingress import (  # noqa: PLC0415
+            normalize_agent_json,
+        )
+
+        inp = SimpleNamespace(
+            extraction_method="",
+            credential_guid="",
+            agent_json=normalize_agent_json(
+                {"agent-name": "acme", "secret-path": "arn:x"}
+            ),
+            credential_ref=None,
+            connection=self._input().connection,
+        )
+        assert SqlApp().resolve_credential_ref(inp) is None  # type: ignore[arg-type]
+
+    def test_declared_named_refs_skip_the_fallback(self) -> None:
+        from application_sdk.templates.contracts.sql_query import (  # noqa: PLC0415
+            QueryExtractionInput,
+        )
+
+        class _MultiInput(QueryExtractionInput):
+            preflight_credential_refs: ClassVar[dict[str, str]] = {
+                "api": "api_credential_guid"
+            }
+
+        inp = _MultiInput.model_validate(
+            {
+                "connection": {
+                    "typeName": "Connection",
+                    "attributes": {"defaultCredentialGuid": "conn-guid"},
+                }
+            }
+        )
+        assert SqlApp().resolve_credential_ref(inp) is None
+
+    def test_no_connection_guid_resolves_nothing(self) -> None:
+        inp = self._input(connection={"typeName": "Connection", "attributes": {}})
+        assert SqlApp().resolve_credential_ref(inp) is None
+
+    def test_gate_and_task_path_agree(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415
+            PreflightGateInput,
+        )
+
+        inp = self._input()
+        gate_ref = CredentialRef.resolve_or_none(
+            PreflightGateInput.from_extraction_input(inp, "mine")
+        )
+        task_ref = SqlApp().resolve_credential_ref(inp)
+        assert gate_ref is not None and task_ref is not None
+        assert gate_ref.credential_guid == task_ref.credential_guid == "conn-guid"

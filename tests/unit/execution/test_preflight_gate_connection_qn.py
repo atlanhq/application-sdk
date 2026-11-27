@@ -55,10 +55,19 @@ def _handler() -> DefaultHandler:
     return handler
 
 
-def _patches() -> ExitStack:
+def _patches(resolver: mock.MagicMock | None = None) -> ExitStack:
+    # The incident connection carries a defaultCredentialGuid, which the gate
+    # resolves when the input names no other credential; stub the resolver so
+    # these tests stay about the connection's identity, not the secret store.
+    if resolver is None:
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(return_value={})
     stack = ExitStack()
     stack.enter_context(
         mock.patch(f"{_GATE}.get_infrastructure", return_value=mock.MagicMock())
+    )
+    stack.enter_context(
+        mock.patch(f"{_GATE}.CredentialResolver", return_value=resolver)
     )
     return stack
 
@@ -206,3 +215,21 @@ class TestIdentifiableOrAbsentConnectionProceeds:
             _gate_input(connection=_INCIDENT_CONNECTION), **keys
         )
         await self._assert_proceeds(gate_input, mode)
+
+    async def test_connection_default_credential_guid_is_resolved(
+        self, mode: PreflightGateMode
+    ) -> None:
+        resolver = mock.MagicMock()
+        resolver.resolve_raw = mock.AsyncMock(return_value={})
+        gate_input = _with_snapshot_keys(
+            _gate_input(connection=_INCIDENT_CONNECTION),
+            connection_qualified_name=_QN,
+        )
+        handler = _handler()
+        gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
+        with _patches(resolver):
+            result = await gate(gate_input)
+        assert result.status is PreflightStatus.READY
+        resolver.resolve_raw.assert_awaited_once()
+        (ref,) = resolver.resolve_raw.await_args.args
+        assert ref.credential_guid == "example-credential-guid"

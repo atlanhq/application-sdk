@@ -14,17 +14,9 @@ from application_sdk.storage.batch import (
     download_prefix,
     list_data_keys,
     list_keys,
-    upload_file_from_bytes,
     upload_prefix,
 )
-from application_sdk.storage.factory import create_local_store
-from application_sdk.storage.ops import download_file, upload_file
-
-
-@pytest.fixture
-def store(tmp_path):
-    """Create a real local object store backed by a temp directory."""
-    return create_local_store(tmp_path / "store")
+from application_sdk.storage.ops import download_file, upload_bytes, upload_file
 
 
 @pytest.fixture
@@ -201,15 +193,15 @@ async def test_upload_prefix_with_retain_local_false(store, staging):
 
 
 # ------------------------------------------------------------------
-# upload_file_from_bytes
+# upload_bytes
 # ------------------------------------------------------------------
 
 
 @pytest.mark.integration
-async def test_upload_file_from_bytes_roundtrip(store, tmp_path):
+async def test_upload_bytes_roundtrip(store, tmp_path):
     """Upload bytes directly, then download and verify."""
     content = b"hello from bytes upload"
-    sha = await upload_file_from_bytes("bytes/test.bin", content, store)
+    sha = await upload_bytes("bytes/test.bin", content, store)
     assert len(sha) == 64  # hex SHA-256
 
     dest = tmp_path / "downloaded.bin"
@@ -218,9 +210,9 @@ async def test_upload_file_from_bytes_roundtrip(store, tmp_path):
 
 
 @pytest.mark.integration
-async def test_upload_file_from_bytes_empty(store, tmp_path):
+async def test_upload_bytes_empty(store, tmp_path):
     """Upload empty bytes."""
-    sha = await upload_file_from_bytes("bytes/empty.bin", b"", store)
+    sha = await upload_bytes("bytes/empty.bin", b"", store)
     assert len(sha) == 64
 
     dest = tmp_path / "empty.bin"

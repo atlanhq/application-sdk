@@ -31,6 +31,7 @@ from application_sdk.execution.heartbeat import (
     stop_heartbeat_task,
 )
 from application_sdk.execution.progress import ProgressWatchdogMode
+from tests.unit._doubles import FakeClock
 from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
@@ -448,24 +449,6 @@ class TestAutoHeartbeatLoop:
 
 
 @dataclass
-class WatchdogClock:
-    """A monotonic clock the test advances explicitly.
-
-    The tracker takes its clock by injection precisely so tests never patch
-    ``time.monotonic``: the asyncio loop driving ``auto_heartbeat_loop`` shares
-    that global, so patching it makes the loop itself misbehave.
-    """
-
-    now: float = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
-@dataclass
 class StallRecorder:
     """Captures the (stalled_for, last_label) pairs on_stall is called with."""
 
@@ -491,7 +474,7 @@ class LoopRun:
 async def _drive(
     *,
     tracker: ProgressTracker | None,
-    clock: WatchdogClock,
+    clock: FakeClock,
     mode: ProgressWatchdogMode = ProgressWatchdogMode.OFF,
     budget: float | None = None,
     on_stall: Callable[[float, str], None] | None = None,
@@ -568,13 +551,13 @@ class TestStallWatchdogInert:
     """Purely additive: with nothing injected, the loop behaves exactly as before."""
 
     async def test_no_tracker_means_no_watchdog(self) -> None:
-        run = await _drive(tracker=None, clock=WatchdogClock(), budget=1.0, ticks=3)
+        run = await _drive(tracker=None, clock=FakeClock(), budget=1.0, ticks=3)
 
         assert run.beats == 3
         assert not run.stall_infos and not run.stall_warnings and not run.recorded
 
     async def test_off_mode_observes_nothing(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         run = await _drive(
             tracker=ProgressTracker(clock=clock),
             clock=clock,
@@ -588,7 +571,7 @@ class TestStallWatchdogInert:
         assert not run.stall_infos and not run.stall_warnings and not run.recorded
 
     async def test_no_budget_means_no_watchdog(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         run = await _drive(
             tracker=ProgressTracker(clock=clock),
             clock=clock,
@@ -606,7 +589,7 @@ class TestStallWatchdogEnforce:
     async def test_gap_at_the_budget_fails_the_activity_and_stops_the_loop(
         self,
     ) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.mark_progress("write_batch")
         stalls = StallRecorder()
@@ -627,7 +610,7 @@ class TestStallWatchdogEnforce:
         assert run.beats == 3
 
     async def test_stall_is_reported_at_warning_and_names_the_last_signal(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.mark_progress("fetch_page")
 
@@ -648,7 +631,7 @@ class TestStallWatchdogEnforce:
 
     async def test_detection_latency_is_budget_plus_at_most_one_tick(self) -> None:
         """The tick that first sees ``stalled >= budget`` is the tick that fires."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         stalls = StallRecorder()
 
@@ -668,7 +651,7 @@ class TestStallWatchdogEnforce:
         assert stalls.calls == [(12.0, "")]
 
     async def test_progress_each_tick_never_stalls(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         stalls = StallRecorder()
 
@@ -688,7 +671,7 @@ class TestStallWatchdogEnforce:
 
     async def test_unbounded_hold_suppresses_the_stall(self) -> None:
         """A vouched-for opaque call is never accused of stalling."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.enter_hold("full table scan", timeout=None)
         stalls = StallRecorder()
@@ -708,7 +691,7 @@ class TestStallWatchdogEnforce:
 
     async def test_lapsed_bounded_hold_fires_at_allowance_plus_budget(self) -> None:
         """Kill time for a wedged held call is ``allowance + budget``."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.enter_hold("snapshot metadata query", timeout=10.0)
         stalls = StallRecorder()
@@ -730,7 +713,7 @@ class TestStallWatchdogEnforce:
 
     async def test_beat_stays_unconditional_while_stalled(self) -> None:
         """The keepalive is the crash detector; a stall must not gate it."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
 
         run = await _drive(
@@ -748,7 +731,7 @@ class TestStallWatchdogEnforce:
         """If the handler can't fail the attempt, stop beating and let
         Temporal's heartbeat_timeout reclaim it — never keep beating for an
         attempt already judged wedged."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         stalls = StallRecorder(raises=True)
 
@@ -769,7 +752,7 @@ class TestStallWatchdogEnforce:
 
 class TestStallWatchdogWarn:
     async def test_warn_reports_each_gap_once_and_never_fails(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.mark_progress("write_batch")
         stalls = StallRecorder()
@@ -793,7 +776,7 @@ class TestStallWatchdogWarn:
     async def test_warn_never_logs_at_warning(self) -> None:
         """A fleet-wide default that logged at WARNING would manufacture exactly
         the alert noise ADR-0018 exists to reduce."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
 
         run = await _drive(
@@ -809,7 +792,7 @@ class TestStallWatchdogWarn:
         assert not run.stall_warnings
 
     async def test_re_arm_keeps_the_label_it_just_reported(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.mark_progress("fetch_page")
 
@@ -828,7 +811,7 @@ class TestStallWatchdogWarn:
         assert tracker.last_label == "fetch_page"
 
     async def test_unlabelled_gap_reads_as_none(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
 
         run = await _drive(
@@ -845,7 +828,7 @@ class TestStallWatchdogWarn:
 
 class TestStallWatchdogMetric:
     async def test_gap_is_recorded_with_task_label_and_mode(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         tracker.mark_progress("write_batch")
 
@@ -868,7 +851,7 @@ class TestStallWatchdogMetric:
         }
 
     async def test_enforced_gap_is_recorded_too(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
 
         run = await _drive(
@@ -885,7 +868,7 @@ class TestStallWatchdogMetric:
         assert run.recorded[0].args[1]["watchdog.mode"] == "enforce"
 
     async def test_metric_failure_never_breaks_the_watchdog(self) -> None:
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         stalls = StallRecorder()
 
@@ -908,7 +891,7 @@ class TestStallWatchdogWiring:
     async def test_enforce_without_a_handler_downgrades_to_warn(self) -> None:
         """A wiring bug must not silence the watchdog, and must not let it
         pretend it enforced."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
 
         run = await _drive(
@@ -928,7 +911,7 @@ class TestStallWatchdogWiring:
 
     async def test_non_positive_budget_disables_the_watchdog(self) -> None:
         """One bad config value must not become a fleet-wide kill switch."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         stalls = StallRecorder()
 
@@ -950,7 +933,7 @@ class TestStallWatchdogWiring:
     async def test_negative_budget_disables_the_watchdog(self) -> None:
         """A negative allowance vouches for nothing: the guard must refuse it
         the same way it refuses zero."""
-        clock = WatchdogClock()
+        clock = FakeClock()
         tracker = ProgressTracker(clock=clock)
         stalls = StallRecorder()
 
@@ -974,7 +957,7 @@ class TestStallWatchdogWiring:
         False) and +inf would silently never enforce — both must disable the
         watchdog like any other invalid budget."""
         for bad_budget in (float("nan"), float("inf")):
-            clock = WatchdogClock()
+            clock = FakeClock()
             tracker = ProgressTracker(clock=clock)
             stalls = StallRecorder()
 

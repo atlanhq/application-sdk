@@ -208,6 +208,43 @@ def test_v3_pairs_fold_into_the_canonical_shape() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "variant",
+    [
+        {"extra": {"project_id": "p"}, "region": "r"},
+        # A pair carries a nested value JSON-encoded.
+        '{"extra": {"project_id": "p"}, "region": "r"}',
+    ],
+)
+def test_a_nested_auth_type_object_expands_like_dotted_keys(variant: Any) -> None:
+    """A v2 credential can send its auth type's fields as one object (FND-4688)."""
+    assert canonical_credential({"authType": "gcp-wif", "gcp-wif": variant}) == {
+        "authType": "gcp-wif",
+        "region": "r",
+        "extra": {"project_id": "p"},
+    }
+
+
+def test_a_dotted_key_wins_over_the_nested_object() -> None:
+    flat = {
+        "authType": "gcp-wif",
+        "gcp-wif": {"extra": {"project_id": "nested"}},
+        "gcp-wif.extra.project_id": "dotted",
+    }
+    assert canonical_credential(flat)["extra"] == {"project_id": "dotted"}
+
+
+@pytest.mark.parametrize("value", ["plain", "{not json", '["a"]'])
+def test_an_auth_type_value_that_is_not_an_object_is_kept(value: str) -> None:
+    flat = {"authType": "gcp-wif", "gcp-wif": value}
+    assert canonical_credential(flat) == flat
+
+
+def test_an_unselected_auth_type_object_is_left_alone() -> None:
+    flat = {"authType": "basic", "gcp-wif": {"extra": {"project_id": "p"}}}
+    assert canonical_credential(flat) == flat
+
+
 def test_fixture_is_the_real_generated_shape() -> None:
     """Guards the fixture against hand edits that drop its structure."""
     data = json.loads((_GENERATED / "atlan-connectors-bigquery.json").read_text())

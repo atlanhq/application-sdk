@@ -12,21 +12,15 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
-import yaml
+from _workflows import ACTIONS, REPO_ROOT, load_workflow, steps
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ACTION = REPO_ROOT / ".github/actions/setup-deps/action.yaml"
+ACTION = ACTIONS / "setup-deps" / "action.yaml"
 ACTION_REL = ".github/actions/setup-deps/action.yaml"
 
 
-def _steps() -> list[dict]:
-    return yaml.safe_load(ACTION.read_text())["runs"]["steps"]
-
-
 def _step(predicate) -> dict:
-    matches = [s for s in _steps() if predicate(s)]
+    matches = [s for s in steps(load_workflow(ACTION)) if predicate(s)]
     assert len(matches) == 1, matches
     return matches[0]
 

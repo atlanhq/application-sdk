@@ -9,6 +9,15 @@ from pydantic import Field
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, MaxItems
 
+__all__ = [
+    "CleanupInput",
+    "CleanupOutput",
+    "STORAGE_CLEANUP_FILE_REFS_MAX",
+    "StorageCleanupInput",
+    "StorageCleanupOutput",
+]
+
+
 #: Most stored refs a workflow passes to ``cleanup_storage`` in
 #: ``StorageCleanupInput.file_refs``. The list travels in the activity's input,
 #: so it is bounded well under Temporal's payload limit (a ref serialises to a

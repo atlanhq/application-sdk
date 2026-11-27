@@ -112,3 +112,40 @@ class TestWarnRemovedEnvVars:
             warn_removed_env_vars()
 
         assert name in self._formatted_message(mock_logger)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "ATLAN_APP_DASHBOARD_HOST",
+            "ATLAN_APP_DASHBOARD_PORT",
+            "ATLAN_MAX_CONCURRENT_ACTIVITIES",
+            "ATLAN_SQL_SERVER_MIN_VERSION",
+            "ATLAN_WORKFLOW_UI_HOST",
+            "ATLAN_WORKFLOW_UI_PORT",
+        ],
+    )
+    def test_names_dropped_from_env_example_warn_when_set(
+        self, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
+        """``.env.example`` set these for years after the SDK stopped reading
+        them, so deployments copied from it may still carry them."""
+        monkeypatch.setenv(name, "1")
+        ctx, mock_logger = self._patch_logger()
+        with ctx:
+            warn_removed_env_vars()
+
+        assert name in self._formatted_message(mock_logger)
+
+    def test_app_contract_var_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``ATLAN_LOCAL_DEVELOPMENT`` is read by connector ``main.py`` files,
+        not the SDK, and the shared integration-test action sets it on every
+        run. Listing it as removed told apps a live switch was dead."""
+        assert "ATLAN_LOCAL_DEVELOPMENT" not in _REMOVED_ENV_VARS
+        monkeypatch.setenv("ATLAN_LOCAL_DEVELOPMENT", "true")
+        ctx, mock_logger = self._patch_logger()
+        with ctx:
+            warn_removed_env_vars()
+
+        mock_logger.warning.assert_not_called()

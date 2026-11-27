@@ -1,5 +1,4 @@
 import asyncio
-import urllib.request
 import warnings
 from typing import Any, Literal, overload
 
@@ -15,6 +14,7 @@ from httpx._types import (
 
 from application_sdk import _deprecation
 from application_sdk._logging import get_logger
+from application_sdk._proxy import environment_proxies, proxy_for
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
 from application_sdk.clients.sql_errors import AbstractClientLoadError
@@ -26,6 +26,11 @@ from application_sdk.constants import (
 )
 from application_sdk.errors.http import classify_http_exception
 from application_sdk.errors.leaves import SourceUnavailableError
+
+__all__ = [
+    "BaseClient",
+]
+
 
 logger = get_logger(__name__)
 
@@ -77,19 +82,13 @@ class _EnvProxyHTTPTransport(httpx.AsyncHTTPTransport):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._transport_kwargs = kwargs
-        self._env_proxies = urllib.request.getproxies_environment()
+        self._env_proxies = environment_proxies()
         self._proxied: dict[str, httpx.AsyncBaseTransport] = {}
 
     def _proxy_for(self, url: httpx.URL) -> str | None:
-        proxy = self._env_proxies.get(url.scheme) or self._env_proxies.get("all")
-        if not proxy or not url.host:
+        if not url.host:
             return None
-        # Stdlib NO_PROXY matcher (suffix, exact host, "*"); missing from typeshed.
-        if urllib.request.proxy_bypass_environment(  # pyright: ignore[reportAttributeAccessIssue]
-            url.host, self._env_proxies
-        ):
-            return None
-        return proxy
+        return proxy_for(url.scheme, url.host, proxies=self._env_proxies)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         proxy = self._proxy_for(request.url)

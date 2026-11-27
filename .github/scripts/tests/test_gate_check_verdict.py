@@ -23,18 +23,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
+import gate_check_verdict as gcv
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import gate_check_verdict as gcv  # noqa: E402
-import test_command_comment as tcc  # noqa: E402
-from pr_test_command import GitHub, GitHubError  # noqa: E402
+import test_command_comment as tcc
+from pr_test_command import GitHub, GitHubError
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "a96a27b0000000000000000000000000000000aa"
@@ -790,6 +785,22 @@ class TestRerunReleaseGate:
         )
         assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT) is False
         assert api.writes == []
+
+    def test_a_pull_request_target_gate_is_rerun(self) -> None:
+        """FND-5321 moved the shim to `pull_request_target`; its run is the
+        gate, while a `status` run on the same workflow only skips it."""
+        target = _gate(9)
+        target["event"] = "pull_request_target"
+        api = FakeApi(
+            status=None,
+            runs={
+                gcv.RELEASE_GATE_WORKFLOW: [
+                    [target, _run(10, event="status"), _run(11, event="merge_group")]
+                ]
+            },
+        )
+        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT)
+        assert [p for p, _ in api.writes] == [f"repos/{REPO}/actions/runs/9/rerun"]
 
 
 class TestMain:

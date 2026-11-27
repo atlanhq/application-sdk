@@ -1,8 +1,8 @@
 name: Release Contract Toolkit
 
 # Fired automatically when a non-release PR that touches contract-toolkit files is
-# merged to main. Runs .github/scripts/contract_toolkit_release.py to compute the
-# next semver (from conventional commits touching contract-toolkit/** since the last
+# merged to main. Runs `.github/scripts/release_train.py bump contract-toolkit` to
+# compute the next semver (from conventional commits touching contract-toolkit/** since the last
 # contract-toolkit-v* tag), bumps contract-toolkit/src/PklProject, prepends a new
 # entry to contract-toolkit/CHANGELOG.md, and creates or updates the
 # bump-version-contract-toolkit PR labeled release:contract-toolkit.
@@ -69,7 +69,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
@@ -81,7 +81,7 @@ jobs:
           # on origin/main — a stacked PR merging into its parent feature branch
           # fires this workflow exactly like a merge into main (#3794).
           PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: python .github/scripts/contract_toolkit_release.py
+        run: python .github/scripts/release_train.py bump contract-toolkit
 
       - name: Regenerate conformance toolkit baseline
         # Reuse the conformance suite's own generator — the single source of truth

@@ -11,6 +11,10 @@ import json
 import httpx
 import orjson
 
+__all__ = [
+    "main",
+]
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Provision credentials for local dev")

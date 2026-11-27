@@ -6,7 +6,7 @@ It complements three existing resources:
 
 - [`upgrade-guide-v3.md`](../upgrade-guide-v3.md) — the canonical v2 → v3 how-to with before/after code.
 - [`whats-new-v3.md`](../whats-new-v3.md) — the conceptual rationale for the changes.
-- [`tools/migrate_v3/check_migration.py`](../../tools/migrate_v3/check_migration.py) — the static checker that enforces most of §1 automatically.
+- [`tools/migrate_v3/check_migration.py`](https://github.com/atlanhq/application-sdk/blob/main/tools/migrate_v3/check_migration.py) — the static checker that enforces most of §1 automatically.
 
 An app is **v3-ready** when every item below is either ✅ (done) or ➖ (not applicable to this app). A single ❌ blocks the v3 cutover.
 
@@ -36,9 +36,9 @@ Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migrati
 
 ## 2 — Contract & config
 
-The SDK generates workflow/credential/manifest/input artifacts from a single `contract/app.pkl`. See [`.claude/skills/make-contract/SKILL.md`](../../.claude/skills/make-contract/SKILL.md).
+The SDK generates workflow/credential/manifest/input artifacts from a single `contract/app.pkl`. See [`.claude/skills/make-contract/SKILL.md`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/make-contract/SKILL.md).
 
-> **Output directory is `app/generated/`**, importable as `app.generated`. The SDK reads it via `ATLAN_CONTRACT_GENERATED_DIR` (default defined in [`application_sdk/constants.py`](../../application_sdk/constants.py) as `app/generated`). If an app writes generated artifacts elsewhere, either set `ATLAN_CONTRACT_GENERATED_DIR` to match or (preferred) point `poe generate` at `app/generated/` so the runtime finds them without extra config.
+> **Output directory is `app/generated/`**, importable as `app.generated`. The SDK reads it via `ATLAN_CONTRACT_GENERATED_DIR` (default defined in [`application_sdk/constants.py`](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/constants.py) as `app/generated`). If an app writes generated artifacts elsewhere, either set `ATLAN_CONTRACT_GENERATED_DIR` to match or (preferred) point `poe generate` at `app/generated/` so the runtime finds them without extra config.
 
 - [ ] **`contract/app.pkl`** exists and is the source of truth for the app's metadata, credentials, and workflow form.
 - [ ] **Generated artifacts are committed** — `app/generated/{name}.json`, `atlan-connectors-{name}.json`, `manifest.json` and `app/generated/_input.py` are present.

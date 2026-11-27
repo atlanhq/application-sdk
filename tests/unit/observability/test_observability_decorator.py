@@ -24,7 +24,8 @@ from application_sdk.observability.decorators.observability_decorator import (
     _record_success_observability,
     observability,
 )
-from application_sdk.observability.metrics_adaptor import MetricType
+from application_sdk.observability.models import MetricType
+from tests.unit._doubles import FakeClock
 from tests.unit.private_stdlib import private_stdlib
 
 
@@ -33,21 +34,8 @@ def _mock_components():
     return MagicMock(name="logger"), MagicMock(name="metrics"), MagicMock(name="traces")
 
 
-class _HandClock:
-    """Stands in for ``time.time`` in the decorator; moves only when told to."""
-
-    def __init__(self) -> None:
-        self.now = 1_000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-
 @contextmanager
-def _decorator_clock() -> Iterator[_HandClock]:
+def _decorator_clock() -> Iterator[FakeClock]:
     """Give the decorator module a clock the test advances by hand.
 
     A real sleep measured against the real clock is not a lower bound on
@@ -56,9 +44,9 @@ def _decorator_clock() -> Iterator[_HandClock]:
     in CI. The clock is patched on a private copy of ``time``, so the event
     loop and every other thread keep the real one.
     """
-    clock = _HandClock()
+    clock = FakeClock()
     with private_stdlib(observability_decorator, "time") as local_time:
-        with patch.object(local_time, "time", clock):
+        with patch.object(local_time, "monotonic", clock):
             yield clock
 
 

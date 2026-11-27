@@ -13,6 +13,11 @@ from pydantic import ValidationError
 from application_sdk._logging import get_logger
 from application_sdk.outputs.models import Artifact, Metric
 
+__all__ = [
+    "OutputCollector",
+]
+
+
 _logger = get_logger(__name__)
 
 

@@ -64,6 +64,13 @@ from application_sdk.storage.batch import DataObject, list_data_objects, list_ke
 # is how the reader and the writer drift apart.
 from application_sdk.storage.integrity import read_expected_digest, sha256_file
 
+__all__ = [
+    "download",
+    "InternalError",
+    "upload",
+]
+
+
 _logger = get_logger(__name__)
 
 if TYPE_CHECKING:

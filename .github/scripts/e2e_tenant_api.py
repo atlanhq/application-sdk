@@ -84,10 +84,6 @@ RELEASE_SCAN_PATH = (
 #: so reading it needs no new Heracles rule.
 CONFIGMAP_PATH = f"{_SERVICE_PREFIX}/configmaps/{{name}}"
 
-#: AE submit / create. `submit=false` creates the workflow without executing it,
-#: which still drives Heracles' server-side manifest fetch from the deployed pod.
-PACKAGE_WORKFLOWS_PATH = f"{_SERVICE_PREFIX}/package-workflows"
-
 TOKEN_PATH = "/auth/realms/default/protocol/openid-connect/token"
 
 Method = Literal["GET", "POST", "PUT"]

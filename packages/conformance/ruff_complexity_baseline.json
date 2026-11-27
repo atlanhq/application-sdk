@@ -33,7 +33,7 @@
     "C901": 1
   },
   "conformance/suite/checks/_entrypoint_contract_fields.py": {
-    "C901": 4
+    "C901": 3
   },
   "conformance/suite/checks/app_name_alignment/_code_app_name.py": {
     "C901": 2
@@ -56,9 +56,6 @@
     "C901": 1
   },
   "conformance/suite/checks/client_seam/_raw_http_to_atlan.py": {
-    "C901": 1
-  },
-  "conformance/suite/checks/dapr_objectstore.py": {
     "C901": 1
   },
   "conformance/suite/checks/dependency_conformance/__init__.py": {

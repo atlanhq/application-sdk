@@ -17,6 +17,10 @@ from application_sdk.constants import MCP_METADATA_KEY
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.mcp.models import MCPMetadata
 
+__all__ = [
+    "MCPServer",
+]
+
 
 def _bind_task_for_mcp(app_name: str, task_meta: Any) -> Callable[..., Any]:
     """Return an MCP-callable wrapper around an unbound ``@task`` method.

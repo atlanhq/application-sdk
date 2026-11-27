@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk-api"
-version = "3.59.0"
+version = "3.60.0"
 description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
 license = "Apache-2.0"
 authors = [
@@ -61,7 +61,7 @@ obstore = ["obstore>=0.12.0,<0.13.0"]
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
 # calls. Declared so those function-level imports are an extra's, as on the worker.
 pyatlan = [
-    "pyatlan>=11.8.0,<12",
+    "pyatlan>=11.9.0,<12",
     # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
     # here too so a resolver that ignores requires-python cannot pick pyatlan's
     # py3.9 authlib branch for this wheel.
@@ -119,9 +119,13 @@ sql = [
 aws = [
     "application_sdk.common.aws_utils",
 ]
-# The host's object store: core reaches this module too (object_routes.py
-# builds the store through it), and the group makes the wheel probe install
-# the obstore extra and import it.
+# The host's object store: core reaches _obstore_config too (object_routes.py
+# builds the store through it). storage.ops is the worker's read and write
+# path, which HostObjectStore calls (lazily, so core does not reach it); its
+# closure must stay free of loguru, python-dotenv (constants), Dapr and
+# OpenTelemetry. The group makes the wheel probe install the obstore extra and
+# import them.
 obstore = [
     "application_sdk._obstore_config",
+    "application_sdk.storage.ops",
 ]

@@ -39,9 +39,7 @@ from application_sdk.testing.e2e._errors import (
 from application_sdk.testing.e2e.client import AEWorkflowClient
 from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.automation_engine import (
-    DAGNodeResult,
     DAGNodeStatus,
-    DAGRunResult,
     DAGRunStatus,
     RunLookup,
 )
@@ -89,6 +87,7 @@ from application_sdk.testing.harness.automation_engine.wire import (
     safe_run_status as _safe_run_status,
 )
 from application_sdk.testing.harness.bridge import run_sync
+from tests.unit.testing._ae_fakes import node, run_result, succeeded
 
 _RUN_ID = "test-run-123"
 
@@ -116,44 +115,10 @@ def _make_client() -> AEWorkflowClient:
     )
 
 
-def _succeeded_result() -> DAGRunResult:
-    return DAGRunResult(
-        run_id=_RUN_ID,
-        workflow_slug="slug",
-        status=DAGRunStatus.SUCCEEDED,
-        nodes=[
-            DAGNodeResult(
-                name="extract",
-                status=DAGNodeStatus.SUCCEEDED,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-        ],
-    )
-
-
 def _http_error() -> AtlanApiHttpError:
     return AtlanApiHttpError(
         message="AE-COMMON-500-01: An unexpected error occurred",
         target="GET /api/service/package-workflows/native-status HTTP 500",
-    )
-
-
-def _result(run_status: DAGRunStatus, node_status: DAGNodeStatus) -> DAGRunResult:
-    return DAGRunResult(
-        run_id=_RUN_ID,
-        workflow_slug="slug",
-        status=run_status,
-        nodes=[
-            DAGNodeResult(
-                name="extract",
-                status=node_status,
-                started_at_ms=None,
-                completed_at_ms=None,
-                error_message=None,
-            )
-        ],
     )
 
 
@@ -165,7 +130,7 @@ class TestPollNativeStatusStallGuard:
         the AE queue while no worker polls the extract queue. Must raise
         NoWorkerOnTaskQueueError once the grace window elapses, not hang."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -186,7 +151,9 @@ class TestPollNativeStatusStallGuard:
         must keep the guard armed and raise. Guards against a regression that
         drops SCHEDULED from the not-started set."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
+        stuck = run_result(
+            DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.SCHEDULED)
+        )
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -207,7 +174,9 @@ class TestPollNativeStatusStallGuard:
         error and must not name the app's queue.
         """
         client = _make_client()
-        never_dispatched = _result(DAGRunStatus.PENDING, DAGNodeStatus.PENDING)
+        never_dispatched = run_result(
+            DAGRunStatus.PENDING, node("extract", DAGNodeStatus.PENDING)
+        )
 
         with patch.object(
             client._ae, "get_native_status", return_value=never_dispatched
@@ -230,7 +199,7 @@ class TestPollNativeStatusStallGuard:
         """With no stall_task_queue supplied, the error falls back to the
         generic 'the extract task queue' phrasing."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -248,8 +217,10 @@ class TestPollNativeStatusStallGuard:
         """Once any node reaches Running the guard latches off — a long-running
         node past the grace window must NOT trip it."""
         client = _make_client()
-        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
-        done = _succeeded_result()
+        running = run_result(
+            DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.RUNNING)
+        )
+        done = succeeded("extract")
         # Node running for many polls (well past grace), then succeeds.
         side_effects = [running] * 6 + [done]
 
@@ -268,7 +239,7 @@ class TestPollNativeStatusStallGuard:
         """stall_grace_seconds=None disables the guard: a stuck run polls to the
         timeout and returns the last observation instead of raising."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -284,7 +255,7 @@ class TestPollNativeStatusStallGuard:
         """stall_grace_seconds=0 also disables the guard (base passes the int
         attr directly, so 0 must be treated as off, not 'grace of 0')."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -300,7 +271,7 @@ class TestPollNativeStatusStallGuard:
         """A negative grace is non-positive → disabled, NOT 'fire immediately'
         (elapsed 0 >= -1 would otherwise trip the guard on the first poll)."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -323,7 +294,7 @@ class TestPollNativeStatusProgressWatchdog:
         state → DAGProgressStalledError once progress_stall_seconds elapses,
         instead of polling the full timeout."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.RUNNING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -356,7 +327,7 @@ class TestPollNativeStatusProgressWatchdog:
         """progress_stall_seconds=None disables the watchdog: a wedged-Running
         run polls to the timeout and returns the last observation, no raise."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.RUNNING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -373,8 +344,10 @@ class TestPollNativeStatusProgressWatchdog:
         """A run that keeps moving (Running → Succeeded) within the window is not
         killed — the terminal return wins and the watchdog never trips."""
         client = _make_client()
-        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
-        done = _succeeded_result()
+        running = run_result(
+            DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.RUNNING)
+        )
+        done = succeeded("extract")
 
         with patch.object(
             client._ae, "get_native_status", side_effect=[running, running, done]
@@ -410,7 +383,9 @@ class TestSkippedStatus:
         otherwise raise NoWorkerOnTaskQueueError) must not fire on a terminal
         status."""
         client = _make_client()
-        skipped = _result(DAGRunStatus.SKIPPED, DAGNodeStatus.PENDING)
+        skipped = run_result(
+            DAGRunStatus.SKIPPED, node("extract", DAGNodeStatus.PENDING)
+        )
 
         with patch.object(client._ae, "get_native_status", return_value=skipped):
             with fake_clock():
@@ -431,7 +406,7 @@ class TestPollNativeStatusTransientHandling:
         """N=2 failures followed by success with max=5 → returns result."""
         client = _make_client()
         err = _http_error()
-        ok = _succeeded_result()
+        ok = succeeded("extract")
         side_effects = [err, err, ok]
 
         with patch.object(client._ae, "get_native_status", side_effect=side_effects):
@@ -465,14 +440,9 @@ class TestPollNativeStatusTransientHandling:
         """Error → success → errors below threshold → success: streak resets."""
         client = _make_client()
         err = _http_error()
-        ok = _succeeded_result()
+        ok = succeeded("extract")
         # 2 errors, then a success (streak reset), then 2 more errors, then final success
-        running = DAGRunResult(
-            run_id=_RUN_ID,
-            workflow_slug="slug",
-            status=DAGRunStatus.RUNNING,
-            nodes=[],
-        )
+        running = run_result(DAGRunStatus.RUNNING)
         side_effects = [err, err, running, err, err, ok]
 
         with patch.object(client._ae, "get_native_status", side_effect=side_effects):
@@ -831,7 +801,7 @@ class TestPollNativeStatusHonoursRetryAfter:
         )
         with (
             patch.object(
-                client._ae, "get_native_status", side_effect=[err, _succeeded_result()]
+                client._ae, "get_native_status", side_effect=[err, succeeded("extract")]
             ),
             fake_clock() as clock,
         ):
@@ -850,7 +820,7 @@ class TestPollNativeStatusHonoursRetryAfter:
             patch.object(
                 client._ae,
                 "get_native_status",
-                side_effect=[_http_error(), _succeeded_result()],
+                side_effect=[_http_error(), succeeded("extract")],
             ),
             fake_clock() as clock,
         ):
@@ -1920,7 +1890,7 @@ class TestPollNativeStatusCeilingStamp:
         """Nothing ever moves → the returned observation carries the ceiling and
         the full no-progress window."""
         client = _make_client()
-        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+        stuck = run_result(DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING))
 
         with patch.object(client._ae, "get_native_status", return_value=stuck):
             with fake_clock():
@@ -1940,8 +1910,12 @@ class TestPollNativeStatusCeilingStamp:
         """A DAG that progresses and *then* freezes reports the frozen window,
         not the whole poll — that is the number that names the wedge."""
         client = _make_client()
-        pending = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
-        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        pending = run_result(
+            DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.PENDING)
+        )
+        running = run_result(
+            DAGRunStatus.RUNNING, node("extract", DAGNodeStatus.RUNNING)
+        )
 
         with patch.object(
             client._ae, "get_native_status", side_effect=[pending] + [running] * 20
@@ -1965,7 +1939,7 @@ class TestPollNativeStatusCeilingStamp:
         client = _make_client()
 
         with patch.object(
-            client._ae, "get_native_status", return_value=_succeeded_result()
+            client._ae, "get_native_status", return_value=succeeded("extract")
         ):
             with fake_clock():
                 result = client.poll_native_status(
@@ -2003,26 +1977,10 @@ class TestNotStartedNodes:
     def test_not_started_nodes_excludes_a_real_failure(self):
         """``failed_nodes`` stays the wide not-successful set; the new accessor
         isolates the never-dispatched ones so a message can tell them apart."""
-        result = DAGRunResult(
-            run_id=_RUN_ID,
-            workflow_slug="slug",
-            status=DAGRunStatus.RUNNING,
-            nodes=[
-                DAGNodeResult(
-                    name="publish",
-                    status=DAGNodeStatus.FAILED,
-                    started_at_ms=None,
-                    completed_at_ms=None,
-                    error_message="boom",
-                ),
-                DAGNodeResult(
-                    name="lineage-publish",
-                    status=DAGNodeStatus.PENDING,
-                    started_at_ms=None,
-                    completed_at_ms=None,
-                    error_message=None,
-                ),
-            ],
+        result = run_result(
+            DAGRunStatus.RUNNING,
+            node("publish", DAGNodeStatus.FAILED, error="boom"),
+            node("lineage-publish", DAGNodeStatus.PENDING),
         )
         assert [n.name for n in result.failed_nodes] == ["publish", "lineage-publish"]
         assert [n.name for n in result.not_started_nodes] == ["lineage-publish"]

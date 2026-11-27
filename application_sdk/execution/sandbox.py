@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from temporalio.worker.workflow_sandbox import SandboxRestrictions
 
+__all__ = [
+    "host_library_modules",
+    "SandboxConfig",
+]
+
 
 # Every top-level module and subpackage of application_sdk, classified. The
 # sandbox passes a module through by name prefix, so one "application_sdk"
@@ -35,7 +40,10 @@ _SDK_PASSTHROUGH_PACKAGES: frozenset[str] = frozenset(
         "_logging",
         "_loop_stall_watchdog",
         "_obstore_config",
+        "_proxy",
         "_runtime",
+        "_shutdown_policy",
+        "_storage_classify",
         "app",
         "clients",
         "common",

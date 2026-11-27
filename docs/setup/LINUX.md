@@ -23,38 +23,30 @@ libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev \
 liblzma-dev
 ```
 
-### 2. Install uv 0.7.3 and Python
+### 2. Install uv and Python
 
-uv manages both Python environments and dependencies:
+uv manages both Python and the project's dependencies:
 
 ```bash
-# Install UV
-curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install Python 3.11.10
-uv venv --python 3.11.10
+# Create a virtualenv on a supported Python (3.11 to 3.14; see the Setup Overview)
+uv venv --python 3.12
 
 # activate the venv
 source .venv/bin/activate
 
 # Verify installation
-python --version # Should show Python 3.11.10
+python --version # Should show Python 3.12.x
 ```
 
-### 3. That's it — Dapr and Temporal are auto-managed
+### 3. That's it: Dapr and Temporal are auto-managed
 
-You do **not** need to install the Dapr or Temporal CLIs. When you run an app
-locally via `run_dev_combined()` (see the [Getting Started Guide](../guides/getting-started.md)),
-the SDK auto-downloads and manages both the Dapr runtime (`daprd`) and an
-in-process Temporal server for you — nothing is required on your machine beyond
-Python and uv.
-
-> [!NOTE]
-> Prefer to run against an external Dapr sidecar and Temporal server to mirror
-> production? You only need the [Temporal CLI](https://docs.temporal.io/cli#install) —
-> not the Dapr CLI; the SDK fetches the pinned `daprd` runtime for you and you run
-> it directly. Then follow the optional external-infrastructure section of the
-> Getting Started guide.
+You do **not** need the Dapr or Temporal CLIs to build, run or test an app; the SDK
+downloads what it needs. What is required, and the optional extras for running
+against external infrastructure, are listed once in the
+[Setup Overview](../standards/setup.md).
 
 > [!NOTE]
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:

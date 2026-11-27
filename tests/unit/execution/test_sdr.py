@@ -1061,10 +1061,12 @@ class TestSdrPreflightObjectStoreChecks:
             _OBJECT_STORE_ACTIONS,
             _object_store_failure,
         )
-        from application_sdk.storage.preflight import (
+        from application_sdk.storage._classify import (
             _NOT_CONFIGURED,
             _OBJECT_STORE_ERROR_CLASSES,
-            _classify_access_error,
+        )
+        from application_sdk.storage._classify import (
+            classify_access_error as _classify_access_error,
         )
 
         # The declared surface has to be the *real* one: anything the classifier

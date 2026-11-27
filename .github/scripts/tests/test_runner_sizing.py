@@ -66,11 +66,14 @@ SLIM_ACTIONS = frozenset(
         "peter-evans/repository-dispatch",
         "softprops/action-gh-release",
         "atlanhq/application-sdk/.github/actions/discover-e2e-suites",
+        # Each is actions/{upload,download}-artifact twice around a `sleep`.
+        "atlanhq/application-sdk/.github/actions/download-artifact-retry",
         "atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck",
         # Runs .github/scripts/git_auth.py on the system python3: stdlib-only,
         # pinned where release-version-bump runs its `mirror` directly.
         "atlanhq/application-sdk/.github/actions/scoped-private-deps-token",
         "atlanhq/application-sdk/.github/actions/sign-bot-commits",
+        "atlanhq/application-sdk/.github/actions/upload-artifact-retry",
         "atlanhq/application-sdk/.github/actions/verify-test-gate",
     }
 )
@@ -153,8 +156,22 @@ def _third_party_imports(path: Path, seen: set[Path]) -> set[str]:
             if _SCRIPTS_ROOT in path.parents:
                 candidates.append(_SCRIPTS_ROOT / f"{top}.py")
             first_party = next((c for c in candidates if c.exists()), None)
+            # A first-party package next to the script (release_gate.py →
+            # connector_reviewer/): every module in it is followed, since its
+            # own relative imports are not walked one by one.
+            package = next(
+                (
+                    d / top
+                    for d in (path.parent, _SCRIPTS_ROOT)
+                    if (d / top / "__init__.py").is_file()
+                ),
+                None,
+            )
             if first_party is not None:
                 out |= _third_party_imports(first_party, seen)
+            elif package is not None:
+                for module in sorted(package.rglob("*.py")):
+                    out |= _third_party_imports(module, seen)
             else:
                 out.add(top)
     return out

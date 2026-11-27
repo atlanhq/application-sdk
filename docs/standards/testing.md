@@ -1,7 +1,6 @@
 # Testing Guidelines
 
-- Run the unit tests using the command: `uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics`
-
+- The commands that run the tests (unit, coverage, perf, integration) are in [Development Commands](../agents/dev-commands.md#testing), the one place they are written down.
 
 - **Test Framework**
     - Write tests before fixing bugs
@@ -23,6 +22,11 @@
     - `packages/conformance/tests/` shares helpers through `tests/_helpers.py`
       (`ids`, `active_ids`, `write_py`, `scan_files`, `uv_lock`, `extract_node`,
       `sdk_root`); import from it rather than defining a local copy
+    - The SDK's unit tests share doubles through `tests/unit/_doubles.py`
+      (`FakeClock`, `StaticHandler`, `SiblingProbe`, `loaded_after_importing`,
+      `record_connect_params`, the Temporal `ExecuteInput` / `WorkflowInfo` /
+      `ActivityInfo`) and the shipped `application_sdk.testing.mocks`
+      (`MockSecretStore`); import from them rather than defining a local copy
 
 - **Connector-App Testing Tiers (Agreed Architecture)**
 

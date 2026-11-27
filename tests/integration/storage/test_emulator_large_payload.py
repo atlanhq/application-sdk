@@ -9,6 +9,9 @@ OpenAPI-specific, and belong with the rest of the SDK's storage coverage:
 * **ops chunking path at >=100 MiB** — ``storage.ops.upload_file`` /
   ``download_file``, the only path that actually drives obstore's
   multipart-upload writer + streaming range-GET download, SHA-256 verified.
+* **upload_bytes at >=100 MiB** — ``ops.upload_bytes`` (multipart, with the
+  deployment part-size override reaching the writer, sidecar recorded) and
+  ``CloudStore.upload_bytes`` (readback on, no sidecar), SHA-256 verified.
 * **Timeout enforcement** — a 1 ms request timeout + retries disabled (plumbed
   through the SDK's ``ATLAN_OBSTORE_*`` config, i.e. the real binding path) must
   surface a ``StorageError``, proving the timeout config reaches the HTTP layer.
@@ -183,6 +186,80 @@ async def test_large_payload_via_ops_chunking(
 
         with contextlib.suppress(Exception):
             await ops.delete(key, store=cloud_store.store)
+
+
+async def test_large_payload_via_upload_bytes(
+    cloud_store, large_payload_file, tmp_path, monkeypatch
+):
+    """>=100 MiB of in-memory bytes through ops.upload_bytes, multipart.
+
+    upload_bytes streams through the same writer as upload_file, so the
+    deployment part-size override (ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES,
+    DISTR-899) must reach the writer, the object must round-trip byte for
+    byte, and the sidecar must record its digest.
+    """
+    import obstore
+
+    from application_sdk import constants
+
+    src_path, src_sha, src_size = large_payload_file
+    data = src_path.read_bytes()
+    part = 5 * 1024 * 1024
+    monkeypatch.setattr(constants, "STORAGE_UPLOAD_PART_SIZE_BYTES", part)
+    monkeypatch.setattr(constants, "STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", True)
+    real_open = obstore.open_writer_async
+    buffer_sizes: list[int] = []
+
+    def _spy(store, key, **kwargs):
+        buffer_sizes.append(kwargs["buffer_size"])
+        return real_open(store, key, **kwargs)
+
+    monkeypatch.setattr(obstore, "open_writer_async", _spy)
+    key = "large-bytes/payload.bin"
+    try:
+        digest = await ops.upload_bytes(
+            key, data, store=cloud_store.store, normalize=False
+        )
+        assert digest == src_sha
+        assert buffer_sizes == [part]
+        sidecar = await ops._get_bytes(
+            f"{key}.sha256", cloud_store.store, normalize=False
+        )
+        assert sidecar == src_sha.encode()
+        dl = tmp_path / "bytes.bin"
+        dl_digest = await ops.download_file(
+            key, dl, store=cloud_store.store, compute_hash=True, normalize=False
+        )
+        assert dl.stat().st_size == src_size
+        assert dl_digest == src_sha
+    finally:
+        import contextlib
+
+        for k in (key, f"{key}.sha256"):
+            with contextlib.suppress(Exception):
+                await ops.delete(k, store=cloud_store.store, normalize=False)
+
+
+async def test_large_payload_via_cloudstore_upload_bytes(
+    cloud_store, large_payload_file, tmp_path
+):
+    """>=100 MiB through CloudStore.upload_bytes: readback on, no sidecar."""
+    src_path, src_sha, src_size = large_payload_file
+    data = src_path.read_bytes()
+    key = "large-cs-bytes/payload.bin"
+    try:
+        assert await cloud_store.upload_bytes(key, data) == src_size
+        assert not await ops.exists(
+            f"{key}.sha256", store=cloud_store.store, normalize=False
+        )
+        paths = await cloud_store.download(key=key, output_dir=str(tmp_path / "dl"))
+        assert paths[0].stat().st_size == src_size
+        assert _sha256_of_path(paths[0]) == src_sha
+    finally:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await ops.delete(key, store=cloud_store.store, normalize=False)
 
 
 async def test_upload_respects_short_request_timeout(

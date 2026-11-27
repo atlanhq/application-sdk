@@ -17,6 +17,13 @@ from application_sdk.errors.leaves import (
     PreconditionError,
 )
 
+__all__ = [
+    "RedisConfigError",
+    "RedisConnectionError",
+    "RedisProtocolError",
+    "RedisTimeoutError",
+]
+
 
 @deprecated(
     "application_sdk.clients.redis_errors.RedisConnectionError is deprecated and "

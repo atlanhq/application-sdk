@@ -13,6 +13,12 @@ from application_sdk.errors.leaves import (
     SourceUnavailableError,
 )
 
+__all__ = [
+    "classify_http_exception",
+    "classify_http_status",
+]
+
+
 _DEFAULT_STATUS_LEAVES: Mapping[int, type[AppError]] = {
     401: AuthError,
     403: AppPermissionDeniedError,

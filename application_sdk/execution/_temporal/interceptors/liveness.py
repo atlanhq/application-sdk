@@ -14,7 +14,7 @@ This interceptor never observes the poll loop directly (Temporal exposes no
 poll hook to Python), so a timestamp-based window is only a proxy for progress
 and false-positives on idle queues. The authoritative, false-positive-free
 signal for "is the worker run loop still alive?" is the restart supervisor
-``_run_worker_with_restart`` in ``main.py``, which rebuilds a worker whose
+``_run_worker_with_restart`` in ``execution/_temporal/supervisor.py``, which rebuilds a worker whose
 ``run()`` returns or raises. ``WorkerHealthServer.check_live`` only enforces the
 opt-in idle-timestamp window; see ``ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS``.
 """

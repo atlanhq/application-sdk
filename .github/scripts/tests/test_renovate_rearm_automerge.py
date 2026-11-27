@@ -8,15 +8,10 @@ only write this script makes, so most tests assert on whether it was sent.
 from __future__ import annotations
 
 import json
-import os
-import sys
 from typing import Optional
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__))))
-
-import renovate_rearm_automerge as rearm  # noqa: E402
+import renovate_rearm_automerge as rearm
 
 try:  # Vocabulary pin: the literal must match the classifier's enum value.
     from conformance.renovate.models import BlockingReason as _BlockingReason

@@ -7,6 +7,12 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import InvalidInputError, PreconditionError
 
+__all__ = [
+    "InvalidRollingFileWriterError",
+    "InvalidRolloverPolicyError",
+    "RollingWriterClosedError",
+]
+
 
 @dataclass(kw_only=True)
 class InvalidRolloverPolicyError(InvalidInputError):

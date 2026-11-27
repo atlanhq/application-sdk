@@ -10,13 +10,8 @@ skip.
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import release_guard
 
 PYPROJECT = "packages/conformance/pyproject.toml"
@@ -432,3 +427,42 @@ class TestSkipMessage:
         assert PYPROJECT in msg
         assert "0.25.0" in msg
         assert "origin/main" in msg
+
+
+# ---------------------------------------------------------------------------
+# A stalled remote is bounded and fails open
+# ---------------------------------------------------------------------------
+
+
+class TestFetchTimeout:
+    """A ``git fetch`` that hangs must not hold the release job until the
+    workflow cancels it: it is bounded, and running out counts as a failed
+    fetch, which both guards already fail open on."""
+
+    def _stall_fetch(self, monkeypatch: pytest.MonkeyPatch) -> list[float | None]:
+        timeouts: list[float | None] = []
+
+        def fake_run(
+            cmd: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            if cmd[:2] == ["git", "fetch"]:
+                timeout = kwargs.get("timeout")
+                seconds = float(timeout) if isinstance(timeout, (int, float)) else None
+                timeouts.append(seconds)
+                raise subprocess.TimeoutExpired(cmd, seconds or 0.0)
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: no ref")
+
+        monkeypatch.setattr(release_guard.subprocess, "run", fake_run)
+        return timeouts
+
+    def test_landed_on_branch_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        timeouts = self._stall_fetch(monkeypatch)
+        landed, detail = release_guard.landed_on_branch("feedfacecafe0001")
+        assert landed is True
+        assert "could not fetch" in detail
+        assert timeouts == [release_guard.FETCH_TIMEOUT_S]
+
+    def test_already_released_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        timeouts = self._stall_fetch(monkeypatch)
+        assert release_guard.already_released(PYPROJECT, "0.25.0") == (False, None)
+        assert timeouts == [release_guard.FETCH_TIMEOUT_S] * 2

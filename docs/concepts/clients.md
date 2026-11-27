@@ -84,10 +84,9 @@ class SnowflakeClient(BaseSQLClient):
 
 *   **Role of `BaseSQLClient`:** Creates and manages the underlying database connection (`self.engine`) based on `DB_CONFIG` and credentials. Provides the configured engine and the `run_query` method to other components.
 *   **Role of `@task` methods:**
-    *   Tasks (e.g., `fetch_tables`, `fetch_columns` in your `SqlMetadataExtractor` subclass) orchestrate the extraction process.
-    *   They create a client instance and call `load()` with a credentials dict.
-    *   They call `client.run_query(query)` to execute queries and yield row batches.
-    *   They process the resulting data (e.g., pass to asset mappers for transformation).
+    *   On a `SqlApp` subclass, the `extract_*` tasks (e.g., `extract_tables`, `extract_columns`) load a `sql_client_class` instance with the run's credentials and stream each `fetch_*_sql` query's rows through `client.run_query(query)`.
+    *   The matching `transform_*` tasks pass those rows to the `map_*` asset mappers.
+    *   A custom `@task` that needs its own query creates a client instance, calls `load()` with a credentials dict, and calls `client.run_query(query)` the same way.
 
 **Simplified Flow:**
 `@task method` → creates `BaseSQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
@@ -136,7 +135,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 
 1.  **HTTP Configuration:**
     *   **`http_headers` (HeaderTypes):** HTTP headers for all requests made by this client. Supports dict, Headers object, or list of tuples. GET and POST requests through the `execute_http_get_request` and `execute_http_post_request` methods will use this header and allow for override through the `headers` parameter.
-    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. The default httpx transport retries connection setup (connect errors and connect timeouts) up to 3 times. That retry happens before any request bytes are sent, so it is safe for POST. It does not retry read errors or status codes. It also verifies TLS with `get_ssl_context()`, so CAs in `SSL_CERT_DIR` are trusted. It sends each request through the proxy set in `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`, unless the host matches `NO_PROXY`; httpx skips those variables whenever a transport is given, so the default transport applies them itself. Override it for custom retry behavior, for example with `httpx-retries`. A replacement transport owns TLS verification and proxying (httpx ignores a per-client `verify=` and the proxy environment variables when a transport is given), so build its inner transport with `httpx.AsyncHTTPTransport(verify=get_ssl_context())`, and pass `proxy=` to it if the app runs behind an egress proxy.
+    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. The default httpx transport retries connection setup (connect errors and connect timeouts) up to 3 times. That retry happens before any request bytes are sent, so it is safe for POST. It does not retry read errors or status codes. It also verifies TLS with `get_ssl_context()`, so CAs in `SSL_CERT_DIR` are trusted. It sends each request through the proxy for its scheme (`HTTPS_PROXY` or `HTTP_PROXY`, then `ALL_PROXY`), unless the host matches `NO_PROXY`, by the rule every SDK connection follows (see [Outbound proxy](../configuration.md#outbound-proxy)); httpx skips those variables whenever a transport is given, so the default transport applies them itself. Override it for custom retry behavior, for example with `httpx-retries`. A replacement transport owns TLS verification and proxying (httpx ignores a per-client `verify=` and the proxy environment variables when a transport is given), so build its inner transport with `httpx.AsyncHTTPTransport(verify=get_ssl_context())`, and pass `proxy=` to it if the app runs behind an egress proxy.
 
 2.  **Loading (`load` method):**
     *   Called with credentials and other configuration parameters.

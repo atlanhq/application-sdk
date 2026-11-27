@@ -259,6 +259,20 @@ rather than as "unknown". Renaming a `SkipReason` value or a metric breaks
 fleet-wide aggregation across SDK versions, so add new members rather than
 renaming existing ones.
 
+## The fetch-failures artifact, layout and metrics
+
+| | |
+|---|---|
+| **Produced by** | `record_fetch_failure` and `persist_activity_fetch_failures` in `application_sdk/outputs/fetch_failures.py`, merged by `merge_run_log`; scheduled by `App.merge_fetch_failures` ([ADR-0022](../adr/0022-skipped-record-capture.md)) |
+| **Layout** | `{run prefix}/fetch-failures.ndjson` (merged, one per run) and `{run prefix}/fetch-failures/parts/{activity_id}.ndjson`, where the run prefix is `WORKFLOW_OUTPUT_PATH_TEMPLATE` |
+| **Line shape** | `{"record_id", "entity_type", "reason", "endpoint", "http_status", "detail"}`; `reason` is a `FetchFailureReason` value (`source_unavailable`, `not_found`, `forbidden`, `rate_limited`) |
+| **Run outputs** | artifact `fetch-failures`; metrics `fetch-failures`, `fetch-failures-<reason>` (kebab-case), `fetch-failures-truncated`, `fetch-failures-unpersisted`; status `partial_success` |
+| **Read by** | Run-output consumers (the Automation Engine UI) and anyone aggregating extraction gaps across the fleet |
+| **Pinned by** | `tests/unit/outputs/test_fetch_failures.py`, `TestFetchFailuresThroughInterceptors` in `tests/unit/execution/_temporal/interceptors/test_output_interceptor.py`, `tests/unit/app/test_merge_fetch_failures.py` |
+
+**Absence means zero**, as for skipped records: a run that recorded no fetch failure has no
+artifact, metric or file. Add `FetchFailureReason` members rather than renaming existing ones.
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |
@@ -611,8 +625,8 @@ per pod, so only the worker knows the number.
 | **Produced by** | `.github/scripts/pr_test_command.py` (the comment command), `tests-reusable.yaml`'s e2e verdict steps, and `.github/scripts/gate_check_verdict.py` |
 | **Served at** | Commit statuses on a PR's head commit: `e2e` and `gate-check` (connector repos), `e2e-request` and `gate-check` (application-sdk). `workflow_dispatch` of a connector's `tests.yaml` with `run_e2e: only` and `head_sha` |
 | **Key** | Context names; the `running: <workflow files>` description of a pending `gate-check`; the `E2E_ONLY_MARKER` line (`inputs.run_e2e == 'only'`) in the scaffolded `tests.yaml` |
-| **Read by** | Every connector repo's vendored Release Gate (`release_gate.py`, reads `gate-check`), its scaffolded `tests.yaml` / `test-commands.yaml` (bootstrap templates, resynced per repo, so a rename reaches the fleet only on resync) |
-| **Pinned by** | `.github/scripts/tests/test_pr_test_command.py` (contexts, marker, workflow names), `packages/conformance/tests/test_release_gate.py::test_status_context_matches_the_command_that_writes_it` |
+| **Read by** | Every connector repo's Release Gate (`.github/scripts/release_gate.py` here, run from `main` by the scaffolded `release-gate.yaml`; reads `gate-check` and `connector-reviewer`; a repo that has not resynced since FND-5321 still runs its vendored copy), its scaffolded `tests.yaml` / `test-commands.yaml` (bootstrap templates, resynced per repo, so a rename reaches the fleet only on resync) |
+| **Pinned by** | `.github/scripts/tests/test_pr_test_command.py` (contexts, marker, workflow names), `.github/scripts/tests/test_release_gate.py::test_the_gate_reads_the_context_test_commands_writes` and `::test_the_contexts_and_identity_are_the_reviewers` |
 
 A connector keeps whatever template it last resynced, while the scripts here
 run at `@main`. So the command refuses a branch whose `tests.yaml` lacks the

@@ -39,7 +39,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       - name: Install dependencies
         shell: bash
@@ -70,30 +70,6 @@ jobs:
           NEW_VERSION=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
 
-      - name: Update version.py
-        # release.py sets skip=true when main already carries the version it
-        # computed — this run is looking at a frozen merge ref that predates a
-        # release which has already merged and published, so bumping again
-        # would open a duplicate release PR (application-sdk#3570). Guarding
-        # the mutating steps leaves the job green having done nothing.
-        if: steps.version_update.outputs.skip != 'true'
-        # In-place edit the ``__version__`` line only. The previous block
-        # truncated the file and re-emitted a fixed 5-line template, which
-        # wiped out anything else living alongside ``__version__`` (the
-        # ``__dapr_version`` pin, its docstring, and any future SDK-internal
-        # constants). A targeted ``sed`` keeps the bump working while
-        # preserving everything around it.
-        run: |
-          set -euo pipefail
-          sed -i 's/^__version__ = .*/__version__ = "${{ env.NEW_VERSION }}"/' application_sdk/version.py
-          # Confirm exactly one line changed; bail if the constant moved or
-          # was renamed, so a silent miss doesn't ship a broken bump.
-          new=$(grep '^__version__' application_sdk/version.py | cut -d'"' -f2)
-          if [[ "$new" != "${{ env.NEW_VERSION }}" ]]; then
-            echo "::error::sed did not rewrite __version__ as expected (got '$new', want '${{ env.NEW_VERSION }}')"
-            exit 1
-          fi
-
       - name: Mint fleet App token
         # A real (non-github-actions[bot]) identity is required so the push
         # below re-fires the bump PR's required checks. This PR always needs
@@ -113,7 +89,19 @@ jobs:
         if: steps.version_update.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
+        # --archive-dir: every section from a major older than NEW_VERSION's
+        # moves to docs/changelog/v<major>.md, so CHANGELOG.md holds only the
+        # current major. Idempotent; in steady state it moves anything only on
+        # the release that bumps the major (FND-4274).
+        run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}" --archive-dir docs/changelog
+
+      # The section just generated must have a unique heading, at least one
+      # bullet, and a (#N) PR reference on every bullet; a failure here stops the
+      # bump before it is pushed, so a malformed section never becomes release
+      # notes (FND-4274).
+      - name: Lint changelog section
+        if: steps.version_update.outputs.skip != 'true'
+        run: python .github/scripts/lint_changelog.py "${NEW_VERSION}"
 
       # Same debounce as release-version-bump.yaml (FND-3322): a force-push is a
       # `synchronize` that re-runs all PR CI on the bump PR, so skip it when the
@@ -128,7 +116,6 @@ jobs:
           python .github/scripts/release_bump_debounce.py \
             --branch "bump-version-${TARGET_BRANCH}" \
             --version-file pyproject.toml \
-            --version-file application_sdk/version.py \
             --version-file packages/api/pyproject.toml \
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
@@ -151,9 +138,11 @@ jobs:
           branch_name="bump-version-${TARGET_BRANCH}"
           git checkout -b "$branch_name"
 
+          # docs/changelog: update_changelog.py --archive-dir moves older-major
+          # sections there; index.md is committed, so the path always exists.
           # packages/api/pyproject.toml: release.py moves the api package in lockstep
           # (its version and the SDK's == pin), and the SDK pins that exact version.
-          git add pyproject.toml uv.lock CHANGELOG.md application_sdk/version.py packages/api/pyproject.toml
+          git add pyproject.toml uv.lock CHANGELOG.md docs/changelog packages/api/pyproject.toml
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin "$branch_name" --force
 
@@ -172,9 +161,8 @@ jobs:
           This PR updates:
           - pyproject.toml
           - uv.lock
-          - application_sdk/version.py
           - packages/api/pyproject.toml
-          - CHANGELOG.md
+          - CHANGELOG.md (and docs/changelog/ on a major bump)
 
           Version: ${CURRENT_VERSION} → ${NEW_VERSION}
           EOF

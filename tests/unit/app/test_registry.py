@@ -47,14 +47,6 @@ class _FakeAppCls:
 class TestAppRegistry:
     """Tests for AppRegistry singleton."""
 
-    def setup_method(self) -> None:
-        """Reset registry before each test."""
-        AppRegistry.reset()
-
-    def teardown_method(self) -> None:
-        """Reset registry after each test."""
-        AppRegistry.reset()
-
     def test_singleton(self) -> None:
         """AppRegistry is a singleton."""
         r1 = AppRegistry.get_instance()
@@ -264,14 +256,6 @@ class TestAppRegistry:
 class TestTaskRegistry:
     """Tests for TaskRegistry singleton."""
 
-    def setup_method(self) -> None:
-        """Reset registry before each test."""
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        """Reset registry after each test."""
-        TaskRegistry.reset()
-
     def test_singleton(self) -> None:
         """TaskRegistry is a singleton."""
         r1 = TaskRegistry.get_instance()
@@ -373,14 +357,6 @@ class TestSandboxReimport:
     copy must not reach the host registries, and must carry its own generated
     workflow classes, which the sandbox imports from the module by name.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     @staticmethod
     def _define_app() -> type:

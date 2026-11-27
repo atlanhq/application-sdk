@@ -18,3 +18,56 @@ When modifying SDK code, update corresponding conceptual documentation under `do
 *   `application_sdk/credentials/**` -> `docs/concepts/handlers.md` (credential resolution section)
 *   `application_sdk/storage/**` -> `docs/concepts/apps.md` (built-in storage tasks section)
 *   `application_sdk/observability/**` -> `docs/concepts/monitoring.md`
+
+## Code examples use current APIs
+
+A Python example in a Markdown file teaches whatever it imports, so an example
+on a deprecated symbol lands every app that copies it on a base it must migrate
+off again. `.github/scripts/check_docs_deprecated_imports.py` (pre-commit hook
+`check-docs-deprecated-imports`, run on every PR by the required `Pre-commit`
+check) parses each Python block in every tracked Markdown file and fails on a
+use of a symbol in `packages/conformance/conformance/data/deprecated_symbols.json`.
+It uses conformance's own B001 matcher, so it matches what B001 matches in an
+app: an import resolves through re-exports (`from application_sdk.templates
+import SqlMetadataExtractor`), an enum member (`PreflightStatus.PARTIAL`)
+through its enum, and a deprecated method by name. Deprecated properties are
+not matched, in docs or in apps. SDK imports carry from one block to the next
+on a page, so a block that only subclasses a deprecated base is still checked
+against the earlier block's import.
+
+When the check fails, rewrite the example onto the replacement the message
+names. A block that shows a deprecated API on purpose (a v2 "before" snippet, a
+page about a deprecated framework, a target kept until its replacement exists)
+says so on the line directly above its opening fence:
+
+````markdown
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
+```python
+from application_sdk.transformers.atlas import AtlasTransformer
+```
+````
+
+The reason is required. A page that presents itself as the current way to
+build an app carries no marker: if it needs one, the page needs rewriting.
+
+The check sees only Python blocks; a deprecated name in prose or in a table is
+on the author. Run it on its own with
+`uv run --frozen python .github/scripts/check_docs_deprecated_imports.py [FILE.md ...]`.
+
+## Site build (`mkdocs build --strict`)
+
+CI builds the docs site with `mkdocs build --strict` on every PR that touches `docs/` or `mkdocs.yml` (the Docs area of the SDK Gate, `.github/workflows/docs.yaml`). The `validation:` block in `mkdocs.yml` makes each of these a failure:
+
+- **A page not in `nav`.** Add every new page under `docs/` to `nav` in `mkdocs.yml`. Working notes that are not site pages go under an `exclude_docs` path instead.
+- **A link to a file outside `docs/`.** The site serves `docs/` only, so `../../application_sdk/main.py` is a 404 there. Link repo source with a full URL: `https://github.com/atlanhq/application-sdk/blob/main/application_sdk/main.py`.
+- **An anchor the target page lacks.** MkDocs and GitHub slug headings differently: a heading with `&` or `—` gets a double hyphen on GitHub and a single one in MkDocs. Avoid punctuation in headings you link to, so both renderers agree.
+
+Run `uv run --group docs mkdocs build --strict` locally before pushing a docs change.
+
+## Python examples parse and import real symbols
+
+Every `python` code block under `docs/` must parse, and its `application_sdk` imports must name modules and symbols that exist in the source tree. The `check-doc-examples` pre-commit hook (`.github/scripts/check_doc_examples.py`) enforces both. It runs on docs changes and on SDK changes, since renaming a symbol breaks the docs that import it.
+
+*   Write fragments so they parse: put `...` in a comment rather than an argument list, give a signature a `: ...` body, and wrap a bare `except` or `finally` in a `try`.
+*   A block with a `legacy-example` marker (see above) must still parse, but its imports are not resolved, so a v2 "before" snippet may import paths v3 removed.
+*   In a block showing v2 and v3 side by side, end the first line of each v2 import statement with a `# v2` comment instead.

@@ -9,20 +9,14 @@ an unbounded lock.
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
+import bound_lock_branch as orchestrator
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import bound_lock_branch as orchestrator
-import renovate_approval_conditions as approval
 
 WORKFLOW = (
     Path(__file__).parent.parent.parent / "workflows" / "renovate-lock-cooldown.yaml"
@@ -57,12 +51,9 @@ def uv_lock(pyatlan: str | None = "11.4.0", marker: str = "base") -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repo shaped like application-sdk: two uv projects and the relationship
-    table. Every file the refresh lane may rewrite."""
+    """A repo shaped like application-sdk: one workspace lock and the
+    relationship table. Every file the refresh lane may rewrite."""
     (tmp_path / "uv.lock").write_text(uv_lock(marker="root"))
-    sub = tmp_path / "packages" / "conformance"
-    sub.mkdir(parents=True)
-    (sub / "uv.lock").write_text(uv_lock(marker="sub"))
     table = tmp_path / orchestrator.RELATIONSHIP_DIRECTIONS
     table.parent.mkdir(parents=True, exist_ok=True)
     table.write_text('{"table": "11.4.0"}\n')
@@ -87,12 +78,10 @@ def head_subject(repo: Path) -> str:
 
 
 class TestWorkflowGuards:
-    """The `if:` on the job, which is two guards doing two unrelated jobs.
+    """What renovate-lock-cooldown.yaml passes to renovate-branch-fixup.yaml.
 
-    Both are asserted here rather than trusted, because both fail silently. A
-    skipped job is not red anywhere: an actor list that drifts out of step with
-    the identity actually pushing would stop bounding the lock and announce
-    nothing, which is the shape of failure FND-367 already paid for once.
+    The actor allowlist, the re-entrancy guard and the job split are the
+    reusable's, guarded once in test_renovate_branch_fixup.py.
     """
 
     @property
@@ -100,60 +89,21 @@ class TestWorkflowGuards:
         workflow = yaml.safe_load(WORKFLOW.read_text())
         return workflow["jobs"]["bound"]
 
-    def test_the_actor_list_matches_the_approval_gates_renovate_identities(self):
-        """One list of Renovate identities, not two.
-
-        The gate accepts these as PR authors; this workflow accepts them as
-        pushers. They describe the same fact — "a Renovate is driving this" — so a
-        change to one that misses the other leaves the lane running for a PR it
-        will not approve, or approving a PR it did not bound.
-        """
-        declared = re.findall(r'"([a-z0-9-]+\[bot\])"', self.job["if"])
-        assert sorted(declared) == sorted(approval.RENOVATE_AUTHORS), (
-            "the workflow's actor allowlist has drifted from "
-            f"RENOVATE_AUTHORS ({approval.RENOVATE_AUTHORS})"
-        )
-
-    def test_the_condition_folds_to_a_single_line(self):
-        # The `if:` is a folded scalar spanning two lines. A continuation line
-        # indented deeper than the block keeps its newline rather than folding to
-        # a space, leaving a literal line break inside the `${{ }}` — which is
-        # not something YAML validation or a lint pass flags.
-        assert "\n" not in self.job["if"]
-
-    def test_the_guard_reads_the_actor_and_not_something_spoofable(self):
-        # `github.actor` is set by GitHub from the push. Deriving the identity
-        # from anything inside the pushed content — a commit author, a trailer —
-        # would let the push assert who made it.
-        assert "github.actor" in self.job["if"]
-        assert "head_commit.author" not in self.job["if"]
-
     def test_re_entrancy_is_guarded_by_the_commit_subject_we_actually_write(self):
         # The actor list admits atlan-app-fleet[bot], which is the identity our
         # own push arrives as, so the actor check cannot be what stops the loop.
-        # This is — and it only works while it matches the driver's message.
+        # This is, and it only works while it matches the driver's message.
         assert orchestrator.COMMIT_MESSAGE.startswith(
             "chore(deps): bound the refreshed locks"
         )
-        assert "chore(deps): bound the refreshed locks" in self.job["if"]
-
-    def test_the_bound_step_pins_the_version_parser_it_needs(self):
-        """The runner image is not a promise.
-
-        The driver's rollback gate needs PEP 440 parsing, and `python3` on a bare
-        runner is not guaranteed to have `packaging` importable. Without it the
-        gate reports every upgrade as a regression, so the dependency is declared
-        at the call site rather than assumed — pinned, and `--no-project` so the
-        bound never waits on a full dev sync.
-        """
-        steps = self.job["steps"]
-        bound_step = next(
-            s for s in steps if s.get("name") == "Bound the refreshed locks"
+        assert (
+            self.job["with"]["own-commit-subject"]
+            == "chore(deps): bound the refreshed locks"
         )
-        run = bound_step["run"]
-        assert "bound_lock_branch.py" in run
-        assert "--with 'packaging==" in run, run
-        assert "--no-project" in run, run
+
+    def test_the_bound_runs_this_driver_with_the_fleet_window(self):
+        assert self.job["with"]["script"] == ".github/scripts/bound_lock_branch.py"
+        assert self.job["with"]["generate-args"] == "--window P3D"
 
     def test_the_lane_is_scoped_to_the_lock_refresh_branch(self):
         # Widening this to `renovate/**` would put the bound on the single-package
@@ -167,28 +117,22 @@ class TestWorkflowGuards:
 
 
 class TestProjects:
-    """The declared project set, guarded because both entries are load-bearing."""
+    """The declared project set, guarded because the entry is load-bearing."""
 
-    def test_both_uv_projects_are_covered(self):
-        assert [p.directory for p in orchestrator.PROJECTS] == [
-            ".",
-            "packages/conformance",
-        ]
+    def test_the_workspace_lock_is_the_only_project(self):
+        """packages/conformance is a member of the root uv workspace (FND-4671),
+        so the root lock covers it. A second entry would point the bound at a
+        lock that no longer exists and fail every refresh."""
+        assert [p.directory for p in orchestrator.PROJECTS] == ["."]
+        assert orchestrator.PYATLAN_LOCK == "uv.lock"
 
-    def test_neither_project_holds_the_sdk_and_both_exempt_pyatlan(self):
-        """packages/conformance path-sources atlan-application-sdk from this
-        checkout (FND-4256), so its lock has no registry SDK to hold. A hold
-        here would be a stale leftover of the PyPI pin that ran its tests
-        against an old release."""
-        exempt = {p.directory: set(p.exempt) for p in orchestrator.PROJECTS}
-        hold = {p.directory: set(p.hold) for p in orchestrator.PROJECTS}
-        assert hold["packages/conformance"] == set()
-        assert exempt["packages/conformance"] == {"pyatlan"}
-        # The root project consumes neither of its own packages from PyPI:
-        # atlan-application-sdk IS this project, and the conformance package is
-        # path-sourced via [tool.uv.sources].
-        assert exempt["."] == {"pyatlan"}
-        assert hold["."] == set()
+    def test_the_root_holds_nothing_and_exempts_pyatlan(self):
+        """The workspace consumes neither of its own packages from PyPI:
+        atlan-application-sdk IS the root, and the conformance package is a
+        workspace member."""
+        (root,) = orchestrator.PROJECTS
+        assert set(root.exempt) == {"pyatlan"}
+        assert set(root.hold) == set()
 
 
 class TestBoundProject:
@@ -202,7 +146,7 @@ class TestBoundProject:
         for project in orchestrator.PROJECTS:
             orchestrator.bound_project(project, "P7D", "origin/main", tmp_path)
 
-        assert len(calls) == 2
+        assert len(calls) == len(orchestrator.PROJECTS) == 1
         for argv, project in zip(calls, orchestrator.PROJECTS):
             assert argv[argv.index("--window") + 1] == "P7D"
             assert argv[argv.index("--baseline-ref") + 1] == "origin/main"
@@ -259,29 +203,23 @@ class TestMain:
             lambda root: pytest.fail("pyatlan did not move; nothing to regenerate"),
         )
 
-    def test_one_commit_carries_every_lock(self, monkeypatch, in_repo):
-        """One commit, not two: each push re-fires the PR's whole check suite."""
+    def test_the_bounded_lock_is_committed(self, monkeypatch, in_repo):
         self._stub_bound(monkeypatch)
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 0
-        assert head_files(in_repo) == {
-            "uv.lock",
-            "packages/conformance/uv.lock",
-        }
+        assert head_files(in_repo) == {"uv.lock"}
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
 
     def test_a_failed_bound_commits_nothing_at_all(self, monkeypatch, in_repo):
-        """Fail-closed, and specifically not fail-partial.
-
-        The second project failing must not leave the first one's bounded lock
-        committed on its own — a half-bounded branch still auto-merges, and it
-        would look like the control worked.
+        """Fail-closed: a bound that fails after writing must not leave its
+        partial lock committed — the branch still auto-merges, and it would
+        look like the control worked.
         """
 
         def fake_main(argv: list[str]) -> int:
             directory = Path(argv[argv.index("--project-dir") + 1])
             (directory / "uv.lock").write_text(uv_lock(marker="bounded"))
-            return 0 if directory.name != "conformance" else 1
+            return 1
 
         monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
 
@@ -463,8 +401,6 @@ class TestTwoJobHandoff:
         """
         artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
         (artifact / "uv.lock").write_text(uv_lock(marker="bounded"))
-        if missing == "uv.lock":
-            (artifact / orchestrator.PYATLAN_LOCK).write_text(uv_lock(marker="x"))
         (artifact / missing).unlink()
 
         with pytest.raises(FileNotFoundError, match=missing):
@@ -521,52 +457,8 @@ class TestTwoJobHandoff:
 
 
 class TestJobSplit:
-    """The point of the split is where the App token lives, so assert it
-    structurally rather than trust the comments."""
-
-    @property
-    def jobs(self) -> dict:
-        return yaml.safe_load(WORKFLOW.read_text())["jobs"]
-
-    def _step(self, job: str, uses: str) -> dict:
-        return next(s for s in self.jobs[job]["steps"] if uses in s.get("uses", ""))
-
-    def test_the_bound_job_never_sees_a_secret_or_a_write_permission(self):
-        bound = self.jobs["bound"]
-        assert bound["permissions"] == {"contents": "read"}
-        assert "secrets." not in yaml.safe_dump(bound)
-        checkout = self._step("bound", "actions/checkout@")
-        assert checkout["with"]["persist-credentials"] is False
-
-    def test_the_bound_job_does_not_commit(self):
-        bound_step = next(
-            s
-            for s in self.jobs["bound"]["steps"]
-            if s.get("name") == "Bound the refreshed locks"
-        )
-        assert "--no-commit" in bound_step["run"]
-
-    def test_the_artifact_carries_exactly_the_drivers_outputs(self):
-        upload = self._step("bound", "actions/upload-artifact@")
-        assert upload["with"]["path"].split() == list(orchestrator.OUTPUT_PATHS)
-
-    def test_the_token_job_installs_and_resolves_nothing(self):
-        publish = self.jobs["publish"]
-        assert publish["needs"] == "bound"
-        dumped = yaml.safe_dump(publish)
-        for forbidden in ("setup-uv", "setup-node", "uv run", "npm "):
-            assert forbidden not in dumped, forbidden
-        apply_step = next(
-            s for s in publish["steps"] if "bound_lock_branch.py" in s.get("run", "")
-        )
-        assert "--apply-from" in apply_step["run"]
-
-    def test_both_jobs_work_on_the_pushed_sha(self):
-        # `publish` commits onto what `bound` resolved; a moved branch must make
-        # the push non-fast-forward, not absorb stale outputs.
-        for job in ("bound", "publish"):
-            checkout = self._step(job, "actions/checkout@")
-            assert checkout["with"]["ref"] == "${{ github.sha }}", job
+    """The split itself is renovate-branch-fixup.yaml's (FND-4928), guarded in
+    test_renovate_branch_fixup.py; what stays here is this lane's own data."""
 
     def test_the_declared_paths_exist_in_this_repo(self):
         root = Path(__file__).parent.parent.parent.parent

@@ -21,22 +21,18 @@
 .github/actions/twingate-connect/action.yml::runs.connect
 .github/workflows/build-and-scan.yaml::jobs.build.meta
 .github/workflows/capability-manifest-check.yaml::jobs.drift-check.ctx
-.github/workflows/capability-manifest-check.yaml::jobs.drift-check.drift
 .github/workflows/capability-manifest-regen.yaml::jobs.commit.Refuse a branch that moved since regeneration
 .github/workflows/capability-manifest-regen.yaml::jobs.regen.handover
 .github/workflows/codeql.yaml::jobs.analyze.Generate summary
 .github/workflows/conformance-publish.yml::jobs.publish.Create source tag
-.github/workflows/conformance-publish.yml::jobs.publish.meta
 .github/workflows/contract-toolkit-publish.yml::jobs.publish.Create source tag
 .github/workflows/contract-toolkit-publish.yml::jobs.publish.Publish package to GitHub Pages branch
-.github/workflows/contract-toolkit-publish.yml::jobs.publish.meta
 .github/workflows/contract-toolkit-reusable.yaml::jobs.changelog-guard.Fail if toolkit changelog is hand-edited
 .github/workflows/contract-toolkit-reusable.yaml::jobs.docs-check.Check docs coverage for toolkit source changes
 .github/workflows/contract-toolkit-reusable.yaml::jobs.generated-output.Check for stale generated output
 .github/workflows/prune-dashboard-repo.yaml::jobs.prune.Validate slug
 .github/workflows/pull_request.yaml::jobs.changes.sdk-refine
 .github/workflows/pull_request.yaml::jobs.matrix-builder.set-matrix
-.github/workflows/release.yaml::jobs.bump-version.Update version.py
 .github/workflows/sdk-gate.yaml::jobs.changes.final-force
 .github/workflows/sdk-gate.yaml::jobs.changes.force
 .github/workflows/sdk-gate.yaml::jobs.changes.sdk-refine

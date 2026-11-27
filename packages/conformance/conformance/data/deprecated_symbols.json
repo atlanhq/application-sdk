@@ -10,6 +10,33 @@
       "symbol": "APP_CONTEXT_ERROR"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_azure_store is deprecated; use build_azure_store with an AzureStoreSettings, which applies the shared endpoint and credential rules \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_azure_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_gcs_store is deprecated; use build_gcs_store with a GCSStoreSettings \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_gcs_store"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "make_s3_store is deprecated; use build_s3_store with an S3StoreSettings, which applies the shared endpoint, tagging and credential rules \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk._obstore_config",
+      "removal_version": "4.0.0",
+      "symbol": "make_s3_store"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "ARTIFACT_SCHEMAS_STEM is deprecated; use application_sdk.common._generated_tree.ARTIFACT_SCHEMAS_STEM \u2014 the implementation moved to common (FND-3280). Will be removed in v4.0.0.",
@@ -188,6 +215,15 @@
       "module": "application_sdk.app.context",
       "removal_version": "4.0.0",
       "symbol": "ChildAppContext"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "get_correlation_context is deprecated; use application_sdk.observability.correlation.get_correlation_context \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.context",
+      "removal_version": "4.0.0",
+      "symbol": "get_correlation_context"
     },
     {
       "kind": "constant",
@@ -377,6 +413,42 @@
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisTimeoutError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EngineNotInitializedError is deprecated; use application_sdk.clients.sql_errors.EngineNotInitializedError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "EngineNotInitializedError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SqlBindParameterError is deprecated; use application_sdk.clients.sql_errors.SqlBindParameterError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "SqlBindParameterError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SqlPandasResultError is deprecated; use application_sdk.clients.sql_errors.SqlPandasResultError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "SqlPandasResultError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UnsupportedSqlCursorError is deprecated; use application_sdk.clients.sql_errors.UnsupportedSqlCursorError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "UnsupportedSqlCursorError"
     },
     {
       "kind": "function",
@@ -584,6 +656,15 @@
       "module": "application_sdk.common.incremental.marker",
       "removal_version": "4.0.0",
       "symbol": "upload_file"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "upload_file_from_bytes is deprecated; use application_sdk.storage.batch.upload_file_from_bytes \u2014 it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file_from_bytes"
     },
     {
       "kind": "constant",
@@ -892,6 +973,15 @@
       "symbol": "PAYLOAD_SAFETY"
     },
     {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "is_backwards_compatible is deprecated; use application_sdk.contracts.compat.check_backwards_compatible, which returns structured Incompatibility records, or assert_backwards_compatible in tests. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.base",
+      "removal_version": "4.0.0",
+      "symbol": "is_backwards_compatible"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.contracts.events.Consumes is deprecated; use application_sdk.handler.contracts.EventTriggerConfig instead \u2014 will be removed in v4.0.",
@@ -917,6 +1007,15 @@
       "module": "application_sdk.contracts.events",
       "removal_version": "4.0",
       "symbol": "EventRegistration"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CredentialRef is deprecated; use application_sdk.credentials.ref.CredentialRef \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.types",
+      "removal_version": "4.0.0",
+      "symbol": "CredentialRef"
     },
     {
       "kind": "method",
@@ -973,12 +1072,21 @@
       "symbol": "CREDENTIAL_VALIDATION_ERROR"
     },
     {
-      "kind": "function",
+      "kind": "method",
       "marker_via": "decorator",
-      "message": "legacy_credential_ref() is deprecated and will be removed in v4.0. Use CredentialRef.resolve(input) instead.",
+      "message": "CredentialRef.from_workflow_args is deprecated; use CredentialRef.resolve(input) instead, passing the typed Input itself (a dict-only caller validates it first: CredentialRef.resolve(ExtractionInput.model_validate(workflow_args))) \u2014 resolve routes on extraction_method, where this falls through to the GUID. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.credentials.ref",
-      "removal_version": "4.0",
+      "removal_version": "4.0.0",
+      "symbol": "from_workflow_args"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "legacy_credential_ref is deprecated; use CredentialRef.resolve(input) instead, which routes a direct-mode input to the same GUID ref. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.credentials.ref",
+      "removal_version": "4.0.0",
       "symbol": "legacy_credential_ref"
     },
     {
@@ -1360,6 +1468,15 @@
       "symbol": "ErrorCode"
     },
     {
+      "kind": "property",
+      "marker_via": "warn",
+      "message": "error_code is deprecated; use the error's code (or qualified_code) instead \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.errors.base",
+      "removal_version": "4.0.0",
+      "symbol": "error_code"
+    },
+    {
       "kind": "class",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal._lock_errors.LockAcquisitionError is deprecated and has no effect: create_worker never registers the lock interceptor or the lock activities that raise it. Will be removed in v4.0.0.",
@@ -1594,6 +1711,15 @@
       "symbol": "HandlerError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AgentCredentialSpec is deprecated; use application_sdk.credentials.spec.AgentCredentialSpec \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0.0",
+      "symbol": "AgentCredentialSpec"
+    },
+    {
       "kind": "enum_member",
       "marker_via": "enum-member",
       "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
@@ -1619,6 +1745,24 @@
       "module": "application_sdk.handler.object_routes",
       "removal_version": "4.0.0",
       "symbol": "S3ObjectStore"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_CREDENTIAL_KEYS is deprecated; use the app's generated credential form (contract/app.pkl) \u2014 every top-level field the form declares is now a credential key on every surface, so drop the rebind. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_CREDENTIAL_KEYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_normalize_credentials is deprecated; use a field the entry point's input contract declares \u2014 send the field the input reads; a legacy request shape the contract cannot express is a gap to raise with the SDK, not a request to rewrite. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0.0",
+      "symbol": "_normalize_credentials"
     },
     {
       "kind": "function",
@@ -2017,6 +2161,15 @@
       "symbol": "METRICS_RETENTION_DAYS"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MetricType is deprecated; use application_sdk.observability.models.MetricType \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.metrics_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "MetricType"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "compute_deltas is deprecated; use ActivityShareLedger for per-activity attribution \u2014 the whole-process delta has no caller in the SDK. Will be removed in v4.0.0.",
@@ -2224,9 +2377,18 @@
       "symbol": "internal_server_error_handler"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "upload_file_from_bytes is deprecated; use application_sdk.storage.batch.upload_file_from_bytes \u2014 it was only ever re-exported here by an import; use application_sdk.storage.upload_bytes. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.server.fastapi.utils",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file_from_bytes"
+    },
+    {
       "kind": "function",
       "marker_via": "decorator",
-      "message": "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's POST /workflows/v1/file route instead, or application_sdk.storage.batch.upload_file_from_bytes to write the bytes yourself \u2014 will be removed in v4.0.",
+      "message": "application_sdk.server.fastapi.utils.upload_file_to_object_store is deprecated; use the handler's POST /workflows/v1/file route instead, or application_sdk.storage.upload_bytes to write the bytes yourself \u2014 will be removed in v4.0.",
       "migration_target": true,
       "module": "application_sdk.server.fastapi.utils",
       "removal_version": "4.0",
@@ -2240,6 +2402,33 @@
       "module": "application_sdk.server.health",
       "removal_version": "4.0.0",
       "symbol": "run_health_server"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.storage.batch.upload_file_from_bytes is deprecated; use application_sdk.storage.upload_bytes, which writes the bytes directly instead of staging them through a temp file \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.batch",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file_from_bytes"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "prune_internal_dirs is deprecated; use application_sdk.common._listing.prune_internal_dirs \u2014 it was only ever re-exported here by an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.cloud",
+      "removal_version": "4.0.0",
+      "symbol": "prune_internal_dirs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "run_in_thread is deprecated; use application_sdk._runtime.offload.run_in_thread \u2014 it was only ever re-exported here by an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.storage.cloud",
+      "removal_version": "4.0.0",
+      "symbol": "run_in_thread"
     },
     {
       "kind": "constant",
@@ -2433,6 +2622,42 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "Audience is deprecated; use application_sdk.errors.categories.Audience \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "Audience"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "ExtractionOutput is deprecated; use application_sdk.templates.contracts.sql_metadata.ExtractionOutput \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "ExtractionOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "FailureCategory is deprecated; use application_sdk.errors.categories.FailureCategory \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "FailureCategory"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "TEMPORARY_PATH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "WORKFLOW_OUTPUT_PATH_TEMPLATE is deprecated; use application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_app",
@@ -2449,6 +2674,33 @@
       "symbol": "_build_transform_input"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_error_from_failure_details is deprecated; use application_sdk.errors.wire.error_from_failure_details \u2014 the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_error_from_failure_details"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._extract_entity is deprecated; use the public SqlApp.extract_entity instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_extract_entity"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "_redacted_validation_reason is deprecated; use application_sdk.errors.wire.redacted_validation_reason \u2014 the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_redacted_validation_reason"
+    },
+    {
       "kind": "method",
       "marker_via": "decorator",
       "message": "SqlApp._resolve_credential_ref is deprecated; use the public SqlApp.resolve_credential_ref instead. Will be removed in v4.0.0.",
@@ -2458,6 +2710,24 @@
       "symbol": "_resolve_credential_ref"
     },
     {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._resolve_output_path is deprecated; use the public SqlApp.resolve_output_path instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_resolve_output_path"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "SqlApp._transform_entity is deprecated; use the public SqlApp.transform_entity instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "_transform_entity"
+    },
+    {
       "kind": "constant",
       "marker_via": "module-getattr",
       "message": "legacy_credential_ref is deprecated; use application_sdk.credentials.ref.legacy_credential_ref \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
@@ -2465,6 +2735,33 @@
       "module": "application_sdk.templates.sql_app",
       "removal_version": "4.0.0",
       "symbol": "legacy_credential_ref"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "redact_wire_value is deprecated; use application_sdk.errors.base.redact_wire_value \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "redact_wire_value"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "sanitize_cause_repr is deprecated; use application_sdk.errors.base.sanitize_cause_repr \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "sanitize_cause_repr"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "secret_named_evidence_keys is deprecated; use application_sdk.errors.wire.secret_named_evidence_keys \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "secret_named_evidence_keys"
     },
     {
       "kind": "class",

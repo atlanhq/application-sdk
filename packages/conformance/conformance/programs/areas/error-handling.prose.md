@@ -681,6 +681,19 @@ outcome mirroring the error-handling shape in the reference app named by
   Classification is `"mechanical"` when the class already declares its own
   `code`, and `"judgment"` when one has to be named.
 
+- **E023 LegacyErrorCodeAccess** — code reaches the SDK's deprecated `AAF-*`
+  vocabulary on an SDK legacy-coded error without importing it: the
+  `error_code=` constructor keyword, a read of `err.error_code`, or a read of
+  `Cls.DEFAULT_ERROR_CODE`.  For the keyword, delete it; if the call relied on
+  it to name a distinct failure, raise (or define, prefixed per P003) a
+  subclass whose `code: ClassVar[str]` names that failure instead.  For a
+  read, switch to `code`: `err.error_code.code` becomes `err.code`, and
+  `Cls.DEFAULT_ERROR_CODE` becomes `Cls.code`.  `code` is a `str`, not an
+  `ErrorCode`, so check every downstream use of the value (attribute access,
+  equality against an `AAF-*` constant, formatting) in the same edit.
+  Classification is `"mechanical"` for a read whose only use is `.code`, and
+  `"judgment"` otherwise.
+
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
   subclass.  Consult the `/typed-failures` prescription: propose replacing
   with the appropriate `AppError` subclass from

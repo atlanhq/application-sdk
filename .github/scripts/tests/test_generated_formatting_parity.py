@@ -24,9 +24,6 @@ import types
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import regenerate_contract as regen
 import renovate_pkl_sync as sync
 

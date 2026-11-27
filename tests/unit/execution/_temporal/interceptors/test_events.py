@@ -50,6 +50,19 @@ class TestEventInterceptor:
         result = interceptor.workflow_interceptor_class(mock_input)
         assert result is EventWorkflowInboundInterceptor
 
+    def test_activity_events_off_leaves_activities_unwrapped(self) -> None:
+        """The worker's events-off value still stops activity start/end
+        events; those are not workflow commands, so replay is unaffected."""
+        mock_next = mock.MagicMock()
+        interceptor = EventInterceptor(activity_events=False)
+        assert interceptor.intercept_activity(mock_next) is mock_next
+        # The workflow side stays, so the worker can replay a run that had
+        # events on.
+        assert (
+            interceptor.workflow_interceptor_class(mock.MagicMock())
+            is EventWorkflowInboundInterceptor
+        )
+
     def test_workflow_interceptor_class_never_returns_none(self) -> None:
         interceptor = EventInterceptor()
         mock_input = mock.MagicMock()
@@ -796,6 +809,49 @@ class TestPublishEventViaBinding:
 
 class TestEventWorkflowInboundInterceptor:
     """Tests for EventWorkflowInboundInterceptor.execute_workflow."""
+
+    async def test_a_run_pinned_with_events_off_publishes_nothing(self) -> None:
+        """The run's pinned flag decides, not the worker's: this interceptor
+        is registered on every worker, so a run pinned off schedules no
+        publish_event even though the interceptor is in the chain."""
+        from application_sdk.execution._temporal.run_flags import _RUN_FLAGS, RunFlags
+
+        next_iface = mock.AsyncMock()
+        next_iface.execute_workflow = mock.AsyncMock(return_value="ok")
+        interceptor = EventWorkflowInboundInterceptor(next_iface)
+        execute_activity = mock.AsyncMock()
+        token = _RUN_FLAGS.set(RunFlags(events=False, cleanup=True))
+        try:
+            with mock.patch.object(
+                events_module.workflow, "execute_activity", new=execute_activity
+            ):
+                result = await interceptor.execute_workflow(mock.MagicMock())
+        finally:
+            _RUN_FLAGS.reset(token)
+
+        assert result == "ok"
+        execute_activity.assert_not_awaited()
+
+    async def test_a_run_pinned_with_events_on_publishes_start_and_end(self) -> None:
+        from application_sdk.execution._temporal.run_flags import _RUN_FLAGS, RunFlags
+
+        next_iface = mock.AsyncMock()
+        next_iface.execute_workflow = mock.AsyncMock(return_value="ok")
+        interceptor = EventWorkflowInboundInterceptor(next_iface)
+        execute_activity = mock.AsyncMock()
+        token = _RUN_FLAGS.set(RunFlags(events=True, cleanup=False))
+        try:
+            with (
+                mock.patch.object(events_module.workflow, "time", return_value=1.0),
+                mock.patch.object(
+                    events_module.workflow, "execute_activity", new=execute_activity
+                ),
+            ):
+                await interceptor.execute_workflow(mock.MagicMock())
+        finally:
+            _RUN_FLAGS.reset(token)
+
+        assert execute_activity.await_count == 2
 
     async def test_success_emits_start_and_end_events(self) -> None:
         next_iface = mock.AsyncMock()

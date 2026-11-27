@@ -882,7 +882,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "A typed ``AppError`` raise whose ``message=`` keyword value embeds the\n"
             "caught exception via an f-string (``f'…{exc}…'``), ``str(exc)``,\n"
             "``repr(exc)``, or string concatenation (``'…: ' + str(exc)``) — see\n"
-            "typed-error-prescription.md §6.  This leaks\n"
+            "§6 of https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md.  This leaks\n"
             "unsanitised, potentially user-facing text from an upstream library into a\n"
             "field that is displayed to operators and indexed in dashboards.  It also\n"
             "breaks aggregation by collapsing distinct failure modes into one\n"
@@ -1026,7 +1026,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``InvalidInputError(...)``) without a domain-specific subclass that\n"
             "overrides ``code`` collapses all failure modes for a given category into\n"
             "one dashboard bucket — impossible to route, alert on, or triage\n"
-            "individually.  See typed-error-prescription.md §4.  Only sanctioned\n"
+            "individually.  See §4 of\n"
+            "https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md.\n"
+            "Only sanctioned\n"
             "bare-parent form: ``InternalError(classification_pending=True)`` — used\n"
             "exclusively as a temporary placeholder during migration, never in\n"
             "production-stable code.  For all other sites: define a domain subclass\n"
@@ -1344,6 +1346,64 @@ RULES: tuple[RuleDefinition, ...] = (
             "``code: ClassVar[str]`` (prefixed with its category, see P003).  The\n"
             "class keeps its ``[AAF-…]`` ``str()`` prefix from the SDK base until\n"
             "v4.0.0, so log text does not change.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="E023",
+        canonical_reference=(
+            "atlan-mysql-app app/failures.py — each error class names its failure "
+            "with its own `code` ClassVar; no caller passes error_code= or reads "
+            "error_code / DEFAULT_ERROR_CODE off an SDK error."
+        ),
+        scope=RuleScope.BOTH,
+        name="LegacyErrorCodeAccess",
+        tier=EnforcementTier.WARN,
+        category="legacy-error-code",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.62.0",
+        rationale=(
+            "B001 flags importing the SDK's AAF-* names and E022 flags binding "
+            "DEFAULT_ERROR_CODE, but the legacy vocabulary is also reached without "
+            "either: the error_code= constructor keyword, a read of err.error_code, "
+            "or a read of Cls.DEFAULT_ERROR_CODE on an SDK error. All three only "
+            "warn at runtime and are removed in v4.0.0 (ADR-0013 §5, FND-389), when "
+            "the keyword raises TypeError and the reads raise AttributeError. The "
+            "v4.0.0 removal is gated on a clean fleet census, which needs every "
+            "consumption surface visible. Customer impact: a connector that still "
+            "reads the code fails at the first error it handles after the SDK bump "
+            "— the failure path itself crashes, so the real cause is lost."
+        ),
+        short_description=(
+            "Passes error_code= to, or reads error_code / DEFAULT_ERROR_CODE from, "
+            "an SDK error in the deprecated AAF-* vocabulary"
+        ),
+        full_description=(
+            "Flags three uses of the SDK's legacy AAF-* vocabulary that B001 and\n"
+            "E022 do not see, each on a class that resolves to an SDK class\n"
+            "carrying an AAF-* code (``StorageError``, ``CredentialError``, …),\n"
+            "directly or through app subclasses in the scanned repo:\n"
+            "\n"
+            "* the ``error_code=`` keyword in a call to such a class, or in\n"
+            "  ``super().__init__(...)`` inside one;\n"
+            "* ``<Cls>.DEFAULT_ERROR_CODE``, or ``self`` / ``cls``\n"
+            "  ``.DEFAULT_ERROR_CODE`` inside such a class;\n"
+            "* ``<name>.error_code`` where ``<name>`` is bound by\n"
+            "  ``except <such class> as <name>``, or ``self.error_code`` inside one.\n"
+            "\n"
+            "An app's own ``error_code`` attribute or keyword on its own error\n"
+            "classes is not flagged: it is not the SDK's legacy vocabulary.  Values\n"
+            "the rule cannot see the class of (narrowed by ``isinstance``, returned\n"
+            "from a call) are not tracked — a known false negative at WARN.\n"
+            "\n"
+            "Fix: drop ``error_code=`` and raise a subclass that sets its own\n"
+            "``code: ClassVar[str]``; read ``.code`` instead of ``.error_code``\n"
+            "(``.error_code.code`` becomes ``.code``) and ``Cls.code`` instead of\n"
+            "``Cls.DEFAULT_ERROR_CODE``.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,

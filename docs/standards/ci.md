@@ -37,12 +37,40 @@ are stubbed, `git` runs against a throwaway repo in `tmp_path`, and every
 branch (opt-in gate, missing input, eval-failure fallback, no-change
 short-circuit) has a case.
 
+### Call `gh` through `_gh.py`, write outputs through `_gha.py` (FND-4924)
+
+A new script does not write its own `gh` wrapper or its own `$GITHUB_OUTPUT`
+writer. Import the shared ones:
+
+| Need | Use | What it decides for you |
+|------|-----|-------------------------|
+| Run `gh` | `_gh.gh(args, input=, timeout=, retries=, idempotent=)` | A timeout on every call (120 s default), retry with backoff on a transient failure, `GhError(status, stderr)` on any other |
+| Parse its JSON | `_gh.gh_json(args)` | A non-JSON answer is a `GhError`, not a crash |
+| Read a paginated REST listing | `_gh.gh_paginated(path, key=)` | `--paginate --slurp` plus one flatten; a page of the wrong shape is an error, not a silent drop |
+| Decide "worth retrying" | `_gh.is_transient(status, stderr)` | 5xx, 429, a rate-limit 403 (not a permission 403), network errors |
+| Set a step output | `_gha.set_output(name, value)` / `set_outputs({...})` | Heredoc form with a random delimiter for any multi-line value; stdout when `$GITHUB_OUTPUT` is unset |
+| Write the step summary | `_gha.append_summary(markdown)` | Same unset behaviour |
+
+Pass `idempotent=False` for a call that creates something (a `POST` of a check
+run, a comment, a ref). It is then retried only on a rate limit, which GitHub
+refuses before doing the write; a 5xx or a timeout may already have created the
+object, so a retry would leave a duplicate.
+
+Tests stub `_gh.run`, the one subprocess seam, and get the real retry,
+classification and parsing. The conftest sleep stub makes backoff free.
+
+Existing scripts adopt these incrementally (FND-4924 and its follow-ups). Two
+kinds of script must stay self-contained and not import them: one a workflow
+sparse-checks-out as a single file, unless the sparse set is widened in the
+same change, and one vendored into consumer repos (`probe_code_scanning.py`,
+`build_conformance_args.py`).
+
 ### Never aggregate over `gh api --paginate --jq`
 
 With `--paginate`, gh runs the `--jq` filter once per page. A filter that
 aggregates (`length`, `add`, `first`, `any`) therefore prints one result per
 page: a review count over two pages is `"1\n0"`, not `1`. Fetch the listing
-with `--paginate --slurp`, flatten it with `_flatten_pages`, and do the
+with `_gh.gh_paginated` (`--paginate --slurp` plus a flatten) and do the
 counting in Python. `renovate_approval_conditions.fetch_reviews` and
 `count_signature_approvals` do this for review counts, and
 `vuln_auto_merge_gate` imports them rather than keeping its own copy (FND-4898).
@@ -118,6 +146,20 @@ uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 
 If you add a new script, add its test in the same PR — the workflow will pick
 it up automatically.
+
+The suite has its own `.github/scripts/pytest.ini`, which pytest uses instead of
+the root `pyproject.toml` whenever its arguments sit under `.github/scripts`.
+Its `pythonpath` puts `.github/scripts` and `.github/scripts/tests` on
+`sys.path`, so a test imports its script with a plain `import do_the_thing` and
+a shared helper with `from _workflows import …`. Do not add a
+`sys.path.insert` for either directory; `test_pytest_ini.py` fails on one. A
+script kept elsewhere (`.github/actions/*/`, `build_and_publish/`) still needs
+its own insert.
+
+A test that asserts on workflow or composite-action YAML reads it through
+`.github/scripts/tests/_workflows.py` (`load_workflow`, `job`, `steps`,
+`step_named`, `triggers`) rather than declaring its own `_load` / `_job` /
+`_step`.
 
 The trigger is deliberately **not** path-filtered. Part of this suite consists of
 cross-file guards that read YAML outside `.github/scripts/` — the mask-before-write
@@ -278,12 +320,87 @@ that stopped reporting the rule fails instead of matching an emptied baseline.
 The `ann401-baseline` pre-commit hook runs the check on every change under
 `application_sdk/`.
 
-## An artifact upload retry must use a DIFFERENT artifact name
+## SDK function size: a C901 / PLR0915 baseline that only shrinks
+
+ruff's C901 (McCabe complexity above 10) and PLR0915 (more than 50 statements)
+are not in the root ruff `select`: `application_sdk/` had 126 over-limit
+functions when they were enabled (FND-4266). Each is named, by file, rule and
+qualified name (`Class.method`), in `.github/scripts/complexity_baseline.json`,
+and `.github/scripts/check_complexity_baseline.py` holds the tree to it:
+
+- **A function not in the baseline fails.** It is new, or grew past a limit.
+  Split it. The failure prints the ruff finding for each one.
+- **A baseline function no longer over a limit also fails.** Lock the
+  improvement in with `--update`. `--update` refuses to add a function unless
+  given `--allow-increase`, and the base check below still catches that.
+- **A baseline entry the base revision lacks fails.** The `CI script tests` job
+  passes `--base-sha`. An entry matches the base's in the same file. A module
+  split that moves an over-limit function unchanged passes: a base entry
+  carries to another file only when its own file no longer defines a function
+  of that name and the function's AST (formatting and comments aside) is
+  identical at base and in the new file. A same-named replacement, a function
+  edited while it moves, or a renamed one counts as new: move it unchanged and
+  change it in a later PR.
+  A base with no baseline file is measured on its own tree.
+
+```bash
+uv run --frozen python .github/scripts/check_complexity_baseline.py           # check
+uv run --frozen python .github/scripts/check_complexity_baseline.py --update  # lock in a reduction
+```
+
+Naming functions rather than counting them per file means paying one function
+down cannot buy room for a new one in the same file.
+
+The baseline is the only suppression. As with ANN401, ruff runs with
+`--isolated` and `--ignore-noqa`, so no `select`, `ignore`, `per-file-ignores`,
+`exclude`, nested `ruff.toml`, raised `max-complexity` / `max-statements` or
+`# noqa: C901` can hide a function. The thresholds (ruff's defaults) and the
+target version are passed on the command line. A tree with nothing left passes
+when ruff still flags a canary over both limits.
+
+The `complexity-baseline` pre-commit hook runs the check on every change under
+`application_sdk/`. `packages/conformance` has its own count-based baseline for
+the same rules (above).
+
+## Artifacts move through the retry composites
 
 `actions/upload-artifact` treats the artifact service's `FinalizeArtifact` 403
-as non-retryable and fails the step, so every upload on a gating path is paired
-with a retry (first attempt `continue-on-error: true`, companion step guarded on
-`steps.<id>.outcome == 'failure'`). Three rules the pairing has to follow:
+as non-retryable and fails the step, and `actions/download-artifact` does the
+same with a `ListArtifacts` 403. So every upload and download goes through one
+of two composites that hold the retry:
+
+```yaml
+- name: Upload test results
+  if: always()
+  continue-on-error: true        # only when a lost artifact must not fail the job
+  uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+  with:
+    name: integration-test-results
+    path: results/
+    retention-days: 14
+
+- name: Download test results
+  uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+  with:
+    pattern: integration-test-results*
+    path: results/
+```
+
+Each composite runs a first attempt with `continue-on-error: true`, a 20-second
+wait and a retry, both guarded on the first attempt's outcome. The step fails
+only when both attempts fail. The caller's `if:` gates the whole thing. A
+workflow that only ever runs in this repo, on a checkout of it, may use the
+relative `./.github/actions/...` ref (`codeql.yaml` does, so a PR exercises its
+own version of the upload composite); reusable workflows and composites must
+use `atlanhq/...@main`, because a relative ref resolves against a consumer's
+workspace.
+
+`conformance-reusable.yaml` still writes its 12 SARIF pairs by hand: this
+repo's own PR CI runs it, and an `@main` ref to a composite that is not yet on
+`main` fails the job at setup. It moves in a follow-up once the composites
+merge.
+
+The upload composite follows these rules:
 
 1. **The retry uploads under `<first attempt's name>-retry`.** A failed finalize
    leaves an artifact record that holds the name for the rest of the run but
@@ -329,11 +446,11 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    "nothing matched" as **success**, so any step gated on
    `steps.<download>.outcome` has to move onto `hashFiles(...)`.
 
-`.github/scripts/tests/test_artifact_upload_retry.py` enforces all four over
-every workflow, composite action and script in this repo — including a
-cross-file check that no consumer addresses a retried artifact by its base name
-alone — and `EXEMPT` there carries the reason for each upload that does not need
-the hardening.
+`.github/scripts/tests/test_artifact_upload_retry.py` and
+`test_artifact_download_retry.py` pin these rules on the composites, fail on any
+direct `actions/upload-artifact` or `actions/download-artifact` step elsewhere,
+and check that no consumer addresses a retried artifact by its base name alone.
+`EXEMPT` in each carries the reason for a direct call that needs no retry.
 
 ## Test legs are requested by PR comment, never by label
 
@@ -353,7 +470,7 @@ is a relationship, not a role — `MEMBER` is any org member, even one with only
 Read). In application-sdk, `/gate-check` needs the Admin role: it gates an SDK
 release (`--gate-check-requires-admin` in `test-commands.yml`); bots and fork PRs are
 refused. The decision is in
-[`pr_test_command.py`](../../.github/scripts/pr_test_command.py), wired by
+[`pr_test_command.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/pr_test_command.py), wired by
 `test-commands.yml` here and by the scaffolded `test-commands.yaml` (calling
 `test-commands-reusable.yaml`) in connector repos (FND-3839).
 
@@ -434,7 +551,7 @@ contains(github.event.pull_request.labels.*.name, 'e2e') &&
 (github.event.action != 'labeled' || github.event.label.name == 'e2e')
 ```
 
-[`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py)
+[`test_label_trigger_gates.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/tests/test_label_trigger_gates.py)
 enforces that term and fails any workflow or scaffold that subscribes to
 `labeled`. Both the gates and the input go once the fleet has resynced.
 
@@ -451,6 +568,41 @@ finishes and a second request is dropped. It replaces the review gate that ran
 on every pull request and review event (`connector-review-gate.yaml`, retired
 in FND-5317; `bootstrap` removes it and its script, and C002 reports a copy
 still on disk).
+
+**Release Gate requires that status** (FND-5321). A pull request merges only
+when the reviewer App's newest `connector-reviewer` status on its head is
+`success`: every finding fixed or dismissed, `/review waive` for that head, or
+`/review` answering `exempt`.
+`pending` reads "still running", `error` "re-run `/review`", `failure` names
+the open findings (the gate's job summary lists each one's id, severity, title,
+principle and suggestion, read from the reviewer's own summary comment), and no
+status reads "comment `/review`". A pull request the reviewer would not review
+passes without one, decided by the reviewer's own classifier
+(`connector_reviewer.review.exemption` with `config.toml`'s `[exempt]` lists),
+and only while the reviewer has never reviewed it. A push moves the head to a
+commit with no status, so the gate blocks again. The reviewer posts its status
+with its App token, which fires a `status` event; `release-gate.yaml`'s
+`rerun-on-review` job (default branch, `actions: write`, skipped for every other
+context) re-runs the newest Release Gate run on that commit through
+`gate_check_verdict.rerun_release_gate`, the same re-run a `gate-check` verdict
+uses. The decision is `.github/scripts/release_gate.py` in this repository,
+checked out at `main` by the shim; bootstrap no longer vendors it. The gate job
+runs on `pull_request`, as it always has, so no org or repository Actions
+policy is needed. Nothing of the pull request is checked out or run: the pin
+check reads `uv.lock` and `pyproject.toml` at the head through the API, and a
+pull request that edits the old vendored script changes nothing. The exposure
+that every `pull_request` gate already had remains: a pull request can edit
+`release-gate.yaml` itself, or add its own job named `Release Gate`. Such an
+edit is in the diff, and the connector reviewer's gate-file check raises a high
+finding on any hand edit to a bootstrap-managed workflow (FND-5325).
+
+The gate posts no PR comment. Why it failed and what to do ("comment
+`/review`", the open findings, "still running", "re-run `/review`", the
+`/gate-check` reason on a release PR) is in the Release Gate check: its error
+annotation and its job summary.
+`python release_gate.py explain --repo <owner/name> --pr <n> --config-dir
+.github/connector-reviewer` prints, read-only, what the gate and the reviewer's
+classifier decide for any real pull request.
 
 ## Bot-opened PRs are never labelled
 
@@ -478,7 +630,7 @@ The same rule covers Renovate: the fleet preset applies no labels (FND-2201),
 and classifies its PRs by branch slug instead.
 
 Enforced by
-[`test_no_bot_pr_labels.py`](../../.github/scripts/tests/test_no_bot_pr_labels.py),
+[`test_no_bot_pr_labels.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/tests/test_no_bot_pr_labels.py),
 which sweeps `.github/`, `renovate-config/` and the conformance bootstrap
 templates for every way code adds a PR label, and parses each Renovate config
 for `labels` / `addLabels` / `:label` presets. Sites that predate it are
@@ -670,14 +822,16 @@ base-sensitive or not:
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
-| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
+| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839) and `connector-reviewer` status (FND-5321). A pull request without the verdicts it needs fails on the PR and never enters the queue. |
 | `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
 | `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
-runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
+runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. Its body is one
+nested reusable, `queue-diff-reusable.yaml`, which each of the three reusables
+calls with `./` (FND-4928); each keeps its own `if:`. It reads the PR
 number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and
 fetches the PR head from `refs/pull/<N>/head`. The SHA in the branch name is
 the commit the entry was built on, the queue commit's parent, not the PR head.
@@ -744,8 +898,8 @@ surface.
 
 application-sdk follows the connector split. In `sdk-tests-reusable.yaml`,
 Integration Tests and Storage Emulator Tests run on `merge_group` and on `v*`
-tag pushes, and on a PR only when someone asks for the full suite. Unit legs,
-Unit Perf Tests and the script tests still run on every PR push.
+tag pushes, and on a PR only when someone asks for the full suite. Unit legs
+and Unit Perf Tests still run on every PR push.
 
 **On demand.** A `/e2e` or `/gate-check` comment runs the integration tier on
 that PR commit too. The reusable's `Decide integration request` job reads the
@@ -769,6 +923,31 @@ averaged 5.8 pushes, and integration ran 8.9 minutes p50 on each, about 50
 runner-minutes per PR. Over the same window, three PR-side integration failures
 came from one PR, and no queue failure was an integration break the PR run had
 missed. The cost of the move is about one extra queue ejection in that window.
+
+### The SDK's unit grid is reduced on PR pushes (FND-4673)
+
+The `unit` job in `sdk-tests-reusable.yaml` is an OS × Python grid: 3.11–3.14
+on `ubuntu-22.04`, `macOS-latest` and `windows-latest`, 12 legs. An ordinary PR
+push runs 6 of them: all four Pythons on Linux, and only the container's
+Python (the Dockerfile's golden tag) on macOS and Windows. The merge queue,
+`v*` tags, and `release/*` and `bump-version-main` PRs (`force_sdk`) run all
+12. `sdk-gate.yaml` decides this and passes it as the reusable's
+`full-unit-grid` input, which defaults to `true` so a caller that omits it keeps
+the full grid.
+
+The trade: a break that shows only on macOS or Windows *and* only on
+3.11/3.12/3.14 fails in the queue, not on the PR, and costs one ejection.
+Before the change every PR push ran 12 unit legs, with Windows the critical
+path at p50 447 s, and PRs averaged 5.8 pushes.
+
+`test_container_python_version.py` expands the `exclude:` expression the way
+GitHub does and fails if the PR grid stops being "all of Linux plus the
+container's Python elsewhere", or drops the coverage leg. Bumping the
+Dockerfile's Python therefore fails that test until the exclude list moves
+with it.
+
+`with-retry.sh`'s tests are pytest (`test_with_retry.py`) and run in
+`pytest .github/scripts/tests`; there is no bats job or bats-core checkout.
 
 ### The vulnerability scan gates the bump PR, not every PR (FND-3328)
 
@@ -891,8 +1070,9 @@ tell you what it needs.
 Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
 
 * `tests-reusable.yaml`: Detect merge queue, Detect integration suite, Discover
-  e2e suites, Recheck the dispatched SDK ref, Release tenant lease, Report to
-  application-sdk, Test-readiness scorecard, Renovate artifacts, Tests Gate.
+  e2e suites, Report to application-sdk, Test-readiness scorecard, Renovate
+  artifacts, Tests Gate. Its e2e tier, `e2e-tests-reusable.yaml`: Recheck the
+  dispatched SDK ref, Release tenant lease.
 * `build-and-publish-app.yaml`: Validate Channel + Branch, Dispatch App
   Deployment, Publish.
 * `build-and-scan.yaml`: Security Gate.
@@ -909,9 +1089,9 @@ Short fleet jobs that stay on `ubuntu-latest`:
 | `renovate-auto-approve` | A conformance-resync PR is verified by rendering in a Docker container, and the job only finds out which kind of PR it has after it starts. Its 25-minute ceiling (fan-in wait) is also over the slim cap. Moving it needs the resync render split into its own job. |
 | build-and-publish-app `prepare` | Runs `parse_atlan_yaml.py` / `validate_atlan_yaml.py` on the system `python3`, which import PyYAML and `packaging` from the full image. |
 | build-and-publish-app `leak-scan`, `certify`; `generated-freshness` | `sudo` (gitleaks / `install-pkl`), not yet verified on slim. |
-| tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
-| tests-reusable `wake-` / `pause-dataforge-source` | GlobalProtect VPN needs a tun device, which an unprivileged container cannot create. |
-| `checks-reusable` pre-commit, tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
+| e2e-tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
+| tests-reusable `wake-` / `pause-dataforge-source` | The Twingate client needs a tun device, which an unprivileged container cannot create. |
+| `checks-reusable` pre-commit, unit-tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
 | Image build, merge, scan and e2e jobs | Docker. |
 
 Jobs that only run in application-sdk itself stay put because moving them saves
@@ -920,7 +1100,7 @@ nothing.
 ### arm64 for Python jobs: not now
 
 `ubuntu-24.04-arm` is $0.005/min, about 17% under `ubuntu-latest`. The
-SDK, conformance, mysql and metabase locks all resolve to wheels with an
+SDK (which covers conformance), mysql and metabase locks all resolve to wheels with an
 aarch64 build. openapi's does not: `scalene` (a dev dependency) ships x86_64
 wheels only, so its `uv sync` would compile it from source, which costs more
 than the 17% saves. The other cost is a second architecture to debug in every
@@ -1132,7 +1312,7 @@ venv, later `uv sync`, `uv run`, `uv lock --check` and even a re-lock of a
 stale lock fetch nothing. `uv run --isolated` and a re-resolve on a cold cache
 do fetch, so give them the token too, through `git_auth.py`.
 
-Used by `tests-reusable.yaml` (unit, integration, e2e), `checks-reusable.yaml`,
+Used by `tests-reusable.yaml`'s tiers (unit, integration, e2e), `checks-reusable.yaml`,
 `conformance-reusable.yaml`, `release-version-bump.yaml` and the certify gate
 in `build-and-publish-app.yaml` (see `docs/standards/app-certification.md`).
 `test_private_git_deps_wiring.py` pins the shape (FND-4740).
@@ -1558,18 +1738,19 @@ and change nothing. Hence `--baseline-ref origin/<default-branch>`, which also
 makes "never roll back what main ships" structural: the driver's rollback gate
 then compares against main by construction.
 
-**Two uv projects, one exempt set.** `packages/conformance` is a separate uv
-project with its own lock. Like the root it never resolves `atlan-application-sdk`
-from PyPI: its `[tool.uv.sources]` path-sources this checkout (FND-4256), so its
-tests run against the tree they ship beside and there is no registry SDK for the
-bound to hold. Both projects exempt only pyatlan. That source is not published
-metadata: the released conformance wheel still declares a plain
-`atlan-application-sdk[sql]` test extra. A change to the SDK's own dependencies
-therefore also re-resolves `packages/conformance/uv.lock`.
+**One lock for the whole tree.** `packages/conformance` is a member of the root
+uv workspace (FND-4671), so the root `uv.lock` covers it and the bound runs once,
+exempting only pyatlan. The workspace never resolves `atlan-application-sdk`
+from PyPI: it is the workspace root, so conformance's tests run against the tree
+they ship beside (FND-4256) and there is no registry SDK for the bound to hold.
+The workspace source is not published metadata: the released conformance wheel
+still declares a plain `atlan-application-sdk[sql]` test extra. Until FND-4671
+the package carried a second lock that re-resolved the SDK through that extra,
+and every SDK dependency change had to relock it too.
 
-**One commit, not one per lock.** Every push to the branch re-fires the PR's
-entire required-check suite, so the bound rewrites both uv locks in a single
-commit.
+**One commit, not one per file.** Every push to the branch re-fires the PR's
+entire required-check suite, so the bounded lock and, when pyatlan moved, the
+regenerated relationship table land in a single commit.
 
 The workflow pushes with a minted App token, not `GITHUB_TOKEN`: a `GITHUB_TOKEN`
 push does not re-trigger the PR's required checks, which would leave the PR green
@@ -1602,6 +1783,18 @@ and "not yet" would otherwise read as "never".
 
 If you add another workflow that commits to a Renovate branch, it inherits this
 problem. Carry the status or accept that the PR needs a human.
+
+### One implementation for both fix-up lanes
+
+`renovate-lock-cooldown.yaml` and `renovate-pyatlan-table-sync.yaml` both
+call `renovate-branch-fixup.yaml` (FND-4928). The caller owns the trigger, the
+concurrency group and the driver's arguments. The reusable owns the actor
+allowlist, the re-entrancy guard, the read-only `generate` job, the App-token
+`publish` job and the `renovate/artifacts` carry-forward. A new lane that rewrites
+files on a Renovate branch should call it too. Its driver must take
+`--no-commit --baseline-ref REF`, `--stage-to DIR` and `--apply-from DIR`, and
+write only its `OUTPUT_PATHS`. `test_renovate_branch_fixup.py` checks that
+contract for every caller.
 
 ### Repo-local `postUpgradeTasks` override
 
@@ -1711,20 +1904,22 @@ a `python3` being on the runner before `setup-python`. There is still no
 conditional shell. `test_setup_deps_python_pin_wiring.py` runs both steps, and
 also fails if `tests-reusable.yaml` ever passes a `python-version` to a tier.
 
-### The lint toolchain: three ruff pins that move as one
+### The lint toolchain: two ruff pins that move as one
 
-ruff is the exception to "declared once": it has to be pinned in three files
-that three different readers own. The `ruff-pre-commit` rev in
+ruff is the exception to "declared once": it has to be pinned in two files
+that two different readers own. The `ruff-pre-commit` rev in
 `.pre-commit-config.yaml` is what CI's `Pre-commit Checks` runs. The `ruff==`
-dev pin in `pyproject.toml` is what `uv run ruff` runs locally. The one in
-`packages/conformance/pyproject.toml` is what that package's scaffold-lint test
-runs. pre-commit cannot read a version from the lock, so the three literals
-stay, and two things keep them equal:
+dev pin in `pyproject.toml` is what `uv run ruff` runs locally.
+`packages/conformance/pyproject.toml` names ruff unpinned: the package is a
+member of the root uv workspace (FND-4671), so the one lock gives its
+scaffold-lint test the root's ruff. pre-commit cannot read a version from the
+lock, so the two literals stay, and two things keep them equal:
 
 - Renovate's `pre-commit` manager is enabled in `renovate.json`, and a `ruff`
-  group puts the hook rev and both pypi pins in one PR. The group is never
+  group puts the hook rev and the pypi pin in one PR. The group is never
   auto-merged, because a ruff release can change what CI enforces.
-- `.github/scripts/tests/test_lint_guards.py` fails if the three disagree, if
+- `.github/scripts/tests/test_lint_guards.py` fails if they or the locked ruff
+  disagree, if
   isort comes back as a second import sorter, or if either ruff config stops
   selecting `I`.
 
@@ -1837,7 +2032,7 @@ The same list has three input names and a file, and all of them go through it:
 
 | Where it is declared | Installed by |
 | --- | --- |
-| `apt-packages` (`tests-reusable.yaml`, three jobs; `conformance-reusable.yaml`) | `--env APT_PACKAGES` |
+| `apt-packages` (`tests-reusable.yaml`, one job in each tier; `conformance-reusable.yaml`) | `--env APT_PACKAGES` |
 | `apt_packages` (`build-and-publish-app.yaml`, `certify` and `certify-unit`) | `--env APT_PACKAGES` |
 | `system_deps` (`checks-reusable.yaml`) | `--env SYSTEM_DEPS` |
 | `.github/ci-system-deps.txt` (bootstrap `--system-deps`) | `conformance-reusable.yaml`, `--file`, before the D series |
@@ -1852,8 +2047,8 @@ declare the same list three ways and get a different answer from each.
 
 **How the script reaches the step:** from this workflow's own commit, like any
 other driver (see [Reusing scripts from a reusable
-workflow](#reusing-scripts-from-a-reusable-workflow)). `tests-reusable.yaml`
-and `checks-reusable.yaml` sparse-check it out into `.sdk-apt` and remove it
+workflow](#reusing-scripts-from-a-reusable-workflow)). `tests-reusable.yaml`'s
+tiers and `checks-reusable.yaml` sparse-check it out into `.sdk-apt` and remove it
 after the install; `build-and-publish-app.yaml` reads it from its existing
 `sdk/` checkout; `conformance-reusable.yaml` fetches it with the lock-check
 scripts and copies it to `$RUNNER_TEMP`.
@@ -1866,8 +2061,8 @@ step re-installs a list the reusable has already checked, or never reaches it
 because D is skipped after a rejected one.
 
 `.github/scripts/tests/test_install_apt_packages.py` tests the script and
-fails on any `apt-get install` in `.github/workflows`, `.github/actions`,
-`.github/workflow-templates` or the bootstrap templates that bypasses it. It
+fails on any `apt-get install` in `.github/workflows`, `.github/actions`
+or the bootstrap templates that bypasses it. It
 reads whole shell commands, joining backslash-continued lines, so splitting
 `apt-get \` from `install "$LIST"` does not hide an install. The only
 exceptions are fixed packages this repo names itself (`twingate`,
@@ -1971,6 +2166,56 @@ reaching 65+ repos in the same minute. We are not adopting one:
 Breaking edits to a reusable go through the same path as any other: keep old
 inputs working until callers move, and test on a consumer before merge.
 
+### `tests-reusable.yaml` calls its tiers (FND-4676)
+
+`tests-reusable.yaml` is the only connector test workflow a connector calls. It
+owns every input and secret declaration, routes the run, and aggregates the
+verdict. The tiers live in three workflows it calls, each at `@main`:
+
+| Workflow | Jobs |
+| --- | --- |
+| `tests-reusable.yaml` | `queue-proof`, `detect-merge-queue`, `detect-integration`, `discover-e2e`, `wake-` / `pause-dataforge-source`, `report-to-sdk`, `scorecard`, `renovate-artifacts`, `tests-passed` (Tests Gate), and one caller job per tier |
+| `unit-tests-reusable.yaml` | `unit`, `detect-api-member`, `api-member` |
+| `integration-tests-reusable.yaml` | `integration` |
+| `e2e-tests-reusable.yaml` | `build-e2e-image`, `merge-e2e-image`, `sdk-head-recheck`, `lease-tenant`, `prepare-tenant`, `e2e`, `release-tenant` |
+
+The rules at the seams, all pinned by
+`.github/scripts/tests/test_tests_reusable_split.py`:
+
+* **Inputs are declared once.** A tier input is `required: true` with no
+  default, and the caller job forwards it from the `tests-reusable.yaml` input
+  of the same name. A forgotten passthrough fails at parse time instead of
+  taking a second default. The one exception is the integration tier's
+  `timeout-minutes`, whose literal default `test_job_timeouts.py` reads.
+* **The caller job declares the tier's permissions,** exactly the strongest
+  level each scope is used at in that tier. A called job can only narrow its
+  caller's grant, so a scope missing there arrives as `none`.
+* **The gate reads each tier job's result as a tier output**
+  (`jobs.<id>.result`, which actionlint 1.7.12 does not model; see
+  `.github/actionlint.yaml`). Outputs are empty when the caller job was skipped,
+  cancelled or failed at startup, so every read falls back to the caller's own
+  result: `needs.e2e.outputs.lease-tenant-result || needs.e2e.result`. A
+  cancelled tier never reads as a pass.
+* **A tier job never names a `tests-reusable.yaml` job.** `needs.<job>` cannot
+  resolve across the call and renders empty. Discovery's outputs reach the e2e
+  tier as inputs (`e2e-matrix`, `e2e-cloud-*`), and the conditions every e2e job
+  used to repeat (discovery succeeded, at least one suite) are the `e2e` caller
+  job's `if:`.
+
+Two consequences to know:
+
+* **Check names gained a segment:** `tests / unit / Unit`,
+  `tests / integration / Integration`, `tests / e2e / End-to-end (<leg>)`.
+  Nothing in the fleet requires them; every ruleset requires
+  `tests / Tests Gate`, which did not move. `test_command_comment.py` matches
+  the leg suffix, so the `/e2e` table is unaffected.
+* **Piloting a tier change needs two edits.** A connector pointed at a
+  `tests-reusable.yaml` branch still runs `main`'s tiers, because `uses:` cannot
+  take an expression. To pilot a change to a tier, also point that tier's
+  `uses:` line in `tests-reusable.yaml` at the branch, on the pilot branch only.
+  `test_self_reference_pinning.py` fails that branch, which is what keeps it
+  from merging.
+
 ## `concurrency:` is not a lock, and not a queue
 
 **Rule:** never use a `concurrency:` group to protect a shared external resource
@@ -2011,7 +2256,7 @@ On a real PR ref the shared group is the point (supersede the previous commit);
 everywhere else the run must be independent.
 
 **For a shared resource, take a lease instead.** The `(app, cloud)` tenant lease
-in [`e2e_tenant_lease.py`](../../.github/scripts/e2e_tenant_lease.py) is the worked
+in [`e2e_tenant_lease.py`](https://github.com/atlanhq/application-sdk/blob/main/.github/scripts/e2e_tenant_lease.py) is the worked
 example (FND-250). It needs no lock server:
 
 * One ref per resource, with a **fixed** name:
@@ -2116,8 +2361,12 @@ Three further consequences to design for:
 **The ref transport lives in exactly one module, and that is why the lease is a
 script and not a composite action.** `.github/scripts/_gh_refs.py` holds the
 primitives — the CAS, the blob read/write, the ref listing, holder liveness, and
-the 403-rate-limit/403-permission split — and both the tenant lease and the
-DataForge source refcount import it. A composite action cannot: it is checked out
+the 403-rate-limit/403-permission split — and the tenant lease, the DataForge
+source refcount and the e2e dispatch guard all import it. Callers that disagree
+about what a transport failure means do not get a copy each: the module raises
+`TransportError`, a `SystemExit`, so the lease and the refcount fail the job as
+they always did, and the guard, which fails open, catches it by name and
+dispatches (FND-4925). A composite action cannot import it: it is checked out
 in isolation, with no sibling scripts on disk, so it has to carry its own copy.
 The lease was an action, and the copy taken from it for the refcount dropped the
 rate-limit/permission split on the way out — reintroducing the exact conflation
@@ -2209,7 +2458,8 @@ make that edit easy to get wrong:
   strictly *worse* than declaring nothing, because it clamps a job whose
   repository default would have carried it.
 * **Derive the set from the reusable, in a test.** `test_tests_yaml_permissions`
-  reads every `permissions:` block in `tests-reusable.yaml`, takes the strongest
+  reads every `permissions:` block in `tests-reusable.yaml` and the three tiers
+  it calls, takes the strongest
   level each scope is used at, and asserts the scaffolded caller declares exactly
   that — so adding a scope to a job of the reusable fails there rather than
   silently arriving as `none` in every connector.

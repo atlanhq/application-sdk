@@ -266,8 +266,8 @@ def update_api_lockstep(new_version: str, root: Path | None = None) -> None:
     can never be installed next to a stale api. Each substitution must match
     exactly once; a miss raises instead of releasing a half-bumped pair.
 
-    The api wheel ships ``application_sdk/version.py`` itself, so ``__version__``
-    moves with the SDK's own bump. A repository without ``packages/api`` — every
+    ``application_sdk.__version__`` is read from the installed distribution's
+    metadata, so it moves with these two files and needs no edit of its own. A repository without ``packages/api`` — every
     app repo, which runs this same script through release-version-bump — has
     nothing to move.
     """

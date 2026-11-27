@@ -151,8 +151,8 @@ than the `large_string` pandas 3 converts to by default. Two exceptions:
 | App type | Install command |
 |----------|----------------|
 | Custom `App` / `BaseMetadataExtractor` (API-based) | `pip install atlan-application-sdk` |
-| `SqlMetadataExtractor` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
-| `IncrementalSqlMetadataExtractor` | `pip install atlan-application-sdk[incremental]` |
+| `SqlApp` / `SqlQueryExtractor` | `pip install atlan-application-sdk[sql]` |
+| `SqlApp` with an incremental `run()` | `pip install atlan-application-sdk[incremental]` |
 
 ### Dockerfile examples
 
@@ -187,6 +187,7 @@ ENV ATLAN_APP_MODULE=app.app:MyIncrementalConnector
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
 from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
@@ -237,6 +238,7 @@ Key changes:
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
@@ -248,6 +250,12 @@ class MyQueryWorkflow(SQLQueryExtractionWorkflow):
 
 ### v3
 
+`SqlQueryExtractor` is deprecated (removal in v4.0.0), but it is still the
+target for query-log connectors: `SqlApp` has no query-log capability yet
+(FND-4313). Migrate onto it as below; when `SqlApp` gains that capability,
+this step and the import rewriter move to it.
+
+<!-- legacy-example: SqlQueryExtractor stays the query-log target until SqlApp has a query-log capability (FND-4313) -->
 ```python
 from application_sdk.templates import SqlQueryExtractor
 from application_sdk.templates.contracts import (
@@ -272,6 +280,7 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.workflows.metadata_extraction.incremental_sql import (
     IncrementalSQLMetadataExtractionWorkflow,
@@ -307,7 +316,12 @@ class MyIncrementalExtractor(SqlApp):
 
 `SqlApp` does not provide the v2 4-phase sequence (marker → fetch → diff →
 finalize). Write the phases the connector needs as `@task` methods and call
-them from `run()`.
+them from `run()`. With SDK ≥ 3.60.0, build each entity's tasks on
+`extract_entity` / `transform_entity` (older SDKs name them
+`_extract_entity` / `_transform_entity`), and end the `run()` in
+`finalize_extraction` (SDK ≥ 3.33.2), which
+verifies the transformed tree before publish reads it (conformance rule P068
+flags a `run()` that calls neither it nor `super().run()`).
 
 ---
 
@@ -333,6 +347,7 @@ SQL connectors use `SqlApp` (Step 1) and the templated-query pattern.
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 blocks below replace it -->
 ```python
 # app/transformer.py
 from application_sdk.transformers.atlas import AtlasTransformer
@@ -430,8 +445,8 @@ class MyConnector(App):
 > customer-owned `objectstore`. `App.upload()` = **app-to-app** hand-off, Atlan-owned
 > `atlan-objectstore` in SDR. These are two distinct stores. Forgetting `App.upload()` is a
 > silent failure — all activities succeed but Atlan's publish app sees nothing. See
-> [ADR-0014](../adr/0014-two-store-storage-architecture.md) and
-> [file-reference.md](../concepts/file-reference.md).
+> [ADR-0014](adr/0014-two-store-storage-architecture.md) and
+> [file-reference.md](concepts/file-reference.md).
 
 ### Rules for mapper functions
 
@@ -455,6 +470,7 @@ The import rewriter (`tools/migrate_v3/rewrite_imports.py`) cannot auto-convert 
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.handlers import HandlerInterface
 
@@ -491,12 +507,19 @@ class MyHandler(Handler):
 
 The `load()` method is removed — handler context (secrets, state) is injected automatically via `self.context`. Access credentials in handler methods with `await self.context.get_secret(name)`.
 
+### Connector-specific credential keys
+
+Do not patch `application_sdk.handler.service` to change how requests are normalized. Rebinding `service._CREDENTIAL_KEYS` or `service._normalize_credentials` is deprecated (removal in v4.0.0), reaches only the worker, and is flagged by conformance rules B001 and B010.
+
+When a v2 flat credential arrives (top-level `host`, `authType`, ...), the SDK lifts the shared keys into `input.credentials` and, on the worker and the API host alike, also every top-level field of your generated credential form (for example `kerberos` or an auth-type object such as `basic`). Declare the field in `contract/app.pkl` and regenerate; there is nothing to configure in code. A field the form declares never makes a body a credential on its own.
+
 ---
 
 ## Step 5: Upgrade the Application Entry Point
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
@@ -678,6 +701,7 @@ don't register anything manually.
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.worker import Worker
 from application_sdk.clients.temporal import TemporalWorkflowClient
@@ -847,7 +871,7 @@ You do not need to create `DaprClient` instances in your code.
 
 ```python
 # v2 — all calls went through the Dapr binding
-from application_sdk.services.objectstore import ObjectStore
+from application_sdk.services.objectstore import ObjectStore  # v2
 
 await ObjectStore.upload_file(source="/local/file.parquet", key="output/file.parquet")
 data = await ObjectStore.get_content("config/settings.json")
@@ -870,6 +894,7 @@ await delete("output/old.parquet")
 
 ### Migrating AtlanStorage
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 # v2
 from application_sdk.services.atlan_storage import AtlanStorage
@@ -910,7 +935,7 @@ class ExtractionInput(Input, allow_unbounded_fields=True):
     credential_guid: str = ""
 
 # In @task method:
-from application_sdk.services.secretstore import SecretStore  # deprecated v2
+from application_sdk.services.secretstore import SecretStore  # v2, deprecated
 
 credentials = await SecretStore.get_credentials({"credential_guid": input.credential_guid})
 await client.load(credentials)  # dict[str, Any]
@@ -1002,6 +1027,7 @@ register_credential_type("my_service", MyCredential, _parse_my)
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.clients.atlan import get_client, get_async_client
 
@@ -1040,7 +1066,7 @@ class MyConnector(AtlanClientMixin, App):
 
 ```python
 # v2
-from application_sdk.clients.atlan_auth import AtlanAuthClient
+from application_sdk.clients.atlan_auth import AtlanAuthClient  # v2
 auth = AtlanAuthClient()
 headers = await auth.get_authenticated_headers()
 
@@ -1060,6 +1086,7 @@ timing them out. In v3, heartbeating is built into `@task` — no decorator need
 
 ### v2
 
+<!-- legacy-example: v2 "before" snippet; the v3 block below replaces it -->
 ```python
 from application_sdk.activities.common.utils import auto_heartbeater
 
@@ -1175,8 +1202,17 @@ The one consequence to be aware of is on the other side of the trade: a *wedged*
 is no longer killed by a small ceiling, so while your app is in `warn` its containment is
 the `AtlanAppTaskStalled` alert plus a human rather than an automatic kill. Detection
 improves — a wedge is now visible one budget in, where before it was only ever killed by
-luck. See [ADR-0018 → Migration](adr/0018-progress-aware-heartbeat.md#migration--backward-compatibility--what-if-i-do-nothing)
+luck. See [ADR-0018](adr/0018-progress-aware-heartbeat.md) ("Migration & backward compatibility")
 for why that trade is the one being made.
+
+**`SqlApp` apps get the backstop without editing anything.** `SqlApp`'s twelve
+`extract_*` / `transform_*` tasks used to pin `timeout_seconds=1800`,
+`heartbeat_timeout_seconds=120` and `auto_heartbeat_seconds=30`, which hid both the
+backstop and the env vars from every app built on it. They now declare nothing, so
+an attempt that ran longer than 30 minutes is no longer killed, and the heartbeat
+window is `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` (default 60 s, beating every 10 s). If
+your app overrode those methods only to raise the 30-minute limit, the override can
+go. See [Tasks → Which knob governs `SqlApp`](concepts/tasks.md#process-wide-timeout-defaults-via-env-vars).
 
 ### Declaring holds is an eventual optimisation, not an upgrade task
 
@@ -1244,9 +1280,9 @@ if you need to trigger cleanup mid-run (e.g., after a particularly large interme
 
 ```python
 # v2 — all of these are deprecated
-from application_sdk.test_utils import ...
-from application_sdk.test_utils.credentials import MockCredentialStore
-from application_sdk.test_utils.scale_data_generator import ...
+import application_sdk.test_utils  # v2
+from application_sdk.test_utils.credentials import MockCredentialStore  # v2
+import application_sdk.test_utils.scale_data_generator  # v2
 
 # v3
 from application_sdk.testing import (
@@ -1257,7 +1293,7 @@ from application_sdk.testing import (
     MockCredentialStore,
     MockHeartbeatController,
 )
-from application_sdk.testing.scale_data_generator import ...
+import application_sdk.testing.scale_data_generator
 ```
 
 ### Using mock infrastructure in tests
@@ -1381,7 +1417,7 @@ The SDK no longer reads these constants: the run mode comes from `ATLAN_APP_MODE
 | `server.fastapi.models.Subscription` | `handler.contracts.SubscriptionConfig` |
 | `server.fastapi.models.EventWorkflowRequest` | `handler.contracts.CloudEventEnvelope` |
 | `server.fastapi.models.WorkflowRequest`, `WorkflowConfigRequest`, `WorkflowResponse`, `WorkflowData`, `EventWorkflowResponse`, `WorkflowConfigResponse`, `ConfigMapResponse` | none; the handler's `/workflows/v1` and `/events/v1` routes own these shapes, and the App's typed `Input` contract replaces the request dicts |
-| `server.fastapi.utils.upload_file_to_object_store` | the handler's `POST /workflows/v1/file`, or `application_sdk.storage.batch.upload_file_from_bytes` |
+| `server.fastapi.utils.upload_file_to_object_store` | the handler's `POST /workflows/v1/file`, or `application_sdk.storage.upload_bytes` |
 | `server.fastapi.utils.internal_server_error_handler` | none; the handler service installs its own sanitised 500 handling |
 | `testing.hypothesis.strategies.server.fastapi.*` | none; build strategies from your app's own models in its tests |
 
@@ -1445,6 +1481,37 @@ An SDK error class names its failure with one vocabulary, its `code` ClassVar (`
 | `Cls.DEFAULT_ERROR_CODE`, `err.error_code` | `Cls.code`, `err.qualified_code` |
 | the `error_code=` keyword of an SDK error constructor | raise an `AppError` subclass whose `code` names the failure |
 | `DEFAULT_ERROR_CODE = …` on your own subclass of an SDK error | delete it, and give the class its own `code: ClassVar[str]` |
+
+---
+
+## Names a module only imported (deprecated, removed in v4.0.0)
+
+Every public SDK module now declares `__all__`, listing what it defines. A name a module only imported from elsewhere in the SDK is no longer part of that module's surface. Each name below was imported by connector apps from a module that only imported it. It still works and warns, and B001 flags each import. Import it from its home instead.
+
+| Deprecated | Import from |
+|---|---|
+| `application_sdk.app.context.get_correlation_context` | `application_sdk.observability.correlation` |
+| `application_sdk.clients.sql.EngineNotInitializedError`, `SqlBindParameterError`, `SqlPandasResultError`, `UnsupportedSqlCursorError` | `application_sdk.clients.sql_errors` |
+| `application_sdk.contracts.types.CredentialRef` | `application_sdk.credentials.ref` |
+| `application_sdk.handler.contracts.AgentCredentialSpec` | `application_sdk.credentials.spec` |
+| `application_sdk.observability.metrics_adaptor.MetricType` | `application_sdk.observability.models` |
+| `application_sdk.templates.sql_app.ExtractionOutput` | `application_sdk.templates.contracts.sql_metadata` |
+| `application_sdk.templates.sql_app.TEMPORARY_PATH` | `application_sdk.constants` |
+
+Every other name a module only imported still imports today, without a warning, but it is no longer surface and can go in any release. If you import one, import it from the module that defines it.
+
+---
+
+## `retry_policy` together with the `@task` retry scalars (warns now, an error in v4.0.0)
+
+`retry_policy` replaces `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds`. The task is dispatched with the policy as-is and the three scalars are never read, so `@task(retry_policy=RetryPolicy(max_attempts=2), retry_max_attempts=5)` ran with 2 attempts and the 5 was dropped without a word. `@task` now emits a `DeprecationWarning` and logs a WARNING at decoration when `retry_policy` is passed together with any of the three, even when the value passed equals the default. From v4.0.0 it raises `TaskDeclarationError`. Retry behaviour is unchanged: the policy still wins.
+
+| Instead of | Do this |
+|---|---|
+| `@task(retry_policy=policy, retry_max_attempts=5)` | `@task(retry_policy=policy.with_max_attempts(5))` |
+| `@task(retry_policy=policy, retry_initial_interval_seconds=5)` | `@task(retry_policy=policy.with_initial_interval(timedelta(seconds=5)))` |
+| `@task(retry_policy=policy, retry_max_interval_seconds=60)` | `RetryPolicy(..., max_interval=timedelta(seconds=60))` |
+| `@task(retry_policy=RetryPolicy(), retry_max_attempts=1)` | `@task(retry_policy=RetryPolicy())` to keep what runs today, or `@task(retry_max_attempts=1)` for what the scalar asked for |
 
 ---
 

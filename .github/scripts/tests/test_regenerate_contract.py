@@ -37,14 +37,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 import types
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import regenerate_contract as mod
 import renovate_pkl_sync
 

@@ -79,6 +79,13 @@ if TYPE_CHECKING:
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage import integrity
 
+__all__ = [
+    "fetch",
+    "materialize_file_reference",
+    "persist_file_reference",
+]
+
+
 logger = get_logger(__name__)
 
 # Files at or above this size emit transfer events at INFO; smaller files use DEBUG.

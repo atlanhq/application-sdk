@@ -123,6 +123,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from _gha import set_outputs
 from e2e_tenant_api import (
     APP_EVENTS_PATH,
     APP_FAILURE_PATH,
@@ -1397,20 +1398,6 @@ def _looks_like_scan_gate_text(text: str) -> bool:
     )
 
 
-def _looks_like_scan_gate(response: Response) -> bool:
-    """True when a failed install looks like GM's release-scan gate refusing.
-
-    Matched on the rendered body rather than a status code: GM does not document
-    a distinct status for this, and a false positive only changes the wording of
-    an error that is failing anyway.
-    """
-    rendered = json.dumps(response.body).lower() if response.body else ""
-    return any(
-        marker in rendered
-        for marker in (_SCAN_PENDING, _SCAN_FAILED, "scan", "not active", "draft")
-    )
-
-
 def _release_status(client: TenantClient, app_id: str, release_id: str) -> str:
     """Return GM's release status, or "" when it cannot be read.
 
@@ -2641,7 +2628,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # with an unresolvable string is still a tenant that can be put back.
     previous_id = installed_version_id(info)
     if previous_id:
-        _write_outputs(
+        set_outputs(
             {
                 "previous_version": current or UNRESOLVED_PREVIOUS_VERSION,
                 "previous_version_id": previous_id,
@@ -3170,21 +3157,6 @@ def verify(args: argparse.Namespace) -> str:
     )
 
 
-def _write_outputs(outputs: dict[str, str]) -> None:
-    """Append to ``$GITHUB_OUTPUT``, or print when running outside Actions.
-
-    No masking pass is needed here, unlike the tenant resolver: every value
-    written is an id, a version or a status. No credential reaches this function.
-    """
-    target = os.environ.get("GITHUB_OUTPUT")
-    lines = "".join(f"{k}={v}\n" for k, v in outputs.items())
-    if not target:
-        sys.stdout.write(lines)
-        return
-    with open(target, "a") as handle:
-        handle.write(lines)
-
-
 def _true_false(value: str) -> bool:
     """Parse a ``true``/``false`` step output, refusing anything else.
 
@@ -3343,11 +3315,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "install":
             outcome = install(args)
-            _write_outputs(outcome.as_outputs())
+            set_outputs(outcome.as_outputs())
         elif args.command == "restore":
-            _write_outputs({"restored_version": restore(args)})
+            set_outputs({"restored_version": restore(args)})
         else:
-            _write_outputs({"installed_version": verify(args)})
+            set_outputs({"installed_version": verify(args)})
     except (TenantAppError, TenantApiError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

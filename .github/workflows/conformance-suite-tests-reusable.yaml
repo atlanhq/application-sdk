@@ -8,15 +8,17 @@ name: Conformance suite tests (reusable)
 # suite package's *own* unit tests.
 #
 # Invoked only by sdk-gate.yaml, gated on packages/conformance/** — so a change
-# to the package's source OR its own pyproject.toml / uv.lock (e.g. a Renovate
-# dependency bump within range pins) re-runs these tests. Previously they were
-# only exercised on merge/publish (conformance-publish.yml), never on PRs.
+# to the package's source or its own pyproject.toml re-runs these tests.
+# Previously they were only exercised on merge/publish (conformance-publish.yml),
+# never on PRs.
 #
-# Runs against THIS tree's SDK, not a release: packages/conformance
-# path-sources atlan-application-sdk (editable) in its [tool.uv.sources]
-# (FND-4256), and tests/test_app_name_alignment.py fails if application_sdk is
-# imported from anywhere else. Its parity tests compare conformance's copies of
-# SDK helpers against that import, so a PyPI pin would check an old release.
+# Runs against THIS tree's SDK, not a release: packages/conformance is a member
+# of the root uv workspace (FND-4671), so its `test` extra's
+# atlan-application-sdk is the workspace root, installed editable, and the root
+# uv.lock is the only lock. tests/test_app_name_alignment.py fails if
+# application_sdk is imported from anywhere else (FND-4256). Its parity tests
+# compare conformance's copies of SDK helpers against that import, so a PyPI pin
+# would check an old release.
 #
 # SDK-private: no consumer app references this workflow.
 
@@ -36,17 +38,20 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       - name: Run conformance package unit tests
         working-directory: packages/conformance
         run: |
           set -euo pipefail
-          # The package pins its own pyproject.toml / uv.lock; sync all extras +
-          # groups so the `test` deps (pytest, pytest-asyncio) are present, then
-          # run its suite (testpaths = ["tests"], asyncio_mode = auto).
-          uv sync --all-extras --all-groups
-          uv run pytest -v
+          # Run from the package directory, uv selects this workspace member:
+          # its own dependencies, its `test` extra (pytest, pytest-asyncio and
+          # the SDK editable) and its default `dev` group (ruff), from the root
+          # uv.lock. Not --all-groups: in a workspace that also installs every
+          # root group (docs, pyright, ...), which these tests do not use.
+          # --locked fails on a lock that no longer matches the workspace.
+          uv sync --locked --extra test
+          uv run --locked --extra test pytest -v
 
       # pytest above already fails on a count above or below
       # ruff_complexity_baseline.json; this adds the check pytest cannot make:
@@ -57,4 +62,4 @@ jobs:
         working-directory: packages/conformance
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: uv run --frozen python tests/test_complexity_baseline.py --base-sha "$BASE_SHA"
+        run: uv run --frozen --extra test python tests/test_complexity_baseline.py --base-sha "$BASE_SHA"

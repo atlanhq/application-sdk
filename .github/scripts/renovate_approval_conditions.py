@@ -220,7 +220,7 @@ USES_LINE_RE = re.compile(r"[ \t]*(-[ \t]+)?uses:[ \t]*(?P<ref>\S+)[ \t]*(#.*)?"
 #: the Python equivalent of the workflow's original ``grep -vxE``.
 #:
 #: Lock/manifest files match at ANY depth via the ``(.*/)?`` prefix, so a
-#: monorepo's packages/conformance/uv.lock or apps/*/contract/PklProject ride the
+#: monorepo's packages/<name>/uv.lock or apps/*/contract/PklProject ride the
 #: gate. That covers everything a Renovate app-contract-toolkit bump touches: the
 #: Pkl pin + lock (contract/PklProject, contract/PklProject.deps.json).
 #:

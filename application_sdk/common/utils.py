@@ -18,6 +18,11 @@ from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
 from application_sdk.constants import TEMPORARY_PATH
 
+__all__ = [
+    "download_file_from_upload_response",
+]
+
+
 logger = get_logger(__name__)
 
 

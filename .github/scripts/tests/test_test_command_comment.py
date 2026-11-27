@@ -19,22 +19,16 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
-from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import pr_test_command as ptc
 import pytest
+import test_command_comment as tcc
 import yaml
+from _workflows import REPO_ROOT, job, load_workflow, step_named, tier_job
+from conformance.bootstrap import render as bootstrap_render
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-import pr_test_command as ptc  # noqa: E402
-import test_command_comment as tcc  # noqa: E402
-from conformance.bootstrap import render as bootstrap_render  # noqa: E402
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOWS = REPO_ROOT / ".github/workflows"
 TEMPLATES = REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
 
 REPO = "atlanhq/atlan-example-app"
@@ -122,7 +116,9 @@ class TestRender:
 
 def _job(leg: str, conclusion: str | None = "success", status: str = "completed"):
     return {
-        "name": f"e2e / End-to-end ({leg})",
+        # The API name of a leg in e2e-tests-reusable.yaml, called from
+        # tests-reusable.yaml's `e2e` job (FND-4676), on a `/e2e` run.
+        "name": f"e2e / e2e / End-to-end ({leg})",
         "conclusion": conclusion,
         "status": status,
     }
@@ -531,16 +527,6 @@ def _on(doc: dict[Any, Any]) -> dict[str, Any]:
     return doc.get("on") or doc.get(True) or {}
 
 
-def _workflow(name: str) -> dict[str, Any]:
-    return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
-
-
-def _step(job: dict[str, Any], name: str) -> dict[str, Any]:
-    matches = [s for s in job.get("steps") or [] if s.get("name") == name]
-    assert matches, f"lost the {name!r} step"
-    return matches[0]
-
-
 def _flat(text: Any) -> str:
     return " ".join(str(text).split())
 
@@ -553,13 +539,13 @@ class TestWiring:
         assert doc["jobs"]["tests"]["with"]["pr-number"] == "${{ inputs.pr_number }}"
 
     def test_reusable_declares_the_pr_number_input(self) -> None:
-        inputs = _on(_workflow("tests-reusable.yaml"))["workflow_call"]["inputs"]
+        inputs = _on(load_workflow("tests-reusable.yaml"))["workflow_call"]["inputs"]
         assert inputs["pr-number"]["default"] == ""
         assert inputs["pr-number"]["required"] is False
 
     def test_running_step(self) -> None:
-        job = _workflow("tests-reusable.yaml")["jobs"]["discover-e2e"]
-        step = _step(job, "Show the /e2e request as running on the PR")
+        discover = job(load_workflow("tests-reusable.yaml"), "discover-e2e")
+        step = step_named(discover, "Show the /e2e request as running on the PR")
         condition = _flat(step["if"])
         assert "github.event_name == 'workflow_dispatch'" in condition
         assert "inputs.run-e2e == 'only'" in condition
@@ -567,13 +553,13 @@ class TestWiring:
         assert step["continue-on-error"] is True
         assert "e2e-running" in step["run"]
         # The checkout it runs from shares the condition, or it runs nothing.
-        fetch = _step(job, "Fetch the comment driver")
+        fetch = step_named(discover, "Fetch the comment driver")
         assert _flat(fetch["if"]) == condition
         assert step["run"].split()[1].startswith(fetch["with"]["path"] + "/")
 
     def test_verdict_step_in_the_gate(self) -> None:
-        job = _workflow("tests-reusable.yaml")["jobs"]["tests-passed"]
-        step = _step(job, "Post the /e2e verdict on the PR")
+        gate = job(load_workflow("tests-reusable.yaml"), "tests-passed")
+        step = step_named(gate, "Post the /e2e verdict on the PR")
         condition = _flat(step["if"])
         assert condition.startswith("always()")
         assert "inputs.run-e2e == 'only'" in condition
@@ -584,27 +570,31 @@ class TestWiring:
 
     def test_gate_can_read_its_own_jobs(self) -> None:
         """`run_jobs` needs `actions: read`; without it the grid is empty."""
-        permissions = _workflow("tests-reusable.yaml")["jobs"]["tests-passed"][
+        permissions = job(load_workflow("tests-reusable.yaml"), "tests-passed")[
             "permissions"
         ]
         assert permissions["actions"] == "read"
         assert permissions["pull-requests"] == "write"
 
     def test_e2e_job_names_are_what_legs_from_jobs_parses(self) -> None:
-        job = _workflow("tests-reusable.yaml")["jobs"]["e2e"]
-        assert job["name"] == "End-to-end (${{ matrix.name }})"
+        # The legs run in e2e-tests-reusable.yaml, so the API lists each as
+        # `<caller job> / <tests-reusable's e2e job> / <leg job>` (FND-4676).
+        caller = job(load_workflow("tests-reusable.yaml"), "e2e")
+        e2e = tier_job("e2e")
+        assert e2e["name"] == "End-to-end (${{ matrix.name }})"
+        leg = e2e["name"].replace("${{ matrix.name }}", "x-aws")
         assert tcc.legs_from_jobs(
-            [{"name": "e2e / " + job["name"].replace("${{ matrix.name }}", "x-aws")}],
+            [{"name": f"e2e / {caller['name']} / {leg}"}],
             ["aws"],
         ) == [("x", "aws", "")]
 
     def test_sdk_connector_gate_step(self) -> None:
-        job = _workflow("pull_request.yaml")["jobs"]["connector-gate"]
-        assert "e2e-request" in job["needs"]
-        assert job["permissions"]["pull-requests"] == "write"
+        gate = job(load_workflow("pull_request.yaml"), "connector-gate")
+        assert "e2e-request" in gate["needs"]
+        assert gate["permissions"]["pull-requests"] == "write"
         # check_runs reads the connector e2e checks on the head commit.
-        assert job["permissions"]["checks"] == "read"
-        step = _step(job, "Post the /e2e verdict on the PR")
+        assert gate["permissions"]["checks"] == "read"
+        step = step_named(gate, "Post the /e2e verdict on the PR")
         condition = _flat(step["if"])
         assert "needs.e2e-request.outputs.requested == 'true'" in condition
         assert "steps.upstream.outputs.dispatched == 'true'" in condition
@@ -612,4 +602,4 @@ class TestWiring:
         assert "sdk-e2e-verdict" in step["run"]
         assert '--sdr-result "$SDR_RESULT"' in step["run"]
         assert step["env"]["SDR_RESULT"] == "${{ needs.sdr-k8s-e2e.result }}"
-        assert any(s.get("id") == "upstream" for s in job["steps"])
+        assert any(s.get("id") == "upstream" for s in gate["steps"])

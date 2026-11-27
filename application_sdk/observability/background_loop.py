@@ -51,6 +51,15 @@ from typing import Any
 
 from application_sdk.constants import OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS
 
+__all__ = [
+    "BackgroundTask",
+    "observability_loop",
+    "ObservabilityLoop",
+    "register_after_fork",
+    "THREAD_NAME",
+]
+
+
 THREAD_NAME = "atlan-observability-loop"
 
 

@@ -26,13 +26,23 @@ import re
 import time
 import urllib.parse
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
-from . import advisory, baseline, exempt, holistic, prompts, sdk_source, skeptic, trace
+from . import (
+    advisory,
+    baseline,
+    exempt,
+    gate,
+    holistic,
+    prompts,
+    sdk_source,
+    skeptic,
+    trace,
+)
 from . import context as code_context
 from . import facts as code_facts
 from .agent import AgentLimits, BundleResult, review_bundle, suspect_paths
@@ -94,6 +104,15 @@ class RunResult:
     unplaced: list[Finding] = field(default_factory=list)
     resolved_free: list[str] = field(default_factory=list)
     resolved_verified: list[str] = field(default_factory=list)
+    # Gate findings closed because their file now matches the bootstrap render,
+    # or is no longer changed (gate.py, FND-5325).
+    resolved_gate: list[str] = field(default_factory=list)
+    # The round's gate-file check (gate.py): changed gate files compared, and of
+    # those the ones that match the render. None when no check was made.
+    gate: gate.Evaluation | None = None
+    # Files a gate finding covers, path -> finding id (gate.covered): held out
+    # of the line review and the approach check, and named in the summary.
+    gate_covered: dict[str, str] = field(default_factory=dict)
     # Open items (F-… and A…) sent to a verify call that spent its whole output
     # budget before answering: not re-judged this round, so not a verdict on them.
     verify_cut_off: list[str] = field(default_factory=list)
@@ -332,6 +351,18 @@ def author_files_in_range(
     }
 
 
+def _gate_cover(fd: FileDiff, covered: dict[str, str]) -> str:
+    """The gate finding that covers this file, by its path or a rename's old
+    path, or "" when none does (gate.covered)."""
+    return covered.get(fd.path) or covered.get(fd.old_path or "", "")
+
+
+def _model_findings(state: PRState) -> list[Finding]:
+    """The open findings the model raised: the ones verify may close. A gate
+    finding is computed in code and closed in code (gate.reconcile)."""
+    return [f for f in state.open_findings() if f.origin != gate.ORIGIN]
+
+
 def _sev_at_least(sev: str, floor: str) -> bool:
     return (
         SEVERITIES.index(sev) <= SEVERITIES.index(floor)
@@ -463,6 +494,7 @@ def compute_facts(
     files: list[FileDiff],
     cfg: Config,
     tests_changed: list[FileDiff] | None = None,
+    test_text: tuple[Mapping[str, str | None], Mapping[str, str | None]] | None = None,
 ) -> code_facts.Facts:
     """The regression and history facts for the files under review, in review
     order. No model call; the history half makes at most
@@ -471,12 +503,14 @@ def compute_facts(
 
     `tests_changed` are the test files this round changed, taken before file
     selection: a deleted test file is skipped by selection ("deletion only"),
-    and it is exactly a weakened expectation FP15 asks about."""
+    and it is exactly a weakened expectation FP15 asks about. `test_text` are
+    their base and head copies (`weakened_expectations`)."""
     fx = code_facts.Facts()
     if cfg.facts.regression:
         fx.symbols = code_facts.regression_symbols(ws, files)
         fx.expectations = code_facts.weakened_expectations(
-            files if tests_changed is None else tests_changed
+            files if tests_changed is None else tests_changed,
+            *(test_text or (None, None)),
         )
         fx.regression_read = True
     if cfg.facts.history and files:
@@ -594,6 +628,7 @@ def run(
     sdk_note: str = "",
     sdk_dir: str | None = None,
     sdk_head: str = "",
+    gate_fact: str | None = None,
 ) -> RunResult:
     """One review round. `on_pending(head)` is called right after the
     `pending` status is set on `head`, so the caller can record which head
@@ -602,7 +637,9 @@ def run(
     `uv.lock` of the very head this round reviews, and only when the checkout
     is at the ref that lock pins; `sdk_head` is the head the workflow chose the
     checkout's ref from, named when the two differ (FND-5316). A caller that
-    built the source itself passes `sdk` and `sdk_note` instead."""
+    built the source itself passes `sdk` and `sdk_note` instead. `gate_fact`
+    is the gate job's fact file (gate.py, FND-5325); None when the gate check
+    is not configured."""
     t_start = time.monotonic()
     pr = gh.pr(number)
     head = pr["head"]["sha"]
@@ -826,6 +863,42 @@ def run(
         )
     if sdk_note:
         res.notes.append(sdk_note)
+    # The gate-file fact (FND-5325): a changed bootstrap-managed file that
+    # differs from what the base's pinned conformance version renders is one finding,
+    # computed in code. Judged against the whole PR's diff at this head.
+    gate_eval = gate.evaluate(
+        gate_fact,
+        full_files,
+        head=head,
+        # The base's pin decides which version renders (the head's is not
+        # read): read through the API, as data.
+        base_lock_text=gh.raw_file_at(sdk_source.LOCK, base),
+        exclude=exclude_patterns(cfg),
+        # The fallback for a gate file the pinned version does not manage yet:
+        # its base and head copies, read through the API as data.
+        read_base=lambda p: gh.file_at(p, base),
+        read_head=lambda p: gh.file_at(p, head),
+    )
+    res.gate = gate_eval
+    res.notes.extend(gate_eval.notes)
+    for n in gate_eval.notes:
+        trace.line(n)
+    if gate_eval.findings is not None:
+        differ = ", ".join(f.path for f in gate_eval.findings)
+        trace.line(
+            f"gate files: {len(gate_eval.checked)} changed, "
+            f"{len(gate_eval.matching)} match the render, "
+            f"{len(gate_eval.findings)} differ" + (f": {differ}" if differ else "")
+        )
+    # A file with a gate finding is one finding, not two: the line review and
+    # the approach check are not shown it (FND-5325).
+    res.gate_covered = gate.covered(state, gate_eval)
+    if res.gate_covered:
+        trace.line(
+            "held out of the line review and the approach check (covered by a gate "
+            "finding): "
+            + ", ".join(f"{p} ({i})" for p, i in sorted(res.gate_covered.items()))
+        )
     if post:
         # Pending while it runs: the checks box links straight to the live log.
         gh.set_status(
@@ -848,6 +921,8 @@ def run(
     touched = {fd.path for fd in all_files}
     pr_diffs = {fd.path: fd for fd in full_files}
     for f in state.open_findings():
+        if f.origin == gate.ORIGIN:
+            continue  # computed in code each round (gate.reconcile), never matched
         if not quote_stored(f):
             continue  # no quote to match (the state outgrew a comment): verify judges it
         text = head_text.get(f.path)
@@ -869,24 +944,57 @@ def run(
         )
 
     # ---- scope -----------------------------------------------------------
-    sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
+    # A file a gate finding covers is never selected: the summary names it,
+    # against its gate finding, and it is not unread source (the gate finding
+    # is its verdict).
+    covered_skips = [
+        (fd.path, f"{gate.COVERED} {fid}, which says how to fix it: not line-reviewed")
+        for fd in all_files
+        if (fid := _gate_cover(fd, res.gate_covered))
+    ]
+    sel = select_files(
+        [fd for fd in all_files if not _gate_cover(fd, res.gate_covered)],
+        exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude),
+    )
+    sel.skipped[:0] = covered_skips
     # The weakened-expectation facts are read from the round's test files before
     # selection, which skips a test file deleted outright.
     tests_changed = changed_tests(all_files, cfg)
+    # Both copies of each changed test file, so the assertions are compared as
+    # syntax trees, not lines: a re-wrapped `assert` weakens nothing (FND-5316).
+    # The base copies are shared with triage below.
+    old_text: dict[str, str | None] = {}
+    test_new: dict[str, str | None] = {}
+    if cfg.facts.regression:
+        for fd in tests_changed[: cfg.max_changed_files]:
+            old_path = fd.old_path or fd.path
+            old_text[old_path] = (
+                "" if fd.status == "added" else gh.file_at(old_path, range_base)
+            )
+            test_new[fd.path] = (
+                "" if fd.status == "deleted" else head_text.get(fd.path) or None
+            )
     weakened = (
-        code_facts.weakened_expectations(tests_changed) if cfg.facts.regression else []
+        code_facts.weakened_expectations(tests_changed, old_text, test_new)
+        if cfg.facts.regression
+        else []
     )
     weakened_paths = {e.path for e in weakened}
     res.skipped_files = sel.skipped
 
     # Mechanical change is proven and set aside before any model call (triage.py):
     # a 100-file rename or reformat costs a summary line, not 100 files of review.
-    old_text: dict[str, str | None] = {}
     for fd in sel.reviewed[: cfg.max_changed_files]:
-        if fd.path.endswith(".py") and fd.status == "modified":
+        if (
+            fd.path.endswith(".py")
+            and fd.status == "modified"
+            and fd.path not in old_text
+        ):
             old_text[fd.path] = gh.file_at(fd.path, range_base)
     res.triage = triage(
-        sel.reviewed, old_text, {k: (v or None) for k, v in head_text.items()}
+        sel.reviewed,
+        {fd.path: old_text.get(fd.path) for fd in sel.reviewed if fd.path in old_text},
+        {k: (v or None) for k, v in head_text.items()},
     )
 
     bundles = plan_bundles(res.triage.reviewed, cfg, res)
@@ -975,7 +1083,7 @@ def run(
         or (
             cfg.verify
             and round_no > 1
-            and (state.open_findings() or open_concerns(state))
+            and (_model_findings(state) or open_concerns(state))
         )
     )
     if cfg.preflight and will_call:
@@ -1011,7 +1119,13 @@ def run(
             f"{sum(len(v) for v in added.symbols.values())} added symbol(s) in existing files"
         )
     pr_meta["paths_added"] = added.render_paths()
-    pr_meta["symbols_added"] = added.render_symbols()
+    # Not the symbols of a file a gate finding covers: no prompt is shown it.
+    pr_meta["symbols_added"] = replace(
+        added,
+        symbols={
+            p: names for p, names in added.symbols.items() if p not in res.gate_covered
+        },
+    ).render_symbols()
 
     # ---- regression and history facts (0 model calls) ----------------------
     # Computed in code and handed to every bundle's prompt (facts.py). The
@@ -1029,6 +1143,7 @@ def run(
                 _whole_files([fd for b in bundles for fd in b.files]),
                 cfg,
                 tests_changed=tests_changed,
+                test_text=(old_text, test_new),
             )
             res.timings_ms["facts"] = int((time.monotonic() - t_facts) * 1000)
             trace.line(f"regression: {fx.regression_line()}")
@@ -1062,7 +1177,7 @@ def run(
         recheck = bool(round_files) or force
         verify_files = round_files if round_files else full_files
         if not recheck:
-            res.verify_skipped = [f.id for f in state.open_findings()] + [
+            res.verify_skipped = [f.id for f in _model_findings(state)] + [
                 cid for cid, _ in open_concerns(state)
             ]
             if res.verify_skipped:
@@ -1070,7 +1185,8 @@ def run(
                     "verify: skipped — no PR file changed this round, so "
                     f"{', '.join(res.verify_skipped)} were not re-checked"
                 )
-        to_verify = state.open_findings() if recheck else []
+        # A gate finding is never the model's to close: gate.reconcile does it.
+        to_verify = _model_findings(state) if recheck else []
         # The approach check runs once per PR, so without this a concern the author
         # has since addressed would stay on the PR forever. It rides the same call.
         concerns = open_concerns(state) if recheck else []
@@ -1146,7 +1262,10 @@ def run(
             _approach,
             side,
             ws,
-            full_files if incremental else sel.reviewed,
+            # A file a gate finding covers is never shown to it (FND-5325).
+            [fd for fd in full_files if not _gate_cover(fd, res.gate_covered)]
+            if incremental
+            else sel.reviewed,
             dict(pr_meta),
             exclude_patterns(cfg),
         )
@@ -1301,6 +1420,17 @@ def run(
         )
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
+    # Gate findings after the model's (FND-5325): computed in code, so no
+    # later-round floor, base-branch check, skeptic or verify applies to them.
+    gate_new, res.resolved_gate = gate.reconcile(
+        state, gate_eval.findings, round_no, gate_eval.unchecked
+    )
+    res.new_findings.extend(gate_new)
+    if res.resolved_gate:
+        trace.line(
+            f"resolved (gate file now matches the render or is unchanged): "
+            f"{', '.join(res.resolved_gate)}"
+        )
     for path, rounds in res.spiral:
         trace.line(f"spiral: {path} drew new findings in rounds {rounds}")
     with trace.group("7 · verdict"):
@@ -1351,6 +1481,13 @@ def run(
             trace.line(note)
             res.incomplete.append(note)
             failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.shallow:
+            # Stopped by the context ceiling before it could read the code
+            # around its diff (FND-5316): not a review of its files.
+            note = shallow_note(b, bundles, "/review")
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
     res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
@@ -1377,7 +1514,9 @@ def run(
             "mode": mode,
             "label": mode_label,
             "new": len(res.new_findings),
-            "resolved": len(res.resolved_free) + len(res.resolved_verified),
+            "resolved": len(res.resolved_free)
+            + len(res.resolved_verified)
+            + len(res.resolved_gate),
             "blocking": len(state.open_findings(BLOCKING)),
             "incomplete": bool(res.failed or res.incomplete or state.unread),
             "usd": round(
@@ -2139,6 +2278,11 @@ def recheck(
         f = by_id.get(fid)
         if f is None or f.status != "open":
             refused.append(f"`{fid}` is not an open finding")
+        elif f.origin == gate.ORIGIN:
+            refused.append(
+                f"`{fid}` is computed in code from the bootstrap render, not by the "
+                "model: change the file back, or dismiss it with a reason"
+            )
         else:
             targets.append(f)
     ledger = (
@@ -2366,17 +2510,41 @@ def no_review_note(result: BundleResult, bundles: list[Bundle]) -> str:
     )
 
 
+def shallow_note(result: BundleResult, bundles: list[Bundle], command: str) -> str:
+    """The incomplete reason for a bundle the context ceiling stopped early
+    (`BundleResult.shallow`): it read little past its own diff, so what it
+    found is not a full review of its files, and they are retried."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    return (
+        f"Bundle `{result.label}` was reviewed shallowly: it reached the context "
+        f"ceiling at turn {result.ceiling_turn} of {result.turn_budget}, so its "
+        f"{len(result.findings) + len(result.unplaced)} finding(s) do not cover it "
+        f"({shown}); `{command}` retries it"
+    )
+
+
 # Every skip reason past the cap starts with this (`UNREAD_REASONS`): a state
 # written by an earlier version says "bundle cap (lowest-risk code, …)".
 BUNDLE_CAP = "bundle cap"
 MAX_RANGES_SHOWN = 6  # line ranges named per partly reviewed file
 
 
+# The most diff a re-packed bundle may hold (estimated tokens). It was half
+# the context ceiling, 30,000 at a 60,000 ceiling; the ceiling is now 200,000
+# (FND-5316), and a 100,000-token diff would start a bundle near it with no room
+# to read anything. Kept at the old value: past `max_bundles` the fix is more
+# bundles, not deeper ones.
+MAX_REPACK_DIFF_TOKENS = 30_000
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     """Bundles in review order — riskiest first — within `max_bundles`.
 
-    Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed. If that is still over the cap,
+    Past the cap, bundles are first re-packed larger (up to
+    `MAX_REPACK_DIFF_TOKENS` of diff) so every file still gets reviewed. If that is still over the cap,
     the code the app ships (app, then contract, build files and CI) and the
     rest (tests, then anything else) are packed apart, in that order
     (FND-5316): a test file no longer rides in the bundle of the source it
@@ -2387,10 +2555,7 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
-        bigger = min(
-            max(total // cfg.max_bundles + 1, 9000),
-            cfg.limits.context_limit_tokens // 2,
-        )
+        bigger = min(max(total // cfg.max_bundles + 1, 9000), MAX_REPACK_DIFF_TOKENS)
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
         if len(bundles) > cfg.max_bundles:
             diffs = cast("list[FileDiff]", files)
@@ -2944,6 +3109,7 @@ _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
     "pr-history": "closed: needed history only this PR's own earlier commits could produce",
+    gate.FIXED_BY: "the file matches the bootstrap render again, or is no longer changed",
 }
 _CLOSE_HINT = (
     "Fix them and comment `/review`, or close one the team won't fix with "
@@ -3121,6 +3287,8 @@ def _principle(f: Finding) -> str:
     """The principle a finding rests on, as shown in the summary: its id (FPnn
     from the fleet set, RPnn from the repository's own), or a note that it is a
     concrete bug, which needs no principle (`agent.cite`)."""
+    if f.origin == gate.ORIGIN:
+        return "— (bootstrap render, computed in code)"
     return f"`{f.rule_id}`" if f.rule_id else "— (concrete bug)"
 
 
@@ -3165,7 +3333,16 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     out.append(cap(f.body.strip()))
     if f.scenario.strip():
         out.append(f"\n**When it fails:** {cap(f.scenario.strip())}")
-    if f.suggestion.strip() and chars != 0:
+    if f.origin == gate.ORIGIN and f.suggestion.strip() and chars != 0:
+        # The diff from the render to the pull request (gate.py). Fenced longer
+        # than any backtick run in it: its lines are the pull request's text.
+        runs = [len(m) for m in re.findall(r"`+", f.suggestion)]
+        fence = "`" * max(3, max(runs, default=0) + 1)
+        out.append(
+            "\n**Diff from the render** (`-` is what bootstrap renders, `+` what this "
+            f"pull request has):\n\n{fence}diff\n{cap(f.suggestion.rstrip())}\n{fence}"
+        )
+    elif f.suggestion.strip() and chars != 0:
         # Longer than any backtick run inside, so a suggestion that itself holds a
         # fenced example (a Markdown doc) cannot close the block early.
         runs = [len(m) for m in re.findall(r"`+", f.suggestion)]

@@ -26,6 +26,10 @@ This document outlines the development standards for the Application SDK, includ
     - Each function should do exactly one thing
     - Functions should be small and focused
     - If a function needs a comment to explain what it does, it should be split
+    - In `application_sdk/`, a function must stay under ruff's C901 (McCabe
+      complexity 10) and PLR0915 (50 statements). The functions already over
+      either limit are named in a baseline that only shrinks
+      (see [ci.md](ci.md)); a new or grown one fails pre-commit. Split it.
 
 - **DRY (Don't Repeat Yourself)**
     - Extract repeated code into reusable functions
@@ -68,6 +72,24 @@ This document outlines the development standards for the Application SDK, includ
     - A file's count may not rise; paying one down means running
       `check_ann401_baseline.py --update` in the same change. The count is per
       file, so do not trade one `Any` for another in the same file.
+
+- **Time and Clocks**
+    - A timestamp is timezone-aware UTC: `datetime.now(UTC)`,
+      `datetime.fromtimestamp(ts, UTC)`. A naive reading takes the host's zone;
+      pods run in UTC, so it only goes wrong on SDR hosts and laptops, where
+      nobody is looking. Ruff `DTZ` enforces this.
+    - Parsing: `strptime(s, fmt).replace(tzinfo=UTC)` only when `fmt` has no
+      `%z` and the string is known to be UTC (`replace` relabels, it does not
+      convert). When the string carries an offset, parse it with `%z` and
+      convert with `.astimezone(UTC)`; replacing the tzinfo there would shift
+      the instant by the offset.
+    - A duration is two `time.monotonic()` readings, never two `time.time()`
+      readings: the wall clock can step between them (NTP, VM resume) and the
+      difference comes out negative or hours long.
+      `tests/unit/test_no_wall_clock_elapsed.py` fails on
+      `time.time() - <name>` under `application_sdk/`.
+    - Inside `run()`, use `application_sdk.app.now()` instead; both of the
+      above are non-deterministic there and the workflow sandbox refuses them.
 
 - **Testing Standards**
     - Testing standards are defined in [testing.md](testing.md)

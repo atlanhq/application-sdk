@@ -17,21 +17,13 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import queue_gate_check_proof as proof  # noqa: E402
-from _gha_expr import evaluate  # noqa: E402
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
+import queue_gate_check_proof as proof
+from _gha_expr import evaluate
+from _workflows import job, load_workflow, steps, tier_job, triggers
 
 HEAD = "a" * 40
 REPO = "atlanhq/example-app"
@@ -136,10 +128,6 @@ def test_main_fails_safe_on_an_empty_environment(tmp_path: Path) -> None:
 _STATUS_FN_RE = re.compile(r"\b(always|success|failure|cancelled)\s*\(")
 
 
-def _workflow() -> dict[str, Any]:
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-
-
 def _needs(job: dict[str, Any]) -> list[str]:
     needs = job.get("needs", [])
     return [needs] if isinstance(needs, str) else list(needs)
@@ -160,8 +148,7 @@ def _ancestors(jobs: dict[str, Any], job_id: str) -> set[str]:
 def _inputs(workflow: dict[str, Any]) -> dict[str, Any]:
     """The reusable's input defaults, with the scaffolded caller's overrides
     (packages/conformance/.../templates/tests.yaml)."""
-    # PyYAML reads the bare `on:` key as True.
-    declared = (workflow.get("on") or workflow[True])["workflow_call"]["inputs"]
+    declared = triggers(workflow)["workflow_call"]["inputs"]
     values = {name: spec.get("default", "") for name, spec in declared.items()}
     values.update({"skip-on-bump-pr": True, "e2e-label-trigger": False})
     return values
@@ -175,7 +162,7 @@ def _simulate(
     succeeded: GitHub's implicit ``success()`` covers the whole ``needs`` chain,
     not only direct needs. A job that runs succeeds, except ``queue-proof``,
     whose result the scenario picks."""
-    workflow = _workflow()
+    workflow = load_workflow("tests-reusable.yaml")
     jobs: dict[str, Any] = workflow["jobs"]
     github = {"event_name": event, "head_ref": "", "ref": "refs/heads/x"}
     if event == "merge_group":
@@ -251,11 +238,12 @@ def test_an_unproven_queue_entry_runs_the_tiers_as_before(
     proof_result: str, proven: str
 ) -> None:
     ran = _ran(_simulate("merge_group", proof_result, proven, _OUTPUTS))
+    # `unit` is the call to unit-tests-reusable.yaml, so it carries the hosted
+    # api member leg with it (FND-4676).
     assert {
         "unit",
         "detect-integration",
         "integration",
-        "detect-api-member",
         "scorecard",
         "tests-passed",
     } <= ran
@@ -272,37 +260,45 @@ def test_queue_proof_runs_only_on_a_queue_entry(event: str) -> None:
 
 @pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
 def test_an_opted_in_app_runs_its_api_member(event: str) -> None:
-    # queue-proof's skip sits upstream of api-member through detect-api-member.
-    outputs = {**_OUTPUTS, "detect-api-member": {"present": "true"}}
-    assert _simulate(event, "success", "true", outputs)["api-member"] == "success"
+    # queue-proof's skip sits upstream of api-member through the `unit` call,
+    # which runs the hosted api member leg (FND-4676)…
+    assert _simulate(event, "success", "true", _OUTPUTS)["unit"] == "success"
+    # …and inside that tier api-member runs on detect-api-member's answer alone.
+    member = tier_job("api-member")
+    assert _needs(member) == ["detect-api-member"]
+    needs = {"detect-api-member": {"result": "success", "outputs": {"present": "true"}}}
+    assert evaluate(str(member["if"]), {"needs": needs}) is True
 
 
 def test_the_gate_keeps_its_static_required_name() -> None:
-    jobs = _workflow()["jobs"]
+    jobs = load_workflow("tests-reusable.yaml")["jobs"]
     assert jobs["tests-passed"]["name"] == "Tests Gate"
-    assert jobs["unit"]["name"] == "Unit"
-    assert jobs["integration"]["name"] == "Integration"
+    # The tier checks file as `tests / unit / Unit` and `tests / integration /
+    # Integration` since FND-4676; neither is a required context.
+    assert jobs["unit"]["name"] == "unit"
+    assert jobs["integration"]["name"] == "integration"
+    assert tier_job("unit")["name"] == "Unit"
+    assert tier_job("integration")["name"] == "Integration"
 
 
 def test_queue_proof_reads_statuses_only_for_an_identical_tree() -> None:
-    job = _workflow()["jobs"]["queue-proof"]
-    assert job["runs-on"] == "ubuntu-slim"
-    assert job["permissions"] == {"contents": "read", "statuses": "read"}
-    steps = {step.get("id"): step for step in job["steps"] if step.get("id")}
+    queue_proof = job(load_workflow("tests-reusable.yaml"), "queue-proof")
+    assert queue_proof["runs-on"] == "ubuntu-slim"
+    assert queue_proof["permissions"] == {"contents": "read", "statuses": "read"}
+    steps = {step.get("id"): step for step in queue_proof["steps"] if step.get("id")}
     assert steps["diff"]["run"] == "python3 _sdk/.github/scripts/queue_tree_diff.py"
     assert steps["proof"]["if"] == "steps.diff.outputs.identical == 'true'"
     # The verdict is read on the very commit whose tree was compared.
     assert steps["proof"]["env"]["PR_HEAD"] == "${{ steps.diff.outputs.pr_head }}"
-    assert job["outputs"] == {"proven": "${{ steps.proof.outputs.proven }}"}
+    assert queue_proof["outputs"] == {"proven": "${{ steps.proof.outputs.proven }}"}
 
 
 def test_queue_proof_diffs_exactly_as_the_other_queue_diff_jobs() -> None:
-    """Same checkout and diff step as checks-reusable's queue-diff, so a fix to
-    one (FND-4344's head lookup) cannot miss this copy."""
-    checks = yaml.safe_load(
-        (WORKFLOW.parent / "checks-reusable.yaml").read_text(encoding="utf-8")
-    )["jobs"]["queue-diff"]["steps"]
-    mine = _workflow()["jobs"]["queue-proof"]["steps"]
+    """Same checkout and diff step as queue-diff-reusable.yaml, which the other
+    three queue-diff jobs call (FND-4928), so a fix to it (FND-4344's head
+    lookup) cannot miss this copy."""
+    checks = steps(job(load_workflow("queue-diff-reusable.yaml"), "diff"))
+    mine = steps(job(load_workflow("tests-reusable.yaml"), "queue-proof"))
     assert mine[0]["uses"] == checks[0]["uses"]
     assert mine[0]["with"] == checks[0]["with"]
     assert mine[2]["env"] == checks[2]["env"]

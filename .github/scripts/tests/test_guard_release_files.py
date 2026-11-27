@@ -2,14 +2,8 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import guard_release_files as grf
+import pytest
 
 # ---------------------------------------------------------------------------
 # Sample diffs
@@ -30,15 +24,6 @@ CONFORMANCE_VERSION_DIFF = _diff(
     '-version = "0.15.0"',
     '+version = "0.16.0"',
     ' description = "..."',
-)
-
-CONFORMANCE_DUNDER_DIFF = _diff(
-    "diff --git a/packages/conformance/conformance/__init__.py b/packages/conformance/conformance/__init__.py",
-    "--- a/packages/conformance/conformance/__init__.py",
-    "+++ b/packages/conformance/conformance/__init__.py",
-    "@@ -7 +7 @@",
-    '-__version__ = "0.15.0"',
-    '+__version__ = "0.16.0"',
 )
 
 CONFORMANCE_CHANGELOG_DIFF = _diff(
@@ -146,10 +131,6 @@ class TestViolationsOffBumpBranch:
         "diff,expected_path",
         [
             (CONFORMANCE_VERSION_DIFF, "packages/conformance/pyproject.toml"),
-            (
-                CONFORMANCE_DUNDER_DIFF,
-                "packages/conformance/conformance/__init__.py",
-            ),
             (CONFORMANCE_CHANGELOG_DIFF, "packages/conformance/CHANGELOG.md"),
             (TOOLKIT_VERSION_DIFF, "contract-toolkit/src/PklProject"),
             (TOOLKIT_CHANGELOG_DIFF, "contract-toolkit/CHANGELOG.md"),
@@ -173,11 +154,7 @@ class TestViolationsOffBumpBranch:
 
 class TestAllowed:
     def test_conformance_bump_branch_allows_conformance_files(self):
-        parsed = grf.parse_diff(
-            CONFORMANCE_VERSION_DIFF
-            + CONFORMANCE_DUNDER_DIFF
-            + CONFORMANCE_CHANGELOG_DIFF
-        )
+        parsed = grf.parse_diff(CONFORMANCE_VERSION_DIFF + CONFORMANCE_CHANGELOG_DIFF)
         assert grf.evaluate(parsed, "bump-version-conformance") == []
 
     def test_toolkit_bump_branch_allows_toolkit_files(self):

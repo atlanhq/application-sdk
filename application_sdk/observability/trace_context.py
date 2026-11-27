@@ -18,6 +18,11 @@ from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "get_trace_context",
+]
+
+
 logger = get_logger(__name__)
 
 

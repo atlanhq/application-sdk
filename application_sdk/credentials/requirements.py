@@ -35,6 +35,21 @@ import orjson
 
 from application_sdk._logging import get_logger
 
+__all__ = [
+    "agent_schema",
+    "AUTH_TYPE_KEY",
+    "canonical_credential",
+    "credential_form",
+    "credential_from_pairs",
+    "credential_slots",
+    "CREDENTIAL_WIDGET",
+    "CredentialSlot",
+    "load_form",
+    "missing_required_fields",
+    "selected_auth_type",
+]
+
+
 logger = get_logger(__name__)
 
 AUTH_TYPE_KEY = "auth-type"
@@ -253,6 +268,14 @@ def canonical_credential(flat: Mapping[str, Any]) -> dict[str, Any]:
     ``<authType>.<f>`` → root ``<f>``. A nested ``extra`` dict is merged as
     sent. Accepts a v2 dict, a v3 ``[{key, value}]`` list already folded into
     a dict, or an agent spec's raw dict.
+
+    The selected auth type's fields may also arrive as one nested object,
+    ``{"gcp-wif": {"extra": {...}}}``, as a v2 credential sends a variant
+    such as ``kerberos`` -- or as that object JSON-encoded, which is how
+    :func:`~application_sdk.handler.contracts.flatten_credentials_to_pairs`
+    carries a nested value in a pair. It expands like the dotted keys (an agent
+    payload never nests, so the parity with the runtime transform holds), and
+    a dotted key wins over the same field in the object.
     """
     creds: dict[str, Any] = {k: v for k, v in flat.items() if "." not in k}
     if "auth-type" in creds:
@@ -266,6 +289,14 @@ def canonical_credential(flat: Mapping[str, Any]) -> dict[str, Any]:
     for key, value in flat.items():
         if key.startswith("extra."):
             extra[key[len("extra.") :]] = value
+    variant = _auth_type_object(creds.get(auth_type)) if auth_type else None
+    if variant is not None:
+        del creds[auth_type]
+        for key, value in variant.items():
+            if key == "extra" and isinstance(value, Mapping):
+                extra.update(value)
+            else:
+                creds[key] = value
     for key, value in flat.items():
         if extra_prefix and key.startswith(extra_prefix):
             extra[key[len(extra_prefix) :]] = value
@@ -274,6 +305,20 @@ def canonical_credential(flat: Mapping[str, Any]) -> dict[str, Any]:
     if extra:
         creds["extra"] = extra
     return creds
+
+
+def _auth_type_object(value: object) -> Mapping[str, Any] | None:
+    """*value* as an auth type's nested fields: a mapping, or one JSON-encoded."""
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str) and value.lstrip().startswith("{"):
+        try:
+            decoded = orjson.loads(value)
+        except orjson.JSONDecodeError:
+            # Not an object after all: left as the plain value it was sent as.
+            return None
+        return decoded if isinstance(decoded, Mapping) else None
+    return None
 
 
 def credential_from_pairs(pairs: list[Any]) -> dict[str, Any]:

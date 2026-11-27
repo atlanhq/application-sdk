@@ -10,11 +10,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "build_and_publish"))
 
-import check_generated_freshness  # noqa: E402
-import renovate_pkl_sync  # noqa: E402
+import check_generated_freshness
+import renovate_pkl_sync
 
 # The scripts import each other as top-level modules (`import _bap`), so the
 # tests do too: that keeps one module object for monkeypatching. pyright
@@ -64,13 +63,11 @@ def test_check_migration(
     expected: int,
     message: str,
 ) -> None:
-    calls = _stub(monkeypatch, {"uv run python": rc})
+    calls = _stub(monkeypatch, {sys.executable: rc})
     assert certify.main(["check-migration"]) == expected
     assert calls == [
         [
-            "uv",
-            "run",
-            "python",
+            sys.executable,
             "-m",
             "tools.migrate_v3.check_migration",
             "--no-color",
@@ -78,6 +75,25 @@ def test_check_migration(
         ]
     ]
     assert message in capsys.readouterr().out
+
+
+def test_check_migration_runs_the_real_checker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The command certify runs, executed for real in certify's layout (cwd
+    ``sdk``, app at ``../app``): it finds the checker and grades the app, so
+    the exit code is the checker's verdict, not "module not found"."""
+    repo_root = Path(__file__).resolve().parents[3]
+    (tmp_path / "sdk").symlink_to(repo_root, target_is_directory=True)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "app.py").write_text(
+        "from application_sdk.workflows import WorkflowInterface\n"
+    )
+    monkeypatch.chdir(tmp_path / "sdk")
+    assert certify.main(["check-migration"]) == 1
+    assert "check_migration reported FAILs" in capsys.readouterr().out
 
 
 # ── contract-drift ────────────────────────────────────────────────────────────
@@ -284,7 +300,6 @@ def _verdict(monkeypatch: pytest.MonkeyPatch, **env: str) -> int:
         "CD": "success",
         "UT": "success",
         "COV": "success",
-        "SDK_INSTALL": "success",
         "APP_INSTALL": "success",
     }
     for key, value in {**defaults, **env}.items():
@@ -354,9 +369,8 @@ def test_install_failures_block_and_are_labelled(
     assert (
         _verdict(
             monkeypatch,
-            SDK_INSTALL="failure",
             APP_INSTALL="failure",
-            CM="skipped",
+            CM="success",
             CD="success",
             UT="install_failed",
             COV="skipped",
@@ -364,17 +378,15 @@ def test_install_failures_block_and_are_labelled(
         == 1
     )
     text = summary.read_text()
-    assert (
-        "**v3 shape (check_migration) — warn-only (sdk install failed)** — skipped"
-        in text
-    )
+    # check_migration needs no install, so it ran: an app that does not
+    # install still gets its v3-shape verdict (FND-4675).
+    assert "- ✅ **v3 shape (check_migration) — warn-only** — success" in text
     assert "- ✅ **Contract drift (SDK regeneration) — enforced** — success" in text
     assert (
         "- ❌ **Unit tests — enforced (app install failed)** — install_failed" in text
     )
     assert "\n\n### ❌ Publish blocked — app dependencies did not install\n\n" in text
     out = capsys.readouterr().out
-    assert "SDK install failed, so check_migration did not run." in out
     assert "::error title=Publish blocked::App dependencies did not install" in out
 
 

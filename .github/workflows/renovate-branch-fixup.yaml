@@ -1,0 +1,247 @@
+name: Fix up a Renovate branch
+
+# The one implementation of "rewrite files on a Renovate branch Mend pushed,
+# then push the result back onto that branch" (FND-4928). Two lanes call it:
+#
+#   - renovate-lock-cooldown.yaml     bound_lock_branch.py (FND-376)
+#   - renovate-pyatlan-table-sync.yaml renovate_pyatlan_table_sync.py
+#                                      (FND-4439, FND-5018, FND-4671)
+#
+# Each caller owns its trigger (branches, paths) and its concurrency group. This
+# file owns everything the lanes share, so a fix lands once:
+#
+#   - Mend stays the PR author, so renovate-auto-approve-reusable.yml's author
+#     condition holds unchanged. A workflow that opened its own PR would fail
+#     that condition outright, and widening a fleet-wide approval gate for one
+#     repo is not a trade worth making.
+#   - Two jobs. `generate` resolves and, when pyatlan moved, installs and
+#     imports the new release, holding only a read-only GITHUB_TOKEN. `publish`,
+#     the only job that ever sees the App token or the signing key, copies the
+#     script's declared OUTPUT_PATHS out of the artifact, commits and pushes. No
+#     resolver and no third-party install runs where the push credential lives
+#     (the rule in .github/actions/sign-bot-commits/action.yaml).
+#   - An App-token push, because a GITHUB_TOKEN push triggers no CI.
+#   - carry_artifact_status.py carries `renovate/artifacts` onto our commit:
+#     statuses are per-SHA and Renovate stamps only its own commits.
+#
+# A script used here must take `--no-commit --baseline-ref REF`, `--stage-to
+# DIR` and `--apply-from DIR`, and write only its OUTPUT_PATHS. All branching
+# logic lives in those tested scripts.
+
+on:
+  workflow_call:
+    inputs:
+      script:
+        description: >-
+          The lane's driver, a path under .github/scripts/ in this repo.
+        required: true
+        type: string
+      generate-args:
+        description: >-
+          Extra arguments for the driver's `--no-commit` run, e.g.
+          `--window P3D`. Word-split, so no argument may contain a space.
+        required: false
+        type: string
+        default: ""
+      artifact-name:
+        description: The artifact `generate` hands to `publish`.
+        required: true
+        type: string
+      own-commit-subject:
+        description: >-
+          The start of the commit subject the driver writes. A push whose head
+          commit starts with it is our own push re-firing the caller, and is
+          skipped.
+        required: true
+        type: string
+    secrets:
+      FLEET_APP_ID:
+        required: true
+      FLEET_APP_PRIVATE_KEY:
+        required: true
+      BOT_SIGNING_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: Generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Two guards, for two unrelated reasons.
+    #
+    # ACTOR. The lanes exist to serve pushes made by a Renovate identity, so run
+    # for those and nothing else. The list is the same one the approval gate
+    # accepts as a PR author (`renovate_approval_conditions.RENOVATE_AUTHORS`):
+    # renovate[bot] is Mend, which is what drives this repo today, and
+    # atlan-app-fleet[bot] is the self-hosted runner, kept so the lanes do not
+    # quietly stop working if that ever changes. A drift test pins the two lists
+    # together rather than trusting them to stay in step by hand.
+    #
+    # Read this for what it is: defence in depth, not a control. The check is
+    # evaluated from the workflow file at the pushed ref, so it constrains what
+    # runs by accident, not what runs by intent: anything that can change what
+    # this job does can change this line in the same breath. Restricting who may
+    # push these branches is branch configuration, which lives outside the repo;
+    # see FND-395.
+    #
+    # RE-ENTRANCY. Our own push re-fires the caller (an App-token push does
+    # trigger workflows, which is the whole reason we use one) and arrives as
+    # atlan-app-fleet[bot], which the actor list admits. The drivers are
+    # idempotent, so a second run would find nothing to commit, but it would pay
+    # for a full resolve to learn that. Renovate's own subjects never start with
+    # a lane's `own-commit-subject`, so this never skips a real bump.
+    #
+    # Both continuation lines sit at the block's own indentation deliberately: a
+    # more-indented line in a folded scalar keeps its newline instead of folding
+    # to a space, which would leave a literal line break inside the `${{ }}`.
+    if: >-
+      ${{ contains(fromJSON('["atlan-app-fleet[bot]", "renovate[bot]"]'), github.actor)
+      && !startsWith(github.event.head_commit.message, inputs.own-commit-subject) }}
+    # Read-only, and no App token or secret anywhere in this job: it runs the
+    # resolver and, when pyatlan moved, installs and imports the new release.
+    permissions:
+      contents: read
+    steps:
+      # The pushed SHA, not the branch: `publish` commits onto this same SHA, so
+      # a branch that moves in between makes its push non-fast-forward instead
+      # of landing these outputs on top of a newer push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The baseline the drivers compare against. Only the tree at the tip of
+      # the base branch is needed (one `git show` of each lock), so a depth-1
+      # fetch is enough.
+      - name: Fetch the base branch
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+
+      # Pinned to the same uv the fleet runner uses: a resolver version skew
+      # here would show up as unexplained lock churn, and both lanes must write
+      # the same lock format.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+
+      # `--with packaging`, pinned: the drivers' version comparisons need PEP 440
+      # parsing, and the runner image shipping `packaging` for the system
+      # interpreter is not a promise GitHub makes. `--no-project` keeps this off
+      # the repo's own environment: the lanes must not depend on a full dev sync.
+      # `--no-commit`: committing is `publish`'s job, below.
+      - name: Generate the outputs
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          SCRIPT: ${{ inputs.script }}
+          GENERATE_ARGS: ${{ inputs.generate-args }}
+        # GENERATE_ARGS is word-split on purpose: it is a list of flags.
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          uv run --no-project --with 'packaging==26.3' \
+            python "$SCRIPT" $GENERATE_ARGS \
+            --baseline-ref "origin/$BASE_BRANCH" \
+            --no-commit
+
+      # One folder holding exactly the driver's OUTPUT_PATHS at their repo
+      # paths. Not the files themselves: given several paths, upload-artifact
+      # roots the artifact at their common parent and drops that prefix, and
+      # publish then finds none of them (FND-5015). A test replays this handoff.
+      - name: Stage the outputs
+        env:
+          SCRIPT: ${{ inputs.script }}
+        run: python3 "$SCRIPT" --stage-to "$RUNNER_TEMP/fixup-out"
+
+      - name: Upload the outputs
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ runner.temp }}/fixup-out
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Commit and push
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # For the carry-forward below. Written with GITHUB_TOKEN rather than the
+      # App token: publishing a commit status needs no identity that re-triggers
+      # anything, so the narrower credential is the right one.
+      statuses: write
+    steps:
+      # A real (non-github-actions[bot]) identity is required: the push below must
+      # re-trigger the PR's required checks against the new commit, which a push
+      # made with the default GITHUB_TOKEN does not.
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+          # Down-scope to the one permission this lane uses (FND-395). An
+          # installation token has no *branch* scope (that is what the `bot
+          # branches` ruleset is for), but it does have a permission scope, and
+          # by default this step mints the App's whole installation grant on
+          # this repo. Since the workflow definition and the scripts it runs
+          # both come from the pushed branch, whatever the token can do is
+          # reachable from that branch: contents-only is a materially smaller
+          # blast radius than the full grant. The commit status published below
+          # is written with GITHUB_TOKEN, so `statuses` is deliberately absent.
+          permission-contents: write
+
+      # The same SHA `generate` resolved against; see the comment on its checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.sha }}
+
+      # Outside the checkout, so the artifact's paths cannot overwrite anything
+      # in it except through the driver's allowlisted copy.
+      - name: Download the outputs
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
+        with:
+          # Glob, not the bare name: the upload's retry lands under
+          # `<name>-retry`. Both uploads overwrite, so exactly one is live.
+          pattern: ${{ inputs.artifact-name }}*
+          path: ${{ runner.temp }}/fixup-in
+
+      # Stdlib only, on the runner's python3: no resolver, no install, nothing
+      # from the new dependency set runs beside the App token.
+      - name: Sign bot commits
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
+      - name: Commit the outputs
+        env:
+          SCRIPT: ${{ inputs.script }}
+        run: python3 "$SCRIPT" --apply-from "$RUNNER_TEMP/fixup-in"
+
+      # Unchanged outputs commit nothing, so HEAD is still the pushed SHA and this
+      # is a no-op. A branch that moved since `generate` rejects it as
+      # non-fast-forward, and the newer push's own run takes over.
+      - name: Push
+        run: git push origin "HEAD:$GITHUB_REF"
+
+      # Our push moves the head off the SHA `renovate/artifacts` lives on, which
+      # the approval gate reads as not-green and withholds on, permanently. This
+      # republishes the state read from our commit's parent, and only when that
+      # state is `success`; anything else publishes nothing and the gate keeps
+      # withholding. Runs after the push so it stamps the SHA that is actually
+      # the head.
+      - name: Carry renovate/artifacts forward
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/carry_artifact_status.py \
+            --target-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

@@ -15,6 +15,17 @@ from application_sdk.errors.leaves import (
     UnimplementedError,
 )
 
+__all__ = [
+    "MapColumnUnimplementedError",
+    "MapDatabaseUnimplementedError",
+    "MapProcedureUnimplementedError",
+    "MapSchemaUnimplementedError",
+    "MapTableUnimplementedError",
+    "SqlClientClassNotSetError",
+    "SqlProbeTimeoutError",
+    "TransformedFileMissingError",
+]
+
 
 @dataclass(kw_only=True)
 class MapDatabaseUnimplementedError(UnimplementedError):
@@ -102,7 +113,7 @@ class TransformedFileMissingError(DataIntegrityError):
     simply will not be in the tree publish walks — where its absence reads as
     "removed from source" and archives the assets.
 
-    ``SqlApp._transform_entity`` never does this (it emits a ref whenever
+    ``SqlApp.transform_entity`` never does this (it emits a ref whenever
     ``count > 0``), so reaching this error means a subclass overrode a
     ``transform_*`` task and dropped the ref. Failing here names the entity
     and the count; the alternative is a quiet short publish two stages later.
@@ -117,7 +128,7 @@ class TransformedFileMissingError(DataIntegrityError):
     )
     suggested_action: str | None = (
         "Return the FileReference for the file the transform wrote on "
-        "TransformOutput.transformed_file (see SqlApp._transform_entity)"
+        "TransformOutput.transformed_file (see SqlApp.transform_entity)"
     )
     typename: str | None = None
     record_count: int = 0

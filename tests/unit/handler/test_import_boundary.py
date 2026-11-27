@@ -18,13 +18,11 @@ handler actually pulls in.
 
 from __future__ import annotations
 
-import functools
 import importlib
-import os
-import subprocess
-import sys
 
 import pytest
+
+from tests.unit._doubles import loaded_after_importing, loaded_after_running
 
 #: The handler surface that must load without the worker. Listed explicitly
 #: rather than discovered by walking the package: a new entry point should be a
@@ -54,31 +52,6 @@ _FORBIDDEN_PREFIXES = (
 _ALLOWED_FOR_START_ROUTE = "temporalio.client"
 
 
-@functools.cache
-def _loaded_after_importing(*modules: str) -> frozenset[str]:
-    """Import *modules* in a fresh interpreter; return everything in ``sys.modules``.
-
-    Cached: three of the five call sites ask for the same two module sets, and
-    each probe is a fresh interpreter importing the SDK — 1-4s on Windows.
-    """
-    imports = "".join(f"importlib.import_module({m!r});" for m in modules)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            f"import sys, importlib;{imports}print('\\n'.join(sys.modules))",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-    assert result.returncode == 0, (
-        f"importing {modules} in a fresh interpreter failed:\n{result.stderr}"
-    )
-    return frozenset(line for line in result.stdout.splitlines() if line)
-
-
 def _is_worker_module(name: str) -> bool:
     return any(
         name == prefix or name.startswith(prefix + ".")
@@ -94,8 +67,8 @@ def test_the_handler_imports_no_worker_code() -> None:
     the worker import it from there — never by importing worker code lazily
     from the handler, which only hides the edge from this test.
     """
-    excused = _loaded_after_importing(_ALLOWED_FOR_START_ROUTE)
-    loaded = _loaded_after_importing(*_HANDLER_MODULES)
+    excused = loaded_after_importing(_ALLOWED_FOR_START_ROUTE)
+    loaded = loaded_after_importing(*_HANDLER_MODULES)
     offenders = sorted(name for name in loaded - excused if _is_worker_module(name))
     assert not offenders, (
         f"Importing the handler loaded {len(offenders)} worker module(s); "
@@ -111,24 +84,12 @@ def test_creating_the_handler_service_imports_no_worker_code() -> None:
     Fails if a startup path reaches the app registry, whose package imports
     execution code.
     """
-    excused = _loaded_after_importing(_ALLOWED_FOR_START_ROUTE)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys\n"
-            "from application_sdk.handler.base import DefaultHandler\n"
-            "from application_sdk.handler.service import create_app_handler_service\n"
-            "create_app_handler_service(DefaultHandler(), app_name='boundary-app')\n"
-            "print('\\n'.join(sys.modules))",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
+    excused = loaded_after_importing(_ALLOWED_FOR_START_ROUTE)
+    loaded = loaded_after_running(
+        "from application_sdk.handler.base import DefaultHandler\n"
+        "from application_sdk.handler.service import create_app_handler_service\n"
+        "create_app_handler_service(DefaultHandler(), app_name='boundary-app')"
     )
-    assert result.returncode == 0, result.stderr
-    loaded = {line for line in result.stdout.splitlines() if line}
     offenders = sorted(name for name in loaded - excused if _is_worker_module(name))
     assert not offenders, (
         "Creating the handler service loaded worker module(s):\n  "
@@ -165,27 +126,13 @@ def test_importing_the_handler_loads_neither_temporal_nor_grpc() -> None:
     (as it does for Temporal's ``FailureError``). ``handler.service`` is left
     out: the ``/workflows/v1/start`` route imports ``temporalio.client``.
     """
-    env = {k: v for k, v in os.environ.items() if k not in _OTLP_EXPORT_ENV}
-    # ``application_sdk.constants`` loads the checkout's ``.env``, which would
-    # put the cleared settings straight back.
-    env["PYTHON_DOTENV_DISABLED"] = "1"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys, application_sdk.handler; print('\\n'.join(sys.modules))",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-        env=env,
+    # ``loaded_after_running`` also turns ``.env`` loading off, which would put
+    # the cleared settings straight back.
+    loaded = loaded_after_running(
+        "import application_sdk.handler", without_env=_OTLP_EXPORT_ENV
     )
-    assert result.returncode == 0, result.stderr
     offenders = sorted(
-        name
-        for name in result.stdout.splitlines()
-        if name.split(".")[0] in _WORKER_RUNTIME_PACKAGES
+        name for name in loaded if name.split(".")[0] in _WORKER_RUNTIME_PACKAGES
     )
     assert not offenders, (
         f"Importing application_sdk.handler loaded {len(offenders)} "
@@ -200,7 +147,7 @@ def test_the_start_route_allowance_is_still_needed() -> None:
     ``temporalio.activity``, or the handler stopped importing the client, the
     excuse would be dead weight hiding nothing — remove it then.
     """
-    loaded = _loaded_after_importing(*_HANDLER_MODULES)
+    loaded = loaded_after_importing(*_HANDLER_MODULES)
     assert _ALLOWED_FOR_START_ROUTE in loaded, (
         "The handler no longer imports temporalio.client: delete "
         "_ALLOWED_FOR_START_ROUTE and the allowance it grants."
@@ -214,7 +161,7 @@ def test_the_contracts_load_without_the_http_server() -> None:
     and a future out-of-tree handler both do; it must not drag in FastAPI and
     the Temporal client behind ``handler.service``.
     """
-    loaded = _loaded_after_importing("application_sdk.handler.contracts")
+    loaded = loaded_after_importing("application_sdk.handler.contracts")
     assert "application_sdk.handler.service" not in loaded
     assert "fastapi" not in loaded
 

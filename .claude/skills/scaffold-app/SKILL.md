@@ -14,8 +14,6 @@ optional_triggers:
   - "new connector"
   - "create app skeleton"
 owner: connector-platform-team
-last_updated: "2026-04-30"
-staleness_days: 90
 inputs:
   - app_name: string (kebab-case, e.g. "my-connector")
   - connector_type: enum[sql, rest] (default: sql)

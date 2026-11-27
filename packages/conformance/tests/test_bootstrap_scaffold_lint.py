@@ -117,8 +117,13 @@ def _ruff_cmd() -> list[str]:
 
 
 def _pinned_ruff_version() -> str:
-    """Return the ruff version this package's dev group pins."""
-    pyproject = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
+    """Return the ruff version the workspace root's dev group pins.
+
+    This package is a member of the repository's uv workspace (FND-4671): its
+    own dev group names ruff unpinned, and the one root lock installs the
+    root's exact pin.
+    """
+    pyproject = pathlib.Path(__file__).resolve().parents[3] / "pyproject.toml"
     dev = tomllib.loads(pyproject.read_text(encoding="utf-8"))["dependency-groups"][
         "dev"
     ]
@@ -148,12 +153,12 @@ def test_ruff_is_the_pinned_version() -> None:
     proc = subprocess.run([*_ruff_cmd(), "--version"], capture_output=True, text=True)
     assert proc.returncode == 0, (
         "ruff is not runnable here, so the scaffold lint guards cannot run. It "
-        "is a pinned dev-group dependency of this package — `uv sync "
-        f"--all-extras --all-groups`, which is what CI does. {proc.stderr}"
+        "is a dev-group dependency of this package — `uv sync --extra test` "
+        f"in packages/conformance, which is what CI does. {proc.stderr}"
     )
     pin = _pinned_ruff_version()
     assert proc.stdout.split() == ["ruff", pin], (
-        f"resolved ruff is {proc.stdout.strip()!r}, but this package pins "
+        f"resolved ruff is {proc.stdout.strip()!r}, but the workspace pins "
         f"ruff=={pin}. The scaffold guards would report a verdict from a "
         f"binary the pin never selected. Run under `uv run` in "
         f"packages/conformance so the synced venv's ruff comes first on PATH."

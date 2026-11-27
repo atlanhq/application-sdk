@@ -47,6 +47,7 @@ from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     SqlCredentialRefMissingError,
+    SqlMetadataExtractionError,
     SqlMetadataExtractorNotImplementedError,
     SqlSecretStoreMissingError,
     SqlTreeFilterInputUnsupportedError,
@@ -74,6 +75,11 @@ from application_sdk.templates.contracts.sql_metadata import (
 if TYPE_CHECKING:
     from application_sdk.clients.sql import BaseSQLClient
     from application_sdk.credentials.ref import CredentialRef
+
+__all__ = [
+    "SqlMetadataExtractor",
+]
+
 
 logger = get_logger(__name__)
 
@@ -529,10 +535,6 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
         # conformance: ignore[E004] re-raises immediately as typed SqlMetadataExtractionError; no information lost
         except Exception as e:
-            from application_sdk.templates._template_errors import (  # noqa: PLC0415
-                SqlMetadataExtractionError,
-            )
-
             raise SqlMetadataExtractionError(
                 workflow_id=str(workflow_id), cause=e
             ) from e

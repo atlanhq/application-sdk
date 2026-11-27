@@ -19,12 +19,15 @@ clean venvs, because an editable or path install exposes the whole
      ``pip install --force-reinstall atlan-application-sdk-api``.
 3. **Api alone.** Install only the api wheel (core dependencies), import every
    core module, and fail if any unlisted ``application_sdk`` module loads or the
-   process exceeds ``--max-rss-mb``. Again with every extra installed, importing
-   every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
+   process exceeds ``--max-rss-mb``. Again with only the ``obstore`` extra,
+   importing the core and object-store modules (the host's store calls the
+   worker's ``storage.ops``, which must not need python-dotenv, which the
+   ``sql`` and ``aws`` extras bring). Again with every extra installed,
+   importing every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
    ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is a 422,
    auth / check / metadata answer, and an ``AuthError`` carrying a DSN answers
    with the password redacted from the body.
-   The object store, in both api venvs: with ``[obstore]``, the config and
+   The object store, in every api venv: with ``[obstore]``, the config and
    file routes round-trip through a ``HostObjectStore`` over obstore's
    ``MemoryStore``, with a missing config answering 404, and
    ``HostObjectStore.from_env()`` builds the S3, GCS and Azure store from the
@@ -32,7 +35,7 @@ clean venvs, because an editable or path install exposes the whole
    gives no store and the config route answers 503, so it never crashes.
 4. **Each module alone.** Step 3 imports the modules in one process, in sorted
    order, so a module that only imports because an earlier one already loaded
-   its dependency would pass. In both api venvs, ``python -I`` imports each
+   its dependency would pass. In every api venv, ``python -I`` imports each
    listed module in a fresh process and names every one that fails.
 
 The wheels are built the way ``tag-and-publish.yaml`` publishes them: plain
@@ -59,7 +62,9 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -121,7 +126,7 @@ print(f"{sys.argv[4]}: {len(to_import)} modules, {rss_mb:.0f} MB, auth/check/met
 """
 
 _STORE = r"""
-import base64, os, sys
+import base64, hashlib, os, sys
 leg, listed = sys.argv[1], sys.argv[2].split(",")
 from fastapi.testclient import TestClient
 from application_sdk.handler import DefaultHandler
@@ -133,6 +138,8 @@ def _env(**values):
         del os.environ[name]
     os.environ.update(values)
 
+# The sidecar check below expects the default; the caller's env may say otherwise.
+os.environ["ATLAN_STORAGE_WRITE_SIDECARS"] = "true"
 if sys.argv[3] == "core":
     # No obstore: a configured bucket must degrade to 503, never crash.
     _env(ATLAN_S3_BUCKET="probe-bucket", ATLAN_S3_REGION="us-east-1")
@@ -154,6 +161,11 @@ else:
     assert r.status_code == 404, f"missing config answered {r.status_code}"
     r = client.post("/workflows/v1/file", files={"file": ("rows.csv", b"a,b\n1,2\n", "text/csv")})
     assert r.status_code == 200 and r.json()["data"]["fileSize"] == 8, f"upload: {r.status_code} {r.text[:200]}"
+    # The worker's integrity sidecar, written by the host's upload too.
+    import obstore
+    uploaded = r.json()["data"]["key"]
+    sidecar = bytes(obstore.get(store._store, uploaded + ".sha256").bytes())
+    assert sidecar == hashlib.sha256(b"a,b\n1,2\n").hexdigest().encode(), f"upload sidecar: {sidecar!r}"
     # Dummy, non-secret values: building a store makes no request.
     key = base64.b64encode(b"probe-key-not-real-0000000000000").decode()
     for kind, values in (
@@ -164,7 +176,7 @@ else:
         _env(**values)
         built = HostObjectStore.from_env()
         assert repr(built) == f"HostObjectStore({kind})", f"from_env for {kind} built {built!r}"
-    summary = "config/file round trip + 404 + S3/GCS/Azure from_env"
+    summary = "config/file round trip + sidecar + 404 + S3/GCS/Azure from_env"
 extra = sorted(
     m for m in sys.modules
     if (m == "application_sdk" or m.startswith("application_sdk."))
@@ -321,6 +333,95 @@ def _pip_module(python: Path, *args: str) -> None:
     _install([str(python), "-m", "pip", "install", "-q", *args])
 
 
+class ApiLeg(NamedTuple):
+    """One api-only venv the probe installs and checks."""
+
+    name: str
+    #: What ``uv pip install`` gets: the api wheel, with or without extras.
+    requirement: str
+    #: Comma-separated modules imported (together, then each alone).
+    modules: str
+    #: Max RSS in MB for importing them.
+    budget_mb: float
+    #: ``core`` (no obstore: a configured bucket answers 503) or ``full``.
+    store_mode: str
+
+
+def api_legs(
+    api: Path,
+    listed: list[str],
+    groups: dict[str, set[str]],
+    extras: list[str],
+    max_rss_mb: float,
+) -> list[ApiLeg]:
+    """The api-only installs to probe, and what each must import.
+
+    *groups* maps a listed file to the seed groups that reach it (a file no
+    group names is core's). *extras* are the non-core seed groups.
+    """
+
+    def modules(keep: Callable[[set[str]], bool]) -> str:
+        return ",".join(
+            check_api_surface.module_of(f)
+            for f in listed
+            if keep(groups.get(f, {"core"}))
+        )
+
+    uri = api.resolve().as_uri()
+    every = ",".join(extras)
+    return [
+        # The core install is what every hosted app pays: held to the budget.
+        ApiLeg(
+            "api core", str(api), modules(lambda g: "core" in g), max_rss_mb, "core"
+        ),
+        # Only the obstore extra: the host's store calls the worker's
+        # storage.ops, whose closure must import without what the other extras
+        # bring (python-dotenv, which constants needs).
+        ApiLeg(
+            "api [obstore]",
+            f"atlan-application-sdk-api[obstore] @ {uri}",
+            modules(lambda g: bool(g & {"core", "obstore"})),
+            10_000,
+            "full",
+        ),
+        # Every extra installed: every listed module must import and serve.
+        ApiLeg(
+            f"api [{every}]",
+            f"atlan-application-sdk-api[{every}] @ {uri}",
+            modules(lambda _g: True),
+            10_000,
+            "full",
+        ),
+    ]
+
+
+def run_leg(leg: ApiLeg, tmp: Path, every: str) -> list[str]:
+    """Install *leg* into a fresh venv under *tmp* and return its failures.
+
+    *every* is all listed modules: anything else under ``application_sdk``
+    that loads is unlisted. Runs from *tmp*, outside the repo.
+    """
+    failures: list[str] = []
+    py = _venv(tmp / leg.name.replace(" ", "-").strip("[]"))
+    _pip(py, leg.requirement, "httpx")
+    done = subprocess.run(
+        [str(py), "-c", _ALONE, leg.modules, str(leg.budget_mb), every, leg.name],
+        cwd=tmp,
+    )
+    if done.returncode:
+        failures.append(f"{leg.name} install failed")
+    done = subprocess.run(
+        [str(py), "-c", _STORE, leg.name, every, leg.store_mode], cwd=tmp
+    )
+    if done.returncode:
+        failures.append(f"{leg.name}: object-store routes failed")
+    names = leg.modules.split(",")
+    alone = import_each_alone(py, names, jobs=min(16, os.cpu_count() or 4))
+    failures += [f"{leg.name}: does not import alone: {a}" for a in alone]
+    print(f"{leg.name}: {len(names) - len(alone)}/{len(names)} modules import alone")
+    return failures
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dist", type=Path, required=True)
@@ -364,46 +465,13 @@ def main(argv: list[str] | None = None) -> int:
                 "atlan-application-sdk-api` did not restore a working install"
             )
 
-        every = ",".join(check_api_surface.module_of(f) for f in listed)
         groups = gen_api_files.file_groups(args.root)
-        core = ",".join(
-            check_api_surface.module_of(f)
-            for f in listed
-            if "core" in groups.get(f, {"core"})
-        )
-        extras = ",".join(
-            sorted(g for g in gen_api_files.seed_groups(args.root) if g != "core")
-        )
+        extras = sorted(g for g in gen_api_files.seed_groups(args.root) if g != "core")
+        every = ",".join(check_api_surface.module_of(f) for f in listed)
         # cwd outside the repo: ``python -c`` puts the cwd on sys.path, and the
         # source tree there would hide what the wheel is missing.
-        for leg, requirement, modules, budget, store_mode in (
-            # The core install is what every hosted app pays: held to the budget.
-            ("api core", str(api), core, args.max_rss_mb, "core"),
-            # Every extra installed: every listed module must import and serve.
-            (
-                f"api [{extras}]",
-                f"atlan-application-sdk-api[{extras}] @ {api.resolve().as_uri()}",
-                every,
-                10_000,
-                "full",
-            ),
-        ):
-            py = _venv(Path(tmp) / leg.replace(" ", "-").strip("[]"))
-            _pip(py, requirement, "httpx")
-            done = subprocess.run(
-                [str(py), "-c", _ALONE, modules, str(budget), every, leg], cwd=tmp
-            )
-            if done.returncode:
-                failures.append(f"{leg} install failed")
-            done = subprocess.run(
-                [str(py), "-c", _STORE, leg, every, store_mode], cwd=tmp
-            )
-            if done.returncode:
-                failures.append(f"{leg}: object-store routes failed")
-            names = modules.split(",")
-            alone = import_each_alone(py, names, jobs=min(16, os.cpu_count() or 4))
-            failures += [f"{leg}: does not import alone: {a}" for a in alone]
-            print(f"{leg}: {len(names) - len(alone)}/{len(names)} modules import alone")
+        for leg in api_legs(api, listed, groups, extras, args.max_rss_mb):
+            failures += run_leg(leg, Path(tmp), every)
 
     for failure in failures:
         print(f"::error::{failure}")

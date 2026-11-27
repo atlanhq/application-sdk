@@ -19,8 +19,6 @@ optional_triggers:
   - "add typed exceptions"
   - "make my errors typed"
 owner: connector-platform-team
-last_updated: "2026-05-11"
-staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
@@ -123,6 +121,10 @@ and optionally `audience` (when the locus differs from the SDK base default).
 - `INVALID_INPUT` vs `PRECONDITION`: payload itself is malformed (irrespective
   of system state) → INVALID_INPUT. Payload syntactically valid but state
   blocks → PRECONDITION.
+
+For the per-trigger leaf cookbook (401/403/404/429/5xx, timeouts, cancellation),
+the legacy `AtlanError` → `AppError` migration table and the mandatory
+raise-site rules, see `.claude/skills/typed-failures/references/typed-error-prescription.md`.
 
 ---
 

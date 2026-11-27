@@ -18,15 +18,11 @@ detection is exercised end to end.
 from __future__ import annotations
 
 import subprocess
-import sys
 import types
 from pathlib import Path
 
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import check_generated_freshness as mod
+import pytest
 import renovate_pkl_sync as sync
 
 COMMITTED_MANIFEST = '{"app_name": "metabase"}\n'

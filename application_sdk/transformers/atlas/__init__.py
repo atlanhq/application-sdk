@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import warnings
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -28,6 +28,11 @@ from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import (
     _process_text as process_text,
 )
+
+__all__ = [
+    "AtlasTransformer",
+]
+
 
 warnings.warn(
     "application_sdk.transformers.atlas is deprecated; use the connector-side "
@@ -310,11 +315,13 @@ class AtlasTransformer(TransformerInterface):
             attributes["source_created_by"] = source_created_by
 
         if created := data.get("created"):
-            attributes["source_created_at"] = datetime.fromtimestamp(created / 1000)
+            attributes["source_created_at"] = datetime.fromtimestamp(
+                created / 1000, UTC
+            )
 
         if last_altered := data.get("last_altered", None):
             attributes["source_updated_at"] = datetime.fromtimestamp(
-                last_altered / 1000
+                last_altered / 1000, UTC
             )
 
         if source_id := data.get("source_id", None):

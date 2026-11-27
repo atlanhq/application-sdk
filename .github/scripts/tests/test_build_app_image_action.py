@@ -33,28 +33,14 @@ where a human edit would break it.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 import yaml
+from _workflows import ACTIONS, job, load_workflow, step_named, steps, tier_job
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_ACTIONS = _REPO_ROOT / ".github" / "actions"
-_BUILD_ACTION_DIR = _ACTIONS / "build-app-image"
+_BUILD_ACTION_DIR = ACTIONS / "build-app-image"
 _BUILD_ACTION = _BUILD_ACTION_DIR / "action.yaml"
-_SDR_ACTION = _ACTIONS / "sdr-e2e" / "action.yaml"
-
-
-def _steps(action_yaml: Path) -> list[dict]:
-    parsed = yaml.safe_load(action_yaml.read_text(encoding="utf-8"))
-    return parsed["runs"]["steps"]
-
-
-def _step(action_yaml: Path, name: str) -> dict:
-    for step in _steps(action_yaml):
-        if step.get("name") == name:
-            return step
-    raise AssertionError(f"{action_yaml.name} has no step named {name!r}")
+_SDR_ACTION = ACTIONS / "sdr-e2e" / "action.yaml"
 
 
 # ── 1. Cross-action asset paths resolve ──────────────────────────────────────
@@ -101,7 +87,7 @@ def test_build_action_asset_paths_resolve(pattern: str, description: str) -> Non
 
 
 def test_sdr_e2e_declares_prebuilt_image_input() -> None:
-    parsed = yaml.safe_load(_SDR_ACTION.read_text(encoding="utf-8"))
+    parsed = load_workflow(_SDR_ACTION)
     assert "prebuilt-image" in parsed["inputs"], (
         "sdr-e2e no longer declares prebuilt-image; the full-DAG legs would "
         "each rebuild the image prepare-tenant already built and installed."
@@ -113,7 +99,7 @@ def test_sdr_e2e_declares_prebuilt_image_input() -> None:
 
 
 def test_sdr_e2e_build_step_is_gated_on_prebuilt_image() -> None:
-    step = _step(_SDR_ACTION, "Build and push PR image")
+    step = step_named(load_workflow(_SDR_ACTION), "Build and push PR image")
     assert step.get("if") == "inputs.prebuilt-image == ''", (
         "the build step must be skipped when prebuilt-image is supplied, "
         f"got if={step.get('if')!r}"
@@ -123,13 +109,13 @@ def test_sdr_e2e_build_step_is_gated_on_prebuilt_image() -> None:
         "and the legs share one implementation"
     )
     referenced = step["uses"].split("@")[0].rsplit("/", 1)[-1]
-    assert (_ACTIONS / referenced / "action.yaml").is_file(), (
+    assert (ACTIONS / referenced / "action.yaml").is_file(), (
         f"sdr-e2e references the action {referenced!r}, which does not exist"
     )
 
 
 def test_sdr_e2e_image_output_reads_the_resolver_not_the_build_step() -> None:
-    parsed = yaml.safe_load(_SDR_ACTION.read_text(encoding="utf-8"))
+    parsed = load_workflow(_SDR_ACTION)
     value = parsed["outputs"]["image"]["value"]
     assert "steps.image.outputs.ref" in value, (
         "sdr-e2e's `image` output must read the resolver step. Reading "
@@ -142,7 +128,7 @@ def test_no_step_reads_the_build_output_directly() -> None:
     """Only the resolver may read the (possibly skipped) build step's output."""
     offenders = [
         step.get("name")
-        for step in _steps(_SDR_ACTION)
+        for step in steps(load_workflow(_SDR_ACTION))
         if step.get("name") != "Resolve effective image reference"
         and "steps.build.outputs.image" in yaml.safe_dump(step)
     ]
@@ -156,7 +142,7 @@ def test_no_step_reads_the_build_output_directly() -> None:
 def test_resolver_prefers_prebuilt_over_built() -> None:
     """The precedence and the both-empty failure live in sdr_steps.py image-ref
     (test_sdr_e2e_steps.py); this pins the wiring that feeds it."""
-    step = _step(_SDR_ACTION, "Resolve effective image reference")
+    step = step_named(load_workflow(_SDR_ACTION), "Resolve effective image reference")
     assert step["env"]["PREBUILT"] == "${{ inputs.prebuilt-image }}"
     assert step["env"]["BUILT"] == "${{ steps.build.outputs.image }}"
     assert re.search(
@@ -174,7 +160,7 @@ def test_resolver_prefers_prebuilt_over_built() -> None:
 
 
 def test_platforms_defaults_to_empty_so_existing_callers_are_untouched() -> None:
-    parsed = yaml.safe_load(_BUILD_ACTION.read_text(encoding="utf-8"))
+    parsed = load_workflow(_BUILD_ACTION)
     spec = parsed["inputs"]["platforms"]
     assert spec.get("default") == "", (
         "platforms must default to empty. 17 repos call sdr-e2e directly and "
@@ -189,7 +175,7 @@ def test_the_platform_flag_is_only_appended_when_requested() -> None:
     So the default path has to stay byte-identical to the pre-input command line,
     which means a conditional append rather than an always-present flag.
     """
-    build = _step(_BUILD_ACTION, "Build and push PR image")
+    build = step_named(load_workflow(_BUILD_ACTION), "Build and push PR image")
     assert 'if [ -n "${PLATFORMS}" ]' in build["run"], (
         "the --platform flag must be appended conditionally, or every "
         "single-arch caller's build breaks on an empty value"
@@ -207,8 +193,9 @@ def test_the_multi_platform_assert_is_gated_on_more_than_one_platform() -> None:
     leg of a per-architecture matrix for being exactly what it should be. Those
     legs are covered by the merge job's assert on the combined manifest instead.
     """
-    step = _step(
-        _BUILD_ACTION, "Assert the pushed image serves every requested platform"
+    step = step_named(
+        load_workflow(_BUILD_ACTION),
+        "Assert the pushed image serves every requested platform",
     )
     assert step.get("if") == "contains(inputs.platforms, ',')", (
         "the assert must fire only for a genuinely multi-platform build, "
@@ -221,16 +208,8 @@ def test_the_multi_platform_assert_is_gated_on_more_than_one_platform() -> None:
     assert "assert_image_platforms.py" in step["run"]
 
     # Order matters: asserting before the push would inspect a stale tag.
-    names = [s.get("name") for s in _steps(_BUILD_ACTION)]
+    names = [s.get("name") for s in steps(load_workflow(_BUILD_ACTION))]
     assert names.index("Build and push PR image") < names.index(step["name"])
-
-
-def _reusable() -> dict:
-    return yaml.safe_load(
-        (_REPO_ROOT / ".github/workflows/tests-reusable.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
 
 
 def test_each_architecture_builds_on_a_runner_native_to_it() -> None:
@@ -241,13 +220,13 @@ def test_each_architecture_builds_on_a_runner_native_to_it() -> None:
     build just takes several times longer, forever, on a path that runs on every
     install-path e2e. So the pairing is pinned rather than trusted.
     """
-    job = _reusable()["jobs"]["build-e2e-image"]
-    assert job["runs-on"] == "${{ matrix.runner }}", (
+    build_job = tier_job("build-e2e-image")
+    assert build_job["runs-on"] == "${{ matrix.runner }}", (
         "the runner must come from the matrix, or both architectures land on the "
         "same one and one of them is emulated"
     )
 
-    legs = {leg["arch"]: leg for leg in job["strategy"]["matrix"]["include"]}
+    legs = {leg["arch"]: leg for leg in build_job["strategy"]["matrix"]["include"]}
     assert set(legs) == {"amd64", "arm64"}, (
         f"the install path builds {sorted(legs)}. It needs BOTH: arm64 for the "
         "tenant's node, amd64 for the per-leg worker on the runner. Retargeting "
@@ -268,8 +247,10 @@ def test_each_architecture_builds_on_a_runner_native_to_it() -> None:
 
 
 def test_the_per_arch_legs_do_not_collide_in_the_tag_or_the_cache() -> None:
-    job = _reusable()["jobs"]["build-e2e-image"]
-    step = next(s for s in job["steps"] if "build-app-image" in str(s.get("uses", "")))
+    build_job = tier_job("build-e2e-image")
+    step = next(
+        s for s in build_job["steps"] if "build-app-image" in str(s.get("uses", ""))
+    )
     assert step["with"]["tag-suffix"] == "-${{ matrix.arch }}", (
         "each leg needs its own tag (the merge step combines two references) and "
         "its own buildx cache scope. A shared scope is the silent half: two "
@@ -286,8 +267,8 @@ def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
     the same, and nothing downstream notices: GM accepts the version, LM accepts
     the install.
     """
-    job = _reusable()["jobs"]["merge-e2e-image"]
-    scripts = " ".join(str(s.get("run", "")) for s in job["steps"])
+    merge_job = tier_job("merge-e2e-image")
+    scripts = " ".join(str(s.get("run", "")) for s in merge_job["steps"])
     assert "imagetools create" in scripts
     assert "assert_image_platforms.py" in scripts, (
         "the merged manifest must be asserted; it is the reference "
@@ -297,7 +278,7 @@ def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
 
     # Reads image-base, never a per-arch reference: base is identical from every
     # matrix leg, which is what makes last-writer-wins outputs safe here.
-    assert "outputs.image-base" in yaml.safe_dump(job)
+    assert "outputs.image-base" in yaml.safe_dump(merge_job)
 
 
 # ── 5. Reading back a just-pushed tag is a race ──────────────────────────────
@@ -309,7 +290,7 @@ def test_the_merge_job_asserts_the_reference_the_tenant_pulls() -> None:
 
 
 def test_a_single_platform_build_is_loaded_locally() -> None:
-    build = _step(_BUILD_ACTION, "Build and push PR image")
+    build = step_named(load_workflow(_BUILD_ACTION), "Build and push PR image")
     # The flag itself, not the substring: the comment above it explains --load at
     # length, so `"--load" in run` stays true even after the flag is deleted.
     assert "BUILD_ARGS+=(--load)" in build["run"], (
@@ -326,7 +307,9 @@ def test_a_single_platform_build_is_loaded_locally() -> None:
 
 def test_the_interpreter_assert_does_not_pull() -> None:
     """The whole point of --load is that this step touches no registry."""
-    run = _step(_BUILD_ACTION, "Assert worker image Python matches expected")["run"]
+    run = step_named(
+        load_workflow(_BUILD_ACTION), "Assert worker image Python matches expected"
+    )["run"]
     assert "docker pull" not in run, (
         "a docker pull here defeats --load: the image is already local, and "
         "pulling reintroduces both the latency and the read-after-write race"
@@ -342,8 +325,10 @@ def test_both_architectures_are_asserted_not_just_one() -> None:
     checks. Each leg runs on a runner native to what it built, so each asserts its
     own variant — and the legs are parallel, so the second check is free.
     """
-    job = _reusable()["jobs"]["build-e2e-image"]
-    step = next(s for s in job["steps"] if "build-app-image" in str(s.get("uses", "")))
+    build_job = tier_job("build-e2e-image")
+    step = next(
+        s for s in build_job["steps"] if "build-app-image" in str(s.get("uses", ""))
+    )
     assert "expected-python-version" not in step.get("with", {}), (
         "the install path pins expected-python-version per leg. Leave it at the "
         "action's default so BOTH architectures are asserted — passing '' on one "
@@ -358,9 +343,9 @@ def test_the_merge_job_retries_its_manifest_read() -> None:
     the registry, so there is no local copy to inspect and reading it back a step
     later is the same race that failed a build leg.
     """
-    job = _reusable()["jobs"]["merge-e2e-image"]
+    merge_job = tier_job("merge-e2e-image")
     inspect = next(
-        s for s in job["steps"] if "imagetools inspect" in str(s.get("run", ""))
+        s for s in merge_job["steps"] if "imagetools inspect" in str(s.get("run", ""))
     )
     run = inspect["run"]
     assert "with-retry.sh" in run, (
@@ -392,7 +377,7 @@ def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
     before anything mentions architecture. Derived from `runner.arch` in the
     expression layer so there is no inlined conditional shell (ci.md).
     """
-    action = (_ACTIONS / "regenerate-contract" / "action.yaml").read_text(
+    action = (ACTIONS / "regenerate-contract" / "action.yaml").read_text(
         encoding="utf-8"
     )
     assert "pkl-linux-amd64" not in action, (
@@ -459,14 +444,8 @@ def test_buildx_cache_scope_is_unchanged() -> None:
 # connector Dockerfile ran.
 
 
-def _pull_request_workflow() -> dict:
-    return yaml.safe_load(
-        (_REPO_ROOT / ".github/workflows/pull_request.yaml").read_text(encoding="utf-8")
-    )
-
-
 def _sdk_base_job() -> dict:
-    return _pull_request_workflow()["jobs"]["build-sdk-base-image"]
+    return job(load_workflow("pull_request.yaml"), "build-sdk-base-image")
 
 
 def _sdk_base_build_step() -> dict:
@@ -484,10 +463,7 @@ def _legs(job: dict) -> dict:
 def test_the_pr_base_image_serves_every_arch_the_connector_matrix_builds() -> None:
     """Both matrices are read from the YAML, so adding a third architecture to
     the app image cannot silently leave the base behind."""
-    consumed = {
-        leg["platform"]
-        for leg in _legs(_reusable()["jobs"]["build-e2e-image"]).values()
-    }
+    consumed = {leg["platform"] for leg in _legs(tier_job("build-e2e-image")).values()}
     published = {leg["platform"] for leg in _legs(_sdk_base_job()).values()}
 
     missing = consumed - published
@@ -504,9 +480,9 @@ def test_the_base_image_legs_are_native_like_the_app_image_legs() -> None:
     # Same property test_each_architecture_builds_on_a_runner_native_to_it pins
     # for the app image, and it fails just as silently here: an emulated leg
     # still succeeds, only slower, on a path that runs on every e2e-labelled PR.
-    job = _sdk_base_job()
-    assert job["runs-on"] == "${{ matrix.runner }}"
-    legs = _legs(job)
+    base_job = _sdk_base_job()
+    assert base_job["runs-on"] == "${{ matrix.runner }}"
+    legs = _legs(base_job)
     for arch, leg in legs.items():
         assert leg["platform"] == f"linux/{arch}"
     assert "arm" in legs["arm64"]["runner"]
@@ -538,8 +514,8 @@ def test_the_merge_job_asserts_the_reference_the_connector_builds_from() -> None
     of the same, and the failure surfaces a repo away as the connector's
     `no match for platform in manifest`.
     """
-    job = _pull_request_workflow()["jobs"]["merge-sdk-base-image"]
-    scripts = " ".join(str(s.get("run", "")) for s in job["steps"])
+    merge_job = job(load_workflow("pull_request.yaml"), "merge-sdk-base-image")
+    scripts = " ".join(str(s.get("run", "")) for s in merge_job["steps"])
     assert "imagetools create" in scripts
     assert "assert_image_platforms.py" in scripts
     assert "linux/amd64,linux/arm64" in scripts
@@ -555,10 +531,10 @@ def test_the_connector_dispatch_gates_on_both_base_image_jobs() -> None:
     'skipped' is the benign value in these clauses, so gating on the merge alone
     would dispatch connectors against a manifest tag that was never created.
     """
-    gate = _pull_request_workflow()["jobs"]["connector-tests"]["if"]
-    for job in ("build-sdk-base-image", "merge-sdk-base-image"):
-        assert f"needs.{job}.result == 'success'" in gate
-        assert f"needs.{job}.result == 'skipped'" in gate
+    gate = job(load_workflow("pull_request.yaml"), "connector-tests")["if"]
+    for needed in ("build-sdk-base-image", "merge-sdk-base-image"):
+        assert f"needs.{needed}.result == 'success'" in gate
+        assert f"needs.{needed}.result == 'skipped'" in gate
 
 
 def test_the_container_filter_covers_the_action_that_builds_the_image() -> None:
@@ -577,7 +553,7 @@ def test_the_container_filter_covers_the_action_that_builds_the_image() -> None:
     filters = yaml.safe_load(
         next(
             step
-            for step in _pull_request_workflow()["jobs"]["changes"]["steps"]
+            for step in steps(job(load_workflow("pull_request.yaml"), "changes"))
             if "paths-filter" in str(step.get("uses", ""))
         )["with"]["filters"]
     )
@@ -598,12 +574,8 @@ def test_the_scan_step_builds_the_runners_own_architecture() -> None:
     emulated amd64 image that is not the artefact being pushed — the scan stops
     describing the thing it gates.
     """
-    action = yaml.safe_load(
-        (_ACTIONS / "secure-build-push-apps" / "action.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    scan = next(s for s in action["runs"]["steps"] if s.get("id") == "build_for_scan")
+    action = load_workflow(ACTIONS / "secure-build-push-apps" / "action.yaml")
+    scan = next(s for s in steps(action) if s.get("id") == "build_for_scan")
     assert "runner.arch" in scan["with"]["platforms"], (
         "the scan platform must follow the runner, not be hardcoded"
     )
@@ -621,8 +593,8 @@ def test_prebuild_regeneration_checks_drift() -> None:
     handled inside regenerate_contract.warn_on_drift, which narrows rather than
     skips. Warn-only either way, so turning it on cannot fail a build.
     """
-    step = _step(
-        _BUILD_ACTION,
+    step = step_named(
+        load_workflow(_BUILD_ACTION),
         "Regenerate contract artifacts (manifest.json) before image build",
     )
     assert "regenerate-contract" in step["uses"]

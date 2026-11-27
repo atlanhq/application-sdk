@@ -467,7 +467,7 @@ deployment object store and returns a `FileReference` pointing at it. Use it whe
 ### Signature
 
 ```python
-await self.upload(input: UploadInput) -> UploadOutput
+async def upload(self, input: UploadInput) -> UploadOutput: ...
 ```
 
 ### UploadInput Fields
@@ -1001,6 +1001,7 @@ and will be removed in the next major SDK release.
 
 **Deprecated:**
 
+<!-- legacy-example: the deprecated call this section migrates off -->
 ```python
 await self.upload_to_atlan(UploadInput(output_path=input.output_path))
 ```

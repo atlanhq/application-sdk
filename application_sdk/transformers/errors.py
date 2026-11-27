@@ -14,6 +14,10 @@ from typing_extensions import deprecated
 
 from application_sdk.errors.leaves import UnimplementedError
 
+__all__ = [
+    "TransformerNotImplementedError",
+]
+
 
 @deprecated(
     "application_sdk.transformers.errors.TransformerNotImplementedError is "

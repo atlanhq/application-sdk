@@ -9,17 +9,9 @@ silently goes back to starting cold (FND-4309).
 
 from __future__ import annotations
 
-from pathlib import Path
+from _workflows import ACTIONS, job, load_workflow, step_named
 
-import yaml
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOWS = REPO_ROOT / ".github/workflows"
-SETUP_DEPS = REPO_ROOT / ".github/actions/setup-deps/action.yaml"
-
-
-def _job(workflow: str, job: str) -> dict:
-    return yaml.safe_load((WORKFLOWS / workflow).read_text())["jobs"][job]
+SETUP_DEPS = ACTIONS / "setup-deps" / "action.yaml"
 
 
 def _matrix(job: dict) -> dict[str, list[str]]:
@@ -27,21 +19,14 @@ def _matrix(job: dict) -> dict[str, list[str]]:
     return {axis: sorted(matrix[axis]) for axis in ("os", "python-version")}
 
 
-def _setup_deps_step(name: str) -> dict:
-    steps = yaml.safe_load(SETUP_DEPS.read_text())["runs"]["steps"]
-    matches = [s for s in steps if s.get("name") == name]
-    assert len(matches) == 1, matches
-    return matches[0]
-
-
 def test_warm_matrix_equals_unit_matrix():
-    unit = _job("sdk-tests-reusable.yaml", "unit")
-    warm = _job("warm-caches.yaml", "unit-venvs")
+    unit = job(load_workflow("sdk-tests-reusable.yaml"), "unit")
+    warm = job(load_workflow("warm-caches.yaml"), "unit-venvs")
     assert _matrix(warm) == _matrix(unit)
 
 
 def test_warm_job_runs_each_leg_on_its_own_runner_and_python():
-    warm = _job("warm-caches.yaml", "unit-venvs")
+    warm = job(load_workflow("warm-caches.yaml"), "unit-venvs")
     assert warm["runs-on"] == "${{ matrix.os }}"
     setup = [
         s for s in warm["steps"] if s.get("uses") == "./.github/actions/setup-deps"
@@ -52,11 +37,15 @@ def test_warm_job_runs_each_leg_on_its_own_runner_and_python():
 
 
 def test_saved_venv_carries_bytecode():
-    install = _setup_deps_step("Install dependencies")
+    install = step_named(load_workflow(SETUP_DEPS), "Install dependencies")
     assert install["env"]["UV_COMPILE_BYTECODE"] == "1"
 
 
-def test_venv_key_still_follows_the_lock_and_conformance_source():
-    key = _setup_deps_step("Cache virtual environment")["with"]["key"]
-    assert "hashFiles('uv.lock', 'packages/conformance/conformance/**')" in key
+def test_venv_key_follows_the_lock():
+    # The conformance package is an editable workspace member (FND-4671), so
+    # .venv never holds a built copy of its source to go stale.
+    key = step_named(load_workflow(SETUP_DEPS), "Cache virtual environment")["with"][
+        "key"
+    ]
+    assert "hashFiles('uv.lock') }}" in key
     assert "-pyc-" in key

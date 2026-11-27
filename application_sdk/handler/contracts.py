@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Collection
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import (
     AliasChoices,
@@ -31,13 +31,52 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.credentials.extra import parse_credentials_extra
-from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.spec import AgentCredentialSpec as _AgentCredentialSpec
 from application_sdk.errors.base import AppError, sanitize_cause_repr
 from application_sdk.errors.leaves import InternalError
 from application_sdk.errors.wire import FailureDetails
+
+__all__ = [
+    "ALL_CHECK_TIERS",
+    "AUTH_STATUS_HTTP_CODES",
+    "UNVERIFIABLE_CHECK_NAME",
+    "AgentCredentialSpec",
+    "ApiMetadataObject",
+    "ApiMetadataOutput",
+    "AuthInput",
+    "AuthOutput",
+    "AuthStatus",
+    "BaseConnectionConfig",
+    "BaseMetadataConfig",
+    "CheckTier",
+    "CloudEventEnvelope",
+    "EventFilterRule",
+    "EventTriggerConfig",
+    "FileUploadResponse",
+    "HandlerCredential",
+    "ManifestInput",
+    "MetadataInput",
+    "MetadataOutput",
+    "PreflightCheck",
+    "PreflightGateMode",
+    "PreflightInput",
+    "PreflightOutput",
+    "PreflightStatus",
+    "SqlMetadataObject",
+    "SqlMetadataOutput",
+    "SubscriptionConfig",
+    "WarmupInput",
+    "WarmupObservation",
+    "WarmupState",
+    "flatten_credentials_to_pairs",
+    "normalize_credentials",
+    "unverifiable_preflight_result",
+]
+
 
 # Named for application_sdk.handler.service, not this module: the only lines
 # logged here are normalize_credentials' "Converting v2 ..." lines, which moved
@@ -269,7 +308,10 @@ _CREDENTIAL_KEYS = frozenset(
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
 def normalize_credentials(
-    body: dict[str, Any], *, keys: Collection[str] | None = None
+    body: dict[str, Any],
+    *,
+    keys: Collection[str] | None = None,
+    extra_keys: Collection[str] = (),
 ) -> dict[str, Any]:
     """Normalize v2 credential formats to v3 list[{key, value}] format.
 
@@ -290,14 +332,16 @@ def normalize_credentials(
     body (including format 3's flat keys) is kept as sent.
 
     ``keys`` is the set of v2 flat top-level keys treated as credential
-    material; ``None`` means :data:`_CREDENTIAL_KEYS`. The worker passes
-    ``application_sdk.handler.service._CREDENTIAL_KEYS`` (read per call)
-    because connector apps extend that module attribute at import time
-    (e.g. adding ``kerberos``), and that rebinding must keep taking effect.
+    material; ``None`` means :data:`_CREDENTIAL_KEYS`. A body carrying any of
+    them is a format-3 credential. ``extra_keys`` are lifted with them once a
+    body is one, but never make it one: the handler routes pass the top-level
+    fields of the app's generated credential form (``kerberos``, ``jdbcUrl``),
+    which include names as generic as ``name`` that a workflow body can carry.
 
     Returns the body with credentials normalized to v3 array format.
     """
     credential_keys = _CREDENTIAL_KEYS if keys is None else frozenset(keys)
+    lifted_keys = credential_keys | frozenset(extra_keys)
     creds = body.get("credentials")
 
     # Already v3 array format — no conversion needed
@@ -314,7 +358,7 @@ def normalize_credentials(
 
     # Format 3: flat top-level keys (detect by presence of known credential keys)
     if creds is None and credential_keys & body.keys():
-        flat_creds = {k: body[k] for k in list(body.keys()) if k in credential_keys}
+        flat_creds = {k: body[k] for k in list(body.keys()) if k in lifted_keys}
         logger.info(
             "Converting v2 flat top-level credentials to v3 list, keys=%s",
             list(flat_creds.keys()),
@@ -383,7 +427,7 @@ class _HandlerRequestInput(BaseModel):
     :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
     for back-compat and for handlers that still read it."""
 
-    agent_json: AgentCredentialSpec | None = Field(
+    agent_json: _AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
     )
@@ -1128,3 +1172,22 @@ class FileUploadResponse(BaseModel):
     file_size: int = 0
     is_uploaded: bool = False
     uploaded_at: str = ""
+
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.credentials.spec import AgentCredentialSpec
+
+#: name -> (replacement, why). Importable from here only as a side effect
+#: of an import; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "AgentCredentialSpec": (
+        "application_sdk.credentials.spec.AgentCredentialSpec",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

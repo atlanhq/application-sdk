@@ -7,6 +7,11 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import InvalidInputError, InvalidInputValueError
 
+__all__ = [
+    "InvalidSqlFilterError",
+    "InvalidSqlFilterValueError",
+]
+
 
 @dataclass(kw_only=True)
 class InvalidSqlFilterError(InvalidInputError):

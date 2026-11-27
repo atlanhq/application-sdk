@@ -379,7 +379,7 @@ class _GateEligibleInput(Input, allow_unbounded_fields=True):
 
 
 @pytest.fixture(autouse=True)
-def _reset_app_base_state(clean_app_registry, clean_task_registry):
+def _reset_app_base_state():
     with _app_state_lock:
         _app_state.clear()
     _workflow_class_cache.clear()
@@ -697,6 +697,66 @@ class TestAppState:
             accessor.get("k")
         with pytest.raises(AppContextError, match="outside of task context"):
             accessor.set("k", 1)
+
+    def test_app_state_outside_activity_raises_app_context_error(self) -> None:
+        # Outside an activity temporalio raises a bare RuntimeError; the public
+        # API must surface AppContextError, never that RuntimeError.
+        app = self._app()
+        with mock.patch(
+            "application_sdk.app.base.activity.info",
+            side_effect=RuntimeError("Not in activity context"),
+        ):
+            with pytest.raises(AppContextError, match="outside of task context") as exc:
+                app.get_app_state("k")
+            assert isinstance(exc.value.__cause__, RuntimeError)
+            with pytest.raises(AppContextError, match="outside of task context"):
+                app.set_app_state("k", "v")
+
+    def test_app_state_run_id_probe_failure_raises_app_context_error(self) -> None:
+        # The workflow id is readable but the run id probe fails: still the
+        # documented AppContextError, not temporalio's RuntimeError.
+        app = self._app()
+        info = mock.MagicMock(workflow_id="wf-4")
+        type(info).workflow_run_id = mock.PropertyMock(
+            side_effect=RuntimeError("Not in activity context")
+        )
+        with mock.patch("application_sdk.app.base.activity.info", return_value=info):
+            with pytest.raises(AppContextError, match="outside of task context"):
+                app.get_app_state("k")
+            with pytest.raises(AppContextError, match="outside of task context"):
+                app.set_app_state("k", "v")
+
+    def test_app_state_with_execution_id_patched_raises_app_context_error(
+        self,
+    ) -> None:
+        # Patching _get_execution_id_from_task does not supply an activity
+        # context; app_state must still raise AppContextError, not RuntimeError.
+        app = self._app()
+        with (
+            mock.patch(
+                "application_sdk.app.base._get_execution_id_from_task",
+                return_value="wf-5",
+            ),
+            mock.patch(
+                "application_sdk.app.base.activity.info",
+                side_effect=RuntimeError("Not in activity context"),
+            ),
+        ):
+            with pytest.raises(AppContextError):
+                app.get_app_state("k")
+            with pytest.raises(AppContextError):
+                app.set_app_state("k", "v")
+
+    def test_app_state_empty_run_id_raises_app_context_error(self) -> None:
+        app = self._app()
+        with mock.patch(
+            "application_sdk.app.base.activity.info",
+            return_value=mock.MagicMock(workflow_id="wf-6", workflow_run_id=""),
+        ):
+            with pytest.raises(AppContextError, match="workflow_run_id is empty"):
+                app.get_app_state("k")
+            with pytest.raises(AppContextError, match="workflow_run_id is empty"):
+                app.set_app_state("k", "v")
 
     async def test_persistent_state_accessor_delegates_to_context(self) -> None:
         app = self._app()
@@ -1503,6 +1563,51 @@ class TestGenerateWorkflowClass:
         assert isinstance(exc.value.__cause__, ValueError)
         assert getattr(exc.value, "non_retryable", None) is True
 
+    async def test_run_reuses_binding_from_wf_init(self) -> None:
+        """When __init__ already bound the instance to the run, _run does not
+        wrap the tasks again: it sets the resolved correlation id on the same
+        context dict the task wrappers hold and on the instance's context."""
+        seen: dict[str, str] = {}
+
+        class CorrApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                seen["correlation_id"] = self.context.correlation_id
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(CorrApp, ep)
+
+        context_data = {"run_id": "r", "workflow_id": "w", "correlation_id": "r"}
+        wf_self = mock.MagicMock()
+        wf_self._app_instance = CorrApp()
+        wf_self._run_context_data = context_data
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=mock.MagicMock(correlation_id="corr"),
+            ),
+        ):
+            from application_sdk.app import base as _base
+
+            await wf_cls.run(wf_self, _BLDXInput())
+            wrap_mock = _base._wrap_instance_tasks
+            assert isinstance(wrap_mock, mock.MagicMock)
+            wrap_mock.assert_not_called()
+
+        assert context_data["correlation_id"] == "corr"
+        assert seen["correlation_id"] == "corr"
+
     async def test_run_lets_failure_error_propagate_unchanged(self) -> None:
         from temporalio.exceptions import FailureError
 
@@ -2296,6 +2401,105 @@ class TestWorkflowInteractionRelay:
         inst_b = wf_cls()
         assert inst_a._app_instance is not inst_b._app_instance
 
+    def test_wf_init_binds_app_instance_to_run_in_workflow(self) -> None:
+        """Inside a workflow, wf_cls() wraps @task methods and sets the run's
+        context before any handler runs. Temporal applies signal/update jobs
+        of the first activation (signal-with-start) after __init__ but before
+        the run coroutine; an unwrapped task would run inline in workflow code.
+        """
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        info_mock = mock.MagicMock(run_id="rid", workflow_id="wfid")
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.in_workflow", return_value=True
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.info", return_value=info_mock
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.patched", return_value=True
+            ) as patched,
+            mock.patch(
+                "application_sdk.app.base._safe_now",
+                return_value=datetime(2025, 1, 1, tzinfo=UTC),
+            ),
+        ):
+            wf_inst = wf_cls()
+
+        patched.assert_called_once_with("atlan-sdk/early-run-binding")
+        app_instance = wf_inst._app_instance
+        # The instance attribute shadows the class's plain coroutine.
+        assert "do_work" in vars(app_instance)
+        assert app_instance._context is not None
+        assert app_instance._context.run_id == "rid"
+        assert app_instance._run_stored_refs is not None
+        assert wf_inst._run_context_data == {
+            "run_id": "rid",
+            "workflow_id": "wfid",
+            "correlation_id": "rid",
+        }
+
+    def test_wf_init_replaying_pre_marker_history_leaves_binding_to_run(
+        self,
+    ) -> None:
+        """Replaying a history written before the early-binding marker existed
+        (``patched`` is False), wf_cls() binds nothing, so _run binds as it
+        did when that history was written and a first-activation handler
+        replays the same commands."""
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.in_workflow", return_value=True
+            ),
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=False),
+        ):
+            wf_inst = wf_cls()
+
+        assert "do_work" not in vars(wf_inst._app_instance)
+        assert wf_inst._app_instance._context is None
+        assert not hasattr(wf_inst, "_run_context_data")
+
+    def test_wf_init_outside_workflow_leaves_binding_to_run(self) -> None:
+        """Outside a workflow there is no run: wf_cls() only builds the instance."""
+
+        class _TaskApp(App):
+            @task
+            async def do_work(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="x")  # pragma: no cover
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")  # pragma: no cover
+
+        wf_cls = generate_workflow_class(
+            _TaskApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        wf_inst = wf_cls()
+        assert "do_work" not in vars(wf_inst._app_instance)
+        assert wf_inst._app_instance._context is None
+        assert not hasattr(wf_inst, "_run_context_data")
+
 
 # =============================================================================
 # App.upload() — store routing
@@ -2304,18 +2508,6 @@ class TestWorkflowInteractionRelay:
 
 class TestUploadStoreRouting:
     """App.upload() routes to upstream_storage when configured, else storage."""
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     async def test_upload_dual_writes_when_both_stores_configured(self) -> None:
         """When both stores are distinct and mirror is enabled (default), _upload is

@@ -82,8 +82,9 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+from application_sdk import _storage_classify
+from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
-from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -92,25 +93,36 @@ if TYPE_CHECKING:
 
     from application_sdk.storage.ops import BoundStore
 
+__all__ = [
+    "check_local_file_stable",
+    "check_transfer_digest",
+    "check_transfer_size",
+    "is_sidecar_key",
+    "read_expected_digest",
+    "sha256_file",
+    "sidecar_key",
+    "SIDECAR_SUFFIX",
+    "sidecar_writes_enabled",
+    "verification_enabled",
+    "write_digest_sidecar",
+]
+
+
 logger = get_logger(__name__)
 
-#: Suffix of the SHA-256 sidecar written alongside every uploaded object.
-SIDECAR_SUFFIX = ".sha256"
+# The sidecar key convention is defined once, in the obstore-free module the
+# API host shares (its file upload route writes the same sidecar), and
+# re-exported here, where every worker caller already imports it from.
+SIDECAR_SUFFIX = _storage_classify.SIDECAR_SUFFIX
 
 #: Suffix of the resumable-download checkpoint written by ``storage.chunked``.
 #: Listed here so the sidecar lookup can skip keys that are themselves
 #: SDK-internal bookkeeping rather than user artifacts.
-_TRANSFER_STATE_SUFFIX = ".transfer-state"
+_TRANSFER_STATE_SUFFIX = _storage_classify.TRANSFER_STATE_SUFFIX
 
 
-def sidecar_key(key: str) -> str:
-    """Object-store key of the SHA-256 sidecar written alongside *key*."""
-    return key + SIDECAR_SUFFIX
-
-
-def is_sidecar_key(key: str) -> bool:
-    """Return ``True`` when *key* is a SHA-256 sidecar rather than a data object."""
-    return key.endswith(SIDECAR_SUFFIX)
+sidecar_key = _storage_classify.sidecar_key
+is_sidecar_key = _storage_classify.is_sidecar_key
 
 
 def _is_sha256_hex(value: str) -> bool:
@@ -123,9 +135,10 @@ def _is_internal_key(key: str) -> bool:
 
     Looking up ``{key}.sha256.sha256`` would be a guaranteed-miss round trip on
     every sidecar write, and the transfer-state checkpoint is local-only
-    bookkeeping whose content is rewritten in place.
+    bookkeeping whose content is rewritten in place. The rule is the shared
+    one (:func:`application_sdk._storage_classify.is_internal_key`).
     """
-    return key.endswith((SIDECAR_SUFFIX, _TRANSFER_STATE_SUFFIX))
+    return _storage_classify.is_internal_key(key)
 
 
 def verification_enabled(verify: bool | None) -> bool:
@@ -138,18 +151,22 @@ def verification_enabled(verify: bool | None) -> bool:
     """
     if verify is not None:
         return verify
-    from application_sdk.constants import STORAGE_VERIFY_TRANSFERS  # noqa: PLC0415
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _settings,
+    )
 
-    return STORAGE_VERIFY_TRANSFERS
+    return _settings.verify_transfers()
 
 
 def sidecar_writes_enabled(write_sidecar: bool | None) -> bool:
     """Resolve a per-call ``write_sidecar`` flag against the kill-switch."""
     if write_sidecar is not None:
         return write_sidecar
-    from application_sdk.constants import STORAGE_WRITE_SIDECARS  # noqa: PLC0415
+    from application_sdk.storage import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _settings,
+    )
 
-    return STORAGE_WRITE_SIDECARS
+    return _settings.write_sidecars()
 
 
 def _sha256_file_sync(path: Path) -> str:
@@ -280,13 +297,27 @@ async def write_digest_sidecar(
 
     try:
         await _put(sidecar_key(key), digest.encode(), store, normalize=False)
-    # conformance: ignore[E002] best-effort sidecar; the object itself uploaded fine and the failure is logged with its cause
-    except Exception:
+    # conformance: ignore[E002] best-effort sidecar; the object itself uploaded fine and the failure is logged with its classified cause
+    except Exception as exc:  # noqa: BLE001 — best-effort sidecar; logged at WARNING with the classified cause
+        # ``_put`` raises a StorageError chained to the store's own exception;
+        # the shared table reads that one.
+        cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+        failure = _storage_classify.classify_storage_failure(cause)
+        # Only the classified evidence and the exception types: the store's
+        # message and traceback can quote a signed URL or the store's
+        # credential, and the API host, which runs this same write, logs only
+        # what it classified.
+        # conformance: ignore[L004] exc_info would log that message, and the credential with it.
         logger.warning(
-            "Integrity sidecar write failed for key '%s' — the object uploaded "
-            "successfully but downstream readers will not be able to verify it",
+            "Integrity sidecar write failed for key '%s' (%s from %s: %s, "
+            "http_status=%s, provider_code=%s): the object was stored, but "
+            "downstream readers cannot verify it",
             key,
-            exc_info=True,
+            type(exc).__name__,
+            type(cause).__name__,
+            failure.kind.value,
+            failure.http_status,
+            failure.provider_code,
         )
 
 

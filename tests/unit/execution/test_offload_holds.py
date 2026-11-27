@@ -29,7 +29,6 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -49,24 +48,12 @@ from application_sdk.execution.progress import (
     current_progress_tracker,
     holding_progress,
 )
+from tests.unit._doubles import FakeClock
 from tests.unit.conftest import RecordingProgressTracker
 
 THREAD_PREFIX = "run_in_thread."
 ISOLATED_PREFIX = "run_fault_isolated."
 UNNAMEABLE = "<callable>"
-
-
-@dataclass
-class _FakeClock:
-    """A monotonic clock the test advances explicitly."""
-
-    now: float = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 @pytest.fixture
@@ -215,7 +202,7 @@ class TestTheHoldIsUnbounded:
         ``ENFORCE``. The watchdog must not fire, so upgrading a task that makes
         one long blocking call cannot fail where it used to succeed.
         """
-        clock = _FakeClock()
+        clock = FakeClock()
         recording = RecordingProgressTracker(clock=clock)
         on_stall = MagicMock()
 
@@ -246,7 +233,7 @@ class TestTheHoldIsUnbounded:
         left. If this ever starts failing, someone has narrowed the residual, and
         ADR-0018 plus the warn-mode report need to be re-read before it lands.
         """
-        clock = _FakeClock()
+        clock = FakeClock()
         recording = RecordingProgressTracker(clock=clock)
         on_stall = MagicMock()
 
@@ -273,7 +260,7 @@ class TestTheHoldIsUnbounded:
         duration on the way out, blocking work would be invisible to the audit
         precisely *because* it was vouched for.
         """
-        clock = _FakeClock()
+        clock = FakeClock()
         recording = RecordingProgressTracker(clock=clock)
 
         with bind_progress_tracker(recording):
@@ -394,7 +381,7 @@ class TestADeclaredAllowanceGoverns:
         one budget later — not stay paused for the 24h backstop because the
         offload added a vouch nobody asked for.
         """
-        clock = _FakeClock()
+        clock = FakeClock()
         recording = RecordingProgressTracker(clock=clock)
         on_stall = MagicMock()
         wedged = threading.Event()
@@ -575,7 +562,7 @@ class TestADeclaredAllowanceGoverns:
         started after the lapse, while the block is still open, must stay
         suppressed.
         """
-        clock = _FakeClock()
+        clock = FakeClock()
         recording = RecordingProgressTracker(clock=clock)
 
         with bind_progress_tracker(recording):

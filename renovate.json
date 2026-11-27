@@ -16,10 +16,9 @@
     }
   },
   "github-actions": {
-    "description": "Also track SHA-pinned third-party actions in files outside the default github-actions fileMatch: the conformance bootstrap templates shipped in the package, and the .github/workflow-templates/ starter workflows (Renovate's default anchor for the latter is root-level workflow-templates/, so the nested copies are not matched by default). Scoped to those dirs so it never touches the .md doc examples or the actions_pinning test fixtures. Repo-local (not the fleet preset) because packages/conformance/ is SDK-specific.",
+    "description": "Also track SHA-pinned third-party actions in files outside the default github-actions fileMatch: the conformance bootstrap templates shipped in the package. Scoped to that dir so it never touches the .md doc examples or the actions_pinning test fixtures. Repo-local (not the fleet preset) because packages/conformance/ is SDK-specific.",
     "managerFilePatterns": [
-      "/^packages/conformance/conformance/bootstrap/templates/.+\\.ya?ml$/",
-      "/^\\.github/workflow-templates/.+\\.ya?ml$/"
+      "/^packages/conformance/conformance/bootstrap/templates/.+\\.ya?ml$/"
     ]
   },
   "pre-commit": {
@@ -159,7 +158,7 @@
       "platformAutomerge": false
     },
     {
-      "description": "pyatlan floor lane (FND-4439): on every pyatlan release, raise the `pyatlan>=X` floor the SDK PUBLISHES (root pyproject.toml and packages/api's `pyatlan` extra) instead of only moving this repo's lock, so the next SDK release carries the new pyatlan to every app. Under the preset's default rangeStrategy an in-range release produces no PR at all and reaches only this repo's uv.lock through lockFileMaintenance, which apps never see. groupName splits pyatlan out of the preset's 'non-critical python dependencies' group so both manifests move in one PR on its own branch (renovate/pyatlan; a major lands on renovate/major-pyatlan via separateMajorMinor). packages/conformance does not declare pyatlan, so Renovate cannot touch its lock: .github/workflows/renovate-conformance-lock-sync.yaml moves that lock to the root's pyatlan and regenerates relationship_directions.json on this branch (FND-5018 widened it to every Renovate branch whose bump the SDK declares). No matchUpdateTypes: the rule applies to every update type, and the next rule takes majors back out of auto-merge (under rangeStrategy bump Renovate keeps updateType minor/patch and only adds `bump` as a second matchable type, so either shape would match; this one does not depend on that). semanticCommitType is restated so the commit type does not hinge on rule order against config:recommended's fix-for-deps preset. No minimumReleaseAge: pyatlan is Atlan-published and exempt from the cooldown (FND-378), and upstream exempts `bump` regardless. Mend cannot run postUpgradeTasks, which is why the regeneration is a workflow and not a task here.",
+      "description": "pyatlan floor lane (FND-4439): on every pyatlan release, raise the `pyatlan>=X` floor the SDK PUBLISHES (root pyproject.toml and packages/api's `pyatlan` extra) instead of only moving this repo's lock, so the next SDK release carries the new pyatlan to every app. Under the preset's default rangeStrategy an in-range release produces no PR at all and reaches only this repo's uv.lock through lockFileMaintenance, which apps never see. groupName splits pyatlan out of the preset's 'non-critical python dependencies' group so both manifests move in one PR on its own branch (renovate/pyatlan; a major lands on renovate/major-pyatlan via separateMajorMinor). The conformance package's relationship_directions.json is built from the locked pyatlan, which Renovate cannot regenerate: .github/workflows/renovate-pyatlan-table-sync.yaml does it on this branch (and on any other Renovate branch that moves pyatlan in uv.lock). packages/conformance is a uv workspace member with no lock of its own (FND-4671), so the root uv.lock Renovate already relocks is the one the table follows. No matchUpdateTypes: the rule applies to every update type, and the next rule takes majors back out of auto-merge (under rangeStrategy bump Renovate keeps updateType minor/patch and only adds `bump` as a second matchable type, so either shape would match; this one does not depend on that). semanticCommitType is restated so the commit type does not hinge on rule order against config:recommended's fix-for-deps preset. No minimumReleaseAge: pyatlan is Atlan-published and exempt from the cooldown (FND-378), and upstream exempts `bump` regardless. Mend cannot run postUpgradeTasks, which is why the regeneration is a workflow and not a task here.",
       "matchDatasources": [
         "pypi"
       ],
@@ -174,7 +173,7 @@
       "semanticCommitType": "chore"
     },
     {
-      "description": "pyatlan majors are reviewed, never auto-merged: a major raises the SDK's `<N+1` cap, which is the control point for a pyatlan major reaching every connector (see the preset's FND-378 note), and the conformance lock cannot follow it until an SDK release does. Separate from the rule above so that rule can stay update-type-agnostic; the preset's major rule still gives it the lowest prPriority.",
+      "description": "pyatlan majors are reviewed, never auto-merged: a major raises the SDK's `<N+1` cap, which is the control point for a pyatlan major reaching every connector (see the preset's FND-378 note), and the relationship table must be regenerated for the new major's models. Separate from the rule above so that rule can stay update-type-agnostic; the preset's major rule still gives it the lowest prPriority.",
       "matchDatasources": [
         "pypi"
       ],
@@ -200,7 +199,7 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "One PR for every ruff pin (FND-4247): the ruff-pre-commit hook rev (pre-commit manager, depName astral-sh/ruff-pre-commit) and the `ruff==` dev pins in pyproject.toml and packages/conformance/pyproject.toml (pypi). They are separate datasources, so without a shared group Renovate would bump them in separate PRs, and local `uv run ruff` would lint and sort differently from CI until the others caught up. .github/scripts/tests/test_lint_guards.py fails any PR that moves one without the others. groupName also takes the pypi pins out of the preset's 'non-critical python dependencies' group. Never auto-merged, for the same reason as the hook rule above: ruff 0.17 widened its default rule set, and a minor can reformat files.",
+      "description": "One PR for every ruff pin (FND-4247): the ruff-pre-commit hook rev (pre-commit manager, depName astral-sh/ruff-pre-commit) and the `ruff==` dev pin in pyproject.toml (pypi; packages/conformance names ruff unpinned and takes the workspace lock's, FND-4671). They are separate datasources, so without a shared group Renovate would bump them in separate PRs, and local `uv run ruff` would lint and sort differently from CI until the other caught up. .github/scripts/tests/test_lint_guards.py fails any PR that moves one without the other. groupName also takes the pypi pin out of the preset's 'non-critical python dependencies' group. Never auto-merged, for the same reason as the hook rule above: ruff 0.17 widened its default rule set, and a minor can reformat files.",
       "matchPackageNames": [
         "ruff",
         "astral-sh/ruff-pre-commit"

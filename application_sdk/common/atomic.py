@@ -70,10 +70,20 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, NoReturn
 
-from application_sdk import constants
+from application_sdk import _env
+from application_sdk._install import worker_only_missing
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.path import convert_to_extended_path
-from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+
+# Read through ``_env``, not imported from ``application_sdk.constants``: this
+# module ships in the api distribution's ``obstore`` extra (the object store's
+# write path), which the API host installs without python-dotenv.
+TEMPORARY_PATH = _env.temporary_path()
+#: Same as ``application_sdk.constants.WORKFLOW_OUTPUT_PATH_TEMPLATE``.
+WORKFLOW_OUTPUT_PATH_TEMPLATE = _env.sdk_constant(
+    "WORKFLOW_OUTPUT_PATH_TEMPLATE",
+    lambda: "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}",
+)
 
 if TYPE_CHECKING:
     from application_sdk.errors import DiskFullError, LocalVolumeUnwritableError
@@ -255,6 +265,14 @@ def _is_disk_full(exc: OSError) -> bool:
     return exc.errno in _DISK_FULL_ERRNOS
 
 
+def _enable_atlan_upload() -> bool:
+    """``ENABLE_ATLAN_UPLOAD`` (``constants``' value when loaded; see
+    :func:`application_sdk._env.sdk_constant`)."""
+    return _env.sdk_constant(
+        "ENABLE_ATLAN_UPLOAD", lambda: _env.env_bool("ENABLE_ATLAN_UPLOAD")
+    )
+
+
 def _disk_full_class() -> type[DiskFullError]:
     """The disk-full class for this worker: who owns its local volume.
 
@@ -271,11 +289,18 @@ def _disk_full_class() -> type[DiskFullError]:
     the flag decides.
     """
     from application_sdk.errors import DiskFullError, SdrDiskFullError  # noqa: PLC0415
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: the infrastructure package loads the Dapr clients
-        get_infrastructure,
-    )
 
-    if not constants.ENABLE_ATLAN_UPLOAD:
+    if not _enable_atlan_upload():
+        return DiskFullError
+    try:
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: the infrastructure package loads the Dapr clients
+            get_infrastructure,
+        )
+    except ModuleNotFoundError as exc:
+        # The API host ships this module without the worker's infrastructure;
+        # it never runs as an SDR agent, so its volume is the platform's.
+        if not worker_only_missing(exc):
+            raise
         return DiskFullError
     infra = get_infrastructure()
     if infra is not None and infra.single_store:

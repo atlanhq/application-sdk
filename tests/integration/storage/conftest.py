@@ -68,6 +68,62 @@ def emulator_unavailable(reason: str) -> NoReturn:
     pytest.skip(reason)
 
 
+#: Where each storage emulator listens. CI's service containers set the env
+#: vars; the defaults match ``uv run poe start-deps``.
+MINIO_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+AZURITE_ENDPOINT = os.environ.get(
+    "AZURE_STORAGE_ENDPOINT", "http://localhost:10000"
+).rstrip("/")
+#: Azurite's well-known dev account — public, emulator-only.
+AZURITE_ACCOUNT = "devstoreaccount1"
+GCS_EMULATOR_ENDPOINT = os.environ.get(
+    "GCS_EMULATOR_ENDPOINT", "http://localhost:9095"
+).rstrip("/")
+
+
+def require_reachable(url: str, name: str) -> None:
+    """Fail (CI) or skip (local) unless *url* answers below 500.
+
+    Unreachable and 5xx are both "unavailable": a reachable but unhealthy
+    emulator should stop here with a clear message, not fail a round-trip with
+    an opaque one.
+    """
+    import httpx
+
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            resp = client.get(url)
+    except httpx.HTTPError as exc:  # pragma: no cover — env guard
+        emulator_unavailable(f"{name} not reachable at {url}: {exc}")
+    if resp.status_code >= 500:  # pragma: no cover — env guard
+        emulator_unavailable(f"{name} unhealthy at {url}: HTTP {resp.status_code}")
+
+
+# Opt a module in with ``pytestmark = pytest.mark.usefixtures("require_minio")``.
+
+
+@pytest.fixture(scope="module")
+def require_minio() -> None:
+    """Fail (CI) or skip (local) the module when MinIO isn't reachable or healthy."""
+    require_reachable(f"{MINIO_ENDPOINT}/minio/health/live", "MinIO")
+
+
+@pytest.fixture(scope="module")
+def require_azurite() -> None:
+    """Fail (CI) or skip (local) the module when Azurite isn't reachable or healthy."""
+    # Azurite answers the bare account URL with 400, not 5xx: reachable.
+    require_reachable(f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}", "Azurite")
+
+
+@pytest.fixture(scope="module")
+def require_testbench() -> None:
+    """Fail (CI) or skip (local) the module when the GCS emulator (proxy) isn't
+    reachable or healthy."""
+    require_reachable(
+        f"{GCS_EMULATOR_ENDPOINT}/storage/v1/b?project=test", "GCS emulator"
+    )
+
+
 # CI sets this on the real-cloud jobs: they log in to all three clouds and export
 # the bucket variables, so a missing one is a broken job (a renamed repo variable,
 # a dropped env line), not a developer without cloud access. Skipping there turned

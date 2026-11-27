@@ -21,16 +21,10 @@ reproduces, per series, what each leg did:
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _bump_skip import without_bump_skip  # noqa: E402
-from _conformance_series import filters, load_workflow, series, suite_job  # noqa: E402
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
+from _bump_skip import without_bump_skip
+from _conformance_series import filters, load_workflow, series, suite_job
+from _gha_expr import evaluate, evaluate_operand
 
 #: Every series the old matrix ran, letter -> slug.  Restated on purpose: the
 #: collapse must not drop or rename one, and a rename would orphan the

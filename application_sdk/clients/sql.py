@@ -24,6 +24,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
 
+from application_sdk import _deprecation
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import (
     CancelHandle,
@@ -37,19 +38,27 @@ from application_sdk.clients._sql_failure_classifier import (
 )
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_errors import (
-    EngineNotInitializedError,
+    EngineNotInitializedError as _EngineNotInitializedError,
+)
+from application_sdk.clients.sql_errors import (
     InvalidSqlEngineTypeError,
     MissingSqlParamError,
     SqlAwsCredentialsError,
-    SqlBindParameterError,
     SqlClientAuthFailedError,
     SqlClientConfigError,
     SqlClientConnectTimeoutError,
     SqlClientConnectUnclassifiedError,
     SqlClientSourceUnavailableError,
     SqlCredentialsParseError,
-    SqlPandasResultError,
-    UnsupportedSqlCursorError,
+)
+from application_sdk.clients.sql_errors import (
+    SqlBindParameterError as _SqlBindParameterError,
+)
+from application_sdk.clients.sql_errors import (
+    SqlPandasResultError as _SqlPandasResultError,
+)
+from application_sdk.clients.sql_errors import (
+    UnsupportedSqlCursorError as _UnsupportedSqlCursorError,
 )
 from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
@@ -65,6 +74,17 @@ from application_sdk.constants import (
 )
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
+
+__all__ = [
+    "AsyncBaseSQLClient",
+    "BaseSQLClient",
+    "EngineNotInitializedError",
+    "SqlBindParameterError",
+    "SqlBindValue",
+    "SqlPandasResultError",
+    "UnsupportedSqlCursorError",
+]
+
 
 logger = get_logger(__name__)
 
@@ -148,7 +168,7 @@ def _bound_params(
     }
     for name in params:
         if name not in referenced:
-            raise SqlBindParameterError(
+            raise _SqlBindParameterError(
                 message=f"Bind parameter {name!r} is not referenced as a :name placeholder in the query"
             )
     return dict(params)
@@ -1232,7 +1252,7 @@ class BaseSQLClient(ClientInterface):
             SqlBindParameterError: If ``params`` does not match the query.
         """
         if not self.engine:
-            raise EngineNotInitializedError()
+            raise _EngineNotInitializedError()
         bound = _bound_params(query, params)
 
         logger.debug(
@@ -1287,7 +1307,7 @@ class BaseSQLClient(ClientInterface):
             execute = handle.bind(_holding_connection(connection.execute))
             cursor = await run_in_thread(execute, statement, bound)
             if not cursor or not cursor.cursor:
-                raise UnsupportedSqlCursorError()
+                raise _UnsupportedSqlCursorError()
             column_names: list[str] = [
                 description.name.lower() for description in cursor.cursor.description
             ]
@@ -1365,7 +1385,7 @@ class BaseSQLClient(ClientInterface):
                 or iterator of DataFrames if chunked.
         """
         if not self.engine:
-            raise EngineNotInitializedError()
+            raise _EngineNotInitializedError()
 
         if chunksize is None:
             with self.engine.connect() as conn:
@@ -1494,7 +1514,7 @@ class BaseSQLClient(ClientInterface):
         except Exception as e:
             # retryable=True: unclassified driver exception — do not override the
             # activity's declared retry policy. See SqlPandasResultError docstring.
-            raise SqlPandasResultError(
+            raise _SqlPandasResultError(
                 message="Error reading batched data from SQL", cause=e, retryable=True
             ) from e
 
@@ -1514,7 +1534,7 @@ class BaseSQLClient(ClientInterface):
 
             if isinstance(result, pd.DataFrame):
                 return result
-            raise SqlPandasResultError(
+            raise _SqlPandasResultError(
                 invariant="_execute_async_read_operation must return a pd.DataFrame"
             )
         except AppError:
@@ -1523,7 +1543,7 @@ class BaseSQLClient(ClientInterface):
         except Exception as e:
             # retryable=True: unclassified driver exception — do not override the
             # activity's declared retry policy. See SqlPandasResultError docstring.
-            raise SqlPandasResultError(cause=e, retryable=True) from e
+            raise _SqlPandasResultError(cause=e, retryable=True) from e
 
 
 class AsyncBaseSQLClient(BaseSQLClient):
@@ -1670,7 +1690,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             EngineNotInitializedError: If engine is not initialized.
         """
         if not self.engine:
-            raise EngineNotInitializedError()
+            raise _EngineNotInitializedError()
         bound = _bound_params(query, params)
 
         logger.debug(
@@ -1721,9 +1741,45 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 # condition (concurrent DDL, lock contention, dropped connection)
                 # is indistinguishable from a permanent one here.
                 # See SqlPandasResultError docstring.
-                raise SqlPandasResultError(
+                raise _SqlPandasResultError(
                     message="Error executing SQL query", cause=e, retryable=True
                 ) from e
             # Async connection automatically closed by context manager
 
         logger.info("Query execution completed")
+
+
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.clients.sql_errors import (
+        EngineNotInitializedError,
+        SqlBindParameterError,
+        SqlPandasResultError,
+        UnsupportedSqlCursorError,
+    )
+
+#: name -> (replacement, why). Importable from here only as a side effect
+#: of an import; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "EngineNotInitializedError": (
+        "application_sdk.clients.sql_errors.EngineNotInitializedError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "SqlBindParameterError": (
+        "application_sdk.clients.sql_errors.SqlBindParameterError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "SqlPandasResultError": (
+        "application_sdk.clients.sql_errors.SqlPandasResultError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "UnsupportedSqlCursorError": (
+        "application_sdk.clients.sql_errors.UnsupportedSqlCursorError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

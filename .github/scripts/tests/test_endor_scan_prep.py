@@ -1,7 +1,7 @@
 """Tests for endor_scan_prep.py, the Endor scan's credential gate and tarball prep.
 
 Both decisions used to live inline in the Endor jobs' ``run:`` blocks
-(build-and-scan.yaml and daily-security-scan.yml), where docs/standards/ci.md
+(build-and-scan.yaml and hourly-security-scan.yml), where docs/standards/ci.md
 forbids branching. The behavioural tests pin every branch; the cross-file guards
 at the bottom pin the workflow wiring the review asked for: Endor reading the
 tarball its own job built (no image artifact), caller input travelling through
@@ -12,20 +12,19 @@ provenance-pinned script checkout.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
+from _workflows import job, load_workflow
 
 _SCRIPTS_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import endor_scan_prep as prep  # noqa: E402
 
 GITHUB_DIR = _SCRIPTS_DIR.parent
 BUILD_AND_SCAN = GITHUB_DIR / "workflows" / "build-and-scan.yaml"
-HOURLY_SCAN = GITHUB_DIR / "workflows" / "daily-security-scan.yml"
+HOURLY_SCAN = GITHUB_DIR / "workflows" / "hourly-security-scan.yml"
 ACTIONLINT = GITHUB_DIR / "actionlint.yaml"
 SCRIPT_NAME = "endor_scan_prep.py"
 
@@ -208,13 +207,6 @@ def test_main_requires_a_subcommand():
 # ── Cross-file guards: the workflow wiring ──────────────────────────────────────
 
 
-def _job(path: Path, job_id: str) -> dict:
-    doc = yaml.safe_load(path.read_text())
-    job = (doc.get("jobs") or {}).get(job_id)
-    assert isinstance(job, dict), f"{path.name} has no job {job_id!r}"
-    return job
-
-
 def _steps(job: dict) -> list[dict]:
     return [s for s in (job.get("steps") or []) if isinstance(s, dict)]
 
@@ -229,7 +221,7 @@ def _step(job: dict, step_id: str) -> dict:
 def _endor_steps(path: Path, job_id: str) -> list[dict]:
     """The steps that make up the Endor scan: the whole hourly job, or the
     `Endor: ...` block of build-and-scan's build job."""
-    steps = _steps(_job(path, job_id))
+    steps = _steps(job(load_workflow(path), job_id))
     if path != BUILD_AND_SCAN:
         return steps
     endor = [s for s in steps if str(s.get("name", "")).startswith(ENDOR_STEP_PREFIX)]
@@ -239,11 +231,11 @@ def _endor_steps(path: Path, job_id: str) -> list[dict]:
 
 @pytest.mark.parametrize(("path", "job_id", "checkout_path"), ENDOR_JOBS)
 def test_endor_jobs_delegate_both_decisions_to_the_script(path, job_id, checkout_path):
-    job = _job(path, job_id)
+    scan_job = job(load_workflow(path), job_id)
     prefix = "" if checkout_path == "." else f"{checkout_path}/"
     script = f"python3 {prefix}.github/scripts/{SCRIPT_NAME}"
-    assert _step(job, "creds")["run"].strip() == f"{script} credentials"
-    assert _step(job, "image")["run"].strip() == f"{script} materialise"
+    assert _step(scan_job, "creds")["run"].strip() == f"{script} credentials"
+    assert _step(scan_job, "image")["run"].strip() == f"{script} materialise"
 
 
 @pytest.mark.parametrize(("path", "job_id", "_"), ENDOR_JOBS)
@@ -268,7 +260,7 @@ def test_no_expression_is_interpolated_into_endor_run_blocks(path, job_id, _):
 
 
 def test_caller_ref_travels_through_env():
-    env = _step(_job(BUILD_AND_SCAN, "build"), "image").get("env") or {}
+    env = _step(job(load_workflow(BUILD_AND_SCAN), "build"), "image").get("env") or {}
     assert env.get("REF") == "${{ inputs.ref || github.sha }}"
     assert env.get("PREBUILT") == "${{ inputs.image }}"
     assert env.get("TARBALL") == "/tmp/image.tar"
@@ -278,7 +270,7 @@ def test_no_image_artifact_travels_between_jobs():
     """FND-3319: the image is built and scanned in one job, so no step of
     build-and-scan.yaml uploads or downloads a `docker-image*` artifact -- not
     the first attempt, not the `-retry` copy, not a download of either."""
-    doc = yaml.safe_load(BUILD_AND_SCAN.read_text())
+    doc = load_workflow(BUILD_AND_SCAN)
     offenders = [
         f"{job_id}: {s.get('name') or s.get('id')}"
         for job_id, job in doc["jobs"].items()
@@ -294,11 +286,11 @@ def test_no_image_artifact_travels_between_jobs():
 def test_endor_scans_the_tarball_its_own_job_built():
     """Both scanners read byte-identical image content: Endor is handed the
     same /tmp/image.tar the build step wrote and Trivy loaded, in that order."""
-    steps = _steps(_job(BUILD_AND_SCAN, "build"))
-    build = _step(_job(BUILD_AND_SCAN, "build"), "build-image")
+    steps = _steps(job(load_workflow(BUILD_AND_SCAN), "build"))
+    build = _step(job(load_workflow(BUILD_AND_SCAN), "build"), "build-image")
     assert build["with"]["outputs"] == "type=docker,dest=/tmp/image.tar"
     scan = next(s for s in steps if "endorlabs/github-action" in str(s.get("uses")))
-    image = _step(_job(BUILD_AND_SCAN, "build"), "image")
+    image = _step(job(load_workflow(BUILD_AND_SCAN), "build"), "image")
     assert scan["with"]["image_tar"] == "/tmp/image.tar"
     # The scan is gated on `steps.image.outcome == 'success'`. Reordered ahead
     # of `image`, that condition is false (the step has not run) and Endor is
@@ -312,12 +304,12 @@ def test_endor_cannot_fail_the_required_build_check():
     report-only, so every one of its steps is continue-on-error, they all run
     after the Trivy results are uploaded, and the scan has its own timeout so a
     hang cannot eat the build's and Trivy's budget."""
-    job = _job(BUILD_AND_SCAN, "build")
-    steps = _steps(job)
+    build_job = job(load_workflow(BUILD_AND_SCAN), "build")
+    steps = _steps(build_job)
     endor = _endor_steps(BUILD_AND_SCAN, "build")
     assert len(endor) == 4
     assert all(s.get("continue-on-error") is True for s in endor), endor
-    assert steps.index(endor[0]) > steps.index(_step(job, "upload-trivy"))
+    assert steps.index(endor[0]) > steps.index(_step(build_job, "upload-trivy"))
     assert all(steps.index(s) > steps.index(endor[0]) for s in endor[1:])
     scan = next(s for s in endor if "endorlabs/github-action" in str(s.get("uses")))
     assert isinstance(scan.get("timeout-minutes"), int)
@@ -340,11 +332,11 @@ def test_job_cap_reserves_endors_full_budget():
     own budget and headroom for the short steps. A tighter cap would let a
     slow but successful build and Trivy run turn report-only Endor into a
     gate."""
-    job = _job(BUILD_AND_SCAN, "build")
-    steps = _steps(job)
+    build_job = job(load_workflow(BUILD_AND_SCAN), "build")
+    steps = _steps(build_job)
     scan = next(s for s in steps if "endorlabs/github-action" in str(s.get("uses")))
     for step_id in LONG_STEPS_BEFORE_ENDOR:
-        step = _step(job, step_id)
+        step = _step(build_job, step_id)
         assert isinstance(step.get("timeout-minutes"), int), step_id
         assert steps.index(step) < steps.index(scan), step_id
     before = sum(
@@ -354,7 +346,7 @@ def test_job_cap_reserves_endors_full_budget():
     )
     assert (
         before + scan["timeout-minutes"] + SHORT_STEP_HEADROOM_MINUTES
-        <= job["timeout-minutes"]
+        <= build_job["timeout-minutes"]
     )
 
 
@@ -371,7 +363,7 @@ def test_at_most_two_jobs_and_both_required_contexts_survive():
     The fourth, `scope` (FND-3328), is a two-step ubuntu-slim decision that
     runs only on a PR or queue entry and lets the other two skip everywhere
     but the bump-version PR; pinned in test_release_candidate_gates.py."""
-    jobs = yaml.safe_load(BUILD_AND_SCAN.read_text())["jobs"]
+    jobs = load_workflow(BUILD_AND_SCAN)["jobs"]
     assert {job_id: job["name"] for job_id, job in jobs.items()} == {
         "scope": "Scan scope",
         "queue-diff": "Queue tree diff",
@@ -387,8 +379,8 @@ def test_endor_scan_script_checkout_is_provenance_pinned():
     """The reusable runs in the caller's repo, so the script comes from the SDK
     at the workflow's own SHA, never a caller-controlled ref, and into its own
     path so it cannot leave the workspace sparse."""
-    job = _job(BUILD_AND_SCAN, "build")
-    steps = _steps(job)
+    build_job = job(load_workflow(BUILD_AND_SCAN), "build")
+    steps = _steps(build_job)
     checkouts = [
         s
         for s in steps
@@ -401,20 +393,20 @@ def test_endor_scan_script_checkout_is_provenance_pinned():
     assert SCRIPT_NAME in str(with_block["sparse-checkout"])
     assert with_block["path"] == "_sdk"
     assert with_block["persist-credentials"] is False
-    assert steps.index(checkouts[0]) < steps.index(_step(job, "creds"))
+    assert steps.index(checkouts[0]) < steps.index(_step(build_job, "creds"))
     # Fetched only after the image is built, so the SDK checkout can never end
     # up inside the app's Docker build context.
-    assert steps.index(checkouts[0]) > steps.index(_step(job, "build-image"))
+    assert steps.index(checkouts[0]) > steps.index(_step(build_job, "build-image"))
 
 
 def test_hourly_scan_checkout_is_sparse_and_credential_free():
-    steps = _steps(_job(HOURLY_SCAN, "endor-base-scan"))
+    steps = _steps(job(load_workflow(HOURLY_SCAN), "endor-base-scan"))
     checkouts = [s for s in steps if "actions/checkout@" in str(s.get("uses", ""))]
     assert len(checkouts) == 1
     with_block = checkouts[0]["with"]
     assert SCRIPT_NAME in str(with_block["sparse-checkout"])
     assert with_block["persist-credentials"] is False
-    env = _step(_job(HOURLY_SCAN, "endor-base-scan"), "image")["env"]
+    env = _step(job(load_workflow(HOURLY_SCAN), "endor-base-scan"), "image")["env"]
     assert env["PREBUILT"].startswith("registry.atlan.com/public/app-runtime-base:")
     assert env["TARBALL"] == "/tmp/base-image.tar"
 

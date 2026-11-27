@@ -22,9 +22,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
+
+from _gh import GhError, gh, gh_paginated
 
 MAX_SUMMARY_CHARS = 60_000
 
@@ -33,35 +34,16 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the `gh` CLI."""
-    return subprocess.run(cmd, **kwargs)
-
-
 def list_check_runs(repo: str, sha: str) -> list[dict]:
-    # --paginate follows the Link: rel="next" header across pages; --jq
-    # flattens each page's nested `check_runs` array and `tojson`-encodes
-    # each entry so every check run prints on its own line regardless of
-    # how many pages it took to fetch them all (a commit with >100 check
-    # runs would otherwise silently lose the ones on page 2+).
-    result = run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
-            "--jq",
-            ".check_runs[] | tojson",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise SystemExit(
-            f"::error::failed to list check runs for {repo}@{sha}: {result.stderr}"
+    """Every check run on ``sha``, across all pages (a commit can carry >100)."""
+    try:
+        return gh_paginated(
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100", key="check_runs"
         )
-    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    except GhError as exc:
+        raise SystemExit(
+            f"::error::failed to list check runs for {repo}@{sha}: {exc.stderr}"
+        ) from exc
 
 
 def find_check_run(check_runs: list[dict], name: str) -> dict | None:
@@ -101,8 +83,7 @@ def complete_check_run(
         payload["details_url"] = details_url
 
     if existing:
-        cmd = [
-            "gh",
+        args = [
             "api",
             "--method",
             "PATCH",
@@ -111,25 +92,21 @@ def complete_check_run(
             "-",
         ]
         target = f"check run id={existing['id']}"
+        # PATCHing the same payload twice is harmless, so a 5xx can be retried.
+        idempotent = True
     else:
-        cmd = [
-            "gh",
-            "api",
-            "--method",
-            "POST",
-            f"repos/{repo}/check-runs",
-            "--input",
-            "-",
-        ]
+        args = ["api", "--method", "POST", f"repos/{repo}/check-runs", "--input", "-"]
         target = "new check run (no matching in-progress run found)"
+        # A POST that 5xx'd may still have created the run; repeating it would
+        # leave a duplicate behind.
+        idempotent = False
 
-    result = run(
-        cmd, input=json.dumps(payload), capture_output=True, text=True, check=False
-    )
-    if result.returncode != 0:
+    try:
+        gh(args, input=json.dumps(payload), idempotent=idempotent)
+    except GhError as exc:
         raise SystemExit(
-            f"::error::failed to complete {target} on {repo}@{sha}: {result.stderr}"
-        )
+            f"::error::failed to complete {target} on {repo}@{sha}: {exc.stderr}"
+        ) from exc
     print(f"Completed '{name}' on {repo}@{sha} ({target}) — conclusion={conclusion}")
 
 

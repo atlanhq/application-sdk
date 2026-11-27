@@ -13,16 +13,12 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import install_apt_packages
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import install_apt_packages  # noqa: E402
-from install_apt_packages import (  # noqa: E402
+from install_apt_packages import (
     InvalidPackages,
     commands,
     main,
@@ -216,7 +212,10 @@ FIXED_INSTALLS = {
 # file) each one reads. These are the nine sites FND-4908 found, less the
 # vendored detect action's, which conformance-reusable.yaml now covers.
 SCRIPT_CALLS = {
-    ".github/workflows/tests-reusable.yaml": ["--env APT_PACKAGES"] * 3,
+    # One per tier tests-reusable.yaml calls (FND-4676).
+    ".github/workflows/unit-tests-reusable.yaml": ["--env APT_PACKAGES"],
+    ".github/workflows/integration-tests-reusable.yaml": ["--env APT_PACKAGES"],
+    ".github/workflows/e2e-tests-reusable.yaml": ["--env APT_PACKAGES"],
     ".github/workflows/conformance-reusable.yaml": [
         "--env APT_PACKAGES",
         "--file .github/ci-system-deps.txt",
@@ -234,7 +233,6 @@ def _ci_files() -> list[Path]:
     roots = [
         REPO_ROOT / ".github" / "workflows",
         REPO_ROOT / ".github" / "actions",
-        REPO_ROOT / ".github" / "workflow-templates",
         REPO_ROOT
         / "packages"
         / "conformance"

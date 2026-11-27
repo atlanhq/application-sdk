@@ -12,6 +12,17 @@ import ssl
 
 from application_sdk._logging import get_logger
 
+__all__ = [
+    "CERT_FILE_EXTENSIONS",
+    "create_ssl_context_with_custom_certs",
+    "get_certificate_files",
+    "get_custom_ca_cert_bytes",
+    "get_ssl_cert_dir",
+    "get_ssl_context",
+    "SSL_CERT_DIR",
+]
+
+
 logger = get_logger(__name__)
 
 #: The directory of custom CA certificates, from the process environment.

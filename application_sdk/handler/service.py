@@ -36,6 +36,7 @@ import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
@@ -94,6 +95,19 @@ from application_sdk.handler.service_errors import (  # noqa: F401 — re-export
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "CONTRACT_GENERATED_DIR",
+    "create_app_handler_service",
+    "generated_entrypoints",
+    "HandlerFn",
+    "run_app_handler_service",
+    "SAGE_V2_WIDGET",
+    "sagev2_warmup_flag",
+    "warn_on_warmup_flag_drift",
+    "WorkflowClientConfig",
+]
+
+
 logger = get_logger(__name__)
 
 # Names this module imported (and so offered) before its handler routes moved to
@@ -125,7 +139,7 @@ from application_sdk.handler.context import bind_handler_context  # noqa: E402,F
 # consolidated API host. These private names are the same objects, kept for the
 # worker-only routes below (and tests) that use them.
 from application_sdk.handler.contracts import (  # noqa: E402
-    _CREDENTIAL_KEYS as _DEFAULT_CREDENTIAL_KEYS,
+    _CREDENTIAL_KEYS as _SDK_CREDENTIAL_KEYS,
 )
 from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported for existing importers
     AuthInput,
@@ -161,6 +175,7 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     _CATEGORY_TO_HTTP,
     _app_error_to_http_status,
     _import_optional_app_module,
+    _normalize_preflight_request,
     _preflight_failure_response,
     _preflight_response,
     _preflight_runtime_summary,
@@ -171,37 +186,118 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     include_app_routers_on,
     register_handler_routes,
 )
-from application_sdk.handler.routes import (  # noqa: E402
-    _normalize_preflight_request as _routes_normalize_preflight_request,
+
+_RequestNormalizer = Callable[[dict[str, Any]], dict[str, Any]]
+"""Turns a raw request body into the shape the handler inputs validate."""
+
+#: The app's credential-form keys while a legacy ``_normalize_credentials``
+#: wrapper runs. The wrapper takes only the body, so this is how the original
+#: it calls learns them.
+_form_credential_keys: ContextVar[frozenset[str]] = ContextVar(
+    "_form_credential_keys", default=frozenset()
 )
 
-# The v2 flat top-level keys the worker treats as credential material, and the
-# worker's credential normalization. Both stay THIS module's attributes (not
-# just contracts') because connector apps patch them at import time:
-#   * extending the key set:
-#     ``service._CREDENTIAL_KEYS = service._CREDENTIAL_KEYS | {"kerberos"}``
-#   * wrapping the normalization:
-#     ``service._normalize_credentials = wrapper_calling_the_original``
-# Every worker-side normalization (/start and the auth / check / metadata
-# routes) resolves both names here at call time, so either patch applies
-# everywhere, as it did when those routes lived in this module. The API host
-# does not import this module and keeps the contracts default.
-_CREDENTIAL_KEYS: frozenset[str] = _DEFAULT_CREDENTIAL_KEYS
+
+def _sdk_normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """The SDK's credential normalization, as ``service._normalize_credentials`` served it.
+
+    Honours a rebound ``service._CREDENTIAL_KEYS`` and the app's credential-form
+    keys, so an app that wraps this function keeps both until v4.0.0.
+    """
+    rebound_keys = globals().get("_CREDENTIAL_KEYS")
+    keys = _SDK_CREDENTIAL_KEYS if rebound_keys is None else frozenset(rebound_keys)
+    return _contracts_normalize_credentials(
+        body, keys=keys, extra_keys=_form_credential_keys.get()
+    )
 
 
-def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
-    """:func:`~application_sdk.handler.contracts.normalize_credentials` with this module's current ``_CREDENTIAL_KEYS``."""
-    return _contracts_normalize_credentials(body, keys=_CREDENTIAL_KEYS)
+_LEGACY_NORMALIZATION_GLOBALS: dict[str, object] = {
+    "_CREDENTIAL_KEYS": _SDK_CREDENTIAL_KEYS,
+    "_normalize_credentials": _sdk_normalize_credentials,
+}
+
+#: Connector apps used to extend the worker's credential normalization by
+#: rebinding these module globals at import time. The SDK now reads the extra
+#: credential keys from the app's generated credential forms, on the worker and
+#: the API host alike; a rebind here only ever reached the worker. Literal per
+#: entry: the surface gate and gen-deprecations read this table statically.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "_CREDENTIAL_KEYS": (
+        "the app's generated credential form (contract/app.pkl)",
+        "every top-level field the form declares is now a credential key on "
+        "every surface, so drop the rebind",
+    ),
+    "_normalize_credentials": (
+        "a field the entry point's input contract declares",
+        "send the field the input reads; a legacy request shape the contract "
+        "cannot express is a gap to raise with the SDK, not a request to rewrite",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_LEGACY_NORMALIZATION_GLOBALS.__getitem__,
+)
+
+_warned_legacy_rebinds: set[str] = set()
 
 
-def _worker_normalize(body: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch to this module's ``_normalize_credentials`` as bound right now."""
-    return _normalize_credentials(body)
+def _legacy_rebinds() -> dict[str, object]:
+    """The deprecated normalization globals an app has rebound on this module."""
+    module_globals = globals()
+    # Binding back the value the shim served (a test restoring what it read)
+    # is not a rebind.
+    return {
+        name: module_globals[name]
+        for name, default in _LEGACY_NORMALIZATION_GLOBALS.items()
+        if name in module_globals and module_globals[name] is not default
+    }
 
 
-def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
-    """The shared preflight normalization, through the worker's normalization."""
-    return _routes_normalize_preflight_request(body, normalize=_worker_normalize)
+def _worker_request_normalizer(
+    generated_dir: Callable[[], Path | None],
+) -> _RequestNormalizer:
+    """The worker's request normalization: the API host's, or a legacy rebind's.
+
+    Built once per service. Without a rebind it is exactly the API host's
+    (:func:`~application_sdk.handler.metadata_routes._credential_normalizer`).
+    An app that still rebinds ``service._CREDENTIAL_KEYS`` or
+    ``service._normalize_credentials`` keeps that behaviour on the worker until
+    v4.0.0, with a logged warning, and keeps its credential-form keys too.
+    """
+    normalize = _credential_normalizer(generated_dir)
+
+    def worker_normalize(body: dict[str, Any]) -> dict[str, Any]:
+        rebound = _legacy_rebinds()
+        if not rebound:
+            return normalize(body)
+        for name in rebound.keys() - _warned_legacy_rebinds:
+            _warned_legacy_rebinds.add(name)
+            logger.warning(
+                "An app rebinds application_sdk.handler.service.%s, which is "
+                "deprecated and honoured on the worker only until v4.0.0; use "
+                "%s instead",
+                name,
+                _DEPRECATED_CONSTANTS[name][0],
+            )
+        form_keys = _credential_form_keys_of(generated_dir())
+        # Whatever the app bound: a body -> body callable, a set of key names.
+        rebound_fn = cast(
+            "_RequestNormalizer | None", rebound.get("_normalize_credentials")
+        )
+        if rebound_fn is not None:
+            token = _form_credential_keys.set(form_keys)
+            try:
+                return rebound_fn(body)
+            finally:
+                _form_credential_keys.reset(token)
+        rebound_keys = cast("frozenset[str] | None", rebound.get("_CREDENTIAL_KEYS"))
+        keys = _SDK_CREDENTIAL_KEYS if rebound_keys is None else rebound_keys
+        return _contracts_normalize_credentials(body, keys=keys, extra_keys=form_keys)
+
+    return worker_normalize
 
 
 class _GatePreflightObserver:
@@ -586,6 +682,8 @@ def warn_on_warmup_flag_drift(
 from application_sdk.handler.metadata_routes import (  # noqa: E402,F401
     MAX_FE_INPUTS_BYTES,
     MetadataSource,
+    _credential_form_keys_of,
+    _credential_normalizer,
     decode_fe_inputs,
     entrypoint_form,
     handler_compute_manifest,
@@ -1117,7 +1215,10 @@ class _StartRequest(NamedTuple):
 
 
 async def _parse_start_request(
-    request: Request, app_name: str, workflow_config: WorkflowClientConfig
+    request: Request,
+    app_name: str,
+    workflow_config: WorkflowClientConfig,
+    normalize: _RequestNormalizer,
 ) -> _StartRequest:
     """Resolve and validate a ``/start`` body against its entry point's input type.
 
@@ -1179,7 +1280,7 @@ async def _parse_start_request(
             detail=f"App class {app_cls.__name__} entry point has no input type.",
         )
 
-    body = _normalize_credentials(body)
+    body = normalize(body)
     if "credentials" in body:
         # Always strip raw credentials — never pass through to Temporal
         # history. Credentials are resolved at runtime via DaprCredentialVault
@@ -1207,9 +1308,14 @@ def _register_workflow_routes(
     manifest: AppManifest | None,
     event_triggers: list[EventTriggerConfig],
     subscriptions: list[SubscriptionConfig],
+    normalize: _RequestNormalizer,
 ) -> None:
     """Register workflow lifecycle, manifest, input-contract, config, file,
-    event, and dev-only routes on *app*."""
+    event, and dev-only routes on *app*.
+
+    *normalize* is the service's one request normalization, shared with the
+    auth / check / metadata routes.
+    """
     # Captured now: create_app_handler_service rebinds the module global per
     # service, so reading it per request would resolve against whichever
     # service was built last.
@@ -1227,7 +1333,9 @@ def _register_workflow_routes(
         try:
             # Validated before the Temporal client is touched, so a malformed
             # configuration is rejected even when Temporal is unreachable.
-            parsed = await _parse_start_request(request, app_name, workflow_config)
+            parsed = await _parse_start_request(
+                request, app_name, workflow_config, normalize
+            )
             input_data = parsed.input_data
             explicit_workflow_id = parsed.explicit_workflow_id
             workflow_name = parsed.workflow_name
@@ -1911,7 +2019,7 @@ def _register_workflow_routes(
             programmatic_manifest=manifest,
             log=lambda: logger,
             max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
-            normalize_body=_worker_normalize,
+            normalize_body=normalize,
         ),
     )
 
@@ -2144,7 +2252,17 @@ def create_app_handler_service(
         LogMiddleware,
     )
 
-    # Auto-instrument HTTP server with OTel: emits http.server.duration,
+    # The SDK owns the HTTP metric contract: the documented series is the
+    # stable-semconv http.server.request.duration (seconds), exported as
+    # http_server_request_duration_seconds. Without this opt-in the
+    # instrumentor emits the legacy http.server.duration (milliseconds), so
+    # the documented PromQL returns nothing on any runtime whose environment
+    # does not set it. setdefault keeps an operator's explicit value. The
+    # instrumentation library reads the variable once per process, on the
+    # first instrument call, so it must be set before instrument_app.
+    os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
+
+    # Auto-instrument HTTP server with OTel: emits http.server.request.duration,
     # http.server.active_requests, etc. with route-templated http.route labels
     # (no raw-path cardinality blowup). Metrics flow through the global
     # MeterProvider configured in observability/metrics_adaptor.py and land in
@@ -2154,6 +2272,10 @@ def create_app_handler_service(
         excluded_urls=",".join(sorted(EXCLUDED_LOG_PATHS)),
     )
     app.add_middleware(LogMiddleware)
+
+    # One request normalization for every route that reads a body (/start,
+    # /validate and the shared routes), built from the handler once.
+    normalize = _worker_request_normalizer(lambda: CONTRACT_GENERATED_DIR)
 
     # The auth / check / metadata routes, the request contract's 422 and the
     # error boundary are ONE implementation shared with the consolidated API host
@@ -2166,7 +2288,7 @@ def create_app_handler_service(
         secret_store=_secret_store,
         observer=_GatePreflightObserver(app_name),
         include_app_routers=False,
-        normalize=_worker_normalize,
+        normalize=normalize,
         warmup_ceiling=getattr(app_class, "preflight_warmup_ceiling_seconds", None),
         warmup_probe_timeout=getattr(
             app_class, "preflight_warmup_probe_timeout_seconds", None
@@ -2180,6 +2302,7 @@ def create_app_handler_service(
         manifest=manifest,
         event_triggers=list(event_triggers or []),
         subscriptions=list(subscriptions or []),
+        normalize=normalize,
     )
 
     # ------------------------------------------------------------------

@@ -279,7 +279,7 @@ asyncio_default_test_loop_scope = "session"
 
 ```python
 @pytest.mark.asyncio(loop_scope="session")
-async def test_workflow_extracts_tables(...):
+async def test_workflow_extracts_tables(your_app_worker):
     ...
 ```
 
@@ -324,7 +324,7 @@ To inspect intermediates while debugging, turn it off for that session only — 
 os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
 ```
 
-This one is read at run time rather than at import, so its position is not load-bearing.
+This one is read when the worker starts rather than at import, so its position relative to the imports is not load-bearing; it must be set before the worker fixture starts. Each run keeps the value it started with.
 
 ## Markers and CI tiering — the directory *is* the boundary
 
@@ -445,6 +445,7 @@ cp -r tests/integration/_example tests/integration/my_connector
 
 Edit `scenarios.py`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import (
     Scenario, lazy, equals, exists
@@ -474,6 +475,7 @@ scenarios = [
 
 Edit `test_integration.py`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import BaseIntegrationTest
 from .scenarios import scenarios
@@ -556,6 +558,7 @@ Benefits:
 
 The assertion DSL provides **higher-order functions** that return predicates:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import (
     equals, exists, one_of, contains, greater_than
@@ -626,31 +629,37 @@ assert_that = {
 
 Combine multiple assertions:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import all_of, any_of, none_of
 
-# All must pass
-"data.name": all_of(exists(), is_string(), is_not_empty())
+assert_that = {
+    # All must pass
+    "data.name": all_of(exists(), is_string(), is_not_empty()),
 
-# At least one must pass
-"data.role": any_of(equals("admin"), equals("superuser"))
+    # At least one must pass
+    "data.role": any_of(equals("admin"), equals("superuser")),
 
-# None should pass
-"message": none_of(contains("error"), contains("fail"))
+    # None should pass
+    "message": none_of(contains("error"), contains("fail")),
+}
 ```
 
 ### Custom Assertions
 
 Create your own:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 from application_sdk.testing.integration import custom
 
-# Using custom()
-"data.count": custom(lambda x: x % 2 == 0, "is_even")
+assert_that = {
+    # Using custom()
+    "data.count": custom(lambda x: x % 2 == 0, "is_even"),
 
-# Or directly as a lambda
-"data.value": lambda x: x > 0 and x < 100
+    # Or directly as a lambda
+    "data.value": lambda x: x > 0 and x < 100,
+}
 ```
 
 ## Writing Effective Scenarios
@@ -756,6 +765,7 @@ workflow_scenarios = [
 
 ### Basic Configuration
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
@@ -769,6 +779,7 @@ class TestMyConnector(BaseIntegrationTest):
 
 If your workflow endpoint is different from `/start`:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
@@ -809,6 +820,7 @@ Scenario(
 
 Or suite-wide, when every scenario in the class targets one entrypoint:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMinerIntegration(BaseIntegrationTest):
     entrypoint = "miner"         # applies to every workflow scenario
@@ -845,6 +857,7 @@ await executor.execute(MyApp, input_data, entry_point="extract-metadata")
 
 ### Setup and Teardown Hooks
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     scenarios = scenarios
@@ -926,15 +939,33 @@ args=lazy(lambda: {"credentials": load_credentials()})
 
 Don't just test the happy path:
 
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
-scenarios = [
-    # Happy path
-    Scenario(name="auth_valid", ...),
+from application_sdk.testing.integration import Scenario, equals
 
-    # Negative cases
-    Scenario(name="auth_invalid_password", ...),
-    Scenario(name="auth_empty_credentials", ...),
-    Scenario(name="auth_missing_username", ...),
+scenarios = [
+    # Happy path: credentials auto-loaded from E2E_{APP_NAME}_* env vars
+    Scenario(name="auth_valid", api="auth", assert_that={"success": equals(True)}),
+
+    # Negative cases: override credentials
+    Scenario(
+        name="auth_invalid_password",
+        api="auth",
+        credentials={"username": "user", "password": "wrong"},
+        assert_that={"success": equals(False)},
+    ),
+    Scenario(
+        name="auth_empty_credentials",
+        api="auth",
+        credentials={},
+        assert_that={"success": equals(False)},
+    ),
+    Scenario(
+        name="auth_missing_username",
+        api="auth",
+        credentials={"password": "secret"},
+        assert_that={"success": equals(False)},
+    ),
 ]
 ```
 
@@ -1003,6 +1034,7 @@ pytest -v --log-cli-level=DEBUG
 ### "Timeout"
 
 Increase timeout:
+<!-- legacy-example: documents the deprecated BaseIntegrationTest scenario framework, removed in v4.0.0 -->
 ```python
 class TestMyConnector(BaseIntegrationTest):
     timeout = 60  # Increase from default 30

@@ -28,9 +28,10 @@ calling workflow gates on the `violation` output in a separate step.
 
 import argparse
 import fnmatch
-import os
 import re
 import sys
+
+from _gha import set_output
 
 RELEASE_RE = re.compile(r"^chore(\([^)]*\))?: release ")
 BUMP_RE = re.compile(r"^Bump version to ")
@@ -79,7 +80,6 @@ CT_EXEMPT_GLOBS = (
 )
 CF_EXEMPT_GLOBS = (
     "packages/conformance/tests/*",
-    "packages/conformance/uv.lock",
     "packages/conformance/*/package-lock.json",
     "packages/conformance/*/yarn.lock",
 )
@@ -200,7 +200,8 @@ This PR changes `packages/conformance/` source, so its title must use the
 - `fix(conformance): …`
 
 (Changes confined to `packages/conformance/tests/` or lock files
-such as `uv.lock`/`package-lock.json` should instead be `chore:`/`ci:`.)
+such as `package-lock.json` should instead be `chore:`/`ci:`. The package has
+no `uv.lock` of its own: the root lock covers it.)
 
 Editing the PR title re-runs this check and clears this comment automatically.
 """,
@@ -294,16 +295,6 @@ def _read_changed_files(path: str) -> list:
         return [line.strip() for line in fh if line.strip()]
 
 
-def _write_output(key: str, value: str) -> None:
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    line = f"{key}={value}"
-    if github_output:
-        with open(github_output, "a") as fh:
-            fh.write(line + "\n")
-    else:
-        print(line)
-
-
 def run(pr_title: str, head_ref: str, changed_files_path: str, comment_out_path: str):
     """Core decision logic, returned as (violation, expected) for testing."""
     if is_version_bump_pr(pr_title, head_ref):
@@ -348,9 +339,9 @@ def main() -> int:
         args.pr_title, args.head_ref, args.changed_files, args.comment_out
     )
 
-    _write_output("violation", "true" if violation else "false")
-    _write_output("expected", expected)
-    _write_output("error_message", _ERROR_MESSAGES.get(expected, ""))
+    set_output("violation", "true" if violation else "false")
+    set_output("expected", expected)
+    set_output("error_message", _ERROR_MESSAGES.get(expected, ""))
     return 0
 
 

@@ -137,7 +137,7 @@ Examine the source files in the target path (exclude test files from this analys
 
 After identifying the connector type, determine the transformation strategy:
 
-**SQL connectors** (v2 `SqlMetadataExtractor`, `SqlQueryExtractor`, `IncrementalSqlMetadataExtractor`):
+**SQL connectors** (v2 SQL workflows, or an app already on the deprecated `SqlMetadataExtractor`, `SqlQueryExtractor` or `IncrementalSqlMetadataExtractor`):
 
 > **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead for metadata extraction:
 > ```python
@@ -650,7 +650,7 @@ curl -s 'http://localhost:8000/workflows/v1/manifest?entrypoint=mine-queries'
 
 If any endpoint returns 500, check the app terminal for the traceback. Common issues:
 - Handler not discovered → import the handler class in the App module
-- Credential format error → ensure `_normalize_credentials` is in the SDK version being used
+- Credential key missing from `input.credentials` → declare it as a top-level field of the credential form in `contract/app.pkl` and regenerate; never rebind `application_sdk.handler.service` globals (B010)
 - Missing configmap files → verify `app/generated/` has the JSON files from `poe generate`
 
 ### 6e — Start a workflow run

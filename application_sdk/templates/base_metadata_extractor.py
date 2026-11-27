@@ -21,6 +21,10 @@ from application_sdk.templates.contracts.base_metadata_extraction import (
     UploadOutput,
 )
 
+__all__ = [
+    "BaseMetadataExtractor",
+]
+
 
 class BaseMetadataExtractor(App):
     """Base App for all metadata extraction connectors.

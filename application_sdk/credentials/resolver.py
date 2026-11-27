@@ -14,6 +14,11 @@ if TYPE_CHECKING:
     from application_sdk.credentials.types import Credential
     from application_sdk.infrastructure.secrets import SecretStore
 
+__all__ = [
+    "CredentialResolver",
+]
+
+
 logger = get_logger(__name__)
 
 

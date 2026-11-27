@@ -386,7 +386,7 @@ self-consistent and every static gate still green. The SDK's CI check in
 `application_sdk.testing._setup_routes` asserts that join against a live tenant; see
 `docs/standards/connector-ci-e2e.md` for where it runs in CI.
 
-### Per-entry-point handler & core modules
+### Per-entry-point handler and core modules
 
 A multi-entry-point app can ship **per-entry-point** lifecycle code next to its hand-written package, discovered by convention:
 

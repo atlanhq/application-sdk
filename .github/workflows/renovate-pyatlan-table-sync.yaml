@@ -1,0 +1,63 @@
+name: Regenerate the relationship table on a Renovate pyatlan move
+
+# The conformance package commits relationship_directions.json, built from the
+# locked pyatlan and pinned to it by a drift test. Renovate moves pyatlan in the
+# root uv.lock but cannot regenerate the table (Mend runs no postUpgradeTasks
+# here), so this does, and the bump lands as one self-contained PR.
+#
+# packages/conformance is a member of the root uv workspace (FND-4671), so the
+# root uv.lock is the lock the table is built from. This lane used to also
+# relock a second, conformance-only uv.lock to every SDK dependency bump
+# (FND-4439, FND-5018); that lock is gone.
+#
+# The two jobs (read-only generate, App-token publish) are
+# renovate-branch-fixup.yaml, shared with renovate-lock-cooldown.yaml
+# (FND-4928); that file says why the lane has that shape. Mend stays the PR
+# author, and the table path is in this repo's extra_dep_file_pattern in
+# renovate-auto-approve.yml, so the approval gate accepts the regenerated table.
+#
+# Scope: every Renovate branch, majors included, because any bump that relocks
+# the root can move pyatlan with it. Except renovate/lock-file-maintenance, which
+# renovate-lock-cooldown.yaml owns: it regenerates the table there after its
+# bound, and two lanes pushing to one branch would race. On a branch where
+# pyatlan did not move the script commits nothing.
+#
+# All branching logic lives in the tested .github/scripts/renovate_pyatlan_table_sync.py.
+
+on:
+  push:
+    branches:
+      - "renovate/**"
+      - "!renovate/lock-file-maintenance"
+    # Only a uv.lock change can move the locked pyatlan. Our own push touches
+    # only packages/conformance/**, so it never matches.
+    paths:
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pyatlan-table-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Regenerate the relationship table for the locked pyatlan
+    # The actor allowlist and the re-entrancy guard live on the reusable's
+    # `generate` job. Our own push arrives as atlan-app-fleet[bot]; it changes
+    # no uv.lock so the paths filter already skips it, and the subject check is
+    # the belt to that brace.
+    permissions:
+      contents: read
+      # The reusable's `publish` job writes the renovate/artifacts carry-forward.
+      statuses: write
+    uses: ./.github/workflows/renovate-branch-fixup.yaml
+    with:
+      script: .github/scripts/renovate_pyatlan_table_sync.py
+      artifact-name: pyatlan-table-sync
+      own-commit-subject: "chore(deps): regenerate the relationship table"
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+      BOT_SIGNING_KEY: ${{ secrets.BOT_SIGNING_KEY }}

@@ -6,6 +6,11 @@ from typing_extensions import deprecated
 from application_sdk.constants import _LOCK_METADATA_KEY as LOCK_METADATA_KEY
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "needs_lock",
+]
+
+
 logger = get_logger(__name__)
 
 

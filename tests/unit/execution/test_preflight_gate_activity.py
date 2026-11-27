@@ -18,7 +18,7 @@ import pytest
 
 from application_sdk.app.base import AppContextError
 from application_sdk.credentials.errors import CredentialNotFoundError
-from application_sdk.credentials.ref import CredentialResolvable
+from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
@@ -2328,12 +2328,12 @@ class TestPreflightGateStorageChecks:
         from application_sdk.execution._temporal.preflight_gate import (
             _storage_failure_details,
         )
-        from application_sdk.storage.errors import StorageBucketRelocationError
-        from application_sdk.storage.preflight import (
+        from application_sdk.storage._classify import (
             _OBJECT_STORE_ERROR_CLASSES,
             RELOCATION_BUCKET,
-            ObjectStoreCheckResult,
         )
+        from application_sdk.storage.errors import StorageBucketRelocationError
+        from application_sdk.storage.preflight import ObjectStoreCheckResult
 
         OBJECT_STORE_RELOCATION_CODE = StorageBucketRelocationError.code
 
@@ -3167,3 +3167,201 @@ class TestOutcomeRowNamesTheFailure:
         ev = _outcome_event(capture_preflight_outcomes)
         assert ev["outcome"] == "no_verdict"
         assert ev[FAILURE_MESSAGE_KEY] == "Source API throttled: 429 after 3 retries"
+
+
+class TestGateFallsBackToConnectionCredentialGuid:
+    """A miner input carries its credential GUID only on the connection."""
+
+    @staticmethod
+    def _miner_input(**overrides: Any) -> Any:
+        from application_sdk.templates.contracts.sql_query import (
+            QueryExtractionInput,
+        )
+
+        payload: dict[str, Any] = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {
+                    "qualifiedName": "default/postgres/1",
+                    "name": "example",
+                    "defaultCredentialGuid": "conn-guid",
+                },
+            },
+        }
+        payload.update(overrides)
+        return QueryExtractionInput.model_validate(payload)
+
+    @staticmethod
+    def _plain(**fields: Any) -> Any:
+        base: dict[str, Any] = {
+            "extraction_method": "",
+            "credential_guid": "",
+            "agent_json": None,
+            "credential_ref": None,
+            "connection": None,
+        }
+        base.update(fields)
+        return SimpleNamespace(**base)
+
+    def test_ae_wire_connection_supplies_the_guid(self) -> None:
+        gate_input = PreflightGateInput.from_extraction_input(
+            self._miner_input(), "mine"
+        )
+        assert gate_input.credential_guid == "conn-guid"
+        ref = CredentialRef.resolve_or_none(gate_input)
+        assert ref is not None
+        assert ref.credential_guid == "conn-guid"
+
+    def test_query_history_method_routes_the_connection_guid(self) -> None:
+        # The miner names its extraction kind in extraction_method; the GUID
+        # must still route, not raise.
+        inp = self._plain(
+            extraction_method="query_history",
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert CredentialRef.resolve(gate_input).credential_guid == "conn-guid"
+
+    def test_explicit_credential_guid_wins(self) -> None:
+        gate_input = PreflightGateInput.from_extraction_input(
+            self._miner_input(credential_guid="explicit"), "mine"
+        )
+        assert gate_input.credential_guid == "explicit"
+
+    def test_prebuilt_credential_ref_wins(self) -> None:
+        ref = CredentialRef(name="r", credential_type="basic", credential_guid="ref-g")
+        inp = self._plain(
+            credential_ref=ref,
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == ""
+        assert gate_input.credential_ref is not None
+        assert gate_input.credential_ref.credential_guid == "ref-g"
+
+    def test_agent_json_wins(self) -> None:
+        inp = self._plain(
+            extraction_method="agent",
+            agent_json={"agent-name": "acme", "secret-path": "arn:x"},
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == ""
+        assert gate_input.agent_json is not None
+
+    def test_agent_mode_without_agent_json_is_not_sent_to_the_vault(self) -> None:
+        inp = self._plain(
+            extraction_method="agent",
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == ""
+        assert CredentialRef.resolve_or_none(gate_input) is None
+
+    def test_declared_named_refs_skip_the_fallback(self) -> None:
+        class _MultiInp:
+            preflight_credential_refs = {"api": "api_credential_guid"}
+            extraction_method = ""
+            credential_guid = ""
+            agent_json = None
+            credential_ref = None
+            connection = {"attributes": {"defaultCredentialGuid": "conn-guid"}}
+
+        gate_input = PreflightGateInput.from_extraction_input(_MultiInp(), "mine")
+        assert gate_input.credential_guid == ""
+
+    @pytest.mark.parametrize("key", ["agent_name", "agent-name"])
+    def test_agent_name_hint_skips_the_fallback(self, key: str) -> None:
+        inp = self._plain(
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}}
+        )
+        inp.model_dump = lambda mode="json": {key: "acme"}
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == ""
+
+    def test_placeholder_agent_json_still_falls_back(self) -> None:
+        # AE replays the marketplace placeholder onto direct runs; it is not an
+        # agent reference, so it must not switch the fallback off.
+        inp = self._plain(
+            agent_json={
+                "agent-name": "agent-name",
+                "host": "host",
+                "port": "port",
+                "secret-manager": "secret-manager",
+            },
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == "conn-guid"
+
+    def test_non_string_extraction_method_does_not_break_the_gate(self) -> None:
+        inp = self._plain(
+            extraction_method=42,
+            connection={"attributes": {"defaultCredentialGuid": "conn-guid"}},
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.entrypoint == "mine"  # built, did not raise
+        assert gate_input.credential_guid == "conn-guid"
+
+    def test_snake_case_attribute_is_read(self) -> None:
+        inp = self._plain(
+            connection=SimpleNamespace(
+                attributes=SimpleNamespace(default_credential_guid="snake-guid")
+            )
+        )
+        gate_input = PreflightGateInput.from_extraction_input(inp, "mine")
+        assert gate_input.credential_guid == "snake-guid"
+
+    @pytest.mark.parametrize(
+        "connection",
+        [
+            None,
+            {},
+            {"attributes": None},
+            {"attributes": {"defaultCredentialGuid": ""}},
+            {"attributes": {"defaultCredentialGuid": 42}},
+            SimpleNamespace(),
+        ],
+    )
+    def test_no_readable_guid_means_no_credential(self, connection: Any) -> None:
+        gate_input = PreflightGateInput.from_extraction_input(
+            self._plain(connection=connection), "mine"
+        )
+        assert gate_input.credential_guid == ""
+        assert CredentialRef.resolve_or_none(gate_input) is None
+
+    @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
+    async def test_deleted_connection_credential_is_treated_like_an_explicit_one(
+        self, mode: PreflightGateMode
+    ) -> None:
+        # Before the fallback, an input with only a connection GUID reached the
+        # gate with no credential at all. Now a deleted default credential is a
+        # provable absence, judged exactly as a deleted explicit credential_guid.
+        async def _outcome(gate_input: PreflightGateInput) -> tuple[str, Any]:
+            handler = DefaultHandler()
+            gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
+            resolver = _resolver_by_guid({"gone": CredentialNotFoundError("gone")})
+            with _infra_patches(resolver), warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    result = await gate(gate_input)
+                except ApplicationError as exc:
+                    return "raised", exc.details[0].category
+            return "returned", result.status
+
+        via_connection = PreflightGateInput.from_extraction_input(
+            self._plain(connection={"attributes": {"defaultCredentialGuid": "gone"}}),
+            "mine",
+        )
+        explicit = PreflightGateInput.from_extraction_input(
+            self._plain(credential_guid="gone"), "mine"
+        )
+        assert via_connection.credential_guid == "gone"
+        assert await _outcome(via_connection) == await _outcome(explicit)
+
+    def test_entrypoint_input_is_not_changed(self) -> None:
+        inp = self._miner_input()
+        PreflightGateInput.from_extraction_input(inp, "mine")
+        assert inp.credential_guid == ""
+        attrs = inp.model_dump(mode="json", by_alias=True)["connection"]["attributes"]
+        assert attrs["defaultCredentialGuid"] == "conn-guid"

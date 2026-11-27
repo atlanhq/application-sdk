@@ -2,16 +2,16 @@
 
 This guide walks through building a SQL metadata extraction connector using the v3 Application SDK. By the end, you will have a working connector that extracts databases, schemas, tables, and columns, transforms them using an asset mapper, and publishes the results.
 
-v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlMetadataExtractor` class. If you are upgrading an existing v2 connector, see the [Upgrade Guide](../upgrade-guide-v3.md) for a step-by-step checklist.
+v3 replaces the v2 `BaseSQLMetadataExtractionWorkflow` + `BaseSQLMetadataExtractionActivities` split with a single `SqlApp` subclass. (`SqlMetadataExtractor`, the first v3 template, is deprecated and removed in v4.0.0; do not start on it.) If you are upgrading an existing v2 connector, see the [Upgrade Guide](../upgrade-guide-v3.md) for a step-by-step checklist.
 
 ## Overview
 
 A v3 SQL connector has five parts:
 
-1. **App (extractor)** --- a `SqlMetadataExtractor` subclass with `@task` methods that fetch and transform metadata.
+1. **App (extractor)** --- a `SqlApp` subclass that declares the SQL to run and the `map_*` method for each entity.
 2. **Handler** --- a `Handler` subclass that implements HTTP endpoints for authentication, preflight checks, and metadata discovery.
 3. **Client** --- a client class (e.g., `BaseSQLClient` subclass or custom `ClientInterface` implementation) that manages the database connection.
-4. **Asset mapper** --- Python functions that map raw extraction results to pyatlan entity objects (replaces YAML transformers).
+4. **Asset mapper** --- `map_*` methods that turn each raw SQL row into a `pyatlan_v9` asset (replaces YAML transformers).
 5. **Contracts** --- typed Pydantic models for credentials, configuration, and task inputs.
 
 The SDK orchestrates everything through Temporal workflows. You never import from `temporalio` directly --- the `@task` decorator handles activity registration, heartbeating, and retry configuration.
@@ -29,11 +29,7 @@ Install the SDK:
 uv add atlan-application-sdk
 ```
 
-Start local infrastructure (Temporal + Dapr sidecars):
-
-```bash
-uv run poe start-deps
-```
+You do not need to start any infrastructure: `run_dev_combined()` starts an embedded Dapr runtime and an in-process Temporal server (see [Getting Started](./getting-started.md)). To run against a standalone Temporal server and Dapr sidecar instead, see the [Setup Overview](../standards/setup.md#optional-external-temporal-and-dapr).
 
 ## Project Structure
 
@@ -46,8 +42,7 @@ my-connector/
     clients.py          # Client class (BaseSQLClient or ClientInterface)
     contracts.py        # Typed Pydantic models (credentials, config, task inputs)
     handler.py          # Handler subclass
-    asset_mapper.py     # Python mapper functions (raw rows → pyatlan entities)
-    connector.py        # SqlMetadataExtractor subclass (fetch + transform tasks)
+    connector.py        # SqlApp subclass (SQL templates + map_* methods)
     constants.py        # Connector-specific constants
     sql/                # SQL query files (*.sql)
     transformers/       # Additional transformation logic (optional)
@@ -201,234 +196,152 @@ class PostgresHandler(Handler):
 | `preflight_check` | `PreflightInput` | `PreflightOutput` | Check connectivity, permissions, table counts |
 | `fetch_metadata` | `MetadataInput` | `SqlMetadataOutput` | Return catalog/schema tree for UI filters |
 
-`AuthOutput.status` uses `AuthStatus` (SUCCESS, FAILED, EXPIRED, INVALID_CREDENTIALS). `PreflightOutput.status` uses `PreflightStatus` (READY, NOT_READY, PARTIAL).
+`AuthOutput.status` uses `AuthStatus` (SUCCESS, FAILED, EXPIRED, INVALID_CREDENTIALS). A handler sets `PreflightOutput.status` to `PreflightStatus.READY` when extraction can proceed (advisory check failures included) or `NOT_READY` when it cannot. `PARTIAL` is deprecated (removal anchored at v3.40.0); return `READY` with the failed advisory checks listed instead.
 
-## Asset Mapper
+## App (Extractor)
 
-v3 uses Python mapper functions to transform raw extraction results into pyatlan entity objects. This replaces the v2 YAML-based `AtlasTransformer` / `QueryBasedTransformer` approach with direct, testable Python code.
+The core of your connector is a `SqlApp` subclass. You declare three things and the template does the rest:
 
-> **Note:** New connectors must use `pyatlan_v9`. The `pyatlan` (non-v9) import shown as a fallback is retained only for connectors that already depend on the built-in `AtlasTransformer` transformers, which still use `pyatlan` internally. All other code should import from `pyatlan_v9`.
+- `sql_client_class` --- the client from [Client](#client).
+- `fetch_database_sql`, `fetch_schema_sql`, `fetch_table_sql`, `fetch_column_sql` --- one query per entity. Each must stand alone: the default `run()` issues all four at once, so each query applies its own filters (here, the same system-schema exclusions in all three).
+- `map_database`, `map_schema`, `map_table`, `map_column` --- one asset mapper per entity. Each takes one raw row and the connection's qualified name and returns a `pyatlan_v9` asset. All four are required for the default `run()`: the base ones raise `Map*UnimplementedError`.
 
 ```python
-# app/asset_mapper.py
-from pyatlan_v9.model.assets import Database, Schema, Table, Column
+# app/connector.py
+from pyatlan_v9.model.assets import Column, Database, Schema, Table
+
+from application_sdk.templates import SqlApp
+
+from app.clients import PostgresClient
 
 
-def map_database(row: dict, connection_qualified_name: str) -> Database:
-    """Map a raw database row to a pyatlan Database entity."""
-    return Database(
-        name=row["database_name"],
-        qualified_name=f"{connection_qualified_name}/{row['database_name']}",
-        connection_qualified_name=connection_qualified_name,
+class PostgresApp(SqlApp):
+    sql_client_class = PostgresClient
+
+    fetch_database_sql = (
+        "SELECT datname AS database_name FROM pg_database "
+        "WHERE datname = current_database()"
     )
+    fetch_schema_sql = """
+        SELECT s.catalog_name AS database_name, s.schema_name
+        FROM information_schema.schemata s
+        WHERE s.schema_name NOT LIKE 'pg_%'
+          AND s.schema_name != 'information_schema'
+    """
+    fetch_table_sql = """
+        SELECT t.table_catalog AS database_name, t.table_schema AS schema_name,
+               t.table_name
+        FROM information_schema.tables t
+        WHERE t.table_type = 'BASE TABLE'
+          AND t.table_schema NOT LIKE 'pg_%'
+          AND t.table_schema != 'information_schema'
+    """
+    fetch_column_sql = """
+        SELECT c.table_catalog AS database_name, c.table_schema AS schema_name,
+               c.table_name, c.column_name, c.data_type, c.ordinal_position
+        FROM information_schema.columns c
+        WHERE c.table_schema NOT LIKE 'pg_%'
+          AND c.table_schema != 'information_schema'
+    """
 
+    def map_database(self, record, connection_qn):
+        return Database.creator(
+            name=record["database_name"],
+            connection_qualified_name=connection_qn,
+        )
 
-def map_schema(row: dict, connection_qualified_name: str, database_name: str) -> Schema:
-    return Schema(
-        name=row["schema_name"],
-        qualified_name=f"{connection_qualified_name}/{database_name}/{row['schema_name']}",
-        connection_qualified_name=connection_qualified_name,
-        database_qualified_name=f"{connection_qualified_name}/{database_name}",
-    )
+    def map_schema(self, record, connection_qn):
+        database = self.map_database(record, connection_qn)
+        return Schema.creator(
+            name=record["schema_name"],
+            database_qualified_name=database.qualified_name,
+        )
 
+    def map_table(self, record, connection_qn):
+        schema = self.map_schema(record, connection_qn)
+        return Table.creator(
+            name=record["table_name"],
+            schema_qualified_name=schema.qualified_name,
+        )
 
-def map_table(row: dict, connection_qualified_name: str) -> Table:
-    qn = f"{connection_qualified_name}/{row['table_schema']}/{row['table_name']}"
-    return Table(
-        name=row["table_name"],
-        qualified_name=qn,
-        connection_qualified_name=connection_qualified_name,
-        schema_qualified_name=f"{connection_qualified_name}/{row['table_schema']}",
-    )
-
-
-def map_column(row: dict, connection_qualified_name: str) -> Column:
-    table_qn = f"{connection_qualified_name}/{row['table_schema']}/{row['table_name']}"
-    return Column(
-        name=row["column_name"],
-        qualified_name=f"{table_qn}/{row['column_name']}",
-        connection_qualified_name=connection_qualified_name,
-        table_qualified_name=table_qn,
-        data_type=row.get("data_type", ""),
-        order=row.get("ordinal_position", 0),
-    )
-
-
+    def map_column(self, record, connection_qn):
+        table = self.map_table(record, connection_qn)
+        column = Column.creator(
+            name=record["column_name"],
+            parent_qualified_name=table.qualified_name,
+            parent_type=Table,
+            order=record["ordinal_position"],
+        )
+        column.data_type = record["data_type"]
+        return column
 ```
 
-Each mapper function is a pure function: easy to unit test, no framework dependencies, no YAML files to maintain. The extractor calls these in its `transform_data` task (see below).
+Build every asset with its `pyatlan_v9` `.creator()` factory. Each one computes its own qualified name from its parent's, so the naming grammar lives in pyatlan rather than in a hand-written `f"{connection_qn}/..."` string per connector (conformance rule P028 flags those). A mapper is a plain method of one row: unit test it by calling it with a dict.
+
+> **Note:** New connectors must use `pyatlan_v9`. The deprecated `AtlasTransformer` / `QueryBasedTransformer` YAML transformers, which still use `pyatlan` internally, are not part of a `SqlApp` connector.
 
 **Return the asset, not a dict.** The SDK serialises whatever the mapper returns through `application_sdk.common.asset_serialization.entity_bytes()`, which encodes a `pyatlan_v9` asset natively and stamps the framework-injected attributes on it — `connectionName`, and the three `lastSync*` attributes that make an asset clickable back to the run that last touched it. Do **not** stamp `last_sync_*` in the mapper: the only workflow id a mapper can reach is the child workflow's Temporal id, which is not the AE-dispatched run (see [Asset Serialisation](../concepts/common.md#asset-serialisation)). Hand-rolling a `serialize_entity()` helper to convert the asset to a dict first costs two extra JSON passes per record and gives up the type checking that is the point of the asset mapper — `asset.column_cont = 7` is a pyright error, `payload["columnCont"] = 7` is not. A return value the seam does not recognise raises `UnserializableMapperResultError` rather than falling back to anything.
 
 **Declare envelope overrides, don't post-process.** If your connector needs the finished line to differ — a `sqlDialect` on definition-bearing assets, or a root-level field a downstream app reads — set `entity_envelope` on the app class or override `decorate_entity()`, rather than reaching past `entity_bytes()` to mutate the serialised dict. See [Entity envelope](../concepts/common.md#entity-envelope). Four connectors hand-rolled that pass and produced four incompatible wire shapes; a declared override is the same change with the fleet able to see it.
 
-## App (Extractor)
+### What happens under the hood
 
-The core of your connector is a `SqlMetadataExtractor` subclass. Override `@task` methods for fetching metadata and transforming it via asset mappers. The `run()` method orchestrates the full pipeline.
+Each `@task` method on `SqlApp` becomes a Temporal activity. The default `run()`:
+
+1. **Prime auth** --- one serial connection before the parallel burst, so a source that caches authentication (MySQL 8's `caching_sha2_password`) does not lock the account out. A failure here raises its typed error and nothing else runs.
+2. **Extract** --- `extract_databases`, `extract_schemas`, `extract_tables` and `extract_columns` run **in parallel**, each streaming its query's rows verbatim into `raw/<entity>/records.json`.
+3. **Transform** --- the matching `transform_*` tasks run in parallel, each reading its raw file and running every row through its `map_*` method into `transformed/<entity>/entities.json`.
+4. **Finalize** --- `finalize_extraction` verifies the transformed tree is whole and returns the `ExtractionOutput` publish reads.
+
+Every non-empty extract and transform task output is a `FileReference` with a canonical `storage_path`, which the task's persist step uploads to the **deployment store**. Do not add `self.upload()` calls or an upload task for that.
+
+Publish reads Atlan's store, which in an SDR deployment is a different store from the deployment store ([ADR-0014](../adr/0014-two-store-storage-architecture.md)). So hand the transformed tree on with `upload_refs()`, by reference, and return the prefix it delivered to. atlan-mysql-app does this on every run; in a single-store deployment the same call writes to the one store:
 
 ```python
-# app/connector.py
-import asyncio
-from application_sdk.contracts import UploadInput
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    ExtractionInput,
-    ExtractionOutput,
-    ExtractionTaskInput,
-    FetchDatabasesInput,
-    FetchDatabasesOutput,
-    FetchSchemasInput,
-    FetchSchemasOutput,
-    FetchTablesInput,
-    FetchTablesOutput,
-    FetchColumnsInput,
-    FetchColumnsOutput,
-)
-from application_sdk.app import task
-from application_sdk.observability import get_logger
-
-from app.clients import PostgresClient
-from app.contracts import MyCredential, MetadataConfig, MyFetchInput
-
-logger = get_logger(__name__)
+from application_sdk.contracts.base import Output
+from application_sdk.contracts.storage import DeclaredFile, UploadRefsInput
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput
 
 
-def _make_task_input(cls, src: ExtractionInput, **extra):
-    """Build a typed task input from the top-level extraction input."""
-    return cls(
-        workflow_id=src.workflow_id,
-        connection=src.connection,
-        credential_guid=src.credential_guid,
-        credential_ref=src.credential_ref,
-        output_prefix=src.output_prefix,
-        output_path=src.output_path,
-        exclude_filter=src.exclude_filter,
-        include_filter=src.include_filter,
-        temp_table_regex=src.temp_table_regex,
-        **extra,
-    )
+class PostgresExtractionOutput(Output):
+    connection_qualified_name: str = ""
+    transformed_data_prefix: str = ""
+    publish_state_prefix: str = ""
+    current_state_prefix: str = ""
 
 
-class PostgresApp(SqlMetadataExtractor):
-    sql_client_class = PostgresClient  # enables default credential loading via super()
+class PostgresApp(SqlApp):
+    ...  # SQL templates and map_* methods as above
 
-    @task(timeout_seconds=1800)
-    async def fetch_databases(self, input: MyFetchInput) -> FetchDatabasesOutput:
-        """Fetch the current database name from PostgreSQL."""
-        client = await self._load_sql_client(input)  # resolves credentials via context
-
-        rows = []
-        async for batch in client.run_query(
-            "SELECT datname AS database_name FROM pg_database WHERE datname = current_database()"
-        ):
-            rows.extend(batch)
-
-        databases = [r["database_name"] for r in rows]
-        return FetchDatabasesOutput(
-            databases=databases,
-            chunk_count=1,
-            total_record_count=len(databases),
+    async def run(self, input: ExtractionInput) -> PostgresExtractionOutput:
+        out = await super().run(input)
+        delivered = await self.upload_refs(
+            UploadRefsInput(
+                files=[DeclaredFile(ref=ref) for ref in out.transformed_files],
+                source_prefix=out.transformed_data_prefix,
+                prefix=out.transformed_data_prefix,
+            )
         )
-
-    @task(timeout_seconds=1800)
-    async def fetch_schemas(self, input: MyFetchInput) -> FetchSchemasOutput:
-        """Fetch non-system schemas."""
-        client = await self._load_sql_client(input)
-
-        rows = []
-        async for batch in client.run_query("""
-            SELECT s.schema_name
-            FROM information_schema.schemata s
-            WHERE s.schema_name NOT LIKE 'pg_%'
-              AND s.schema_name != 'information_schema'
-        """):
-            rows.extend(batch)
-
-        schemas = [r["schema_name"] for r in rows]
-        return FetchSchemasOutput(
-            schemas=schemas,
-            chunk_count=1,
-            total_record_count=len(schemas),
-        )
-
-    @task(timeout_seconds=1800)
-    async def fetch_tables(self, input: MyFetchInput) -> FetchTablesOutput:
-        """Fetch tables from information_schema."""
-        client = await self._load_sql_client(input)
-
-        rows = []
-        async for batch in client.run_query("""
-            SELECT t.table_schema, t.table_name
-            FROM information_schema.tables t
-            WHERE t.table_type = 'BASE TABLE'
-        """):
-            rows.extend(batch)
-
-        tables = [f"{r['table_schema']}.{r['table_name']}" for r in rows]
-        return FetchTablesOutput(
-            tables=tables,
-            chunk_count=1,
-            total_record_count=len(tables),
-        )
-
-    @task(timeout_seconds=3600)
-    async def fetch_columns(self, input: MyFetchInput) -> FetchColumnsOutput:
-        """Fetch column metadata."""
-        client = await self._load_sql_client(input)
-
-        count = 0
-        async for batch in client.run_query("""
-            SELECT c.table_schema, c.table_name, c.column_name,
-                   c.data_type, c.ordinal_position
-            FROM information_schema.columns c
-        """):
-            count += len(batch)
-
-        return FetchColumnsOutput(chunk_count=1, total_record_count=count)
-
-    async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        """Orchestrate the full extraction pipeline."""
-        task_input = _make_task_input(MyFetchInput, input)
-
-        db_result, schema_result, table_result, col_result = await asyncio.gather(
-            self.fetch_databases(task_input),
-            self.fetch_schemas(task_input),
-            self.fetch_tables(task_input),
-            self.fetch_columns(task_input),
-        )
-
-        # Explicit hand-off to Atlan: routes through atlan-objectstore in SDR so
-        # the publish app can read it. The interceptor only writes to infra.storage
-        # (customer-owned). Omitting this call is a silent failure. See ADR-0014.
-        await self.upload(UploadInput(local_path=input.output_path))
-
-        return ExtractionOutput(
-            databases_extracted=db_result.total_record_count,
-            schemas_extracted=schema_result.total_record_count,
-            tables_extracted=table_result.total_record_count,
-            columns_extracted=col_result.total_record_count,
+        return PostgresExtractionOutput(
+            connection_qualified_name=out.connection_qualified_name,
+            transformed_data_prefix=delivered.prefix,
+            publish_state_prefix=out.publish_state_prefix,
+            current_state_prefix=out.current_state_prefix,
         )
 ```
 
-### What happens under the hood
-
-Each `@task` method becomes a Temporal activity. The `run()` method orchestrates the full pipeline:
-
-1. **Fetch phase** --- fetch databases, schemas, tables, and columns **in parallel** via `asyncio.gather`
-2. **Transform phase** --- map raw results to pyatlan entities using the asset mapper
-3. **Upload** --- `App.upload()` pushes the final output to `atlan-objectstore` (Atlan-owned) so the publish app can index it. This explicit call is required — the activity interceptor only writes `FileReference` objects to the customer-owned `objectstore`. See [ADR-0014](../adr/0014-two-store-storage-architecture.md).
-4. **Return** --- aggregate counts into an `ExtractionOutput`
+`delivered.prefix` is `""` when there was nothing to deliver, which tells publish not to diff the tenant against an empty tree. Return your own output model, not `ExtractionOutput`: its validator back-fills an empty `transformed_data_prefix` from `output_path`, which undoes that signal.
 
 ### Available task methods
 
 | Method | Input | Output | Default behavior |
 |--------|-------|--------|-----------------|
-| `fetch_databases` | `FetchDatabasesInput` | `FetchDatabasesOutput` | Default uses `sql_client_class` + `fetch_database_sql`; raises `NotImplementedError` if those are unset |
-| `fetch_schemas` | `FetchSchemasInput` | `FetchSchemasOutput` | Default uses `sql_client_class` + `fetch_schema_sql`; raises `NotImplementedError` if those are unset |
-| `fetch_tables` | `FetchTablesInput` | `FetchTablesOutput` | Default uses `sql_client_class` + `fetch_table_sql`; raises `NotImplementedError` if those are unset |
-| `fetch_columns` | `FetchColumnsInput` | `FetchColumnsOutput` | Default uses `sql_client_class` + `fetch_column_sql`; raises `NotImplementedError` if those are unset |
-| `fetch_views` | `FetchViewsInput` | `FetchViewsOutput` | Optional --- add for databases with views |
-| `transform_data` | `TransformInput` | `TransformOutput` | Override to map raw results via asset mapper |
+| `extract_databases` / `extract_schemas` / `extract_tables` / `extract_columns` | `ExtractionTaskInput` | `ExtractionTaskOutput` | Runs the matching `fetch_*_sql` through `sql_client_class` |
+| `extract_views` / `extract_procedures` | `ExtractionTaskInput` | `ExtractionTaskOutput` | Optional: not driven by the default `run()`; set `fetch_view_sql` / `fetch_procedure_sql` and call them from a `run()` override |
+| `transform_databases` / `transform_schemas` / `transform_tables` / `transform_columns` | `TransformInput` | `TransformOutput` | Runs each raw row through the matching `map_*` method |
+| `transform_views` / `transform_procedures` | `TransformInput` | `TransformOutput` | Optional, as for the extract pair |
+
+Override an `extract_*` or `transform_*` task to change one entity's SQL or mapper; call `extract_entity` / `transform_entity` from the override rather than writing the files yourself.
 
 ### Excluding tables and views by name
 
@@ -457,29 +370,66 @@ Read `input.temp_table_regex` in custom code, not `exclude_table_regex`.
 
 ### Adding custom tasks
 
-Use `@task` to define additional extraction steps and override `run()` to include them:
+A custom entity (SDK ≥ 3.60.0) is an `extract_*` /
+`transform_*` task pair whose bodies call `extract_entity` and
+`transform_entity`. Those two own the
+streaming, the event-loop offload and the canonical `FileReference` keys
+publish reads, so call them rather than writing the files yourself. A
+`run()` that drives the extra pair folds its output in with
+`finalize_extraction`, which verifies the whole transformed tree:
 
 ```python
-from application_sdk.templates.contracts import (
-    FetchViewsInput,
-    FetchViewsOutput,
+from application_sdk.app import task
+from application_sdk.templates import SqlApp
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionInput,
+    ExtractionOutput,
+    ExtractionTaskInput,
+    ExtractionTaskOutput,
+    TransformInput,
+    TransformOutput,
 )
 
-class PostgresApp(SqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_views(self, input: MyFetchInput) -> FetchViewsOutput:
-        """Fetch views from PostgreSQL."""
-        # ... implementation
-        return FetchViewsOutput(chunk_count=1, total_record_count=len(views))
+
+class PostgresApp(SqlApp):
+    fetch_function_sql = "SELECT ..."
+
+    def map_function(self, record, connection_qn):
+        ...  # build and return a pyatlan_v9 Function asset
+
+    @task()
+    async def extract_functions(
+        self, input: ExtractionTaskInput
+    ) -> ExtractionTaskOutput:
+        return await self.extract_entity(
+            entity_type="function",
+            sql_template=self.fetch_function_sql,
+            input=input,
+        )
+
+    @task()
+    async def transform_functions(self, input: TransformInput) -> TransformOutput:
+        return await self.transform_entity(
+            entity_type="function", mapper_fn=self.map_function, input=input
+        )
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:
-        """Override run() to include views in the extraction."""
-        result = await super().run(input)
-
-        views_result = await self.fetch_views(_make_task_input(MyFetchInput, input))
-        result.views_extracted = views_result.total_record_count
-        return result
+        base = await super().run(input)
+        task_input = self.build_task_input(
+            ExtractionTaskInput, input, cred_ref=self.resolve_credential_ref(input)
+        )
+        raw = await self.extract_functions(task_input)
+        out = await self.transform_functions(
+            self.build_transform_input(task_input, raw.raw_file)
+        )
+        return await self.finalize_extraction(base, [out])
 ```
+
+A `run()` that replaces `SqlApp.run()` instead of calling `super().run()` must
+still end in `finalize_extraction`; conformance rule P068 flags one that does
+not. `_extract_entity`, `_transform_entity` and `_resolve_output_path` are the
+names these methods had before 3.60.0; they are deprecated and removed in
+v4.0.0.
 
 ## Typed Contracts
 
@@ -495,22 +445,11 @@ All SQL metadata extraction contracts live in `application_sdk.templates.contrac
 
 ```
 ExtractionInput          -- top-level input to run()
-ExtractionOutput         -- top-level output from run()
-ExtractionTaskInput      -- shared fields for all per-task inputs
-  FetchDatabasesInput    -- passed to fetch_databases()
-  FetchSchemasInput      -- passed to fetch_schemas()
-  FetchTablesInput       -- passed to fetch_tables()
-  FetchColumnsInput      -- passed to fetch_columns()
-  FetchProceduresInput   -- passed to fetch_procedures()
-  FetchViewsInput        -- passed to fetch_views()
-  TransformInput         -- passed to transform_data(); carries typename, file_names, chunk_start
-FetchDatabasesOutput     -- databases: list[str], chunk_count, total_record_count
-FetchSchemasOutput       -- schemas: list[str], chunk_count, total_record_count
-FetchTablesOutput        -- tables: list[str], chunk_count, total_record_count
-FetchColumnsOutput       -- chunk_count, total_record_count
-FetchProceduresOutput    -- chunk_count, total_record_count
-FetchViewsOutput         -- chunk_count, total_record_count
-TransformOutput          -- typename, total_record_count, chunk_count
+ExtractionOutput         -- top-level output from run(); what publish reads
+ExtractionTaskInput      -- shared fields for every extract_* task; build it with build_task_input()
+  TransformInput         -- passed to every transform_* task; build it with build_transform_input()
+ExtractionTaskOutput     -- raw_file: FileReference | None (None for no SQL or zero rows), total_record_count
+TransformOutput          -- transformed_file: FileReference | None (None for an empty input), total_record_count
 ```
 
 ### Bounded collections
@@ -629,41 +568,18 @@ v3 provides in-memory mock implementations of infrastructure services so you can
 
 ```python
 # tests/test_extractor.py
-import pytest
-from application_sdk.testing import MockStateStore, MockSecretStore
-from application_sdk.templates.contracts import (
-    FetchDatabasesInput,
-    FetchDatabasesOutput,
-)
 from app.connector import PostgresApp
 
 
-@pytest.fixture
-def state_store():
-    return MockStateStore()
-
-
-@pytest.fixture
-def secret_store():
-    return MockSecretStore()
-
-
-@pytest.mark.asyncio
-async def test_fetch_databases_contract():
-    """Verify fetch_databases returns the correct contract shape."""
-    # The task method can be called directly in tests
-    # (Temporal decorators are no-ops outside the worker)
-    extractor = PostgresApp()
-
-    input = FetchDatabasesInput(
-        workflow_id="test-workflow-1",
-        credential_ref=None,
+def test_map_table_builds_qualified_name():
+    """A mapper is a plain method of one row: no Temporal, no SQL client."""
+    table = PostgresApp().map_table(
+        {"database_name": "sales", "schema_name": "public", "table_name": "orders"},
+        "default/postgres/1700000000",
     )
 
-    # In a real test, you would mock the SQL client
-    # Here we verify the contract types are correct
-    assert isinstance(input, FetchDatabasesInput)
-    assert input.workflow_id == "test-workflow-1"
+    assert table.name == "orders"
+    assert table.qualified_name == "default/postgres/1700000000/sales/public/orders"
 ```
 
 ### Mock infrastructure

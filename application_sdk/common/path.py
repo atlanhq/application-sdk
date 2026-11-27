@@ -2,7 +2,17 @@ import os
 import sys
 from pathlib import Path
 
-from application_sdk.constants import WINDOWS_EXTENDED_PATH_PREFIX
+__all__ = [
+    "convert_to_extended_path",
+    "WINDOWS_EXTENDED_PATH_PREFIX",
+]
+
+
+#: The Windows extended-length path prefix (``\\?\``). The same value as
+#: ``application_sdk.constants.WINDOWS_EXTENDED_PATH_PREFIX``, defined here so
+#: this module does not import ``constants`` (and python-dotenv) on the API
+#: host, which ships it with the object store's write path.
+WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 
 
 def convert_to_extended_path(path: str | Path) -> str:

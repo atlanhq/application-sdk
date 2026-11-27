@@ -10,9 +10,11 @@ from unittest import mock
 import pydantic
 import pytest
 from temporalio.exceptions import ActivityError
+from temporalio.worker.workflow_sandbox import RestrictedWorkflowAccessError
+from temporalio.workflow import NondeterminismError
 
 from application_sdk.app.base import App
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.constants import SHUTDOWN_DRAIN_DELAY_SECONDS
 from application_sdk.contracts.base import Input, Output
@@ -118,14 +120,6 @@ def _WorkerWrapperForDrain(*, shutdown_drain_delay_seconds: float = 0.0):
 class TestCreateWorker:
     """Tests for create_worker()."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def test_returns_app_worker_instance(self) -> None:
         class _WorkerTestApp(App):
             @task(timeout_seconds=60)
@@ -176,7 +170,8 @@ class TestCreateWorker:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """LogInterceptor, MetricsInterceptor, TraceInterceptor are
-        unconditional and the EventInterceptor stays gated by env var."""
+        unconditional, behind RunFlagsInterceptor, which pins the run-shaping
+        flags ahead of every interceptor that reads them."""
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "true")
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
 
@@ -202,6 +197,7 @@ class TestCreateWorker:
             create_worker(client)
 
         interceptor_types = [type(i).__name__ for i in interceptors_used]
+        assert interceptor_types[0] == "RunFlagsInterceptor"
         assert "LogInterceptor" in interceptor_types
         assert "MetricsInterceptor" in interceptor_types
         assert "TraceInterceptor" in interceptor_types
@@ -209,9 +205,18 @@ class TestCreateWorker:
         # CleanupInterceptor is no longer registered — cleanup is via App.on_complete()
         assert "CleanupInterceptor" not in interceptor_types
 
-    def test_event_interceptor_disabled_via_env(
+    def test_event_interceptor_stays_registered_when_disabled_via_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Events off at worker start no longer drops the event interceptor.
+
+        A run that started on a pod with events on must replay here, and its
+        history has ``publish_event`` commands. So the workflow side and the
+        ``publish_event`` activity stay registered, and the worker's "off" is
+        carried by RunFlagsInterceptor, which pins it on runs this worker
+        starts. Only the activity start/end events (not workflow commands)
+        follow the worker's value directly.
+        """
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_EVENT_INTERCEPTOR", "false")
         monkeypatch.setenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "true")
 
@@ -223,11 +228,23 @@ class TestCreateWorker:
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
+        from application_sdk.execution._temporal.interceptors.events import (
+            EventActivityInboundInterceptor,
+            EventInterceptor,
+            publish_event,
+        )
+        from application_sdk.execution._temporal.run_flags import (
+            RunFlags,
+            RunFlagsInterceptor,
+        )
+
         client = _make_mock_client()
         interceptors_used: list = []
+        activities_used: list = []
 
         def capture_worker(*args, **kwargs):
             interceptors_used.extend(kwargs.get("interceptors", []))
+            activities_used.extend(kwargs.get("activities", []))
             return mock.MagicMock()
 
         with mock.patch(
@@ -237,7 +254,16 @@ class TestCreateWorker:
             create_worker(client)
 
         interceptor_types = [type(i).__name__ for i in interceptors_used]
-        assert "EventInterceptor" not in interceptor_types
+        assert "EventInterceptor" in interceptor_types
+        assert publish_event in activities_used
+        run_flags = interceptors_used[0]
+        assert isinstance(run_flags, RunFlagsInterceptor)
+        assert run_flags._inbound_cls._live == RunFlags(events=False, cleanup=True)
+        (events,) = [i for i in interceptors_used if isinstance(i, EventInterceptor)]
+        assert not isinstance(
+            events.intercept_activity(mock.MagicMock()),
+            EventActivityInboundInterceptor,
+        )
         # The observability trio still runs.
         assert "LogInterceptor" in interceptor_types
         assert "MetricsInterceptor" in interceptor_types
@@ -1159,14 +1185,6 @@ class TestAppWorker:
 class TestLivenessInterceptorWiring:
     """create_worker wires the LivenessInterceptor only when on_activity given."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
     def _interceptor_types(on_activity) -> list[str]:
         class _LivenessApp(App):
@@ -1393,34 +1411,19 @@ class TestOnDrained:
         pusher.stop.assert_awaited_once()
 
     def test_create_worker_forwards_on_drained(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-        try:
+        class _DrainApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
 
-            class _DrainApp(App):
-                async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                    return _WorkerOutput()
-
-            client = _make_mock_client()
-            drained = mock.MagicMock()
-            with mock.patch("application_sdk.execution._temporal.worker.Worker"):
-                worker = create_worker(client, on_drained=drained)
-            assert worker._on_drained is drained
-        finally:
-            AppRegistry.reset()
-            TaskRegistry.reset()
+        client = _make_mock_client()
+        drained = mock.MagicMock()
+        with mock.patch("application_sdk.execution._temporal.worker.Worker"):
+            worker = create_worker(client, on_drained=drained)
+        assert worker._on_drained is drained
 
 
 class TestWorkerPoolQueueResolution:
     """ADR-0016 §3: startup pool→queue diagnostic log emitted by create_worker."""
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _register_pooled_app(self, pool: str) -> None:
         class _PoolApp(App):
@@ -1516,14 +1519,6 @@ class TestNeedsLockNoEffectWarning:
     hide it in production; this warning is the one operators see.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     def _lock_warnings(self, locked: bool) -> list[mock._Call]:
         from application_sdk.execution import needs_lock
 
@@ -1572,16 +1567,10 @@ class TestNeedsLockNoEffectWarning:
 class TestWorkflowFailureExceptionTypes:
     """Pre-user-code failures must fail the run, not retry the task forever."""
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
-    def _declared_types() -> tuple[type[BaseException], ...]:
+    def _declared_types(
+        fail_run_on_nondeterminism: bool = False,
+    ) -> tuple[type[BaseException], ...]:
         class _FailureTypesApp(App):
             @task(timeout_seconds=60)
             async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
@@ -1600,7 +1589,10 @@ class TestWorkflowFailureExceptionTypes:
             "application_sdk.execution._temporal.worker.Worker",
             side_effect=capture_worker,
         ):
-            create_worker(_make_mock_client())
+            create_worker(
+                _make_mock_client(),
+                fail_run_on_nondeterminism=fail_run_on_nondeterminism,
+            )
 
         return tuple(captured["workflow_failure_exception_types"])
 
@@ -1624,6 +1616,20 @@ class TestWorkflowFailureExceptionTypes:
         declared = self._declared_types()
         assert not issubclass(asyncio.CancelledError, declared)
         assert not issubclass(ActivityError, declared)
+
+    def test_production_retries_a_sandbox_refusal(self) -> None:
+        """By default a non-deterministic workflow task waits for a fixed build."""
+        declared = self._declared_types()
+        assert not issubclass(RestrictedWorkflowAccessError, declared)
+        assert not issubclass(NondeterminismError, declared)
+
+    def test_opt_in_fails_the_run_on_nondeterminism(self) -> None:
+        """A test worker fails the run, so its caller sees the error (FND-5513)."""
+        declared = self._declared_types(fail_run_on_nondeterminism=True)
+        assert issubclass(RestrictedWorkflowAccessError, declared)
+        assert issubclass(NondeterminismError, declared)
+        # Additive: the terminal input-decode failure is still declared.
+        assert issubclass(pydantic.ValidationError, declared)
 
 
 class TestDescribeExceptionChain:
@@ -1832,14 +1838,6 @@ class TestArtifactValidationPostureAtBoot:
     registered.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
     def _posture_rows(logger: mock.MagicMock) -> list[dict]:
         from application_sdk.observability.events import (
@@ -1970,14 +1968,6 @@ class TestPreflightVerifyStorageWiring:
     every existing test still green.
     """
 
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
     @staticmethod
     def _captured_verify_storage(monkeypatch) -> list[bool]:
         """Build a worker, returning the ``verify_storage`` of every gate built."""
@@ -2058,14 +2048,6 @@ class TestWorkerAndWorkflowResolveTheSameGatePolicy:
     malformed declarations included, or a hard block could be retried, or a
     soft app blocked, by whichever frame disagrees.
     """
-
-    def setup_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     @staticmethod
     def _worker_side() -> dict:

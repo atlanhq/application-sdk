@@ -1,8 +1,9 @@
 # Testing
 
-- Test command and conventions: `docs/standards/testing.md`.
+- Test commands: `docs/agents/dev-commands.md` (Testing), the one place they are written down. Conventions: `docs/standards/testing.md`.
 - New code should target 85% coverage per `docs/standards/review-checklist.md` (the tooling threshold in `pyproject.toml` is 85% — CI fails below it). The same floor applies to each top-level `application_sdk` subpackage on its own, except those listed with a different floor in `[tool.application-sdk.coverage.package-floors]`; the coverage leg uploads `coverage.xml` and `htmlcov/` as the `sdk-unit-test-coverage` artifact (14 days).
 - Current tests live in `tests/unit/`, which mirrors `application_sdk/`: `application_sdk/a/b/c.py` → `tests/unit/a/b/test_c.py` (so `_runtime/` → `tests/unit/_runtime/`, `execution/_temporal/interceptors/` → `tests/unit/execution/_temporal/interceptors/`). `tests/unit/test_unit_tree_mirrors_package.py` fails a test directory with no package counterpart; a deliberate exception goes in its `_NOT_MIRRORED` with what it tests instead.
+- Before writing a local double, look for a shared one. `tests/unit/_doubles.py` holds `FakeClock` (an injected monotonic clock with `advance`), `StaticHandler` (a `Handler` whose entry points succeed empty), `SiblingProbe` (fan-out first-failure), `loaded_after_importing` / `loaded_after_running` (fresh-interpreter import probes), `record_connect_params` (SQLAlchemy `do_connect` recorder) and the Temporal interceptor inputs; `MockSecretStore` records `get_optional` calls (`get_get_optional_calls()`), so a store that only records or answers from a dict is a `MockSecretStore`. Directory fixtures live in the nearest `conftest.py`: `store` in `tests/unit/storage/` (memory) and `tests/integration/` (local), `mock_next` in `tests/unit/execution/_temporal/interceptors/`, and the emulator guards `require_minio` / `require_azurite` / `require_testbench` in `tests/integration/storage/` (opt in with `pytestmark = pytest.mark.usefixtures("require_minio")`). A double used by one module stays in it; move it to `_doubles.py` when a second module needs it.
 - Keep a test module under 1,500 lines. When one grows past that, split it by the area it covers and move shared handlers and factories into a support module beside it — `tests/unit/handler/test_service_*.py` share `_service_support.py`.
 - A unit test that takes ≥10s on its own (a throughput comparison, a 100k-key scale probe) gets `@pytest.mark.perf`. `addopts` excludes it from the 12-leg matrix; the `Unit Perf Tests` job runs it once, in one process, with `uv run pytest tests/unit -m perf`. Every other unit test runs under a 120s per-test `--timeout` in CI, and only the ubuntu 3.12 leg measures coverage.
 - An unconditional `@pytest.mark.skip` must name its ticket in the reason (`reason="waits on FND-1234"`); the hook in `tests/conftest.py` fails the test otherwise (FND-4286). Fix or delete a broken test instead of skipping it. `skipif` is not checked.
@@ -12,7 +13,16 @@
 - `addopts` has `--strict-markers`: a mark not listed in `[tool.pytest.ini_options].markers` (or registered by a plugin) fails collection. Register a new mark there before using it.
 - No reruns and no flaky marker: CI runs each test once. Fix a flaky test in place.
 - The conformance package's own tests (`packages/conformance/tests/`) share helpers through `tests/_helpers.py`: `ids` / `active_ids` (all findings vs unsuppressed only — the runner gate's view), `write_py`, `scan_files(scan_all, tmp_path, files)`, `uv_lock`, `extract_node` and `sdk_root()`. Import them (`from tests._helpers import active_ids`) instead of copying a helper from the nearest test file. Seven drift guards (`test_contract_ledger_drift`, `test_dependency_audience`, `test_deprecations_manifest`, `test_public_errors_drift`, `test_removed_imports`, `test_sdk_type_aliases_drift`, `test_toolkit_baseline_drift`) get the monorepo root from `sdk_root()`, which fails under `CI` and skips only locally: a miss in CI means the layout changed, which is when the guard is needed. Other drift tests (for example `test_sdk_contract_fields_drift`) do not use it yet; a new path-based drift guard should.
+- The CI script tests (`.github/scripts/tests/`) run under `.github/scripts/pytest.ini`, not the root config. Its `pythonpath` makes every script and every shared helper there (`_workflows.py`, `_frozen_clock.py`, `_gha_expr.py`, …) importable by name, so never add a `sys.path.insert` for either directory (`test_pytest_ini.py` fails one). Read workflow YAML through `_workflows.py` instead of a per-file `_load` / `_job` / `_step`. See `docs/standards/ci.md` ("Running the script tests").
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
+
+## Shared Harness Doubles
+
+The four harness seams each have one shared double under `tests/unit/testing/`: `_atlas_fakes.py` (pyatlan), `_cluster_fakes.py` (Kubernetes), `_temporal_fakes.py` (Temporal) and `_ae_fakes.py` (Automation Engine). Use them; do not write a per-file `_FakeAE` or a private `_node` / `_succeeded` / `_result` builder.
+
+- `FakeAE` implements every public `AEClient` method with the client's parameters, records each call's bound arguments (`ae.calls_to(m)`, `ae.args(m, *names)`, `ae.methods`), and serves scripted `poll_native_status` readings in order. `test_ae_fakes.py` fails when a client method is added or its signature changes, so update the fake in the same PR.
+- Build `DAGRunResult` / `DAGNodeResult` with `node()`, `run_result()`, `succeeded()`, `failed()`, `stalled()` and `numbered()` from the same module.
+- A test that needs failure behaviour the constructor cannot script (for example, a submit that reports a run id and then raises) uses a thin `FakeAE` subclass that calls `super()`.
 
 ## Shared State Under xdist
 
@@ -145,6 +155,21 @@ they read a mock, and now pin them as strict `xfail`s.
 them to every test through an autouse fixture, so a test needs no reset of its
 own. Request them by name only where ordering matters — a fixture that
 registers an app must run after the reset.
+
+Do not add a `setup_method` / `teardown_method`, `try`/`finally`, or fixture
+whose job is `AppRegistry.reset()` or `TaskRegistry.reset()`. pytest runs the
+conftest autouse fixtures before a class's `setup_method` and tears them down
+after `teardown_method`, so each test already starts and ends with both
+registries empty.
+
+`clear_infrastructure()` is different: only `tests/unit/conftest.py` clears the
+infrastructure context around every test. In `tests/unit`, do not add that
+cleanup either. In `tests/integration`, a test or fixture that calls
+`set_infrastructure` must still clear it in its own finalizer, or the next test
+on the worker inherits the context.
+
+Call a reset inside a test only when the reset is the behaviour under test (an
+app that is no longer registered, a cleared context).
 
 ## What SDK Review Checks for Tests
 

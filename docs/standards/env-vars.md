@@ -39,6 +39,28 @@ Two rules keep the line clear:
 To list every test-harness variable in use:
 `grep -rhoE '"E2E_[A-Z_]+' application_sdk/testing | sort -u`.
 
+## Coverage is enforced
+
+`tests/unit/test_env_var_docs_coverage.py` collects every env-var name
+`application_sdk/` reads (outside `testing/`) from the source by AST, and fails when:
+
+- a name appears in no table row of `docs/configuration.md` (its own row, or a
+  fallback named in another row; a mention in prose does not count), is not in
+  `_REMOVED_ENV_VARS`, and is not on the test's short third-party allowlist
+  (`AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `HOSTNAME`);
+- `.env.example` sets a name the SDK does not read, or one listed as removed.
+
+A name built with an f-string (`f"ATLAN_POOL_{pool}_QUEUE"`) is documented with a
+placeholder: `ATLAN_POOL_<POOL>_QUEUE`.
+
+The test finds reads through the stdlib (`os.getenv`, `os.environ`, including
+`from os import getenv as …` and `from os import environ as …`) and through any
+helper that forwards a named parameter to one (`env_bool`, `env_int`, a local
+`_bool`). Keys are matched by position or by keyword (`os.getenv(key=…)`,
+`env_bool(key=…)`), so a new helper of that shape needs no change to the test.
+It does not follow a key passed through `*args` / `**kwargs`, or a reader
+reached through a plain assignment (`read = os.getenv`).
+
 ## The registry
 
 `application_sdk/common/env_warnings.py`:
@@ -77,6 +99,14 @@ Do NOT add an entry when:
   grep -rE "\"OLD_ENV_VAR_NAME\"" application_sdk/ --include="*.py"
   ```
   If any non-test hit remains, it's still alive — don't add.
+- The SDK no longer reads the env var, but **apps or the SDK's own CI still
+  use it as a contract**. A grep of `application_sdk/` cannot see that, so
+  also grep the shared actions under `.github/actions/`, the templates under
+  `.claude/commands/`, and connector `main.py` files before calling a name dead.
+  - Example: `ATLAN_LOCAL_DEVELOPMENT`. Connector `main.py` files read it to
+    choose the embedded runtime, and `connector-integration-tests` sets it.
+    Listing it as removed and dropping it from that action broke connector
+    integration tests (see `docs/configuration.md`, Local development).
 
 ## What the user sees
 
@@ -185,5 +215,6 @@ env:
 3. Add the old name to `_REMOVED_ENV_VARS` in
    `application_sdk/common/env_warnings.py` with a one-line comment on why.
 4. Update any docs that reference the old name
-   (`docs/configuration.md`, `docs/guides/deployment.md`, etc.).
+   (`docs/configuration.md`, `docs/guides/deployment.md`, etc.), and drop it
+   from `.env.example`.
 5. Mention the change in the PR description so the changelog flags it.

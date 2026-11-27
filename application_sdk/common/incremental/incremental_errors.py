@@ -12,6 +12,21 @@ from application_sdk.errors.leaves import (
     PreconditionError,
 )
 
+__all__ = [
+    "ColumnBatchInputError",
+    "ColumnExtractionAnalysisError",
+    "ConnectionQualifiedNameEmptyError",
+    "ConnectionQualifiedNameFormatError",
+    "ConnectionQualifiedNameMissingError",
+    "CurrentStateManifestError",
+    "DaftAnalysisError",
+    "DuckDbConnectionClosedError",
+    "JsonScanError",
+    "MarkerUploadError",
+    "StateDownloadError",
+    "TableScopeLoadError",
+]
+
 
 @dataclass(kw_only=True)
 class MarkerUploadError(DependencyUnavailableError):

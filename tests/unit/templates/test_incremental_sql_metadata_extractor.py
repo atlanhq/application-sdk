@@ -551,7 +551,7 @@ class TestUpdateIncrementalMarkerInlineImport:
                 new=AsyncMock(return_value="2025-01-01T00:00:00Z"),
             ),
             patch(
-                "application_sdk.common.incremental.marker.upload_file_from_bytes",
+                "application_sdk.common.incremental.marker.upload_bytes",
                 new=AsyncMock(),
             ),
             warnings.catch_warnings(),
@@ -1308,7 +1308,7 @@ class TestRunOrchestration:
         fake_ref = CredentialRef(credential_guid="some-guid")
         with (
             patch(
-                "application_sdk.credentials.ref._guid_credential_ref",
+                "application_sdk.templates.incremental_sql_metadata_extractor._guid_credential_ref",
                 return_value=fake_ref,
             ) as mock_guid_ref,
             self._patch_workflow_info(),

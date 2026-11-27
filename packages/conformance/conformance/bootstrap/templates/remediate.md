@@ -146,7 +146,10 @@ rule's `remediation_reference` — for the connector's per-rule sub-issue. See
 Only after Phase 0 has converged (or been recorded as residue):
 
 1. Resolve programs dir:
-   - Inside a connector repo: `PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)`
+   - Inside a connector repo, or the SDK monorepo (which source-pins the
+     package to its own `packages/conformance` checkout, so unreleased rule
+     and program changes are the ones that run):
+     `PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)`
    - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
 2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
 3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.

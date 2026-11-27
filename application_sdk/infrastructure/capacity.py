@@ -25,6 +25,14 @@ from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "CapacityPool",
+    "configure_capacity_pool",
+    "get_capacity_pool",
+    "LocalCapacityPool",
+]
+
+
 logger = get_logger(__name__)
 
 

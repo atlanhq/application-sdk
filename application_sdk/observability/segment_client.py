@@ -4,7 +4,7 @@ import logging
 import threading
 import weakref
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -25,6 +25,13 @@ from application_sdk.observability.background_loop import (
 from application_sdk.observability.models import MetricRecord
 from application_sdk.observability.utils import in_temporal_workflow
 from application_sdk.version import __version__
+
+__all__ = [
+    "SegmentBatchPayload",
+    "SegmentClient",
+    "SegmentTrackEvent",
+]
+
 
 # Default cap on queued events. Without one, a Segment outage grows the queue
 # for as long as metrics are emitted; at the cap new events are dropped and
@@ -558,7 +565,7 @@ class SegmentClient:
             userId=user_id,
             event=metric_record.name,
             properties=event_properties,
-            timestamp=datetime.fromtimestamp(metric_record.timestamp).isoformat(),
+            timestamp=datetime.fromtimestamp(metric_record.timestamp, UTC).isoformat(),
         )
 
     async def _send_batch_to_segment(

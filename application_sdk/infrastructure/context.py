@@ -24,6 +24,15 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.infrastructure.state import StateStore
 
+__all__ = [
+    "clear_infrastructure",
+    "close_infrastructure",
+    "get_infrastructure",
+    "InfrastructureContext",
+    "is_single_store",
+    "set_infrastructure",
+]
+
 
 def is_single_store(
     storage: "ObjectStore | None", upstream_storage: "ObjectStore | None"

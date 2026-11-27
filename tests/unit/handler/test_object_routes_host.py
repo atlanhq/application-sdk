@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import os
 import sys
 from collections.abc import Callable, Iterator
@@ -27,36 +28,28 @@ from obstore.store import LocalStore, MemoryStore
 
 from application_sdk import _obstore_config
 from application_sdk.handler import (
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
-    Handler,
-    MetadataInput,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataOutput,
     object_routes,
 )
 from application_sdk.handler.asgi import build_asgi_app, default_object_store
 from application_sdk.handler.object_routes import HostObjectStore
-
-
-class _Handler(Handler):
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS)
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
-        return SqlMetadataOutput(objects=[])
+from tests.unit._doubles import StaticHandler
 
 
 def _stored(store: MemoryStore) -> dict[str, bytes]:
     """Every object in *store*, by key."""
     keys = [meta["path"] for batch in obstore.list(store) for meta in batch]
     return {key: bytes(obstore.get(store, key).bytes()) for key in keys}
+
+
+@pytest.fixture(autouse=True)
+def _sidecars_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sidecar emission at its default, whatever the runner's env says.
+
+    ``constants`` is loaded in this process, as on the worker, so its value is
+    the one ``storage._settings`` reads; on the host the env is read.
+    """
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
+    monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", True)
 
 
 @pytest.fixture
@@ -68,7 +61,7 @@ def memory() -> MemoryStore:
 def host(memory: MemoryStore) -> TestClient:
     store = HostObjectStore(memory, kind="memory")
     return TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=store),
         raise_server_exceptions=False,
     )
 
@@ -110,7 +103,7 @@ class _FailingStore:
 def test_a_failed_store_read_is_503_not_404() -> None:
     """IAM, network or 5xx: the store is unavailable; the config is not missing."""
     client = TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=_FailingStore()),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=_FailingStore()),
         raise_server_exceptions=False,
     )
     response = client.get("/workflows/v1/config/guid-1?type=credentials")
@@ -131,17 +124,22 @@ def test_an_unreadable_object_raises_rather_than_reads_as_missing(
     locked.mkdir()
     (locked / "config.json").write_text("{}")
     locked.chmod(0)
+    from application_sdk.storage.errors import StorageError
+
     try:
         store = HostObjectStore(LocalStore(tmp_path), kind="local")
-        with pytest.raises(obstore.exceptions.BaseError):
+        with pytest.raises(StorageError) as raised:
             asyncio.run(store.get_json("persistent-artifacts/config.json"))
+        assert isinstance(raised.value.__cause__, obstore.exceptions.BaseError)
         assert asyncio.run(store.get_json("absent/config.json")) is None
     finally:
         locked.chmod(0o700)
 
 
 def test_without_a_store_the_routes_answer_503() -> None:
-    bare = TestClient(build_asgi_app(_Handler(), app_name="mysql", object_store=None))
+    bare = TestClient(
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=None)
+    )
     assert bare.get("/workflows/v1/config/guid-1").status_code == 503
     assert bare.post("/workflows/v1/config/guid-1", json={}).status_code == 503
     upload = bare.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
@@ -168,13 +166,21 @@ def test_a_file_upload_is_stored_under_its_key(
     )
     assert data["key"].endswith(".csv")
     assert data["fileSize"] == 8
-    assert _stored(memory) == {data["key"]: b"a,b\n1,2\n"}
+    # Beside it, the worker's integrity sidecar: the digest of what was stored.
+    assert _stored(memory) == {
+        data["key"]: b"a,b\n1,2\n",
+        data["key"] + ".sha256": hashlib.sha256(b"a,b\n1,2\n").hexdigest().encode(),
+    }
 
 
 def test_an_empty_upload_is_stored(host: TestClient, memory: MemoryStore) -> None:
     response = host.post("/workflows/v1/file", files={"file": ("e.csv", b"")})
     assert response.status_code == 200
-    assert _stored(memory) == {response.json()["data"]["key"]: b""}
+    key = response.json()["data"]["key"]
+    assert _stored(memory) == {
+        key: b"",
+        key + ".sha256": hashlib.sha256(b"").hexdigest().encode(),
+    }
 
 
 @pytest.mark.parametrize(
@@ -214,8 +220,11 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
         data={"prefix": "persistent-artifacts/apps/redshift/credentials"},
     )
     assert response.status_code == 200
-    (key,) = _stored(memory)
-    assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
+    stored = _stored(memory)
+    assert len(stored) == 2  # the object and its sidecar
+    assert all(
+        key.startswith("persistent-artifacts/apps/mysql/uploads/") for key in stored
+    )
 
 
 def _worker(
@@ -364,12 +373,20 @@ class _Built:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.calls: list[tuple[str, str, dict[str, str] | None, str]] = []
         for kind in ("s3", "azure"):
-            monkeypatch.setattr(_obstore_config, f"make_{kind}_store", self._make(kind))
+            monkeypatch.setattr(
+                _obstore_config, f"build_{kind}_store", self._make(kind)
+            )
 
     def _make(self, kind: str) -> Any:
-        def make(
-            name: str, config: dict[str, str] | None = None, *, label: str, **_: object
-        ) -> MemoryStore:
+        # Record the obstore config the shared translation derives from the
+        # settings, so assertions read what obstore would be handed.
+        def make(settings: Any, *, label: str, **_: object) -> MemoryStore:
+            if kind == "s3":
+                name = settings.bucket
+                config, _opts = _obstore_config.s3_store_args(settings, {})
+            else:
+                name = settings.container
+                config, _opts = _obstore_config.azure_store_args(settings, {})
             self.calls.append(
                 (kind, name, None if config is None else dict(config), label)
             )
@@ -594,7 +611,7 @@ def test_without_obstore_there_is_no_store(
     def _missing(*_: object, **__: object) -> None:
         raise ModuleNotFoundError("No module named 'obstore'", name="obstore")
 
-    monkeypatch.setattr(_obstore_config, "make_s3_store", _missing)
+    monkeypatch.setattr(_obstore_config, "build_s3_store", _missing)
     monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
     assert HostObjectStore.from_env() is None
     assert "atlan-application-sdk-api[obstore]" in log.lines[0]
@@ -673,7 +690,7 @@ def test_without_a_store_the_host_answers_503(
 ) -> None:
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    host = TestClient(build_asgi_app(_Handler(), app_name="mysql"))
+    host = TestClient(build_asgi_app(StaticHandler(), app_name="mysql"))
     assert host.get("/workflows/v1/config/g1?type=credentials").status_code == 503
     assert (
         host.post("/workflows/v1/config/g1?type=credentials", json={}).status_code
@@ -713,3 +730,339 @@ def test_building_the_store_loads_no_sql_client() -> None:
         timeout=60,
     )
     assert out.stdout.strip() == "[]"
+
+
+# --- the shared storage seam: sidecar, gateway retry, classified failures ----
+
+# The shapes object_store renders a backend HTTP failure in. Hosts synthetic.
+_GATEWAY_NO_ROUTE = (
+    "Generic S3 error: Error performing GET "
+    "https://gateway.example.invalid/api/blobstorage/k in 8ms - "
+    "Server returned non-2xx status code: 404 Not Found: "
+    '{"message":"no Route matched with those values"}'
+)
+_GATEWAY_AUTH_UNAVAILABLE = (
+    "Generic S3 error: Error performing PUT "
+    "https://gateway.example.invalid/api/blobstorage/k in 8ms - "
+    "Server returned non-2xx status code: 401 Unauthorized: "
+    '{"code": 1005, "error": "invalid_client", "message": "x"}'
+)
+
+
+def _failing_writer(put: Callable[..., Any]) -> Callable[..., Any]:
+    """``obstore.open_writer_async`` (the upload's multipart writer) failing as
+    the async *put* does: it is entered with ``async with``, not awaited."""
+
+    class _Writer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._call = (args, kwargs)
+
+        async def __aenter__(self) -> Any:
+            args, kwargs = self._call
+            return await put(*args, **kwargs)
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    return _Writer
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record the gateway retry's backoff instead of sleeping through it."""
+    slept: list[float] = []
+
+    async def _sleep(delay: float) -> None:
+        slept.append(delay)
+
+    from application_sdk.storage import ops
+
+    # The host's requests go through the worker's store seam, and its retry.
+    monkeypatch.setattr(ops, "_retry_sleep", _sleep)
+    return slept
+
+
+def test_an_uploaded_file_verifies_through_the_workers_download(
+    host: TestClient, memory: MemoryStore, tmp_path: Path
+) -> None:
+    """The host's sidecar is the one the worker's download checks."""
+    from application_sdk.storage import ops
+
+    payload = b"id,name\n1,a\n"
+    key = host.post(
+        "/workflows/v1/file", files={"file": ("rows.csv", payload, "text/csv")}
+    ).json()["data"]["key"]
+    target = tmp_path / "rows.csv"
+    digest = asyncio.run(ops.download_file(key, target, memory, compute_hash=True))
+    assert digest == hashlib.sha256(payload).hexdigest()
+    # A corrupted object now fails the worker's check against the host's sidecar.
+    obstore.put(memory, key, b"id,name\n1,b\n")
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    with pytest.raises(StorageIntegrityError):
+        asyncio.run(ops.download_file(key, tmp_path / "again.csv", memory))
+
+
+def test_sidecars_off_writes_only_the_object(
+    host: TestClient, memory: MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", False)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    assert response.status_code == 200
+    assert list(_stored(memory)) == [response.json()["data"]["key"]]
+
+
+def test_a_failed_sidecar_write_still_stores_the_upload(
+    host: TestClient, memory: MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_put = obstore.put_async
+
+    async def _put(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if key.endswith(".sha256"):
+            raise RuntimeError("sidecar refused")
+        return await real_put(store, key, *args, **kwargs)
+
+    monkeypatch.setattr(obstore, "put_async", _put)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    assert response.status_code == 200
+    assert _stored(memory) == {response.json()["data"]["key"]: b"x\n"}
+
+
+def test_a_gateway_no_route_read_is_retried(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    """The gateway's not-yet-routed 404 is retried, as on the worker, and is
+    never read as a missing config."""
+    body = {"host": "db.example"}
+    assert host.post("/workflows/v1/config/g?type=credentials", json=body).is_success
+    real_get = obstore.get_async
+    failures = iter([RuntimeError(_GATEWAY_NO_ROUTE)] * 2)
+
+    async def _get(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        failure = next(failures, None)
+        if failure is not None:
+            raise failure
+        return await real_get(store, key, *args, **kwargs)
+
+    monkeypatch.setattr(obstore, "get_async", _get)
+    fetched = host.get("/workflows/v1/config/g?type=credentials")
+    assert fetched.status_code == 200
+    assert fetched.json()["data"] == body
+    assert len(no_sleep) == 2
+
+
+def test_a_gateway_that_stays_unrouted_is_503_not_404(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch, no_sleep: list[float]
+) -> None:
+    async def _get(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(_GATEWAY_NO_ROUTE)
+
+    monkeypatch.setattr(obstore, "get_async", _get)
+    response = host.get("/workflows/v1/config/g?type=credentials")
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Object store gateway is not ready; retry shortly"
+    )
+    assert len(no_sleep) == 3
+
+
+def test_a_missing_bucket_read_is_503_not_404(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 404 the listing cannot confirm is the bucket, not the config."""
+
+    async def _get(*_: Any, **__: Any) -> Any:
+        raise FileNotFoundError("object missing")
+
+    async def _list(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("Server returned non-2xx status code: 404 NoSuchBucket")
+
+    monkeypatch.setattr(obstore, "get_async", _get)
+    monkeypatch.setattr(obstore, "list_with_delimiter_async", _list)
+    response = host.get("/workflows/v1/config/g?type=credentials")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Object store unavailable"
+
+
+@pytest.mark.parametrize(
+    ("message", "detail"),
+    [
+        (
+            _GATEWAY_AUTH_UNAVAILABLE,
+            "Object store gateway could not verify the request; retry shortly",
+        ),
+        (
+            "Server returned non-2xx status code: 404 Not Found: "
+            "<Error><Code>ContainerNotFound</Code></Error>",
+            "Object store container does not exist",
+        ),
+        ("connection reset by peer", "Object store unavailable"),
+    ],
+)
+def test_a_failed_write_is_a_classified_503(
+    host: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    detail: str,
+) -> None:
+    """Config writes and uploads answer the shared table's verdict, not a 500."""
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(message)
+
+    # A config is one PUT; an upload goes through the worker's multipart writer.
+    monkeypatch.setattr(obstore, "put_async", _put)
+    monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
+    config = host.post("/workflows/v1/config/g?type=credentials", json={"a": 1})
+    upload = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x\n")})
+    for response in (config, upload):
+        assert response.status_code == 503
+        assert response.json()["detail"] == detail
+
+
+def test_an_upload_named_like_a_sidecar_is_stored_as_data(
+    host: TestClient, memory: MemoryStore, tmp_path: Path
+) -> None:
+    """An ``x.sha256`` upload must not take a bookkeeping key: the worker would
+    neither verify it nor list it as data."""
+    from application_sdk.storage import ops
+
+    payload = b"not a digest\n"
+    response = host.post("/workflows/v1/file", files={"file": ("x.sha256", payload)})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["extension"] == "sha256"
+    key = data["key"]
+    assert not key.endswith(".sha256")
+    assert _stored(memory)[key + ".sha256"] == (
+        hashlib.sha256(payload).hexdigest().encode()
+    )
+    obstore.put(memory, key, b"tampered\n")
+    from application_sdk.storage.errors import StorageIntegrityError
+
+    with pytest.raises(StorageIntegrityError):
+        asyncio.run(ops.download_file(key, tmp_path / "x", memory))
+
+
+def test_a_store_failure_logs_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """obstore's message can quote a signed URL or the store's credential: the
+    host logs the classified evidence and the type, never the text or traceback."""
+    from unittest.mock import MagicMock
+
+    secret = "https://b.example.invalid/k?X-Amz-Signature=deadbeef"
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(f"Server returned non-2xx status code: 403 {secret}")
+
+    log = MagicMock()
+    monkeypatch.setattr(object_routes, "logger", log)
+    monkeypatch.setattr(obstore, "put_async", _put)
+    monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
+    assert (
+        host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
+        == 503
+    )
+    assert (
+        host.post("/workflows/v1/config/g?type=credentials", json={}).status_code == 503
+    )
+    assert log.warning.call_count == 2
+    for call in log.warning.call_args_list:
+        assert "exc_info" not in call.kwargs
+        assert all(secret not in str(arg) for arg in call.args)
+        assert 403 in call.args
+
+
+def test_a_failed_sidecar_write_logs_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    secret = "account_key=c2VjcmV0"
+    real_put = obstore.put_async
+
+    async def _put(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        if key.endswith(".sha256"):
+            raise RuntimeError(secret)
+        return await real_put(store, key, *args, **kwargs)
+
+    from application_sdk.storage import integrity
+
+    # The sidecar write is the worker's (storage.integrity), so is its log.
+    log = MagicMock()
+    monkeypatch.setattr(integrity, "logger", log)
+    monkeypatch.setattr(obstore, "put_async", _put)
+    assert (
+        host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")}).status_code
+        == 200
+    )
+    (call,) = log.warning.call_args_list
+    assert "exc_info" not in call.kwargs
+    assert all(secret not in str(arg) for arg in call.args)
+    assert "RuntimeError" in call.args
+
+
+def test_on_the_host_a_failed_upload_event_carries_no_driver_text(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's per-attempt storage event copies the driver's (redacted)
+    message for its OTLP pipeline; on an api-only install it carries only the
+    error class, as the host's own failure log does."""
+    from unittest.mock import MagicMock
+
+    from application_sdk.storage import ops
+
+    signed = "https://b.example.invalid/k?X-Goog-Signature=deadbeef"
+
+    async def _put(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(f"Server returned non-2xx status code: 403 {signed}")
+
+    log = MagicMock()
+    monkeypatch.setattr(ops, "logger", log)
+    monkeypatch.setattr(ops, "api_only_install", lambda: True)
+    monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")})
+    assert response.status_code == 503
+    (call,) = log.log.call_args_list
+    assert call.kwargs["extra"]["error_class"] == "RuntimeError"
+    assert "error_message" not in call.kwargs["extra"]
+    assert signed not in str(call)
+
+
+def test_an_upload_is_size_checked_after_the_write(
+    host: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's post-write check runs on the host: a store that reports a
+    different size than was sent fails the upload instead of answering 200."""
+    real_head = obstore.head_async
+
+    async def _head(store: Any, key: str, *args: Any, **kwargs: Any) -> Any:
+        meta = dict(await real_head(store, key, *args, **kwargs))
+        meta["size"] = 0
+        return meta
+
+    monkeypatch.setattr(obstore, "head_async", _head)
+    response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
+    assert response.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("given", "stored"),
+    [("dir\\file.csv", "dir/file.csv"), ("/dir/file.csv/", "dir/file.csv")],
+)
+def test_a_direct_put_file_normalises_its_key(
+    memory: MemoryStore, tmp_path: Path, given: str, stored: str
+) -> None:
+    """``put_file`` is public: a direct caller's key is normalised as it always
+    was, so the object (and its sidecar) sit where the worker's download looks."""
+    from application_sdk.storage import ops
+
+    local = tmp_path / "f.csv"
+    local.write_bytes(b"a,b\n")
+    asyncio.run(HostObjectStore(memory, kind="memory").put_file(given, str(local)))
+    assert set(_stored(memory)) == {stored, stored + ".sha256"}
+    digest = asyncio.run(
+        ops.download_file(given, tmp_path / "back.csv", memory, compute_hash=True)
+    )
+    assert digest == hashlib.sha256(b"a,b\n").hexdigest()

@@ -6,12 +6,17 @@ few structural facts about the file, not on anyone remembering them:
 
 * it is only ever called (`workflow_call`), never triggered by a pull request
   event in this repository;
-* it never checks out pull-request code: one checkout of the caller's
-  principles at its default branch, one of the caller at the pull request's
-  base commit (FND-5316), one of this repository at the workflow's own commit,
-  and one of this repository's `application_sdk/` at the ref the pull request
-  head's uv.lock pins (FND-5331, FND-5316: read through the API as data, never
+* the job that holds the secrets (`review`) never checks out pull-request
+  code and installs nothing: one checkout of the caller's principles at its
+  default branch, one of the caller at the pull request's base commit
+  (FND-5316), one of this repository at the workflow's own commit, and one of
+  this repository's `application_sdk/` at the ref the pull request head's
+  uv.lock pins (FND-5331, FND-5316: read through the API as data, never
   checked out), skipped when none resolves and never fatal;
+* the gate-file check (FND-5325) is a job of its own (`gate`) that holds no
+  secret and no App token: it alone checks out the pull request head (sparse,
+  read as data) and installs the pinned conformance package, and hands the
+  review a fact file through an artifact;
 * it has no `concurrency:` block, because the reviewer has its own lock and a
   block would queue or cancel reviews;
 * its job timeout equals the lock's idea of how long a review can run;
@@ -66,12 +71,31 @@ def workflow(text: str) -> dict[Any, Any]:
 @pytest.fixture(scope="module")
 def job(workflow: dict[Any, Any]) -> dict[str, Any]:
     jobs: dict[str, Any] = workflow["jobs"]
-    assert list(jobs) == ["review"]
+    assert list(jobs) == ["gate", "review"]
     return jobs["review"]
+
+
+@pytest.fixture(scope="module")
+def gate_job(workflow: dict[Any, Any]) -> dict[str, Any]:
+    return workflow["jobs"]["gate"]
+
+
+@pytest.fixture(scope="module")
+def gate_text(text: str) -> str:
+    """The `gate` job's lines of the workflow, comments dropped."""
+    start = text.index("\n  gate:\n")
+    end = text.index("\n  review:\n")
+    return "\n".join(
+        ln for ln in text[start:end].splitlines() if not ln.lstrip().startswith("#")
+    )
 
 
 def _steps(job: dict[str, Any]) -> list[dict[str, Any]]:
     return job["steps"]
+
+
+UPLOAD_RETRY = "atlanhq/application-sdk/.github/actions/upload-artifact-retry"
+DOWNLOAD_RETRY = "atlanhq/application-sdk/.github/actions/download-artifact-retry"
 
 
 def _uses(job: dict[str, Any], action: str) -> list[dict[str, Any]]:
@@ -241,13 +265,203 @@ def test_the_sdk_pin_is_read_from_the_pull_request_head_not_the_default_branch(
     )
 
 
-def test_no_step_mentions_a_pull_request_head(text: str) -> None:
+def test_no_step_mentions_a_pull_request_head(text: str, gate_text: str) -> None:
+    """Outside the gate job (FND-5325), which reads the head as data, nothing
+    names a pull request head."""
     code = "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
+        line
+        for line in text.replace(gate_text, "").splitlines()
+        if not line.lstrip().startswith("#")
     )
     assert "pull_request.head" not in code
     assert "refs/pull/" not in code
     assert "head_ref" not in code
+
+
+def test_the_secret_holding_job_never_names_a_pull_request_ref(
+    job: dict[str, Any],
+) -> None:
+    """FND-5325 checks out the pull request head, in the `gate` job only. The
+    review job holds the App key and the model key: none of its checkouts may
+    take a ref from the gate job, and none may install anything."""
+    for step in _uses(job, "actions/checkout"):
+        assert "gate-ref" not in str(step["with"].get("ref", ""))
+    runs = " ".join(str(s.get("run", "")) for s in _steps(job))
+    for installer in ("pip", "uv ", "venv", "gate-fact"):
+        assert installer not in runs
+
+
+def test_the_gate_job_holds_no_secret_and_no_app_token(
+    workflow: dict[Any, Any], gate_job: dict[str, Any], gate_text: str
+) -> None:
+    """The gate job is where third-party code runs (the pinned conformance
+    package and its dependencies) and where the head is checked out. It must
+    have nothing to steal: no secret, no App token, no write scope, and no
+    credentials left in a checkout."""
+    assert "secrets." not in gate_text
+    assert "create-github-app-token" not in gate_text
+    assert "GITHUB_TOKEN" not in gate_text
+    assert "permissions" not in gate_job  # the workflow's contents: read
+    assert workflow["permissions"] == {"contents": "read"}
+    for step in _uses(gate_job, "actions/checkout"):
+        assert step["with"]["persist-credentials"] is False
+        assert "token" not in step["with"]
+
+
+def test_the_gate_job_checks_out_the_head_sparse_from_a_tested_ref(
+    gate_job: dict[str, Any],
+) -> None:
+    """The head ref comes from tested Python (`gate-ref`), never from an
+    expression on the event, and the checkout holds only what the check
+    reads: the CI directories, renovate.json and uv.lock."""
+    steps = _steps(gate_job)
+    [resolve] = [s for s in steps if s.get("id") == "gate-ref"]
+    assert "python -m connector_reviewer gate-ref" in resolve["run"]
+    assert resolve["working-directory"] == "sdk/.github/scripts"
+    assert not re.search(r"\b(if|case|for|while)\b", resolve["run"])
+    [head] = [
+        c
+        for c in _uses(gate_job, "actions/checkout")
+        if c["with"].get("path") == "gate-head"
+    ]
+    assert head["if"] == "steps.gate-ref.outputs.ref != ''"
+    assert head["with"]["ref"] == "${{ steps.gate-ref.outputs.ref }}"
+    assert "repository" not in head["with"]
+    assert head["with"]["sparse-checkout"].split() == [
+        "/.github/workflows/",
+        "/.github/actions/",
+        "/.github/scripts/",
+        "/renovate.json",
+    ]
+    assert head["with"]["sparse-checkout-cone-mode"] is False
+    assert head.get("continue-on-error") is True
+    assert steps.index(resolve) < steps.index(head)
+    [sdk] = [
+        c for c in _uses(gate_job, "actions/checkout") if c["with"].get("path") == "sdk"
+    ]
+    assert sdk["with"]["repository"] == "atlanhq/application-sdk"
+    assert sdk["with"]["ref"] == "${{ job.workflow_sha }}"
+    # The base the pull request merges into, not the default branch: the
+    # first parent of its test merge, read by tested Python, then that
+    # commit's uv.lock alone (its pin is the version rendered).
+    by_path = {c["with"].get("path"): c for c in _uses(gate_job, "actions/checkout")}
+    merge, base = by_path["gate-merge"], by_path["gate-base"]
+    assert merge["if"] == "steps.gate-ref.outputs.merge != ''"
+    assert merge["with"]["ref"] == "${{ steps.gate-ref.outputs.merge }}"
+    assert merge["with"]["fetch-depth"] == 2
+    assert merge["with"]["sparse-checkout"].split() == ["/uv.lock"]
+    [resolve_base] = [s for s in steps if s.get("id") == "gate-base"]
+    assert "python -m connector_reviewer gate-base" in resolve_base["run"]
+    assert not re.search(r"\b(if|case|for|while)\b", resolve_base["run"])
+    assert base["if"] == "steps.gate-base.outputs.base != ''"
+    assert base["with"]["ref"] == "${{ steps.gate-base.outputs.base }}"
+    assert base["with"]["sparse-checkout"].split() == ["/uv.lock"]
+    for c in (merge, base):
+        assert "repository" not in c["with"]
+        assert c.get("continue-on-error") is True
+    assert steps.index(merge) < steps.index(resolve_base) < steps.index(base)
+    assert len(_uses(gate_job, "actions/checkout")) == 4
+
+
+def test_the_gate_fact_reaches_the_review_and_never_blocks_it(
+    gate_job: dict[str, Any], job: dict[str, Any]
+) -> None:
+    """The fact step fails only when it cannot write the fact; its file is
+    uploaded (with the repo's retry) and downloaded by the review, which runs
+    after the gate job whatever its outcome, short of a cancel."""
+    steps = _steps(gate_job)
+    [fact] = [s for s in steps if "gate-fact" in str(s.get("run", ""))]
+    assert fact["working-directory"] == "sdk/.github/scripts"
+    assert not re.search(r"\b(if|case|for|while)\b", fact["run"])
+    assert "env" not in fact  # nothing handed to it, no token among it
+    out = "$RUNNER_TEMP/gate-fact/connector-reviewer-gate.json"
+    assert f'--out "{out}"' in fact["run"]
+    assert '--base-checkout "$GITHUB_WORKSPACE/gate-base"' in fact["run"]
+    [upload] = _uses(gate_job, UPLOAD_RETRY)
+    assert upload.get("continue-on-error") is True
+    assert upload["with"]["name"] == "connector-reviewer-gate"
+    assert job["needs"] == "gate"
+    assert job["if"] == "${{ !cancelled() }}"
+    [download] = _uses(job, DOWNLOAD_RETRY)
+    assert download.get("continue-on-error") is True
+    assert download["with"]["pattern"] == "connector-reviewer-gate*"
+    review_steps = _steps(job)
+    [review] = [s for s in review_steps if s.get("name") == "Review"]
+    assert review_steps.index(download) < review_steps.index(review)
+    assert review["env"]["CONNECTOR_REVIEWER_GATE_FACT"] == (
+        "${{ runner.temp }}/gate-fact/connector-reviewer-gate.json"
+    )
+    # The setup-python step comes before the Python steps.
+    [setup] = _uses(gate_job, "actions/setup-python")
+    assert steps.index(setup) < steps.index(fact)
+
+
+def test_both_reviewer_checkouts_hold_every_script_the_package_imports(
+    gate_job: dict[str, Any], job: dict[str, Any]
+) -> None:
+    """The reviewer is checked out sparse, so a sibling script it imports
+    from `.github/scripts` (`_gha`, the shared step-output writer, F-f0dbf5)
+    must be in both checkouts, or `python -m connector_reviewer` fails on its
+    first import. `gate_render.py` is left out: it runs only in the gate's
+    venv, where the conformance package it imports is installed."""
+    import ast  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    siblings: set[str] = set()
+    for module in sorted((_SCRIPTS / "connector_reviewer").glob("*.py")):
+        if module.name == "gate_render.py":
+            continue
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            names = (
+                [a.name for a in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom) and node.level == 0
+                else []
+            )
+            for name in names:
+                top = name.split(".")[0]
+                if top and top not in sys.stdlib_module_names:
+                    siblings.add(top)
+    assert siblings, "the package imports _gha; this test must see it"
+    for checkouts in (gate_job, job):
+        [sdk] = [
+            c
+            for c in _uses(checkouts, "actions/checkout")
+            if c["with"].get("path") == "sdk"
+        ]
+        held = sdk["with"]["sparse-checkout"].split()
+        for name in siblings:
+            assert (_SCRIPTS / f"{name}.py").is_file(), name
+            assert f".github/scripts/{name}.py" in held, name
+
+
+#: What the gate job's steps other than `gate-base` and `gate-fact` may take,
+#: in seconds: the two checkouts before them and the two between them (all
+#: sparse), setup-python, and the fact's upload with its 20-second wait and
+#: retry. None of them has a bound of its own; this is room, not a guarantee.
+GATE_OTHER_STEPS_SECONDS = 180
+
+
+def test_the_gate_fact_is_written_before_the_gate_job_times_out(
+    gate_job: dict[str, Any],
+) -> None:
+    """F-7ed325: `gate-base` and `gate-fact` bound every subprocess they
+    start. Their worst case, with room for the other steps, must fit in the
+    job's timeout: a job killed first writes no fact at all, where a bound
+    that runs out writes one that says why the check was not made."""
+    from connector_reviewer import gate, sdk_source  # noqa: PLC0415
+
+    gate_base = 2 * gate.GIT_SECONDS  # `base_of_merge`: HEAD^1 and HEAD^2
+    gate_fact = (
+        2 * sdk_source.GIT_SECONDS  # `checkout_commit` of the head and the base
+        + gate.VENV_SECONDS
+        + gate.PIP_SECONDS
+        + gate.RENDER_SECONDS
+        + gate.LATEST_SECONDS
+    )
+    budget = gate_job["timeout-minutes"] * 60
+    assert gate_base + gate_fact + GATE_OTHER_STEPS_SECONDS <= budget
 
 
 def test_there_is_no_concurrency_block(
@@ -341,9 +555,7 @@ def test_the_review_step_times_out_before_the_job(job: dict[str, Any]) -> None:
 def test_the_run_report_is_uploaded_even_when_the_review_fails(
     job: dict[str, Any],
 ) -> None:
-    uploads = _uses(job, "actions/upload-artifact")
-    assert len(uploads) == 2
+    uploads = _uses(job, UPLOAD_RETRY)
+    assert len(uploads) == 1
     assert all(str(u["if"]).startswith("always()") for u in uploads)
     assert all(u.get("continue-on-error") is True for u in uploads)
-    names = [u["with"]["name"] for u in uploads]
-    assert names[0] != names[1], "a retry must use a different artifact name"

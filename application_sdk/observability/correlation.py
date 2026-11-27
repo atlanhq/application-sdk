@@ -9,6 +9,12 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+__all__ = [
+    "CorrelationContext",
+    "get_correlation_context",
+    "set_correlation_context",
+]
+
 
 @dataclass
 class CorrelationContext:

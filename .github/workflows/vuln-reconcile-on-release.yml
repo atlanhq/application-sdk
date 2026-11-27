@@ -12,7 +12,7 @@
 #   Gating removal on release retires the entry exactly when the fix becomes
 #   consumable downstream.
 #
-# Detection / ticketing / allowlisting stay hourly (daily-security-scan.yml):
+# Detection / ticketing / allowlisting stay hourly (hourly-security-scan.yml):
 # a new Critical/High must be allowlisted promptly to start the SLA clock and
 # keep the continuous build gate green. Only reconciliation is deferred to here.
 #
@@ -148,7 +148,7 @@ jobs:
           # fleet App and stays approvable by atlan-ci (see the token step above).
           PR_AUTHOR_TOKEN: ${{ steps.fleet-token.outputs.token }}
           REPO: ${{ github.repository }}
-          SCAN_WORKFLOW: daily-security-scan.yml
+          SCAN_WORKFLOW: hourly-security-scan.yml
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEAR_TEAM_ID: ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
           # Both matrix passes share one GITHUB_RUN_ID; this keeps their

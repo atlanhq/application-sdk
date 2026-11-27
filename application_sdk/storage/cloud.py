@@ -32,32 +32,54 @@ Usage::
 Credential format (standard ``csa-connectors-objectstore``)::
 
     S3:   authType="s3",   username=access_key, password=secret_key,
-          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?}
-          (a blank region is looked up from the bucket before the first call)
+          token?=session_token (temporary STS credentials),
+          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?,
+                 endpoint?, force_path_style?, disable_tagging?, conditional_put?,
+                 copy_if_not_exists?, checksum_algorithm?,
+                 server_side_encryption?, sse_kms_key_id?}
+          (a blank region is looked up from the bucket before the first
+          call, unless a non-AWS endpoint is set; a non-AWS endpoint
+          disables object tagging unless disable_tagging says otherwise;
+          the endpoint must be https:// — CloudStore always uses TLS with
+          certificate verification)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
+          (no password: Application Default Credentials, including a
+          Workload Identity Federation file)
     ADLS: authType="adls", username=client_id,   password=client_secret,
-          extra={storage_account_name, adls_container, azure_tenant_id}
+          extra={storage_account_name, adls_container, azure_tenant_id,
+                 endpoint?}
+
+Every front-end that builds a store (this module, the Dapr binding, the API
+host) translates its input into the settings dataclasses of
+:mod:`application_sdk._obstore_config`, so the same credentials produce the
+same store whichever path read them.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import quote
 
 import httpx
-import obstore as obs
 import orjson
-from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
+from obstore.exceptions import (  # noqa: F401 — importable from here in past releases
+    PermissionDeniedError,
+    UnauthenticatedError,
+)
 from obstore.store import ObjectStore
 
-from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._listing import prune_internal_dirs
-from application_sdk.storage._concurrency import _run_bounded
+from application_sdk import _deprecation
+from application_sdk.storage._classify import (  # noqa: F401 — _DENIED_* importable from here in past releases
+    _DENIED_ERROR_STATUS,
+    _DENIED_STATUSES,
+)
+from application_sdk.storage._classify import denied_evidence as _denied_evidence
+from application_sdk.storage.batch import DataObject, _download_listed, _upload_tree
 from application_sdk.storage.errors import (
     StorageAuthError,
     StorageConfigError,
@@ -69,12 +91,37 @@ from application_sdk.storage.errors import (
 from application_sdk.storage.ops import (
     GATEWAY_INVALID_CLIENT_CODE,
     BoundStore,
+    _get_bytes,
     _list_items,
-    _obstore_http_evidence,
-    _safe_join_under,
     _store_target,
     download_file_chunked,
+    upload_bytes,
     upload_file,
+)
+
+__all__ = [
+    "CloudStore",
+]
+
+
+_T = TypeVar("_T")
+
+
+#: name -> (replacement, why). Importable from here only as a side effect of
+#: an import that is gone; served once more, with a warning naming their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "prune_internal_dirs": (
+        "application_sdk.common._listing.prune_internal_dirs",
+        "it was only ever re-exported here by an import",
+    ),
+    "run_in_thread": (
+        "application_sdk._runtime.offload.run_in_thread",
+        "it was only ever re-exported here by an import",
+    ),
+}
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
 )
 
 # Lazy import: direct get_logger() at module load would create a circular
@@ -92,35 +139,6 @@ def _log():
 
         _logger = get_logger(__name__)
     return _logger
-
-
-# Statuses that mean the caller's credential or the bucket's policy refused the
-# request. obstore maps some of these to a typed error and leaves the rest as
-# text, so both are checked.
-_DENIED_STATUSES = frozenset({401, 403})
-_DENIED_ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
-    (PermissionDeniedError, 403),
-    (UnauthenticatedError, 401),
-)
-
-
-def _denied_evidence(exc: BaseException) -> tuple[int, str | None] | None:
-    """Return ``(http_status, provider_code)`` when *exc* is a 401/403.
-
-    Walks explicit ``__cause__`` links so a ``StorageError`` the shared
-    primitives already wrapped is judged by the driver error inside it.
-    """
-    current: BaseException | None = exc
-    while current is not None:
-        http_status, provider_code = _obstore_http_evidence(current)
-        if http_status is None:
-            http_status = next(
-                (s for t, s in _DENIED_ERROR_STATUS if isinstance(current, t)), None
-            )
-        if http_status in _DENIED_STATUSES:
-            return http_status, provider_code
-        current = current.__cause__
-    return None
 
 
 class CloudStore:
@@ -266,20 +284,20 @@ class CloudStore:
             StorageNotFoundError: If the key does not exist.
         """
         await self._ensure_region()
-        try:
-            result = await obs.get_async(self._store, key)
-            return bytes(await result.bytes_async())
-        except FileNotFoundError as exc:
-            raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
-        # conformance: ignore[E004] re-raise only; discriminates NotFoundError by name then wraps in StorageError/StorageNotFoundError
-        except Exception as exc:
-            # obstore backends raise different exception types for not-found:
-            # - LocalStore: FileNotFoundError (caught above)
-            # - S3/GCS/Azure: obstore.exceptions.NotFoundError
-            if type(exc).__name__ == "NotFoundError":
-                raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
-            self._raise_if_denied(exc, "reading", key)
-            raise StorageError(f"Failed to get key: {key}", cause=exc) from exc
+        # The shared primitive, so this read rides out the gateway's
+        # "no Route matched" 404 and fails with the same typed leaves as
+        # every other read; ``_mapping_denied`` then makes a 401/403 the
+        # customer's. No sidecar: external buckets do not carry one.
+        data = await self._mapping_denied(
+            "reading", key, _get_bytes(key, self._store, normalize=False)
+        )
+        if data is None:
+            raise StorageNotFoundError(
+                f"Key not found: {key}",
+                key=key,
+                target=_store_target(self._store, key),
+            )
+        return data
 
     async def download(
         self,
@@ -373,49 +391,81 @@ class CloudStore:
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
             )
 
-        async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
-            # No `list_prefix and` guard here: when list_prefix == "" (a
-            # whole-bucket download), startswith("") is always True, so the
-            # full key is kept instead of falling through to the basename-only
-            # branch below, which would clobber same-named files from
-            # different subdirectories onto one path.
-            rel = (
-                obj_key[len(list_prefix) :]
-                if obj_key.startswith(list_prefix)
-                else Path(obj_key).name
-            )
-            # Reject keys whose resolved path escapes output (e.g. via ".." segments).
-            local_path = _safe_join_under(output, rel)
-            # Pass the listing's size + etag so large objects chunk (with
-            # version-pinned range GETs) and small ones stream — no per-file
-            # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-            try:
-                await download_file_chunked(
-                    obj_key,
-                    local_path,
-                    store=self._store,
-                    normalize=False,
-                    file_size=size,
-                    etag=etag,
-                    # External bucket: the SDK never wrote sidecars here, so
-                    # skip the per-file probe that could only ever miss.
-                    sidecar_present=False,
-                )
-            except StorageError as exc:
-                self._raise_if_denied(exc, "reading", obj_key)
-                raise
-            return local_path
-
+        # The listing is CloudStore's own (multi-suffix, and ``.sha256`` keys
+        # are customer data here); the download is batch's engine, with every
+        # object marked sidecar-less. Prefix stripped: the tree under the
+        # prefix lands directly in *output*, and a whole-bucket download
+        # (list_prefix "") keeps each full key rather than a basename that
+        # same-named files in different subdirectories would clobber.
+        objects = [
+            DataObject(key=k, size=n, etag=e, has_sidecar=False) for k, n, e in items
+        ]
         # The first failure cancels the remaining downloads and drains them
-        # before it propagates: with asyncio.gather they kept writing into
-        # *output* after the caller had seen the error and moved on.
-        downloaded = await _run_bounded(
-            (_dl(k, s, e) for k, s, e in items),
-            max_concurrency,
-            unwrap_lone_failure=True,
+        # before it propagates, so nothing writes into *output* afterwards.
+        downloaded = await self._mapping_denied(
+            "reading",
+            list_prefix,
+            _download_listed(
+                objects,
+                list_prefix,
+                output,
+                self._store,
+                suffix="",
+                normalize=False,
+                strip_prefix=True,
+                max_concurrency=max_concurrency,
+                sync=False,
+                unwrap_lone_failure=True,
+            ),
         )
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
-        return downloaded
+        return [Path(p) for p in downloaded]
+
+    async def _mapping_denied(
+        self, action: str, key: str, op: Coroutine[Any, Any, _T]
+    ) -> _T:
+        """Await *op*, turning a 401/403 ``StorageError`` into a typed USER error.
+
+        The key named is the failing object's when the error carries one, else
+        *key*. A fan-out whose failures mix a ``StorageError`` with another
+        type surfaces as an exception group (see ``_run_bounded``); each
+        ``StorageError`` leaf in it is mapped the same way and the group is
+        re-raised with the mapped leaves.
+        """
+        try:
+            return await op
+        except StorageError as exc:
+            self._raise_if_denied(exc, action, exc.key or key)
+            raise
+        except BaseExceptionGroup as group:
+            mapped = self._map_denied_leaves(group, action, key)
+            if mapped is group:
+                raise
+            raise mapped from group
+
+    def _map_denied_leaves(
+        self, group: BaseExceptionGroup, action: str, key: str
+    ) -> BaseExceptionGroup:
+        """Return *group* with each 401/403 ``StorageError`` leaf typed.
+
+        Returns *group* itself when no leaf changed.
+        """
+        leaves: list[BaseException] = []
+        changed = False
+        for leaf in group.exceptions:
+            new: BaseException = leaf
+            if isinstance(leaf, BaseExceptionGroup):
+                new = self._map_denied_leaves(leaf, action, key)
+            elif isinstance(leaf, StorageError):
+                try:
+                    self._raise_if_denied(leaf, action, leaf.key or key)
+                except StorageError as typed:
+                    new = typed
+            changed = changed or new is not leaf
+            leaves.append(new)
+        if not changed:
+            return group
+        return group.derive(leaves)
 
     def _raise_if_denied(self, exc: Exception, action: str, key: str) -> None:
         """Raise a typed USER error from *exc* when it is a 401/403.
@@ -608,23 +658,49 @@ class CloudStore:
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
-    async def upload_bytes(self, key: str, data: bytes) -> int:
+    async def upload_bytes(
+        self, key: str, data: bytes, *, verify: bool | None = None
+    ) -> int:
         """Upload raw bytes to the cloud store.
+
+        Routes through the shared
+        :func:`~application_sdk.storage.ops.upload_bytes` primitive, so the
+        post-write HEAD that :meth:`upload` runs also confirms the bytes landed
+        here: a write the store accepted but did not keep, or kept at the wrong
+        size, raises instead of surfacing later at a reader. The key is used
+        exactly as supplied and no ``.sha256`` sidecar is written.
+
+        The readback needs read-metadata (HEAD) access to *key* as well as
+        PUT, as :meth:`upload` and :meth:`upload_dir` already do. Pass
+        ``verify=False`` for a bucket whose policy grants PUT only.
 
         Args:
             key: Destination object key.
             data: Bytes to upload.
+            verify: Run the post-write readback. ``None`` (default) follows
+                ``ATLAN_STORAGE_VERIFY_TRANSFERS``, which is on unless the
+                deployment turned it off.
 
         Returns:
             Number of bytes uploaded.
+
+        Raises:
+            StorageError: If the write fails, or the readback finds the object
+                absent or the wrong size.
         """
         await self._ensure_region()
-        try:
-            await obs.put_async(self._store, key, data, attributes=self._put_attributes)
-        # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
-        except Exception as exc:
-            self._raise_if_denied(exc, "writing", key)
-            raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
+        await self._mapping_denied(
+            "writing",
+            key,
+            upload_bytes(
+                key,
+                data,
+                BoundStore(self._store, self._put_attributes),
+                normalize=False,
+                compute_hash=False,
+                verify=verify,
+            ),
+        )
         return len(data)
 
     async def upload_dir(
@@ -636,11 +712,11 @@ class CloudStore:
     ) -> list[str]:
         """Upload all files in a local directory to the cloud store.
 
-        Note: Unlike ``batch.upload_prefix``, this uploads to an *external*
-        store without SHA-256 sidecars or key normalization — those features
-        are specific to the tenant's internal storage layer.  The byte-level
-        validations (truncation, post-write readback) still apply, via
-        :meth:`upload`.
+        Note: Runs on the same engine as ``batch.upload_prefix`` but without
+        SHA-256 sidecars or key normalization — those features are specific
+        to the tenant's internal storage layer.  The byte-level validations
+        (truncation, post-write readback) still apply.  Symlinks and SDK
+        working directories are skipped.
 
         Args:
             local_dir: Local directory to upload from.
@@ -658,40 +734,27 @@ class CloudStore:
                 directory.
         """
         await self._ensure_region()
-        local = Path(local_dir)
 
-        def _collect_files() -> list[tuple[str, Path]]:
-            collected: list[tuple[str, Path]] = []
-            for root, dirs, filenames in os.walk(local, followlinks=False):
-                # SDK working directories (.sdk-partial staging, in-flight
-                # download part files) must never ship to a customer bucket.
-                prune_internal_dirs(dirs)
-                for fname in filenames:
-                    file_path = Path(root) / fname
-                    if file_path.is_symlink():
-                        continue
-                    rel = file_path.relative_to(local)
-                    key = f"{prefix}/{rel}" if prefix else str(rel)
-                    collected.append((key, file_path))
-            return collected
+        async def _upload_one(key: str, path: Path) -> int:
+            # Per file, so each failure is typed before it can group with a
+            # sibling's: a 401/403 becomes a USER error, and a file that
+            # vanished or became unreadable after the walk a keyed StorageError.
+            return await self.upload(path, key)
 
-        # Offloaded: the walk is one stat per entry over the whole directory,
-        # thousands of syscalls with no await between them on a large upload.
-        # Inline it holds the event loop — and the enclosing activity's
-        # auto-heartbeat — for the entire traversal (ADR-0010).
-        files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
-
-        async def _up(key: str, path: Path) -> str:
-            await self.upload(path, key)
-            return key
-
-        # The first failure cancels and drains the remaining uploads before it
+        # batch's tree engine with the sidecar protocol off: no sidecars and no
+        # key normalisation, and a local ``.sha256`` file uploads as data. The
+        # first failure cancels and drains the remaining uploads before it
         # propagates, so none lands in the bucket after the caller saw it fail.
-        return await _run_bounded(
-            (_up(k, p) for k, p in files),
-            max_concurrency,
+        uploaded = await _upload_tree(
+            Path(local_dir),
+            prefix,
+            _upload_one,
+            max_concurrency=max_concurrency,
+            sidecars=False,
             unwrap_lone_failure=True,
         )
+        _log().info("Uploaded %d files to prefix=%s", len(uploaded), prefix)
+        return uploaded
 
 
 # ---------------------------------------------------------------------------
@@ -704,9 +767,19 @@ _S3_REGION_LOOKUP_TIMEOUT_SECONDS = 10.0
 
 
 def _needs_region_lookup(extra: dict[str, Any]) -> bool:
-    """True when an S3 store has no region and talks to AWS S3 itself."""
+    """True when an S3 store has no region and talks to AWS S3 itself.
+
+    A non-AWS ``extra["endpoint"]`` (MinIO, R2, ...) has no bucket region to
+    look up, so it gets no lookup; an AWS endpoint in ``extra["endpoint"]``
+    still does, since S3 needs the bucket's own region to sign for it. The
+    ``AWS_ENDPOINT_URL`` / ``AWS_ENDPOINT`` env vars skip the lookup as before.
+    """
+    from application_sdk._obstore_config import endpoint_is_aws  # noqa: PLC0415
+
     return not extra.get("region") and not (
-        os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT")
+        not endpoint_is_aws((extra.get("endpoint") or "").strip())
+        or os.environ.get("AWS_ENDPOINT_URL")
+        or os.environ.get("AWS_ENDPOINT")
     )
 
 
@@ -739,19 +812,33 @@ async def _lookup_bucket_region(bucket: str) -> str:
     the header means the bucket is not in that partition, so the other
     partition is probed next; a failed request stops the lookup rather than
     spend a second timeout on an unreachable network.
+
+    The proxy comes from :mod:`application_sdk._proxy`, the rule every SDK
+    connection follows, resolved per lookup host so ``NO_PROXY`` applies.
+    httpx's own ``trust_env`` handling is off: it also reads operating-system
+    proxy settings, which no other SDK connection does. The TLS context is
+    built here with ``trust_env=True``, so ``SSL_CERT_FILE`` and
+    ``SSL_CERT_DIR`` are still trusted as httpx would trust them.
     """
     try:
+        from application_sdk._proxy import (  # noqa: PLC0415
+            environment_proxies,
+            proxy_for,
+        )
         from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
 
-        async with httpx.AsyncClient(
-            timeout=_S3_REGION_LOOKUP_TIMEOUT_SECONDS,
-            trust_env=True,
-            verify=get_ssl_context(),
-        ) as client:
-            for host in _region_lookup_hosts():
-                url = _S3_REGION_LOOKUP_URL.format(
-                    host=host, bucket=quote(bucket, safe="")
-                )
+        proxies = environment_proxies()
+        # trust_env=False below would also drop httpx's SSL_CERT_FILE handling;
+        # build the context as httpx would, so that CA bundle is still trusted.
+        ssl_context = httpx.create_ssl_context(verify=get_ssl_context(), trust_env=True)
+        for host in _region_lookup_hosts():
+            url = _S3_REGION_LOOKUP_URL.format(host=host, bucket=quote(bucket, safe=""))
+            async with httpx.AsyncClient(
+                timeout=_S3_REGION_LOOKUP_TIMEOUT_SECONDS,
+                trust_env=False,
+                verify=ssl_context,
+                proxy=proxy_for("https", host, proxies=proxies),
+            ) as client:
                 # httpx's scalar timeout bounds each read, not the request; a
                 # peer dripping header bytes could hold it open, so cap the HEAD.
                 response = await asyncio.wait_for(
@@ -761,7 +848,7 @@ async def _lookup_bucket_region(bucket: str) -> str:
                 region = response.headers.get("x-amz-bucket-region", "")
                 if region:
                     return region
-            return ""
+        return ""
     except Exception as exc:  # noqa: BLE001 — best-effort lookup; any failure keeps the store as built and is logged
         _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)
         return ""
@@ -778,6 +865,44 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
     return ""
 
 
+def _extra_bool(extra: dict[str, Any], key: str) -> bool | None:
+    """``extra[key]`` as a bool, or ``None`` when absent or blank.
+
+    The credential form stores booleans as JSON booleans or as strings.
+    """
+    value = extra.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def _extra_str(extra: dict[str, Any], key: str) -> str:
+    """``extra[key]`` as a stripped string, ``""`` when absent or blank."""
+    return str(extra.get(key) or "").strip()
+
+
+def _tls_endpoint(extra: dict[str, Any]) -> str:
+    """``extra["endpoint"]``, refusing a plain-HTTP one.
+
+    CloudStore's credential is entered by a customer and reaches a bucket
+    over networks the SDK does not control, so it always uses TLS with
+    certificate verification: there is no ``allow_http`` or
+    ``allow_invalid_certificates`` here, and an ``http://`` endpoint (which
+    the shared translation would turn into plain HTTP) is a config error.
+    The Dapr binding's ``disableSSL`` / ``insecureSSL`` are operator-set in
+    the component YAML and stay as they are.
+    """
+    endpoint = _extra_str(extra, "endpoint")
+    if endpoint.lower().startswith("http://"):
+        raise StorageConfigError(
+            "CloudStore requires an https:// endpoint (extra.endpoint); "
+            "plain HTTP would send credentials and data unencrypted"
+        )
+    return endpoint
+
+
 def _create_s3_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
@@ -787,19 +912,26 @@ def _create_s3_store(
     ``{"Storage-Class": value}`` when ``extra["storageClass"]`` is set,
     or ``None`` otherwise.
     """
-    from application_sdk._obstore_config import make_s3_store  # noqa: PLC0415
+    from application_sdk._obstore_config import (  # noqa: PLC0415
+        S3StoreSettings,
+        build_s3_store,
+    )
 
     bucket = extra.get("s3_bucket", "")
     if not bucket:
         raise StorageConfigError("S3 bucket is required (extra.s3_bucket)")
 
-    config: dict[str, str] = {}
-    region = extra.get("region", "")
-    if region:
-        config["aws_region"] = region
-
     access_key = creds.get("username") or ""
     secret_key = creds.get("password") or ""
+    # Temporary (STS) credentials carry a session token alongside the keys.
+    session_token = creds.get("token") or ""
+    if bool(access_key) != bool(secret_key):
+        _log().warning(
+            "S3: both username and password are required as credentials; only "
+            "one was set — dropping both and falling back to the ambient "
+            "credential chain."
+        )
+        access_key = secret_key = session_token = ""
 
     credential_provider = None
     role_arn = extra.get("aws_role_arn", "")
@@ -809,22 +941,11 @@ def _create_s3_store(
         # the ambient identity), so wire an STS credential provider — the same
         # path binding.py uses. Base creds are optional: when omitted, the STS
         # call uses the pod's ambient chain (IRSA / instance profile) as the
-        # caller identity. Partial base creds (only one of access/secret) are
-        # dropped so we don't hand obstore a half-configured session.
+        # caller identity.
         from application_sdk.storage._credential_providers import (  # noqa: PLC0415
             make_s3_assume_role_provider,
         )
 
-        base_access_key = access_key or None
-        base_secret_key = secret_key or None
-        if bool(base_access_key) != bool(base_secret_key):
-            _log().warning(
-                "S3 assume-role: both username and password are required as base "
-                "credentials; only one was set — dropping both and falling back to "
-                "the ambient credential chain as the STS caller identity."
-            )
-            base_access_key = None
-            base_secret_key = None
         credential_provider = make_s3_assume_role_provider(
             role_arn=role_arn,
             # Distinct from binding.py's "atlan-application-sdk" default so the
@@ -833,60 +954,69 @@ def _create_s3_store(
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
             # No region: scoping the STS session to the bucket's region breaks
             # AssumeRole for opt-in regions (e.g. me-central-1); region belongs
-            # on the S3 store's own config below, not the STS call.
-            base_access_key=base_access_key,
-            base_secret_key=base_secret_key,
-            base_session_token=(creds.get("token") or None)
-            if base_access_key
-            else None,
+            # on the S3 store's own config, not the STS call.
+            base_access_key=access_key or None,
+            base_secret_key=secret_key or None,
+            base_session_token=session_token or None,
             # Required when the role's trust policy has an sts:ExternalId
             # condition; the provider drops a blank one.
             external_id=extra.get("aws_external_id"),
         )
         _log().debug("S3 cross-account assume-role auth configured")
-    elif access_key and secret_key:
-        config["aws_access_key_id"] = access_key
-        config["aws_secret_access_key"] = secret_key
+
+    settings = S3StoreSettings(
+        bucket=bucket,
+        region=extra.get("region") or "",
+        endpoint=_tls_endpoint(extra),
+        force_path_style=bool(_extra_bool(extra, "force_path_style")),
+        disable_tagging=_extra_bool(extra, "disable_tagging"),
+        access_key_id=access_key,
+        secret_access_key=secret_key,
+        session_token=session_token,
+        conditional_put=_extra_str(extra, "conditional_put"),
+        copy_if_not_exists=_extra_str(extra, "copy_if_not_exists"),
+        checksum_algorithm=_extra_str(extra, "checksum_algorithm"),
+        server_side_encryption=_extra_str(extra, "server_side_encryption"),
+        sse_kms_key_id=_extra_str(extra, "sse_kms_key_id"),
+        credential_provider=credential_provider,
+    )
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"Storage-Class": storage_class} if storage_class else None
     )
 
-    return (
-        make_s3_store(
-            bucket,
-            config or None,
-            label="cloud-s3",
-            credential_provider=credential_provider,
-        ),
-        put_attrs,
-    )
+    return build_s3_store(settings, label="cloud-s3"), put_attrs
 
 
 def _create_gcs_store(
     creds: dict[str, Any], extra: dict[str, Any]
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create a GCS store from credentials."""
-    from application_sdk._obstore_config import make_gcs_store  # noqa: PLC0415
+    from application_sdk._obstore_config import (  # noqa: PLC0415
+        GCSStoreSettings,
+        build_gcs_store,
+    )
 
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
         raise StorageConfigError("GCS bucket is required (extra.gcs_bucket)")
-
-    gcs_config: dict[str, str] = {}
-    sa_json = creds.get("password") or ""
-    if sa_json:
-        gcs_config["google_service_account_key"] = sa_json
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"X-Goog-Storage-Class": storage_class} if storage_class else None
     )
 
-    return make_gcs_store(
-        bucket, gcs_config if gcs_config else None, label="cloud-gcs"
-    ), put_attrs
+    from application_sdk.storage.binding import (  # noqa: PLC0415
+        _with_gcs_adc_provider,
+    )
+
+    # No key: Application Default Credentials, with the google-auth provider
+    # for a Workload Identity Federation file, exactly as the binding does.
+    settings = _with_gcs_adc_provider(
+        GCSStoreSettings(bucket=bucket, service_account_key=creds.get("password") or "")
+    )
+    return build_gcs_store(settings, label="cloud-gcs"), put_attrs
 
 
 def _create_azure_store(
@@ -894,7 +1024,8 @@ def _create_azure_store(
 ) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an Azure (ADLS) store from credentials."""
     from application_sdk._obstore_config import (  # noqa: PLC0415
-        make_azure_store,
+        AzureStoreSettings,
+        build_azure_store,
     )
 
     storage_account = extra.get("storage_account_name", "")
@@ -904,27 +1035,27 @@ def _create_azure_store(
             "Azure storage account is required (extra.storage_account_name)"
         )
 
-    az_config: dict[str, str] = {
-        "azure_storage_account_name": storage_account,
-    }
-
-    access_key = creds.get("password") or ""
+    password = creds.get("password") or ""
     client_id = creds.get("username") or ""
     tenant_id = extra.get("azure_tenant_id") or ""
 
-    if access_key and not tenant_id:
-        # Account key auth
-        az_config["azure_storage_account_key"] = access_key
-    elif tenant_id and client_id:
-        # Service principal auth
-        az_config["azure_storage_client_id"] = client_id
-        az_config["azure_storage_tenant_id"] = tenant_id
-        if access_key:
-            az_config["azure_storage_client_secret"] = access_key
+    # Account key auth without a tenant; service principal with one (no
+    # secret: workload identity). Anything else falls to the ambient identity.
+    account_key = password if password and not tenant_id else ""
+    service_principal = bool(tenant_id and client_id)
+    settings = AzureStoreSettings(
+        container=container,
+        account_name=storage_account,
+        endpoint=_tls_endpoint(extra),
+        account_key=account_key,
+        tenant_id=tenant_id if service_principal else "",
+        client_id=client_id if service_principal else "",
+        client_secret=password if service_principal else "",
+    )
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"x-ms-access-tier": storage_class} if storage_class else None
     )
 
-    return make_azure_store(container, az_config, label="cloud-azure"), put_attrs
+    return build_azure_store(settings, label="cloud-azure"), put_attrs

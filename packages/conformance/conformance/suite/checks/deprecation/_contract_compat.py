@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import ast
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -26,6 +26,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.checks._entrypoint_contract_fields import (
     _canonical_type,
     build_contract_registry,
+    recanonicalize,
     resolve_contract_fields,
     resolve_entrypoint_contracts,
     sdk_contract_ancestors,
@@ -497,6 +498,11 @@ def _expand_aliases(
     return canonical if canonical != _canonical_type(annotation) else None
 
 
+def _recanonicalized(ledger: ContractLedger) -> list[ContractField]:
+    """*ledger*'s fields with each recorded type in today's canonical form."""
+    return [replace(f, type=recanonicalize(f.type)) for f in ledger.fields]
+
+
 def scan_contract_compat(
     paths: list[Path],
     root: Path,
@@ -571,16 +577,22 @@ def scan_contract_compat(
     if not entrypoint_nodes:
         return []
 
-    # Pre-index the ledger for O(1) lookups
+    # Pre-index the ledger for O(1) lookups. Recorded types are frozen on
+    # first record, so one written before a canonicalisation change (union
+    # arms sorted, FND-4685) is brought to today's form before any comparison
+    # against a live canonical type — the same spelling, compared as one.
+    ledger_fields = _recanonicalized(ledger)
     ledger_by_key: dict[tuple[str, str], ContractField] = {
-        (f.contract, f.field): f for f in ledger.fields
+        (f.contract, f.field): f for f in ledger_fields
     }
     ledger_by_contract: dict[str, list[ContractField]] = {}
-    for f in ledger.fields:
+    for f in ledger_fields:
         ledger_by_contract.setdefault(f.contract, []).append(f)
 
     sdk_retired: dict[str, set[tuple[str, str]]] = {}
-    for f in (sdk_ledger if sdk_ledger is not None else load_sdk_ledger()).fields:
+    for f in _recanonicalized(
+        sdk_ledger if sdk_ledger is not None else load_sdk_ledger()
+    ):
         if f.status == "sunset":
             sdk_retired.setdefault(f.contract, set()).add((f.field, f.type))
 

@@ -253,7 +253,7 @@ function of facts GitHub reports, names four classes that are not reviewed:
 
 | Class | Holds when |
 |---|---|
-| dependency update | the author is in `dependency_bots`, the branch starts with one of `dependency_branches`, and every commit's author is in `dependency_bots` |
+| dependency update | the author is in `dependency_bots`, the branch starts with one of `dependency_branches`, and every commit's author is in `dependency_bots`; or (FND-5321) the author is in `vuln_bots`, the branch starts with one of `vuln_branches`, every commit's author is in `vuln_bots`, and every changed file matches `dependency_files` |
 | conformance resync | the author is in `resync_bots`, every commit is by one of them, and every changed file matches `bootstrap_managed` |
 | version bump | the branch starts with one of `version_bump_branches`. The summary reminds that it still needs `/gate-check` |
 | docs only | every changed file ends in `.md` or is under `docs/`, and none is under `.github/connector-reviewer/` or `.claude/`, or named `CLAUDE.md` or `AGENTS.md` at any depth |
@@ -411,9 +411,9 @@ and placed in every bundle's prompt after `<context>`. They add no model stage.
   messages only: back and forth between its own commits is not detected. A removed
   assertion whose identical line lands in a brand-new test is taken as moved. Callers
   are counted by bare name, like `context.call_sites`.
-- Not done: the gate-file check of FND-5312 (compare a changed bootstrap-managed
-  gate file with what bootstrap would render). It needs the conformance package's
-  renderer, which this stdlib-only engine does not have.
+- The gate-file check FND-5312 left out (compare a changed bootstrap-managed
+  gate file with what bootstrap would render) is FND-5325, below: the renderer
+  runs in a job of its own and hands the engine a fact file.
 
 Tests: `FakeGitHub` has empty history reads by default
 (`pr_commit_messages`, `recent_commits`, `commit_patches`), so every other test runs
@@ -527,7 +527,9 @@ equivalent.
   --event-path …` runs after the App token is minted (reading the pull request
   needs `pull-requests` scope, which the job's own token lacks), takes the pull
   request from the event, writes `ref`, `label` and the `head` it read to
-  `$GITHUB_OUTPUT` and always exits 0. `--root <dir>` alone still reads a local
+  `$GITHUB_OUTPUT`, and exits 0 unless that write fails (then 1: the step is
+  `continue-on-error`, and the review runs without the SDK source and says
+  so; `base-ref` likewise). `--root <dir>` alone still reads a local
   checkout's lock. A checkout of
   `atlanhq/application-sdk` at that ref, runs only when `ref` is not empty
   (`if:` on the step output). It is sparse (`/application_sdk/`), into `sdk-src/`,
@@ -586,6 +588,47 @@ equivalent.
 - **Open.** A live review on a connector pull request that reads SDK source, and
   its cost and time against today's reviews (the ticket's last two items).
 
+### The gate-file fact (FND-5325)
+
+lens has no equivalent: application-sdk has no bootstrap-managed files.
+
+A connector repo carries files `atlan-application-sdk-conformance bootstrap`
+writes and overwrites on every resync. A hand edit to one is lost at the next
+resync (or holds it back) and changes a CI gate meant to be the same across the
+fleet. When a pull request changes one, the review compares it with what the
+conformance version the pull request's BASE pins renders (the head's own pin
+is never read; see "Which version" below), and a mismatch is one finding,
+computed in code (`gate.py`).
+
+| | |
+|---|---|
+| Which files | Only files bootstrap manages. A file is flagged only when all of these hold: it exists on the PR's base (a file the PR adds, or renames onto a managed name, is never flagged, by the render path either: nothing bootstrap installed was edited, and the next resync writes it); bootstrap manages it at the base's pinned version, or it is on the fixed allowlist `gate.UNMANAGED_FALLBACK` (today only `connector-reviewer.yaml`) and that version does not manage it yet; and the PR's copy differs from the render (for the fallback, from its base copy) or the PR deletes it. What bootstrap manages is that version's C002 list (`bootstrap_drift.discover`) without the two write-if-absent scaffolds the app owns (`tests.yaml`, `renovate.json`): the managed workflow shims, the opt-in SARIF shim, the vendored action and scripts, and the retired files (a retired file still present is a mismatch, as in C002). An app's own CI files under `.github/`, edited or deleted, and its `.github/connector-reviewer/principles/` are never gate files. A value C002 reads back off a file (conformance.yaml's `exit-zero`, for one) is a per-repo choice, not drift. |
+| The comparison | C002 of the base-pinned version, called as it is (`gate_render.py`), over the head's files: `scan_path` decides each file, so the per-repo values it reads back, the action pins it ignores (`strip_action_pins`), an absent file and a retired one are judged as the app's own Conformance gate judges them. The diff shown is between `scan_path`'s own render (`render`, wrapped where `bootstrap_drift` imported it) and the head, both pin-stripped, at most 24 lines and 1,500 characters. A gate file reached through a symlink is not read. The fallback (`gate._fallback`) compares the allowlisted file's head copy with its base copy, both read through the API (`GitHub.file_at`), line endings normalised; a base copy that cannot be read is a note and no finding. |
+| Which version | The `atlan-application-sdk-conformance` the BASE branch's `uv.lock` pins (`gate.conformance_pin`): a released version from PyPI or the org's mirror (`sdk_source.known_index`, the index rebuilt from `_KNOWN_REGISTRIES`, never the lock's spelling). The head's pin is never read: files are judged against what the branch they merge into installs, and a PR that bumps the pin and resyncs is a dependency or resync PR, exempt. The gate job finds that base as the first parent of GitHub's test merge (`refs/pull/<n>/merge`, checked out sparse at depth 2; `gate.base_of_merge`, `gate-base`) and checks out its `uv.lock` alone (a pull request that conflicts has no merge ref: no check, and a note); the review uses the fact only when its head is the head it reviews and its version is the one the PR's own base pins (`gate.evaluate`, the base lock read through the API). Any other pin, or none, is no check. When that pin is older than the newest final release in the index's version list (read with the PEP 691 JSON page, no install; `gate.latest_release`), the summary has one note, "Pinned conformance X is behind Y; bump it with a resync …", which never changes the status; no lookup, no note. |
+| Where it runs | A job of its own, `gate`, before `review` (which `needs` it, `if: !cancelled()`). It holds no secret and no App token, and its token only reads contents. `gate-ref` writes `refs/pull/<n>/head` (the number an int); a sparse checkout of the head (`.github/workflows/`, `.github/actions/`, `.github/scripts/`, `renovate.json`, credentials not persisted) and the `uv.lock` alone of the base it merges into are read as data; `gate-fact` (`gate.make_fact`) creates a venv, installs `atlan-application-sdk-conformance==<pin>` with `--only-binary :all:` from that index, and runs `gate_render.py` with the venv's interpreter, `-I`, from outside the checkout, with an environment of `PATH`, `HOME`, the locale and the temp directory only. The fact goes to the review job as an artifact (`connector-reviewer-gate`, with the upload retry). This is the one place pull-request files are checked out and the one place third-party code runs: the review job, which holds the App token and the model key, still runs only this standard-library package. |
+| The finding | One per mismatched file: `origin = "gate"`, severity high, category `other`, no principle (no fleet principle covers bootstrap-managed files), line 0, the quote a fixed `gate:<path>` so the id is the path's whatever the edit. The body names the pinned version, the line counts, and the fix: edit it in application-sdk (`packages/conformance/conformance/bootstrap/templates/`) or run a resync; for a deleted file, restore it or retire it in application-sdk. `suggestion` holds the diff, shown under "Diff from the render" in a fence longer than any backtick run in it, and only for a path whose diff a prompt may carry (`select.model_visible`'s rule). The summary's principle column reads "bootstrap render, computed in code". |
+| Severity | High, on purpose. Any open finding already makes the status `failure`; what high adds is that the pull request's author cannot dismiss it alone (`dismiss`). A local edit to a fleet CI gate is for someone else to accept, and the two real fixes are cheap. The later-round floor, `calibrate` and the skeptic do not apply: it is not the model's. |
+| Each round | `gate.reconcile`, after `merge_new` and the skeptic: a new mismatch is a new finding; a gate finding whose file now matches or is no longer changed is closed (`fixed_by = "gate"`, "the file matches the bootstrap render again, or is no longer changed"); one that differs again is reopened as new; a dismissed one stays dismissed; one on a file the render did not compare (a symlink, an unreadable or oversized file) stays open, with a note. A round without a usable fact (the gate job failed, the head moved, the pin changed, an unparseable fact) leaves gate findings as they are and adds a note "Gate-file check not made: …". Free resolution, verify (`_model_findings`) and `/review recheck` skip gate findings; the line review still sees it in `<confirmed_findings>`, so it does not raise it again. |
+| One finding, not two | A file a gate finding covers (`gate.covered`: this round's gate findings, and an open one `reconcile` keeps open, with no usable fact or on a path not compared) is not line-reviewed and not shown to the approach check: it never reaches `select_files`, the approach check's files leave it out in an incremental round too, and its added symbols are left out of `symbols_added`. Before this, the line review also reviewed the hand-edited file and raised a medium finding on what the edit breaks, a second finding with the same fix (seen on two test pull requests). The summary's "file(s) not reviewed" list names it, "covered by the gate finding F-…, which says how to fix it: not line-reviewed", so nothing is skipped silently; it is not unread source, so the verdict is still complete. A gate finding a person dismissed covers nothing: the line review judges the file again. A gate file with no gate finding (it matches the render, or no check was made) is reviewed as before, and verify still sees every file, so an earlier model finding on a covered file can still be closed. |
+| Resync | A resync pull request is still exempt (`exempt.py`), with no gate check. Under `/review force` it is reviewed, and a resync whose files match the render raises no gate finding. |
+| The fact file | Read as untrusted data (`gate.load_fact`): schema 1, a 40-hex head, a release version, at most 100 plain repo-relative paths (no `.`, `..`, empty or absolute segment), both the mismatch and the unchecked maps present (a fact without them is unusable, never all clean), a mismatch only on a listed gate file and of a known kind, a diff cut at 2,000 characters, a reason stripped to plain characters. |
+
+Tests: `test_connector_reviewer.py` (the gate section at its end: the ref, the
+pin, the isolated install, a check that cannot be made, the fact's validation,
+one finding per changed mismatched file, deletion and rename, head and version
+binding, `reconcile`, a two-round review, a forced resync, recheck refused, a
+hand-edited gate file as one finding and in no line-review bundle or approach
+request while the PR's other files are reviewed, a gate file with no gate
+finding still reviewed, a covered file's added symbols in no prompt, `covered`,
+and
+`gate_render.py` run in isolated mode against this repository's own bootstrap
+output, and `gate-ref`, `gate-base` and `gate-fact` through the CLI: their
+arguments, the outputs they write, and exit 1 when one cannot be written) and `test_connector_reviewer_workflow.py` (the gate job holds no secret
+or App token, its checkouts, the fact's path to the review, the review job
+names no pull-request ref and installs nothing).
+`test_no_step_mentions_a_pull_request_head` now excludes the gate job, and the
+`job` fixture expects two jobs.
+
 ## Module by module
 
 Where a lens fix lands in this copy. "Names" means only the renames in the table
@@ -611,10 +654,11 @@ above; "typing" means only the annotations described under Typing.
 | `advisory.py` | Rewritten as the empty extension point; holds `glob_match`, without lens's fnmatch fallback for a glob with no slash, and matched by walking the set of glob steps a path can be at instead of by a regex, so a repo-written principle glob such as `a*a*…a*z` costs at most len(path) * len(glob) steps and cannot backtrack exponentially (FND-5316). The semantics are lens's regex translation, checked against it on random globs and paths. |
 | `agent.py` | Names; principles where lens has rules; no released-surface block; typing; `cite`, the test-file cap, the per-bundle time limit (FND-5313); the facts blocks and the `task_done` answers (FND-5312); the `<sdk_source>` block (FND-5331) and the `<other_sdk_packages>` block (FND-5316); `grade_by_principle` (FND-5316); `unique_ids` before grading, and `locate_step`, `trace_chain`, `render_chain`, `traced` and `BundleResult.untraced`, and `principle_case` and `bound_by_outcome` (FND-5316); `_short_line_at` in `trace_chain`, the loop's tool calls factored into `_answer`, `_retry_final` with `review_bundle(retry_empty=…)`, `BundleResult.retried` and `unanswered`, and `AgentLimits.final_retry_max_tokens` (third replay); `BundleResult.retry_span` and the `Finding.retry` mark (fourth replay). |
 | `prompts.py` | The review prompt's opening, "Repository layout", "Principles" (with the Severity-line grading of FND-5316) and "Facts" sections; the causal-chain bullets of "Evidence", and the two-way principle grading and the outcome floor and cap in "Principles" and "Severity" (FND-5316); the observable-outcome bullet of "Evidence", the case judged at that outcome in "Principles", rejection in the floor, and `RETRY_FINAL` (third replay); the removals; typing. |
-| `review.py` | Names; the removals; `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316); `unique_ids` across bundles before `merge_new`, and the mechanical box and scope trace from `Triage.withheld`, and the contested note's wording (FND-5316); the line review in two phases (`split_code_bundles`), `no_review_note`, `base_ref_output` and `base_checkout_note` (third replay); `skeptic_base` and `_drop_by_skeptic` (fourth replay). |
-| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316); the `base-ref` sub-command and `--principles-root` (third replay). |
+| `review.py` | Names; the removals; `run`'s `gate_fact`, `RunResult.gate` and `resolved_gate`, `_model_findings`, the gate rows in `_principle`, `_details` and `_FIXED_BY`, and recheck refusing a gate finding (FND-5325); `RunResult.gate_covered` and `_gate_cover`, holding a file a gate finding covers out of the line review and the approach check (FND-5325); `RISKY_PREFIXES` as tiers; principles where lens has rules; typing; exempt and waive; the verdict rules and the approach check alongside the line review (FND-5313); `compute_facts` and the Regression and History lines (FND-5312), with `_whole_files` joining a file reviewed in parts back into one diff before its facts are computed; the skeptic pass, `SKEPTIC_SHARE` and the contested mark (FND-5332); `run`'s `sdk` and `sdk_note` (FND-5331); `run`'s `sdk_dir` and `sdk_head`, opening the SDK source against the reviewed head's lock, and `sdk_pins_block`, and `plan_bundles` packing the shipped code apart from tests past the cap, with `_cap_skips` naming the lines left unread (FND-5316); `unique_ids` across bundles before `merge_new`, and the mechanical box and scope trace from `Triage.withheld`, and the contested note's wording (FND-5316); the line review in two phases (`split_code_bundles`), `no_review_note`, `base_ref_output` and `base_checkout_note` (third replay); `skeptic_base` and `_drop_by_skeptic` (fourth replay). |
+| `__main__.py` | Names; no `approve` sub-command; the config directory default; `--principles-dir`; the `finalize` sub-command, and the crash handler calls it; the `sdk-ref` sub-command and `--sdk-source` (FND-5331), `sdk-ref` reading the pull request head's lock and writing that head, and `--sdk-head` (FND-5316); the `base-ref` sub-command and `--principles-root` (third replay); the `gate-ref`, `gate-base` and `gate-fact` sub-commands and `--gate-fact` (FND-5325); step outputs written through the repository's shared `.github/scripts/_gha.py` (`set_outputs`), which both reviewer checkouts of the workflow include. |
 | `__init__.py` | Docstring. |
-| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py` | New here. |
+| `principles.py`, `typed.py`, `exempt.py`, `finalize.py`, `facts.py`, `skeptic.py`, `sdk_source.py`, `gate.py` | New here. |
+| `gate_render.py` | New here, and not part of the engine: run only by the gate job's venv, it imports the conformance package (FND-5325). |
 | `approve.py`, `surface.py`, `rules.py` | Not here. |
 
 ## Fixed in both copies (FND-5323)
@@ -665,6 +709,111 @@ names.
 - An unknown word on the command's line (`/review frobnicate`, `/lens forse`) gets a
   usage reply and starts nothing. Options come from the first line only, so a note
   on the lines below a bare `/review` or `/lens` still reviews.
+
+## Review depth (FND-5316)
+
+A live review of a 42-file connector pull request withheld 13 files as mechanical,
+9 of them wrongly, reported weakened test expectations for a file whose tests had
+only been re-wrapped, and forced the final turn of 3 of its 5 bundles at the
+context ceiling, the core one at turn 3 of 24. What changed, and in which copy:
+
+- **Mechanical rename (both copies, `triage.py`).** A token swap counts as a rename
+  only when both names are defined in this repository: the old one in a base copy
+  of a changed Python file, the new one in a head copy (a def, class, variable,
+  parameter or exception name, never a name bound only by an import), or modules
+  of the changed paths (`triage.definitions`). A name after a dot must be a member
+  defined here (a method, class attribute, `self.x`/`cls.x`, or a module-level def
+  or class), after a receiver of this repository: `self`, `cls`, a class defined
+  here or a changed path's module (`Definitions.renames(receiver=…)`; lens F-80e1ac:
+  pooled member names let an unrelated rename of `error` to `warning` bless
+  `logger.error` -> `logger.warning`). So `json` -> `orjson`,
+  `logger.error` -> `logger.warning` and `client.get` -> `client.post` go to the line
+  review however many files repeat them. A hunk whose imports drop one binding and
+  add another, as (module, name, alias) (`import json` -> `import orjson`,
+  `from a import f` -> `from b import f`, `from m import f as send` -> `from m import g
+  as send`), is not "imports only" (`hunk_imports_only`), unless the only difference
+  is a module the pull request renames (`triage.renamed_modules`); imports added,
+  regrouped or reordered still are. `baseline.py`, `diff.py` and `index.py` are
+  unchanged and still byte-identical between the copies. Tests adapted: the
+  rename cases now hand triage the renamed function's definition on each side and
+  its diff, so the def site counts as a renamed file too (the 100-file case counts
+  101 files), and the two
+  `test_import_only_means_nothing_but_import_statements` cases that swapped `os`
+  for `sys` and `a` for `b` now expect a line review, with same-module cases added.
+
+- **Weakened expectations (connector-reviewer only: lens has no facts).**
+  `facts.weakened_expectations` now takes both copies of each changed test file
+  (`review.run` reads the base copy at the reviewed range's base, shared with triage,
+  and the head copy from `head_side_text`; both call sites, the trace's facts and
+  `compute_facts`, pass them). When both parse, each function's expectations are
+  compared as syntax trees (`facts._structural`): an `assert`'s condition (its
+  message is not the expectation), `pytest.raises(...)`, and assert methods. A
+  re-wrap, reformat or reordering reports nothing; an assertion gone or changed
+  still does, with its base line. The line rules carry over: an expectation that
+  moved to a test the pull request adds is not lost, a changed one is one with the
+  same left side gained in the same function, a deleted test counts only with a
+  lost expectation, a new skip counts unless one like it was removed. Helper
+  functions in a test file are compared too, as the line rules did through the
+  hunk header. When any changed test file's copy is missing or does not parse,
+  every file falls back to the diff lines: a move between a file read one way and
+  a file read the other was otherwise reported as a removal (lens F-0290b2).
+
+- **Principles (connector-reviewer only).** `PrincipleSet.in_order` gives a bundle's
+  principles room in this order: those whose `applies-to` names one of its files,
+  fleet then repo, a glob before an area; then those with no `applies-to`, which
+  cover every file and say least about these ones. `render_for(paths, max_chars)`
+  renders them in full while they fit `[agent] principles_max_tokens` (24,000
+  estimated tokens) and lists the rest by id and title. A title-only principle still
+  applies: `cite` and `grade_by_principle` read the whole set, so a finding citing
+  one is graded by its Severity text, which the model saw only as a title. On the
+  live pull request every principle matched by area (`[app]`), so this ordering cut
+  nothing there; the context ceiling below is what fixed its depth. lens's rule
+  cards are matched by glob, first match per file, and are not changed.
+  Test adapted: `test_principles_are_rendered_once_each_with_their_files_and_five_fields`
+  now expects the everywhere principle FP02 after the repo's RP01.
+
+- **Limits (both copies, unless the limit exists only here).** Sized so a pull request
+  of 100 files and about 4,000 changed lines (2x a 50-file / 2,000-line one) finishes
+  without hitting any of them. Every cap stays; the reasons are in the config comments.
+
+  | Limit | Old | New | Copies |
+  |---|---|---|---|
+  | `[agent] context_limit_tokens` | 60,000 | 200,000 | both |
+  | `[agent] max_tool_turns` / `max_tool_turns_cap` | 16 / 30 | 24 / 48 | both |
+  | `[agent] plan_max_tokens` | 8,000 | 24,000 | both |
+  | `[agent] bundle_time_limit_s` | 120 | 240 | connector-reviewer (lens has none) |
+  | `[agent] principles_max_tokens` | none | 24,000 | connector-reviewer (lens has rule cards) |
+  | `[budget] cap_usd_per_pr` | 1.00 | 3.75 | both |
+  | `[scope] max_bundles` | 8 | 16 | both |
+  | `[scope] max_changed_files` | 60 | 200 | both |
+  | re-pack size past `max_bundles` | half the ceiling (30,000) | `review.MAX_REPACK_DIFF_TOKENS` = 30,000 | both |
+  | approach check `max_input_tokens` / `max_lookups` (`holistic.check`) | 8,000 / 4 | 32,000 / 8 | both |
+  | `review_max_tokens`, `final_retry_max_tokens` | 24,000 | 24,000 (unchanged) | both |
+
+  The window: the LiteLLM proxy reports `max_input_tokens` 922,000 for gpt-6-luna, as
+  quoted in mothership's `atlanClaw/src/agent.ts`. Nothing in this repository or the
+  gateway's docs states it, so it is cited as that. The ceiling of 200,000 is 22% of
+  it. It also stays under 272,000: the provider bills a longer prompt on separate
+  long-context meters (abacus: `6-luna LongCo`), whose rate `[model.price]` does not
+  carry, so the reservation would under-price it. No `max_tokens` goes above 24,000,
+  the value every review turn already sends: a 400 is fatal in `llm.Client` and
+  opens the run-wide breaker. The re-pack size had been half the ceiling, and would
+  have become a 100,000-token diff with no room left to read anything, so it is a
+  constant at its old value. Tests adapted: the shipped-config tests allow a cap up
+  to $4.00 and a time limit up to 300 s (16 bundles, 4 at a time, inside 20 minutes);
+  `test_files_past_the_bundle_cap_are_unread` patches `MAX_REPACK_DIFF_TOKENS`
+  instead of the ceiling.
+
+- **A ceiling hit is never silent (both copies).** When the context ceiling forces a
+  bundle's final turn, `BundleResult.ceiling_turn` records the turn. Before turn
+  `agent.SHALLOW_BEFORE_TURN` (4) the bundle is `shallow`: `review.run` adds
+  `review.shallow_note` ("Bundle `x` was reviewed shallowly: it reached the context
+  ceiling at turn 3 of 24 …") to the incomplete reasons, so the status is red,
+  "review incomplete", and its files go to `pending_files` like a failed bundle's
+  (when every bundle failed, the head is left unreviewed and the next run redoes
+  it). Its findings are kept. The run report has `ceiling_turn` and `shallow` per
+  bundle. This follows the verdict rule that the status is never green unless every
+  part of the change was read.
 
 ## Not changed, and worth knowing before the next change
 

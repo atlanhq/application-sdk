@@ -254,7 +254,7 @@ application_sdk/
 │   └── types.py            # MaxItems, FileReference, GitReference, SerializableEnum, StorageTier
 │
 ├── handler/                # HTTP handler framework
-│   ├── base.py             # Handler ABC, HandlerError
+│   ├── base.py             # Handler ABC
 │   ├── context.py          # HandlerContext
 │   ├── contracts.py        # AuthInput/Output, PreflightInput/Output, etc.
 │   ├── manifest.py         # Manifest generation helpers
@@ -387,8 +387,11 @@ application_sdk/
 │   │                       # _legacy_codes.py: deprecated AAF-{COMPONENT}-{ID} ErrorCode constants (removed in v4.0)
 ├── constants.py            # Import-time configuration (env vars, path templates)
 ├── version.py              # Package version (__version__)
+├── _shutdown_policy.py     # Post-drain exit deadline + event-loop stall bound (used by main.py)
 └── main.py                 # Unified CLI entry point (--mode worker|handler|combined)
 ```
+
+`main.py` owns `AppConfig`, the three run modes, signal handling and the CLI. The pieces it runs are kept beside the layer they belong to: the Dapr infrastructure bootstrap in `infrastructure/_bootstrap.py`, the worker restart supervisor and poll-state observer in `execution/_temporal/supervisor.py`, the shutdown policy in `_shutdown_policy.py`, and `run_dev_combined` in `dev/_runner.py` (still imported as `application_sdk.main.run_dev_combined`).
 
 Packages prefixed with `_` (e.g., `execution/_temporal/`, `infrastructure/_dapr/`) are private implementation details — never import from them directly. The public interface is everything without the underscore prefix.
 
@@ -400,14 +403,15 @@ The following Architecture Decision Records document the key choices made in the
 
 | ADR | Decision |
 |-----|----------|
-| [ADR-0001](../adr/0001-per-app-handlers.md) | Per-app handler deployments (not an uber-handler) |
+| [ADR-0001](../adr/0001-per-app-handlers.md) | Per-app handler deployments (not an uber-handler). Superseded in part by ADR-0023 for hosted apps on the consolidated API host |
 | [ADR-0002](../adr/0002-per-app-workers.md) | Per-app workers with dedicated task queues (not an uber-worker) |
 | [ADR-0003](../adr/0003-per-app-observability.md) | Per-app observability with correlation-based tracing |
 | [ADR-0004](../adr/0004-build-time-type-safety.md) | Build-time type safety with Pydantic models |
 | [ADR-0005](../adr/0005-infrastructure-abstraction.md) | Complete abstraction of Temporal and Dapr behind Protocols |
 | [ADR-0006](../adr/0006-schema-driven-contracts.md) | Single-model contracts with additive evolution rules |
-| [ADR-0007](../adr/0007-apps-as-coordination-unit.md) | Apps coordinate via child workflows (not shared activities) |
+| [ADR-0007](../adr/0007-apps-as-coordination-unit.md) | Apps coordinate via child workflows (not shared activities). Superseded: direct inter-app calls were removed, with no successor ADR |
 | [ADR-0008](../adr/0008-payload-safe-bounded-types.md) | Import-time payload safety validation (prevents 2MB Temporal limit failures) |
 | [ADR-0009](../adr/0009-separate-handler-worker-deployments.md) | Separate handler and worker Kubernetes deployments |
 | [ADR-0010](../adr/0010-async-first-blocking-code.md) | Async-first design; `run_in_thread()` for blocking code |
 | [ADR-0011](../adr/0011-logging-level-guidelines.md) | Structured logging level conventions |
+| [ADR-0023](../adr/0023-consolidated-api-host.md) | One consolidated API host serves opted-in hosted apps' handler routes |

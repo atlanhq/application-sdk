@@ -10,7 +10,8 @@ cloud's, and pin the status codes the routes promise:
 * a missing config is 404;
 * a missing bucket or container is 503, although S3 and Azure answer it with
   a 404 too;
-* an upload lands under the app's namespace with its bytes.
+* an upload lands under the app's namespace with its bytes, and the
+  worker's ``{key}.sha256`` integrity sidecar beside it.
 
 Marked ``storage_emulator``; see ``test_emulator_s3.py`` and
 ``test_emulator_azure.py`` for running the emulators locally.
@@ -18,6 +19,7 @@ Marked ``storage_emulator``; see ``test_emulator_s3.py`` and
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 
@@ -26,8 +28,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk._obstore_config import (
-    make_azure_store,
-    make_s3_store,
+    AzureStoreSettings,
+    S3StoreSettings,
+    build_azure_store,
+    build_s3_store,
     obstore_client_options,
 )
 from application_sdk.handler import (
@@ -43,24 +47,25 @@ from application_sdk.handler import (
 )
 from application_sdk.handler.asgi import build_asgi_app
 from application_sdk.handler.object_routes import HostObjectStore
-from tests.integration.storage.conftest import emulator_unavailable
+from tests.integration.storage.conftest import (
+    AZURITE_ACCOUNT,
+    AZURITE_ENDPOINT,
+    MINIO_ENDPOINT,
+    require_reachable,
+)
 
 pytestmark = pytest.mark.storage_emulator
 
-_S3_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+
 _S3_USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 _S3_PASS = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
 _S3_BUCKET = os.environ.get("S3_EMULATOR_BUCKET", "sdk-emulator-test")
 
-# Well-known Azurite dev account/key — public, emulator-only.
-_AZ_ACCOUNT = "devstoreaccount1"
+# Well-known Azurite dev account key — public, emulator-only.
 _AZ_KEY = (
     "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/"
     "K1SZFPTOtr/KBHBeksoGMGw=="
 )
-_AZ_ENDPOINT = os.environ.get(
-    "AZURE_STORAGE_ENDPOINT", "http://localhost:10000"
-).rstrip("/")
 _AZ_CONTAINER = os.environ.get("AZURE_EMULATOR_CONTAINER", "sdk-emulator-test")
 
 
@@ -75,34 +80,22 @@ class _Handler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
-def _reachable(url: str, name: str) -> None:
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0) as client:
-            resp = client.get(url)
-    except Exception as exc:  # pragma: no cover — env guard
-        emulator_unavailable(f"{name} not reachable at {url}: {exc}")
-    if resp.status_code >= 500:  # pragma: no cover — env guard
-        emulator_unavailable(f"{name} unhealthy at {url}: HTTP {resp.status_code}")
-
-
 def _http_options() -> dict[str, object]:
     return {**obstore_client_options(), "allow_http": True}
 
 
 def _minio(bucket: str) -> HostObjectStore:
-    _reachable(f"{_S3_ENDPOINT}/minio/health/live", "MinIO")
-    store = make_s3_store(
-        bucket,
-        {
-            "aws_endpoint": _S3_ENDPOINT,
-            "aws_region": "us-east-1",
-            "aws_access_key_id": _S3_USER,
-            "aws_secret_access_key": _S3_PASS,
-            "aws_virtual_hosted_style_request": "false",
-            "aws_disable_tagging": "true",
-        },
+    require_reachable(f"{MINIO_ENDPOINT}/minio/health/live", "MinIO")
+    store = build_s3_store(
+        S3StoreSettings(
+            bucket=bucket,
+            endpoint=MINIO_ENDPOINT,
+            region="us-east-1",
+            access_key_id=_S3_USER,
+            secret_access_key=_S3_PASS,
+            force_path_style=True,
+            disable_tagging=True,
+        ),
         label="host-s3",
         client_options=_http_options(),  # type: ignore[arg-type]
     )
@@ -110,14 +103,14 @@ def _minio(bucket: str) -> HostObjectStore:
 
 
 def _azurite(container: str) -> HostObjectStore:
-    _reachable(f"{_AZ_ENDPOINT}/{_AZ_ACCOUNT}", "Azurite")
-    store = make_azure_store(
-        container,
-        {
-            "azure_storage_account_name": _AZ_ACCOUNT,
-            "azure_storage_account_key": _AZ_KEY,
-            "azure_storage_endpoint": f"{_AZ_ENDPOINT}/{_AZ_ACCOUNT}",
-        },
+    require_reachable(f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}", "Azurite")
+    store = build_azure_store(
+        AzureStoreSettings(
+            container=container,
+            account_name=AZURITE_ACCOUNT,
+            account_key=_AZ_KEY,
+            endpoint=f"{AZURITE_ENDPOINT}/{AZURITE_ACCOUNT}",
+        ),
         label="host-azure",
         client_options=_http_options(),  # type: ignore[arg-type]
     )
@@ -127,6 +120,12 @@ def _azurite(container: str) -> HostObjectStore:
 _STORES: dict[str, tuple[Callable[[str], HostObjectStore], str]] = {
     "s3": (_minio, _S3_BUCKET),
     "azure": (_azurite, _AZ_CONTAINER),
+}
+
+
+_MISSING_STORE_DETAIL = {
+    "s3": "Object store unavailable",
+    "azure": "Object store container does not exist",
 }
 
 
@@ -165,11 +164,21 @@ def test_a_missing_bucket_or_container_is_503_not_404(cloud: str) -> None:
     host = _host(make("host-emulator-no-such-bucket"))
     response = host.get("/workflows/v1/config/g1?type=credentials")
     assert response.status_code == 503
-    assert response.json()["detail"] == "Object store unavailable"
+    # Azure names the container in its 404 (ContainerNotFound), which the
+    # shared failure table reads as such; S3's NoSuchBucket is a plain 404,
+    # told apart from a missing object only by the listing.
+    assert response.json()["detail"] == _MISSING_STORE_DETAIL[cloud]
 
 
 @pytest.mark.parametrize("cloud", sorted(_STORES))
-def test_an_upload_lands_under_the_apps_namespace(cloud: str) -> None:
+def test_an_upload_lands_under_the_apps_namespace(
+    cloud: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The sidecar assertion needs emission on, whatever the runner's env says.
+    # The host's store writes through the worker's storage.upload_file, which
+    # reads constants' value when constants is loaded, as it is here.
+    monkeypatch.setenv("ATLAN_STORAGE_WRITE_SIDECARS", "true")
+    monkeypatch.setattr("application_sdk.constants.STORAGE_WRITE_SIDECARS", True)
     make, existing = _STORES[cloud]
     store = make(existing)
     response = _host(store).post(
@@ -182,5 +191,8 @@ def test_an_upload_lands_under_the_apps_namespace(cloud: str) -> None:
     try:
         assert key.startswith("persistent-artifacts/apps/mysql/uploads/sample_data/")
         assert bytes(obstore.get(store._store, key).bytes()) == b"a,b\n1,2\n"
+        sidecar = bytes(obstore.get(store._store, key + ".sha256").bytes())
+        assert sidecar == hashlib.sha256(b"a,b\n1,2\n").hexdigest().encode()
     finally:
         obstore.delete(store._store, key)
+        obstore.delete(store._store, key + ".sha256")

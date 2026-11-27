@@ -22,8 +22,6 @@ optional_triggers:
   - "pyatlan_v9 migration"
   - "to_nested_bytes replacement"
 owner: connector-platform-team
-last_updated: "2026-11-09"
-staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:

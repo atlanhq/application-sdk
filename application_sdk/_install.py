@@ -21,18 +21,24 @@ from typing import Any
 #: A module the full SDK always ships and the api distribution never does.
 _WORKER_SENTINEL = "application_sdk.main"
 
-#: The modules the :func:`worker_only_missing` guards import, none of them shipped
-#: by the api distribution: the object store (``contracts.types``,
-#: ``credentials.utils``, ``common.utils``, ``observability.observability``), the
-#: worker's infrastructure (``handler.context``, ``observability.observability``),
-#: the SDK's structured logger (``_logging``) and Temporal
-#: (``observability.utils``). A guard falls back only when one of these (or a
-#: submodule of one) is what is missing; anything else is a real error. A new
-#: guard over another worker-only module adds that module here.
+#: The modules the :func:`worker_only_missing` guards import that an api-only
+#: install may lack: the worker's infrastructure (``handler.context``,
+#: ``observability.observability``, ``storage.ops``, ``common.atomic``), the
+#: SDK's structured logger and metrics (``_logging``, ``storage._telemetry``,
+#: ``storage._budget``), Temporal (``observability.utils``), the Dapr binding
+#: parser (``credentials.utils``), and obstore. ``application_sdk.storage``'s
+#: read and write path ships in the api wheel, but imports obstore, which only
+#: the ``obstore`` extra installs: on a core-only host the object-store guards
+#: (``contracts.types``, ``credentials.utils``, ``common.utils``) find obstore
+#: missing and take their fallback, as they did when ``storage`` was not
+#: shipped at all. A guard falls back only when one of these (or a submodule
+#: of one) is what is missing; anything else is a real error. A new guard over
+#: another worker-only module adds that module here.
 _WORKER_ONLY_PREFIXES: tuple[str, ...] = (
     "application_sdk.infrastructure",
     "application_sdk.observability",
-    "application_sdk.storage",
+    "application_sdk.storage.binding",
+    "obstore",
     "temporalio",
 )
 

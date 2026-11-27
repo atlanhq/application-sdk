@@ -71,6 +71,23 @@ await download_file(
 
 `key` is the object-store path. Leading slashes and `./local/tmp/...` workflow prefixes are stripped automatically by `normalize_key`. `local_path` is the local filesystem path.
 
+Bytes already in memory go through `upload_bytes(key, data)`, the one byte-put primitive. It runs on the same streaming transport as `upload_file` (part size, transfer budget, progress marks, telemetry), with the same post-write size check and `.sha256` sidecar, without staging the bytes on disk. A small payload is still a single PUT. `upload_file_from_bytes` is a deprecated alias for it, to be removed in v4.0.0.
+
+### Which entry point to use
+
+| You have / want | Use |
+|---|---|
+| Bytes in memory → one key | `upload_bytes(key, data)` |
+| A JSON value → one key | `put_json(key, obj)`: a plain PUT, with no post-write size check and no sidecar |
+| A local file → one key | `upload_file(key, local_path)` |
+| One key → a local file | `download_file(key, local_path)`; `download_file_chunked` for GB-class objects |
+| A directory, from a `@task` or `run()` | `App.upload` / `App.download` (adds validation and `FileReference` tagging) |
+| A `FileReference`, outside `App` | `transfer.upload` / `transfer.download` |
+| A state directory mirrored as-is (RocksDB, DuckDB, a parquet dataset) | `upload_prefix` / `download_prefix` (no local markers, no manifest) |
+| A customer's own bucket | `CloudStore` |
+
+Every row except `put_json` ends in the same primitives: `upload_file` / `upload_bytes` for writes and `download_file` / `download_file_chunked` for reads, so transfer integrity is the same whichever of those you call. `put_json` writes small configs with a plain PUT and skips both the readback and the sidecar; use `upload_bytes(key, orjson.dumps(obj))` when a JSON object needs them. The same table is in the `application_sdk.storage` module docstring.
+
 ### Additional operations
 
 ```python
@@ -139,9 +156,11 @@ GETs in a file. Their product is what a worker holds in memory, so one byte
 budget bounds it. Every range GET, streaming download and multipart upload
 behind the file transfers (`download_file`, `upload_file`, the prefix
 operations, FileReference hand-offs) reserves the buffer bytes it will hold
-before it holds them. Whole-object byte reads and writes are outside it:
-`CloudStore`, including `CloudStore.get_bytes()`, holds each object it moves
-in memory without reserving. A transfer that does not
+before it holds them, `CloudStore`'s file and prefix transfers included.
+`upload_bytes` (and so `CloudStore.upload_bytes()`) streams through the same
+writer and reserves its part buffers too; the payload itself is the caller's
+memory. Whole-object reads and small writes are outside it: `put_json` and
+`CloudStore.get_bytes()` hold each object in memory without reserving. A transfer that does not
 fit waits, and keeps marking progress while it waits, so the stall watchdog
 does not kill it. A single transfer larger than the whole budget runs on its
 own. The budget defaults to a quarter of the container memory limit; set
@@ -283,9 +302,11 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 | `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
-| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `CloudStore` byte APIs are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
+| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `put_json` and `CloudStore.get_bytes` are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
+
+The `ATLAN_OBSTORE_*_TIMEOUT` values are durations such as `30s` or `1h 30m`. An empty value, or one that is not a duration (a bare `30` has no unit; `0` alone is accepted as zero), keeps the default; the second also logs a warning. Before, either one failed every object-store client construction with `failed to parse ... as Duration`.
 
 ---
 
@@ -330,6 +351,19 @@ it never contains files the producer did not write.
 
 Objects written before this protocol existed, or by a non-SDK producer, simply
 have no sidecar; those downloads keep the size check and skip the digest check.
+
+The consolidated API host's file upload route (`POST /workflows/v1/file`) is a
+producer too: it writes the same `{key}.sha256` sidecar beside every upload, so
+a worker that downloads a setup-form file verifies it against the digest the
+host recorded. The host cannot import `application_sdk.storage`, so the sidecar
+key convention, the failure table and the gateway no-route retry both stacks
+use live in the obstore-free `application_sdk/_storage_classify.py`.
+The worker-only classifiers, which may name obstore's exception classes, live
+beside the storage package's other private modules in
+`application_sdk/storage/_classify.py`: the preflight probe's access buckets
+(which the write path also reads to recognise a bucket relocation), the etag
+precondition rule chunked downloads restart on, and the 401/403 evidence
+`CloudStore` turns into a typed USER error.
 
 ### What this does not prove
 
@@ -443,7 +477,7 @@ The object-store backend is configured via Dapr component YAML at deploy time (s
 | Mode | Required fields |
 |------|----------------|
 | Static access key | `accessKey` + `secretKey` (+ optional `sessionToken` for temporary/STS-derived base creds) |
-| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `accessKey`/`secretKey`/`sessionToken` for base identity) |
+| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `externalId` for a trust policy with an `sts:ExternalId` condition, `accessKey`/`secretKey`/`sessionToken` for base identity) |
 | Instance profile / IRSA / env vars | Omit all credential fields |
 
 `boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras install nothing more. They are deprecated and removed in v4.0.0; drop them from `pyproject.toml` (conformance rule D017 warns on each).
@@ -470,6 +504,25 @@ Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChi
 |------|----------------|
 | Inline service-account key | Any SA JSON field that includes `private_key` or `private_key_id` |
 | ADC / Workload Identity / metadata server | `bucket` + `project_id` only (no `private_key`) |
+
+### `CloudStore` (customer buckets)
+
+`CloudStore.from_credentials` reads the `csa-connectors-objectstore` credential (`authType`, `username`, `password`, `token`, `extra`) and builds its store through the same settings as the Dapr binding, so the same credentials give the same store on both paths. For S3:
+
+| Field | Effect |
+|-------|--------|
+| `username` + `password` | Static access key; `token` adds the STS session token for temporary credentials |
+| `extra.aws_role_arn` | AssumeRole via STS (+ optional `aws_external_id`, `aws_role_session_name`); `username`/`password`/`token` become the base identity |
+| `extra.endpoint` | S3-compatible endpoint (MinIO, R2, ...). Must be `https://`: CloudStore always uses TLS with certificate verification and refuses an `http://` endpoint. A non-AWS endpoint disables object tagging and skips the bucket-region lookup (an AWS endpoint keeps the lookup) |
+| `extra.force_path_style`, `extra.disable_tagging` | Path-style requests; explicit tagging override (wins over the non-AWS auto-detect) |
+| `extra.conditional_put`, `extra.copy_if_not_exists`, `extra.checksum_algorithm` | obstore's `aws_conditional_put`, `aws_copy_if_not_exists`, `aws_checksum_algorithm` |
+| `extra.server_side_encryption`, `extra.sse_kms_key_id` | Server-side encryption on writes |
+
+`CloudStore` has no transfer code of its own. `get_bytes` reads through the same primitive as every other small read, so it rides out the gateway's "no Route matched" 404 and fails with the same typed leaves and evidence. `upload` and `upload_bytes` call `upload_file` and `upload_bytes`, `upload_dir` runs on the same tree upload as `upload_prefix`, and `download` runs on the same engine as `download_prefix`. Sidecars are off for all of them, because a customer bucket is not part of the SDK's sidecar protocol: no `.sha256` is written, and a `.sha256` file in the bucket or the local directory is moved as ordinary data. Every `CloudStore` write runs the post-write size check, so the credential must be allowed to HEAD the object it just wrote (`s3:GetObject`, `storage.objects.get`, or Blob read). `upload` and `upload_dir` have done this since FND-306; `upload_bytes` now does too. For a bucket whose policy grants PUT only, pass `upload_bytes(..., verify=False)`, or set `ATLAN_STORAGE_VERIFY_TRANSFERS=false` to turn the check off for the whole process.
+
+ADLS also accepts `extra.endpoint` (`https://` only). GCS without a `password` uses Application Default Credentials, including a Workload Identity Federation (`external_account`) file, as the binding does.
+
+Store construction lives in `application_sdk/_obstore_config.py`: each front-end (the Dapr binding, `CloudStore`, the API host) fills an `S3StoreSettings`, `AzureStoreSettings` or `GCSStoreSettings`, and `build_*_store` is the only code that turns settings into obstore config. A fix to that translation reaches every path.
 
 ---
 

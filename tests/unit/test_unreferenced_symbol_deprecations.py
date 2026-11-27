@@ -18,6 +18,7 @@ from application_sdk.clients.azure.azure_errors import (
     AzureConnectionError,
     AzureServiceError,
 )
+from application_sdk.contracts.base import Input, is_backwards_compatible
 from application_sdk.infrastructure._dapr.client import (
     create_dapr_secret_store,
     is_dapr_component_registered,
@@ -41,6 +42,10 @@ def _get_all_versions() -> object:
     return None
 
 
+class _V1(Input):
+    name: str = ""
+
+
 def _create_dapr_credential_vault() -> object:
     with patch(
         "application_sdk.infrastructure._dapr.credential_vault.DaprCredentialVault"
@@ -58,6 +63,7 @@ _SYNC_CALLS: dict[str, Callable[[], Any]] = {
     "get_all_versions": _get_all_versions,
     "create_dapr_secret_store": lambda: create_dapr_secret_store(MagicMock()),
     "create_dapr_credential_vault": _create_dapr_credential_vault,
+    "is_backwards_compatible": lambda: is_backwards_compatible(_V1, _V1),
 }
 
 

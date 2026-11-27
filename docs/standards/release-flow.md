@@ -30,6 +30,12 @@ feat/fix commit merged to main
   Renovate merge, so each repo switches over in the same `bootstrap --resync` that gates
   its bump-PR CI — the extra pushes never run ahead of the gate. The SDK repo renders the
   full notes immediately; it gates its own bump PRs from the same merge.
+- SDK repo only (`release.yaml`): `update_changelog.py --archive-dir docs/changelog` moves
+  every section from a major older than the new version's into `docs/changelog/v<major>.md`,
+  so `CHANGELOG.md` holds only the current major; then `lint_changelog.py <version>` fails
+  the run before the push unless the new section's heading is unique, it has at least one
+  bullet, and every bullet carries a `(#N)` PR reference (FND-4274). App repos'
+  `release-version-bump.yaml` does neither: its hand-over carries `CHANGELOG.md` alone.
 - Opens a PR from `bump-version-main` into `main` with the `release` label — or, when
   that PR is already open, re-syncs its title, body and label to the version this run
   produced (`.github/scripts/upsert_release_pr.py`).
@@ -125,7 +131,13 @@ Connector Tests Gate, which rolls up the connector e2e checks **and the SDR K8s 
 it too. Read the green `gate-check` on an SDK bump PR as "opted in", never as "passed".
 
 **Release Gate passes a release PR only on a `success` `gate-check` status on its head**
-(`.github/scripts/release_gate.py`, vendored by bootstrap). In an app repo `/gate-check` posts
+(`.github/scripts/release_gate.py` in application-sdk, which the scaffolded `release-gate.yaml`
+checks out at `main` and runs, so a release PR cannot edit the gate's script; bootstrap vendored it into each app until FND-5321). A release PR
+the connector reviewer has never reviewed needs no review: a version bump is one of the
+reviewer's exempt classes, so the other half of Release Gate, the `connector-reviewer` verdict
+every other pull request needs (see [ci.md](ci.md)), passes it. Once a bump PR has been reviewed
+(`/review force`), it is never exempt again, and each new head needs a green review or a waive
+too. In an app repo `/gate-check` posts
 it as `pending` with the list of workflows it dispatched; `gate_check_verdict.py`, run by
 `test-commands.yaml` on each of those runs' `workflow_run` completion, sets it to `success` once
 all of them passed (or `failure`, naming the ones that did not) and re-runs Release Gate, whose
@@ -139,13 +151,13 @@ subscribes to `labeled`/`unlabeled`.
 **Release Gate also refuses a release PR that is pinned to an unreleased SDK**, whatever its
 `gate-check` status says. Pinning an SDK branch is how an SDK change is tried on one app before
 the SDK releases it; that is fine on a feature branch, but a release built on it ships SDK code
-no SDK release contains. The gate reads the checked-out `uv.lock` and `pyproject.toml` (no
-network) and fails when an `atlan-application-sdk*` package is locked from anything but a
+no SDK release contains. The gate reads `uv.lock` and `pyproject.toml` at the head commit
+through the contents API, as data (never a checkout of the PR; a read error fails the gate), and fails when an `atlan-application-sdk*` package is locked from anything but a
 package index (a git ref, a path, a URL), is locked to a pre-release (`rc`, `a`, `b`, `.dev`),
 or is redirected by `[tool.uv.sources]` to anything but a named index. It is scoped to the SDK's
 own distributions: another dependency pinned to a git tag is not this gate's business. The check
 runs before the status is read, so the author sees it without running `/gate-check`. Ordinary
-PRs are unaffected. A `uv.lock` that cannot be parsed fails a release PR; a repo with no
+PRs are unaffected by it. A `uv.lock` that cannot be parsed fails a release PR; a repo with no
 `uv.lock` has nothing to check.
 
 **Recovering from one failed leg: re-run it, don't restart the gate** (FND-4331). When a
@@ -200,7 +212,8 @@ jobs:
 
 **What it does:**
 - Reads the new version from `pyproject.toml`.
-- Extracts the matching section from `CHANGELOG.md` as release notes.
+- Extracts the matching section from `CHANGELOG.md` as release notes
+  (`extract_release_notes.py`: exact version match, ends at the next `## ` heading).
 - Creates and pushes an annotated git tag `v<VERSION>` (idempotent — skips if the tag already exists on the correct commit; errors if it points at a different commit).
 - Creates a GitHub Release (pre-release flag set for versions containing a `-` suffix, e.g. `1.2.3-rc1`, `1.2.3-alpha.1`).
 
@@ -396,3 +409,32 @@ version it deployed — which is the case this change exists to correct. A
 deployment that needs the deployer's value to win should stop baking the file
 (`ATLAN_BUILD_INFO_PATH` pointed at a path that does not exist), not reorder the
 precedence: the file is the only source a single-app SDR customer has.
+
+## Package release trains in this repo (conformance, contract-toolkit)
+
+`atlan-application-sdk-conformance` and `app-contract-toolkit` are released from
+this repository independently of the SDK, by one script:
+`.github/scripts/release_train.py`. Each package is a `Train` in that file — a
+pathspec, a tag prefix, one version file and a changelog:
+
+| Train | Version file | Tag | Changelog |
+|---|---|---|---|
+| `conformance` | `packages/conformance/pyproject.toml` | `conformance-vX.Y.Z` | `packages/conformance/CHANGELOG.md` |
+| `contract-toolkit` | `contract-toolkit/src/PklProject` | `contract-toolkit-vX.Y.Z` | `contract-toolkit/CHANGELOG.md` |
+
+- `release_train.py bump <train>` (in `conformance-release.yml` /
+  `contract-toolkit-release.yml`) bumps from the conventional commits since the
+  last release tag and opens the `bump-version-<train>` PR. "Breaking" is
+  `conventional_breaking.declares_breaking_change`, the predicate the SDK's
+  `release.py` uses; on `0.x` a break bumps the minor.
+- `release_train.py publish-meta <train>` (in the `*-publish` workflows) reads
+  the version and refuses a tag that is not `<prefix>X.Y.Z`. Only tags of that
+  shape count as releases: a hand-pushed tag such as
+  `contract-toolkit-v0.11.0-name.1` is ignored by the train. Do not push such
+  tags to `origin`; publish a pre-release from a fork or a local tag instead.
+- Each package's version is written in one file. `conformance.__version__` and
+  `application_sdk.__version__` are read from installed package metadata, so
+  no release job rewrites a Python file. `release.py` still moves the SDK's
+  three lockstep sites (`pyproject.toml`, its `atlan-application-sdk-api==` pin,
+  `packages/api/pyproject.toml`), and `tests/unit/test_api_distribution.py`
+  asserts they agree.

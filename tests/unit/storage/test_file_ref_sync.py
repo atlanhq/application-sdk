@@ -7,14 +7,12 @@ import os
 import sys
 import tempfile
 import threading
-import time
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Annotated
 
 import pytest
 from pydantic import Field
 
-from application_sdk._runtime.offload import run_in_thread
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, Lazy
 from application_sdk.storage.errors import StorageError, UnsafeUploadPathError
@@ -25,6 +23,7 @@ from application_sdk.storage.file_ref_sync import (
     materialize_file_refs,
     persist_file_refs,
 )
+from tests.unit._doubles import SiblingProbe
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -773,48 +772,6 @@ class TestBlockedPathPatternsAreSeparatorAgnostic:
 # First failure: no sibling outlives the raise (FND-4277)
 # ---------------------------------------------------------------------------
 
-#: How long a sibling's offloaded call blocks its thread. Long enough that an
-#: undrained fan-out raises well before it ends.
-_SIBLING_THREAD_SECONDS = 0.3
-
-
-class _SiblingProbe:
-    """Siblings that block in ``run_in_thread``, and one ref that fails once
-    every sibling's thread is running.
-
-    ``completed`` records each sibling coroutine that ran past its thread. With
-    ``asyncio.gather`` they did, after the caller had seen the failure; with the
-    SDK fan-out they are cancelled, and their threads drained before the raise.
-    """
-
-    def __init__(self, siblings: int) -> None:
-        self.started = [threading.Event() for _ in range(siblings)]
-        self.finished = [threading.Event() for _ in range(siblings)]
-        self.completed: list[int] = []
-
-    async def sibling(self, index: int) -> None:
-        def _block() -> None:
-            self.started[index].set()
-            time.sleep(_SIBLING_THREAD_SECONDS)
-            self.finished[index].set()
-
-        await run_in_thread(_block)
-        self.completed.append(index)
-
-    async def fail(self, exc: Exception) -> None:
-        for event in self.started:
-            if not await asyncio.to_thread(event.wait, 5.0):
-                raise AssertionError("sibling thread did not start")
-        raise exc
-
-    async def assert_no_sibling_outlived_the_raise(self) -> None:
-        assert all(e.is_set() for e in self.finished), (
-            "a sibling's thread was still running when the failure propagated"
-        )
-        # Give an orphaned coroutine every chance to resume and finish.
-        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
-        assert self.completed == [], "a sibling completed after the raise"
-
 
 class _ThreeRefOutput(Output, allow_unbounded_fields=True):
     r0: FileReference = Field(default_factory=FileReference)
@@ -828,7 +785,7 @@ class TestFirstFailureStopsSiblings:
     ) -> None:
         from application_sdk.storage import reference as _ref_mod
 
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"p/r0": 0, "p/r1": 1}
 
         async def _materialize(store, ref, **kwargs):
@@ -857,7 +814,7 @@ class TestFirstFailureStopsSiblings:
         would lose the typed, non-retryable translation it maps to."""
         from application_sdk.storage import reference as _ref_mod
 
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         paths = {}
         for name in ("r0", "r1", "bad"):
             path = tmp_path / name
@@ -890,7 +847,7 @@ class TestFirstFailureStopsSiblings:
         failing must not leave the others hashing after the raise."""
         from application_sdk.storage import file_ref_sync as _sync_mod
 
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"p/r0": 0, "p/r1": 1}
 
         async def _needs(ref, rehashes=None):

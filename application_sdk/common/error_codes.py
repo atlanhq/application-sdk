@@ -16,6 +16,20 @@ Components:
 
 from enum import Enum
 
+__all__ = [
+    "ActivityError",
+    "ApiError",
+    "AtlanError",
+    "ClientError",
+    "CommonError",
+    "DocGenError",
+    "ErrorCode",
+    "ErrorComponent",
+    "IOError",
+    "OrchestratorError",
+    "WorkflowError",
+]
+
 
 class ErrorComponent(Enum):
     """Components that can generate errors in the system."""

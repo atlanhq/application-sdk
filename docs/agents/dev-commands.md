@@ -2,8 +2,8 @@
 
 - Setup and local run workflow: `docs/guides/getting-started.md` (uv sync, poe tasks, example run).
 - Task runner and common scripts live in `pyproject.toml` under `[tool.poe.tasks]`.
-- Docs build configuration is in `mkdocs.yml` (install with `uv sync --all-extras --all-groups`, then `uv run poe generate-apidocs`).
-- Capability manifest: `uv run poe regen-capabilities` — refreshes `docs/agents/sdk-capabilities.md` from `application_sdk/` HEAD. CI surfaces drift on every PR; comment `/regen-manifest` on a PR to have a bot regenerate and push.
+- Docs build configuration is in `mkdocs.yml` (install with `uv sync --all-extras --all-groups`, then `uv run poe generate-apidocs`). Check a docs change with `uv run --group docs mkdocs build --strict`: the SDK Gate's Docs area runs exactly that and fails on a page missing from `nav`, a broken link or anchor, or a relative link out of `docs/`.
+- Capability manifest: `uv run poe regen-capabilities` — refreshes `docs/agents/sdk-capabilities.md` from `application_sdk/` HEAD. CI surfaces drift on every PR; comment `/regen-manifest` on a PR to have a bot regenerate and push. To check freshness: `uv run poe regen-capabilities && git diff --exit-code -- docs/agents/sdk-capabilities.md`.
 
 ## Pre-commit Checks
 
@@ -50,7 +50,9 @@ The `components/*.yaml` files are committed to the repo and do not need download
 ls components/
 ```
 
-### Step 3: Start Dapr + Temporal
+### Step 3 (optional): Start an external Dapr + Temporal
+
+`run_dev_combined()` in Step 4 always starts its own embedded Dapr runtime and in-process Temporal server, so skip this step for it. You need it only for the manual `application-sdk --mode combined` approach below, which expects a standalone Temporal server and Dapr sidecar, as production has. It needs the Temporal CLI but not the Dapr CLI; see the [Setup Overview](../standards/setup.md).
 
 ```bash
 uv run poe start-deps
@@ -105,8 +107,8 @@ This does everything automatically:
 
 ### Manual curl approach
 
-If you prefer to control each step, start the app without credentials
-and use curl:
+If you prefer to control each step, start Dapr + Temporal (Step 3), then start
+the app without credentials and use curl:
 
 ```bash
 # Start the app
@@ -129,13 +131,28 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
 
 ## Testing
 
+This section is the one place the SDK's test commands are written down; other pages link here. Conventions for *writing* tests are in [Testing](testing.md) and the [testing standard](../standards/testing.md).
+
 ```bash
-# Run all tests
-uv run pytest
+# Unit tests, the way a CI matrix leg runs them: parallel under xdist.
+# addopts in pyproject.toml already deselects integration, e2e, load and perf.
+uv run pytest --import-mode=importlib -n auto tests/
 
-# Run specific test file with verbose output
+# The same with coverage, as the one coverage leg runs it (85% floor).
+uv run pytest --import-mode=importlib -n auto --cov=application_sdk --cov-report=term tests/
+
+# One file, or tests matching a pattern, serially with output shown
 uv run pytest tests/unit/storage/test_file_ref_sync.py -v -s
-
-# Run tests matching a pattern
 uv run pytest -k "test_name_pattern" -v
+
+# Slow unit tests (@pytest.mark.perf), excluded from the command above
+uv run pytest tests/unit -m perf
+
+# Integration tests: embedded Temporal and Dapr, nothing to start first
+uv run poe test-integration
+
+# CI's own driver scripts (.github/scripts/tests, its own pytest.ini)
+uv run pytest .github/scripts/tests
 ```
+
+Measure coverage with `--cov`, not `coverage run -m pytest`: `coverage run` traces only the parent process, so the xdist workers' coverage is lost. Leave out `--capture=no` and `--log-cli-level`: xdist ignores the first in its workers, and live logging cost 42% of the wall time. The exact per-leg command CI builds (socket guard, timeouts, durations) is `.github/scripts/unit_test_command.py`.

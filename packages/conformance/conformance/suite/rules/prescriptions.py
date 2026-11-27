@@ -307,7 +307,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "leaf) is also flagged so failures don't silently inherit the bare\n"
             "leaf's code.  Suppress with ``# conformance: ignore[P003] <reason>``\n"
             "at the declaration when an intermediate is genuinely abstract — see\n"
-            "typed-error-prescription §4 and BLDX-1431.\n"
+            "§4 of https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/references/typed-error-prescription.md\n"
+            "and BLDX-1431.\n"
             "\n"
             "Exempt: classes whose own MRO overrides ``to_failure_details()`` —\n"
             "usually via a shared connector error mixin.  Those build the wire\n"
@@ -498,7 +499,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "payload-safety gate (P001), the container has no schema: keys and\n"
             "values are opaque strings, typos are runtime-only failures, and the\n"
             "field is invisible to contract diffing and the SDK's\n"
-            "``is_backwards_compatible`` checker.\n"
+            "``application_sdk.contracts.compat.check_backwards_compatible``\n"
+            "checker.\n"
             "\n"
             "The SDK contract guidance (``make-contract`` skill, §6) prefers\n"
             "typed properties over arbitrary string keys.  The target depends on\n"
@@ -1041,6 +1043,71 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "WARN tier.  Suppress with ``# conformance: ignore[P059] <reason>``\n"
             "only when a system outside the app needs the value as JSON text.\n"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="P068",
+        canonical_reference=(
+            "atlan-mysql-app app/mysql.py — `run()` calls `super().run(input)`, "
+            "extracts and transforms its extra entities, then folds them in with "
+            "`await self.finalize_extraction(base_result, extra_transforms)`. "
+            "A replacement that drives its own sequencing ends the same way: "
+            "application_sdk/templates/sql_app.py documents the shape in the "
+            "SqlApp class docstring."
+        ),
+        scope=RuleScope.APP,
+        name="SqlAppRunOverrideUnverified",
+        tier=EnforcementTier.WARN,
+        category="orchestration-seam",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.62.0",
+        rationale=(
+            "SqlApp.run() ends in finalize_extraction, which checks that every "
+            "transformed file the transforms declared is under the prefix handed "
+            "to publish. A run() that replaces it without that call returns a "
+            "prefix nothing has checked: a tree short by one entity looks like a "
+            "source with none, and publish archives those assets as removed from "
+            "source (FND-4686)."
+        ),
+        short_description=(
+            "SqlApp subclass's run() awaits neither super().run() nor "
+            "finalize_extraction()"
+        ),
+        full_description=(
+            "A class that subclasses ``SqlApp`` (imported from\n"
+            "``application_sdk``, directly or through the app's own bases)\n"
+            "defines ``run()``, and its body never awaits ``super().run()``,\n"
+            "``<Ancestor>.run(self, ...)`` or ``self.finalize_extraction(...)``.\n"
+            "A call that is not awaited, or one inside a nested function or\n"
+            "class, does not count: it verifies nothing when ``run()`` returns.\n"
+            "\n"
+            "``SqlApp.run()`` ends in ``finalize_extraction``, which asserts that\n"
+            "every ``transformed_file`` the transforms declared is present under\n"
+            "the ``transformed_data_prefix`` it returns.  An override that skips\n"
+            "both returns a prefix nothing has checked, and publish cannot tell a\n"
+            "lost entity from an absent one: it archives the missing assets.\n"
+            "\n"
+            "Replacing ``run()`` is a documented path — the rule does not ask for\n"
+            "``super().run()``.  Fix: keep the override and end it in\n"
+            "``finalize_extraction``, passing every transform output it drove::\n"
+            "\n"
+            "    base = ExtractionOutput(..., transformed_data_prefix=prefix)\n"
+            "    return await self.finalize_extraction(base, transform_results)\n"
+            "\n"
+            "A connector bridging the tree to another store passes the finalised\n"
+            "output on to ``App.upload_refs``.\n"
+            "\n"
+            "Silent unless the app's ``uv.lock`` resolves an\n"
+            "``atlan-application-sdk`` that ships ``finalize_extraction``.\n"
+            "\n"
+            "Land as ``WARN``: a justified inline ``# conformance: ignore[P068]\n"
+            "<reason>`` on the ``def run`` line records an override that verifies\n"
+            "its output another way.\n"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

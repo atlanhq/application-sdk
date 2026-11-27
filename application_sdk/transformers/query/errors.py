@@ -11,6 +11,13 @@ from application_sdk.errors.leaves import (
     UnimplementedError,
 )
 
+__all__ = [
+    "BuildStructLevelRequiredError",
+    "BuildStructPrefixRequiredError",
+    "IncompatibleDefaultTypeError",
+    "SqlTransformNotRegisteredError",
+]
+
 
 @dataclass(kw_only=True)
 class BuildStructLevelRequiredError(InternalError):

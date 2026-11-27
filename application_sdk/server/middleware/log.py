@@ -12,6 +12,11 @@ from application_sdk.observability.context import request_context
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.middleware._constants import EXCLUDED_LOG_PATHS
 
+__all__ = [
+    "LogMiddleware",
+]
+
+
 logger = get_logger(__name__)
 
 
@@ -28,7 +33,7 @@ class LogMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid4())
 
         token = request_context.set({"request_id": request_id})
-        start_time = time.time()
+        start_time = time.monotonic()
 
         # Suffix match so excluded paths are suppressed regardless of mount
         # prefix (e.g. `/automation/server/health` still matches `/server/health`).
@@ -47,7 +52,7 @@ class LogMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
 
             if should_log:
                 self.logger.info(
@@ -61,7 +66,7 @@ class LogMiddleware(BaseHTTPMiddleware):
             return response
 
         except Exception as exc:
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             # conformance: ignore[L009] request-scoped context (duration_ms, request_id, path, method) is not carried by the re-raised exception; the caller's handler cannot reconstruct it.
             self.logger.error(
                 "Request failed: method=%s path=%s duration_ms=%.2f request_id=%s error_type=%s",

@@ -14,6 +14,12 @@ from application_sdk._runtime.offload import (  # noqa: F401 — re-exported for
     run_in_thread,
 )
 
+__all__ = [
+    "get_actual_cpu_count",
+    "get_safe_num_threads",
+]
+
+
 logger = get_logger(__name__)
 
 

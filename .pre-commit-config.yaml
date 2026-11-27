@@ -2,11 +2,11 @@ repos:
   # Ruff is the only linter, formatter AND import sorter (isort was dropped in
   # FND-4247: the hook and the dev group pinned different isort versions, so
   # `uv run isort` rewrote files CI accepted). The rev must equal the
-  # `ruff==` pin in pyproject.toml's dev group and in
-  # packages/conformance/pyproject.toml, so `uv run ruff` sorts and formats
-  # exactly like this hook. Renovate bumps all three in one PR (the `ruff`
-  # group in renovate.json); .github/scripts/tests/test_lint_guards.py fails
-  # if they ever disagree.
+  # `ruff==` pin in pyproject.toml's dev group, so `uv run ruff` sorts and
+  # formats exactly like this hook. packages/conformance is a member of the
+  # root uv workspace and takes the same locked ruff (FND-4671). Renovate
+  # bumps both pins in one PR (the `ruff` group in renovate.json);
+  # .github/scripts/tests/test_lint_guards.py fails if they ever disagree.
   #
   # `--fix` keeps the auto-fix isort used to give: an unsorted import block
   # is rewritten in place (and the hook still fails, so CI stays a check).
@@ -43,17 +43,11 @@ repos:
   # `run:` blocks, which are a separate and much lower-stakes concern than a
   # workflow that will not start. Config and grandfathered findings live in
   # .github/actionlint.yaml.
-  #
-  # `files` widens the upstream hook's default (`^\.github/workflows/`) to cover
-  # .github/workflow-templates/ as well. Those starter workflows are handed to
-  # other repos verbatim, so a parse error there is shipped rather than merely
-  # suffered — the same silent-failure class, one repo further downstream.
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
       - id: actionlint
         args: ['-shellcheck=']
-        files: ^\.github/(workflows|workflow-templates)/.*\.ya?ml$
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.5.0
     hooks:
@@ -113,6 +107,40 @@ repos:
         additional_dependencies: ["pyyaml==6.0.4"]
         files: ^(mkdocs\.yml|\.github/scripts/check_mkdocs_script_hosts\.py)$
         pass_filenames: false
+      # A Markdown code example on a deprecated SDK symbol teaches it as the
+      # current path; the docs did that for SqlMetadataExtractor, HandlerError
+      # and PreflightStatus.PARTIAL (FND-4268). Checks every tracked Markdown
+      # file against conformance's deprecated_symbols.json with its own B001
+      # matcher, so it also runs when the manifest gains a name. language:
+      # system + uv so the workspace conformance package is importable; CI's
+      # Pre-commit job syncs it (setup-deps) and runs this on every PR.
+      - id: check-docs-deprecated-imports
+        name: check docs examples for deprecated SDK symbols
+        entry: uv run --frozen python .github/scripts/check_docs_deprecated_imports.py
+        language: system
+        files: (\.md|^packages/conformance/conformance/data/deprecated_symbols\.json|^\.github/scripts/check_docs_deprecated_imports\.py)$
+        pass_filenames: false
+      # AGENTS.md (read by Codex, Cursor and other agents) is a generated
+      # pointer at the CLAUDE.md beside it; when both held content they drifted
+      # and non-Claude agents missed rules (FND-4273). Fails on any AGENTS.md
+      # that is not the pointer, and on a CLAUDE.md without one. Fix with
+      # `python .github/scripts/check_agents_md_sync.py --fix`. Stdlib only.
+      - id: check-agents-md-sync
+        name: check AGENTS.md is the generated pointer to CLAUDE.md
+        entry: python .github/scripts/check_agents_md_sync.py
+        language: python
+        files: (^|/)(AGENTS|CLAUDE)\.md$|^\.github/scripts/check_agents_md_sync\.py$
+        pass_filenames: false
+      # Nothing executes the ```python blocks under docs/, so they drift: every
+      # block must parse, and its application_sdk imports must resolve against
+      # the source tree (FND-4272). Runs on SDK changes too, since renaming a
+      # symbol breaks the docs that import it. Stdlib only.
+      - id: check-doc-examples
+        name: check docs python examples
+        entry: python .github/scripts/check_doc_examples.py
+        language: python
+        files: ^(docs/.*\.md|application_sdk/.*\.py|\.github/scripts/check_doc_examples\.py)$
+        pass_filenames: false
       # The pyright hook above never sees .github/scripts ([tool.pyright]
       # excludes .github/**); CI's `pyright .github/scripts` job holds them to
       # .github/scripts/pyright_baseline.json instead. Run the same ratchet here
@@ -129,7 +157,7 @@ repos:
       # C901 / PLR0915 are not in packages/conformance's ruff `select` (~190
       # existing functions exceed them); they are held to a per-file baseline
       # that only shrinks (FND-4668, docs/standards/ci.md). Needs only ruff,
-      # which the root env pins to the same version as the package.
+      # which the workspace lock holds at one version for root and package.
       - id: conformance-complexity-baseline
         name: conformance complexity baseline
         entry: uv run --frozen python packages/conformance/tests/test_complexity_baseline.py
@@ -146,4 +174,16 @@ repos:
         entry: uv run --frozen python .github/scripts/check_ann401_baseline.py
         language: system
         files: ^(application_sdk/.*\.py|\.github/scripts/(ann401_baseline\.json|check_ann401_baseline\.py)|pyproject\.toml)$
+        pass_filenames: false
+      # ruff C901 (complexity > 10) and PLR0915 (> 50 statements) are not in
+      # ruff's `select`: application_sdk/ had 126 over-limit functions when they
+      # were enabled. Those functions are named in
+      # .github/scripts/complexity_baseline.json, which only shrinks (FND-4266,
+      # docs/standards/ci.md). Locally without a base SHA; CI's `CI script
+      # tests` job also holds the baseline to the base revision's.
+      - id: complexity-baseline
+        name: C901 / PLR0915 (function size) baseline
+        entry: uv run --frozen python .github/scripts/check_complexity_baseline.py
+        language: system
+        files: ^(application_sdk/.*\.py|\.github/scripts/(complexity_baseline\.json|check_complexity_baseline\.py))$
         pass_filenames: false

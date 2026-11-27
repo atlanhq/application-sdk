@@ -2,7 +2,7 @@
 """Prepare an Endor Labs container scan: credential gate and image tarball.
 
 Two decisions that ``build-and-scan.yaml`` (the fleet's reusable PR scan) and
-``daily-security-scan.yml`` (the hourly base-image scan) used to make in inlined
+``hourly-security-scan.yml`` (the hourly base-image scan) used to make in inlined
 ``if``/``else`` shell, moved here per docs/standards/ci.md so every branch is
 pytest-covered (tests/test_endor_scan_prep.py).
 

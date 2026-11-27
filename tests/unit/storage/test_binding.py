@@ -10,13 +10,13 @@ import orjson
 import pytest
 import yaml
 
+from application_sdk._obstore_config import endpoint_is_aws
 from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
     _adc_is_external_account,
     _coerce_bool,
     _create_store_from_binding_optional_with_put_attrs,
-    _endpoint_is_aws,
     _find_broken_metadata_fields,
     _nonempty,
     _resolve_metadata_value,
@@ -668,6 +668,41 @@ class TestS3AssumeRole:
         config = call_kwargs.get("config") or {}
         assert "aws_access_key_id" not in config
         assert "aws_secret_access_key" not in config
+
+    @pytest.mark.parametrize(
+        ("external_id", "expected"),
+        [("ext-id-123", "ext-id-123"), ("", None), (None, None)],
+    )
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_external_id_reaches_the_sts_call(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+        tmp_path: Path,
+        external_id: str | None,
+        expected: str | None,
+    ) -> None:
+        """``externalId`` reaches AssumeRole as ``ExternalId``, as CloudStore's
+        ``extra.aws_external_id`` does; a blank one is dropped."""
+        meta = {"bucket": "b", "assumeRoleArn": "arn:aws:iam::123:role/MyRole"}
+        if external_id is not None:
+            meta["externalId"] = external_id
+        components_dir = _write_component(
+            tmp_path, "objectstore", "bindings.aws.s3", meta
+        )
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        sts_kwargs = mock_sts_cls.call_args.kwargs
+        if expected is None:
+            assert "ExternalId" not in sts_kwargs
+        else:
+            assert sts_kwargs["ExternalId"] == expected
+        assert "aws_external_id" not in (mock_s3_cls.call_args.kwargs["config"] or {})
 
     def test_trust_anchor_arn_raises_config_error(self, tmp_path: Path) -> None:
         components_dir = _write_component(
@@ -1797,12 +1832,12 @@ class TestIsBindingConfigured:
 
 
 # ---------------------------------------------------------------------------
-# _endpoint_is_aws
+# endpoint_is_aws
 # ---------------------------------------------------------------------------
 
 
 class TestEndpointIsAws:
-    """Parametrised tests for the _endpoint_is_aws helper.
+    """Parametrised tests for the endpoint_is_aws helper.
 
     The helper must correctly identify real-AWS endpoints and not raise for any
     input scheme form (https://, http://, scheme-less host:port, SDK URI forms).
@@ -1831,7 +1866,7 @@ class TestEndpointIsAws:
         ],
     )
     def test_aws_endpoints_return_true(self, endpoint: str) -> None:
-        assert _endpoint_is_aws(endpoint) is True
+        assert endpoint_is_aws(endpoint) is True
 
     @pytest.mark.parametrize(
         "endpoint",
@@ -1856,7 +1891,7 @@ class TestEndpointIsAws:
         ],
     )
     def test_non_aws_endpoints_return_false(self, endpoint: str) -> None:
-        assert _endpoint_is_aws(endpoint) is False
+        assert endpoint_is_aws(endpoint) is False
 
     @pytest.mark.parametrize(
         "endpoint",
@@ -1869,8 +1904,8 @@ class TestEndpointIsAws:
         ],
     )
     def test_no_exception_on_pathological_input(self, endpoint: str) -> None:
-        """_endpoint_is_aws must never raise regardless of input form."""
-        result = _endpoint_is_aws(endpoint)
+        """endpoint_is_aws must never raise regardless of input form."""
+        result = endpoint_is_aws(endpoint)
         assert isinstance(result, bool)
 
 

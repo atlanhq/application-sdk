@@ -17,19 +17,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.handler import (
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
-    Handler,
-    MetadataInput,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataOutput,
     object_routes,
 )
 from application_sdk.handler.asgi import build_asgi_app
 from application_sdk.handler.object_routes import S3ObjectStore
+from tests.unit._doubles import StaticHandler
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore:application_sdk.handler.object_routes.S3ObjectStore is deprecated"
@@ -42,17 +34,6 @@ def test_constructing_it_warns_with_its_removal_version() -> None:
         DeprecationWarning, match=r"removed in v4\.0\.0.*HostObjectStore"
     ):
         S3ObjectStore("tenant-bucket", client=_FakeS3())
-
-
-class _Handler(Handler):
-    async def test_auth(self, input: AuthInput) -> AuthOutput:
-        return AuthOutput(status=AuthStatus.SUCCESS)
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
-
-    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
-        return SqlMetadataOutput(objects=[])
 
 
 class _NoSuchKey(Exception):
@@ -88,7 +69,7 @@ def s3() -> _FakeS3:
 def host(s3: _FakeS3) -> TestClient:
     store = S3ObjectStore("tenant-bucket", client=s3)
     return TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=store),
         raise_server_exceptions=False,
     )
 
@@ -119,7 +100,7 @@ def test_a_failed_store_read_is_503_not_404() -> None:
     """IAM, network or 5xx: the store is unavailable; the config is not missing."""
     store = S3ObjectStore("tenant-bucket", client=_DenyingS3())
     client = TestClient(
-        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=store),
         raise_server_exceptions=False,
     )
     response = client.get("/workflows/v1/config/guid-1?type=credentials")
@@ -327,7 +308,9 @@ def test_gcs_requests_carry_no_checksums(
     store = S3ObjectStore.from_env()
     assert store is not None
     sent = _answer_here(store._client)
-    host = TestClient(build_asgi_app(_Handler(), app_name="mysql", object_store=store))
+    host = TestClient(
+        build_asgi_app(StaticHandler(), app_name="mysql", object_store=store)
+    )
 
     body = {"host": "db.example"}
     assert (

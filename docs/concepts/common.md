@@ -355,6 +355,8 @@ and `InternalError` files them against the app rather than the customer.
 from application_sdk.errors import NotFoundError, AppError
 from application_sdk.storage.errors import StorageError
 
+try:
+    ...
 # Catch any not-found regardless of domain:
 except NotFoundError as e:
     ...
@@ -484,6 +486,47 @@ redacted where they are built. `message` and `suggested_action` **are** — a `f
 `FailureDetails` runs `redact_secrets` over both at construction and again on `model_validate`,
 idempotently, so a handler gains nothing by redacting them first. `cause_repr` is redacted where the
 cause is captured, by `sanitize_cause_repr`.
+
+#### Rebuilding a typed error from the envelope
+
+On the far side of an activity boundary only `FailureDetails` survives. `error_from_failure_details`
+turns it back into a typed error, picking the leaf by `code`:
+
+```python
+from dataclasses import dataclass
+from typing import ClassVar
+
+from application_sdk.errors import (
+    NotFoundError,
+    error_from_failure_details,
+    register_wire_leaf,
+)
+
+# Register the leaves your activities emit, once, next to their definition.
+@register_wire_leaf
+@dataclass(kw_only=True)
+class WidgetMissingError(NotFoundError):
+    code: ClassVar[str] = "NOT_FOUND_WIDGET"
+    widget: str | None = None
+
+err = error_from_failure_details(output.failure)
+```
+
+A registered code rebuilds as its leaf with the evidence fields that leaf declares; extra keys are
+dropped, so a newer producer cannot crash an older consumer. An unregistered code still rebuilds,
+keeping the envelope's own `category`, `audience`, `code`, `retryable` and evidence, so routing is
+never lost. The SDK registers `AuthError`, `AppTimeoutError`, `SourceUnavailableError` and
+`InternalError`. One code maps to one class: registering a code already bound to another class
+raises `TypeError`, as does registering a leaf whose constructor does not take the base fields
+(`message`, `retryable`, `suggested_action`, `app_name`, `run_id`). Evidence values are redacted on
+the way in, and a value under a nested secret-named key (`{"conn": {"api_key": …}}`) is replaced
+with `***`; `redact_evidence_value` in `application_sdk.errors.wire` does the same for your own
+evidence before you attach it.
+
+If `to_failure_details()` raises because a leaf carries a secret-named evidence field,
+`degraded_failure_details(err)` builds the envelope without those keys (or without evidence at all)
+and keeps the routing. Log its `ValidationError` with `redacted_validation_reason`, never `str()` or
+`exc_info`: both include the rejected input.
 
 ### Legacy error-code namespaces (backward-compat only)
 
@@ -619,7 +662,7 @@ for record in records:
     )
 ```
 
-`lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp._transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that would otherwise write `asset.to_nested_bytes()` directly gets both injections plus the typed-error contract by routing through `entity_bytes()` instead. Conformance rule **P052** flags that direct call (and `to_nested_dict()` / `pyatlan_v9` `to_atlas_format()`) in app code, so the bypass does not spread from one connector to the next.
+`lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp.transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that would otherwise write `asset.to_nested_bytes()` directly gets both injections plus the typed-error contract by routing through `entity_bytes()` instead. Conformance rule **P052** flags that direct call (and `to_nested_dict()` / `pyatlan_v9` `to_atlas_format()`) in app code, so the bypass does not spread from one connector to the next.
 
 `resolve_last_sync_details()` reads the execution and correlation contextvars the SDK's Temporal interceptor populates. Call it on the event loop inside the activity. `run_in_thread` does propagate contextvars (it runs the callable under `contextvars.copy_context()`), so resolving inside an offloaded loop works too — but then the correctness rests on an offload implementation detail rather than on where the call sits.
 
@@ -640,7 +683,7 @@ class TeradataApp(SqlApp):
     entity_envelope = EntityEnvelopePolicy(sql_dialect="teradata")
 ```
 
-Declared once per app as a class attribute, not per mapper: the envelope is a property of the downstream contract, and per-mapper choice is how the fleet ended up with four of them. `SqlApp` reads it in `_transform_entity` and threads it into `entity_bytes()`; a non-SQL app passes `envelope=` directly.
+Declared once per app as a class attribute, not per mapper: the envelope is a property of the downstream contract, and per-mapper choice is how the fleet ended up with four of them. `SqlApp` reads it in `transform_entity` and threads it into `entity_bytes()`; a non-SQL app passes `envelope=` directly.
 
 **`shape`** — where relationship refs live:
 
@@ -698,4 +741,5 @@ The two YAML-template helpers moved here from the deprecated `application_sdk.tr
 | `WORKER_LIVENESS_MAX_IDLE_SECONDS` | `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` | `0` (disabled) | Idle window for the worker `/live` probe. When set to a positive number of seconds, `/live` fails once no worker activity has been recorded within that window, letting a Kubernetes `livenessProbe` recycle a worker whose Temporal poll loop has silently parked (BLDX-1552). Disabled by default because a positive window false-positives on legitimately idle queues — enable it only for continuously-busy queues, and set it larger than the longest activity that runs without heartbeating. Non-numeric, non-finite (`inf`/`nan`), or negative values fall back to `0`. See `docs/concepts/server.md` for the probe behavior. |
 | `WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS` | `ATLAN_WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS` | `5` | Consecutive definitive zero-poller readings (sdk-core's `temporal_num_pollers` gauge) before `/live` fails (FND-4641). `0` disables. Non-numeric or non-finite values fall back to the default. |
 | `WORKER_LIVENESS_FATAL_RECOVERY_SECONDS` | `ATLAN_WORKER_LIVENESS_FATAL_RECOVERY_SECONDS` | `600` | Seconds a fatal poll error may go without a later `polling` reading before `/live` fails (FND-4641). `0` disables. Non-numeric or non-finite values fall back to the default. |
+| `WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS` | `ATLAN_WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS` | `300` | Seconds one thread may wait on the same module import lock before the worker `/live` probe fails (FND-5531). A Temporal deadlock interrupt delivered inside Python's import system can strand such a wait forever, after which every import of that module hangs. `0` disables the check. Non-numeric, non-finite or negative values fall back to the default or clamp to `0`. See `docs/concepts/server.md`. |
 | `load_worker_loop_stall_timeout_override()` | `ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS` | derived | Replaces the event-loop stall bound of a shutting-down worker, which is otherwise 15 s past the longest registered `heartbeat_timeout_seconds` and capped by the shutdown budget (`ShutdownBudget.loop_stall_limit_seconds`). The watchdog is armed only by SIGTERM or SIGINT. `0` turns it off; malformed, negative or non-finite values are ignored with a warning. See `docs/configuration.md`. |

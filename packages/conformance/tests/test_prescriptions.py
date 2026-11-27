@@ -1812,111 +1812,72 @@ _TYPED_CONTRACTS = (
 _APP_IMPORTS = "from application_sdk.app import App, entrypoint, task, signal, query\n"
 
 
-def test_p013_fires_on_untyped_dict_input(tmp_path: Path) -> None:
-    """@entrypoint with dict input → P013."""
+def _boundary_connector(
+    decorator: str, method: str, imports: str, signature: str
+) -> str:
+    """One-method ``App`` subclass for the P013/P014 boundary tables."""
+    return (
+        _APP_IMPORTS + imports + "class MyApp(App):\n"
+        f"    @{decorator}\n"
+        f"    async def {method}{signature}:\n"
+        "        ...\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("imports", "signature", "message_fragment"),
+    [
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict) -> FetchOutput",
+            "input",
+            id="untyped_dict_input",
+        ),
+        # Even if bounded, a dict is not a typed contract.
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict[str, str]) -> FetchOutput",
+            None,
+            id="subscripted_dict_input",
+        ),
+        pytest.param(
+            "from typing import Any\nfrom contracts import FetchOutput\n",
+            "(self, input: Any) -> FetchOutput",
+            None,
+            id="any_input",
+        ),
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input) -> FetchOutput",
+            "missing",
+            id="missing_input_annotation",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput) -> dict",
+            "output",
+            id="untyped_return",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput)",
+            "missing",
+            id="missing_return_annotation",
+        ),
+    ],
+)
+def test_p013_fires_on_untyped_boundary(
+    tmp_path: Path, imports: str, signature: str, message_fragment: str | None
+) -> None:
     files = {
         "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: dict) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
+        "connector.py": _boundary_connector("entrypoint", "run_it", imports, signature),
     }
     findings = scan_files(scan_all, tmp_path, files)
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
-    assert "input" in p013[0].message
-
-
-def test_p013_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
-    """@entrypoint with dict[str,str] input — 'even if bounded' → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: dict[str, str]) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-
-
-def test_p013_fires_on_any_input(tmp_path: Path) -> None:
-    """@entrypoint with Any input → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from typing import Any\n"
-            "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: Any) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-
-
-def test_p013_fires_on_missing_input_annotation(tmp_path: Path) -> None:
-    """@entrypoint with unannotated input param → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "missing" in p013[0].message.lower()
-
-
-def test_p013_fires_on_untyped_return(tmp_path: Path) -> None:
-    """@entrypoint with dict return type → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: FetchInput) -> dict:\n"
-            "        return {}\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "output" in p013[0].message
-
-
-def test_p013_fires_on_missing_return_annotation(tmp_path: Path) -> None:
-    """@entrypoint with no return annotation → P013."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @entrypoint\n"
-            "    async def run_it(self, input: FetchInput):\n"
-            "        pass\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p013 = [f for f in findings if f.rule_id == "P013"]
-    assert len(p013) == 1
-    assert "missing" in p013[0].message.lower()
+    if message_fragment is not None:
+        assert message_fragment in p013[0].message
 
 
 def test_p013_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
@@ -2257,57 +2218,42 @@ def test_p013_result_is_failing_disposition(tmp_path: Path) -> None:
 # ── P014 UntypedTaskBoundary ──────────────────────────────────────────────────
 
 
-def test_p014_fires_on_untyped_dict_input(tmp_path: Path) -> None:
-    """@task with dict input → P014."""
+@pytest.mark.parametrize(
+    ("imports", "signature", "message_fragment"),
+    [
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict) -> FetchOutput",
+            "input",
+            id="untyped_dict_input",
+        ),
+        pytest.param(
+            "from contracts import FetchInput\n",
+            "(self, input: FetchInput) -> dict",
+            "output",
+            id="untyped_return",
+        ),
+        # Bounded containers are still untyped.
+        pytest.param(
+            "from contracts import FetchOutput\n",
+            "(self, input: dict[str, str]) -> FetchOutput",
+            None,
+            id="subscripted_dict_input",
+        ),
+    ],
+)
+def test_p014_fires_on_untyped_boundary(
+    tmp_path: Path, imports: str, signature: str, message_fragment: str | None
+) -> None:
     files = {
         "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: dict) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
+        "connector.py": _boundary_connector("task", "fetch", imports, signature),
     }
     findings = scan_files(scan_all, tmp_path, files)
     p014 = [f for f in findings if f.rule_id == "P014"]
     assert len(p014) == 1
-    assert "input" in p014[0].message
-
-
-def test_p014_fires_on_untyped_return(tmp_path: Path) -> None:
-    """@task with dict return → P014."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchInput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: FetchInput) -> dict:\n"
-            "        return {}\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p014 = [f for f in findings if f.rule_id == "P014"]
-    assert len(p014) == 1
-    assert "output" in p014[0].message
-
-
-def test_p014_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
-    """@task with dict[str,str] input → P014 (bounded containers still untyped)."""
-    files = {
-        "contracts.py": _TYPED_CONTRACTS,
-        "connector.py": (
-            _APP_IMPORTS + "from contracts import FetchOutput\n"
-            "class MyApp(App):\n"
-            "    @task\n"
-            "    async def fetch(self, input: dict[str, str]) -> FetchOutput:\n"
-            "        return FetchOutput()\n"
-        ),
-    }
-    findings = scan_files(scan_all, tmp_path, files)
-    p014 = [f for f in findings if f.rule_id == "P014"]
-    assert len(p014) == 1
+    if message_fragment is not None:
+        assert message_fragment in p014[0].message
 
 
 def test_p014_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
@@ -5014,3 +4960,191 @@ def test_p015_exempts_optional_and_literal_scalar_items(annotation: str) -> None
 )
 def test_p015_still_fires_on_keyed_or_any_items(annotation: str) -> None:
     assert _p015_on(annotation) == ["P015"]
+
+
+# ── P068 SqlAppRunOverrideUnverified ─────────────────────────────────────────
+
+_P068_LOCK = '[[package]]\nname = "atlan-application-sdk"\nversion = "3.59.0"\n'
+
+
+def _p068(tmp_path: Path, files: dict[str, str], lock: str | None = _P068_LOCK) -> list:
+    paths = []
+    for name, src in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(src)
+        paths.append(path)
+    if lock is not None:
+        (tmp_path / "uv.lock").write_text(lock)
+    return [f for f in scan_all(paths, tmp_path) if f.rule_id == "P068"]
+
+
+_SQL_IMPORT = "from application_sdk.templates import SqlApp\n"
+
+
+def test_p068_fires_on_a_run_replacement_that_never_verifies(tmp_path: Path) -> None:
+    src = _SQL_IMPORT + (
+        "class Connector(SqlApp):\n"
+        "    async def run(self, input):\n"
+        "        out = await self.transform_tables(input)\n"
+        "        return ExtractionOutput(transformed_data_prefix='p')\n"
+    )
+    [finding] = _p068(tmp_path, {"app/connector.py": src})
+    assert finding.line == 3
+    assert "Connector.run()" in finding.message
+    assert "finalize_extraction" in finding.message
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "        return await super().run(input)\n",
+        "        base = await super().run(input)\n        return base\n",
+        "        return await SqlApp.run(self, input)\n",
+        "        return await self.finalize_extraction(base, [out])\n",
+        "        if input.x:\n            return await self.finalize_extraction(b)\n"
+        "        return await super().run(input)\n",
+    ],
+)
+def test_p068_silent_when_the_override_verifies(tmp_path: Path, body: str) -> None:
+    src = (
+        _SQL_IMPORT
+        + "class Connector(SqlApp):\n    async def run(self, input):\n"
+        + body
+    )
+    assert _p068(tmp_path, {"app/connector.py": src}) == []
+
+
+def test_p068_follows_the_app_s_own_base_across_files(tmp_path: Path) -> None:
+    files = {
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    [finding] = _p068(tmp_path, files)
+    assert finding.file == "app/connector.py"
+
+
+def test_p068_accepts_the_intermediate_base_by_name(tmp_path: Path) -> None:
+    files = {
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return await Base.run(self, input)\n"
+        ),
+    }
+    assert _p068(tmp_path, files) == []
+
+
+def test_p068_silent_on_a_class_that_is_not_the_sdk_sqlapp(tmp_path: Path) -> None:
+    src = (
+        "from elsewhere import SqlApp\n"
+        "class Connector(SqlApp):\n"
+        "    async def run(self, input):\n"
+        "        return None\n"
+        "class Plain(App):\n"
+        "    async def run(self, input):\n"
+        "        return None\n"
+    )
+    assert _p068(tmp_path, {"app/connector.py": src}) == []
+
+
+def test_p068_silent_on_a_subclass_that_does_not_define_run(tmp_path: Path) -> None:
+    src = _SQL_IMPORT + "class Connector(SqlApp):\n    fetch_table_sql = 'x'\n"
+    assert _p068(tmp_path, {"app/connector.py": src}) == []
+
+
+@pytest.mark.parametrize(
+    "lock",
+    [None, '[[package]]\nname = "atlan-application-sdk"\nversion = "3.33.1"\n'],
+)
+def test_p068_silent_below_the_sdk_that_ships_finalize_extraction(
+    tmp_path: Path, lock: str | None
+) -> None:
+    src = _SQL_IMPORT + (
+        "class Connector(SqlApp):\n    async def run(self, input):\n        return None\n"
+    )
+    assert _p068(tmp_path, {"app/connector.py": src}, lock=lock) == []
+
+
+def test_p068_suppressed_by_directive(tmp_path: Path) -> None:
+    src = _SQL_IMPORT + (
+        "class Connector(SqlApp):\n"
+        "    # conformance: ignore[P068] verifies via its own manifest check\n"
+        "    async def run(self, input):\n"
+        "        return None\n"
+    )
+    [finding] = _p068(tmp_path, {"app/connector.py": src})
+    assert finding.suppressed is True
+
+
+def test_p068_is_warn_tier() -> None:
+    assert get_rule("P068").tier is EnforcementTier.WARN
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Not awaited: builds a coroutine and verifies nothing.
+        "        self.finalize_extraction(base, [out])\n        return base\n",
+        "        super().run(input)\n        return None\n",
+        # In a nested scope run() never calls.
+        "        async def later():\n"
+        "            return await self.finalize_extraction(base)\n"
+        "        return None\n",
+        "        class Helper:\n"
+        "            async def run(self):\n"
+        "                return await super().run()\n"
+        "        return None\n",
+        "        f = lambda: self.finalize_extraction(base)\n        return None\n",
+        # Not the app's own finalize / run.
+        "        return await other.finalize_extraction(base)\n",
+        "        return await client.run(input)\n",
+        "        return await SqlApp.run(other, input)\n",
+    ],
+)
+def test_p068_fires_when_the_verification_is_inert(tmp_path: Path, body: str) -> None:
+    src = (
+        _SQL_IMPORT
+        + "class Connector(SqlApp):\n    async def run(self, input):\n"
+        + body
+    )
+    assert len(_p068(tmp_path, {"app/connector.py": src})) == 1
+
+
+def test_p068_resolves_a_colliding_base_name_by_import(tmp_path: Path) -> None:
+    """An unrelated ``Base`` scanned first must not hide the imported one."""
+    files = {
+        "app/aaa.py": "class Base:\n    pass\n",
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "from app.base import Base\n"
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    [finding] = _p068(tmp_path, files)
+    assert finding.file == "app/connector.py"
+
+
+def test_p068_does_not_follow_a_colliding_base_it_cannot_place(
+    tmp_path: Path,
+) -> None:
+    """Two ``Base`` classes and no import naming one: a miss, not a guess."""
+    files = {
+        "app/aaa.py": "class Base:\n    pass\n",
+        "app/base.py": _SQL_IMPORT + "class Base(SqlApp):\n    pass\n",
+        "app/connector.py": (
+            "class Connector(Base):\n"
+            "    async def run(self, input):\n"
+            "        return None\n"
+        ),
+    }
+    assert _p068(tmp_path, files) == []

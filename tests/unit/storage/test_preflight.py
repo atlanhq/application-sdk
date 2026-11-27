@@ -1,7 +1,8 @@
 """Unit tests for the SDR boot-time object-store access preflight.
 
-Tests ``_classify_access_error``, ``_probe_store``, and ``verify_object_store_access``
-in isolation using synchronous fakes — no network, no obstore binary required.
+Tests ``_probe_store``, and ``verify_object_store_access``
+in isolation using synchronous fakes (the access classifier's own tests are in
+``test_classify.py``) — no network, no obstore binary required.
 The integration tests in ``tests/integration/storage/test_emulator_preflight.py``
 cover the real obstore round-trip against MinIO.
 """
@@ -16,73 +17,10 @@ import pytest
 
 from application_sdk.storage.preflight import (
     ObjectStoreCheckResult,
-    _classify_access_error,
     _probe_store,
     check_object_store_access,
     verify_object_store_access,
 )
-
-# ---------------------------------------------------------------------------
-# _classify_access_error — parametrised
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "message,expected_class",
-    [
-        # 403 HTTP status — word-boundary match
-        ("HTTP 403 Forbidden", "permission denied"),
-        # Ensure bare "403" in isolation still matches
-        ("status code 403", "permission denied"),
-        # Must NOT match "2403" or "4030" (false positive guard)
-        ("request-id x-amz-request-id: 1234030", "connectivity / unknown"),
-        # Named strings — 403 bucket
-        ("AccessDenied: Access Denied", "permission denied"),
-        ("access denied to resource", "permission denied"),
-        ("Forbidden resource", "permission denied"),
-        ("not authorized to perform this action", "permission denied"),
-        ("authorization failed", "permission denied"),
-        # 401 HTTP status — word-boundary match
-        ("HTTP 401 Unauthorized", "invalid credentials"),
-        # Ensure bare "401" in isolation still matches
-        ("error code 401", "invalid credentials"),
-        # Must NOT match "1401" or "4010" (false positive guard)
-        ("byte count 14010", "connectivity / unknown"),
-        # Named strings — 401 bucket
-        (
-            "InvalidAccessKeyId: The AWS Access Key Id you provided does not exist",
-            "invalid credentials",
-        ),
-        ("invalid access key supplied", "invalid credentials"),
-        ("SignatureDoesNotMatch: signature mismatch", "invalid credentials"),
-        ("unauthenticated request", "invalid credentials"),
-        ("invalid credentials provided", "invalid credentials"),
-        # Connectivity fallback
-        ("connection refused", "connectivity / unknown"),
-        ("no route to host", "connectivity / unknown"),
-        ("bucket does not exist", "connectivity / unknown"),
-        ("name or service not known", "connectivity / unknown"),
-    ],
-)
-def test_classify_access_error(message: str, expected_class: str) -> None:
-    exc = Exception(message)
-    error_class, hint = _classify_access_error(exc)
-    assert error_class == expected_class, (
-        f"For message={message!r}: expected {expected_class!r} but got {error_class!r}"
-    )
-    assert isinstance(hint, str) and len(hint) > 0
-
-
-def test_classify_access_error_returns_hint_for_each_class() -> None:
-    """All three classifiers return a non-empty hint."""
-    for msg, expected in [
-        ("403 Forbidden", "permission denied"),
-        ("401 Unauthorized", "invalid credentials"),
-        ("timeout", "connectivity / unknown"),
-    ]:
-        _, hint = _classify_access_error(Exception(msg))
-        assert hint, f"Empty hint for class={expected!r}"
-
 
 # ---------------------------------------------------------------------------
 # _probe_store — fake store using AsyncMock
@@ -506,31 +444,6 @@ _RELOCATION_MESSAGE = (
 )
 
 
-@pytest.mark.parametrize(
-    "message,expected_class",
-    [
-        # The production shape: both tokens present.
-        (_RELOCATION_MESSAGE, "bucket relocation in progress"),
-        # Reversed token order still matches.
-        (
-            "bucket relocation rejected the request: precondition failed",
-            "bucket relocation in progress",
-        ),
-        # An etag/if-match 412 carries "precondition" alone → NOT relocation.
-        (
-            "412 Precondition Failed: at-match condition not met",
-            "connectivity / unknown",
-        ),
-        # "relocation" alone (no precondition) → NOT relocation.
-        ("object relocation pending", "connectivity / unknown"),
-    ],
-)
-def test_classify_relocation(message: str, expected_class: str) -> None:
-    error_class, hint = _classify_access_error(Exception(message))
-    assert error_class == expected_class
-    assert hint
-
-
 async def _run_probe_structured(
     store: Any,
     *,
@@ -902,3 +815,41 @@ async def test_run_check_never_raises_per_store_above_its_share() -> None:
         await check_run_storage_access(infra, timeout_seconds=40)
 
     assert seen == [20.0], seen
+
+
+class TestProbeTimeoutEnv:
+    """``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS`` through the shared reader (FND-5223)."""
+
+    KEY = "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS"
+
+    def test_unset_or_empty_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.preflight import _load_probe_timeout
+
+        monkeypatch.delenv(self.KEY, raising=False)
+        assert _load_probe_timeout() == 30.0
+        monkeypatch.setenv(self.KEY, "")
+        assert _load_probe_timeout() == 30.0
+
+    def test_valid_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from application_sdk.storage.preflight import _load_probe_timeout
+
+        monkeypatch.setenv(self.KEY, "60")
+        assert _load_probe_timeout() == 60.0
+
+    @pytest.mark.parametrize("raw", ["inf", "nan", "0", "-5", "abc"])
+    def test_unusable_value_is_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        """``inf`` was accepted and made the probe wait forever on a blackholed
+        endpoint, which is the stall this timeout exists to prevent."""
+        from application_sdk.storage import preflight
+
+        monkeypatch.setenv(self.KEY, raw)
+        with (
+            patch.object(preflight.logger, "warning") as warning,
+            patch("application_sdk.common._env.logger.warning") as env_warning,
+        ):
+            assert preflight._load_probe_timeout() == 30.0
+        assert warning.called or env_warning.called

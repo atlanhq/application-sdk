@@ -6,8 +6,8 @@ flow. The vuln triage (vuln-triage.yml, .github/scripts/vuln_triage) opens
 two — and only two — shapes of PR, each labelled ``vuln-auto-merge``:
 
   * **allowlist PR** — touches ONLY ``.security/base-allowlist.json``
-  * **bump PR**      — touches ONLY a subset of ``pyproject.toml``,
-                       ``uv.lock``, ``packages/conformance/uv.lock``
+  * **bump PR**      — touches ONLY a subset of ``pyproject.toml`` and
+                       ``uv.lock``
 
 A PR is approved (as ``atlan-ci``, satisfying code-owner review) and put on
 GitHub auto-merge (``gh pr merge --auto`` — no method flag; the merge queue on
@@ -56,11 +56,11 @@ import renovate_approval_conditions as renovate
 from renovate_approval_conditions import GhError
 
 ALLOWLIST_FILE = ".security/base-allowlist.json"
-# The SDK's root dependency manifests, plus the conformance lock: it path-sources
-# the SDK and records its dependencies, so a raised SDK floor must relock it too
-# (FND-4716). Matched exactly (full paths) so a stray same-named file elsewhere in
-# the tree can never ride this gate.
-BUMP_FILES = {"pyproject.toml", "uv.lock", "packages/conformance/uv.lock"}
+# The SDK's root dependency manifests. uv.lock is the workspace lock, so it also
+# covers packages/conformance (FND-4671), which has no lock of its own. Matched
+# exactly (full paths) so a stray same-named file elsewhere in the tree can never
+# ride this gate.
+BUMP_FILES = {"pyproject.toml", "uv.lock"}
 
 APPROVAL_SIGNATURE = "**Vuln auto-merge:**"
 DEFAULT_LABEL = "vuln-auto-merge"

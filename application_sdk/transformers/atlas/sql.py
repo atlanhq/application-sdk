@@ -27,6 +27,17 @@ from application_sdk.transformers.common.utils import (
     _build_atlas_qualified_name as build_atlas_qualified_name,
 )
 
+__all__ = [
+    "Column",
+    "Database",
+    "Function",
+    "Procedure",
+    "Schema",
+    "Table",
+    "TagAttachment",
+]
+
+
 logger = get_logger(__name__)
 
 T = TypeVar("T")

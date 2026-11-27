@@ -23,6 +23,14 @@ from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
+__all__ = [
+    "Message",
+    "PubSub",
+    "PubSubError",
+    "PubSubUnavailableError",
+    "Subscription",
+]
+
 
 @dataclass(kw_only=True)
 class PubSubError(_LegacyErrorCodeMixin, DependencyUnavailableError):

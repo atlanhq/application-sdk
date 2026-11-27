@@ -20,7 +20,6 @@ import inspect
 import json
 import linecache
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -60,37 +59,6 @@ def eprint(*args: Any, **kwargs: Any) -> None:
     print(*args, file=sys.stderr, **kwargs)  # noqa: T201
 
 
-def get_source_sha() -> str:
-    """Return the git SHA of the last commit touching application_sdk/."""
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%H", "--", "application_sdk/"],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-    return result.stdout.strip()
-
-
-def get_source_date(sha: str) -> str:
-    """Return the commit date (ISO 8601) of the given SHA."""
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%cI", sha],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
-    return result.stdout.strip()
-
-
-def get_sdk_version() -> str:
-    """Read __version__ from application_sdk/version.py (no import needed)."""
-    version_file = PKG_ROOT / "version.py"
-    for line in version_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith("__version__"):
-            return line.split("=")[1].strip().strip('"').strip("'")
-    return "unknown"
-
-
 def extract_all_from_init(pkg_path: Path) -> list[str]:
     """Parse __all__ from a package __init__.py or a top-level .py module.
 
@@ -123,6 +91,13 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
     # were parsed on Linux; every public module is parsed now, on every platform
     # the unit suite runs (FND-439).
     tree = ast.parse(source_file.read_text(encoding="utf-8"))
+    # A leaf module's shim serves a name that merely used to be importable there;
+    # a package ``__init__`` listing a deprecated name is its documented home.
+    shimmed = (
+        frozenset()
+        if source_file.name == "__init__.py"
+        else _deprecated_constant_names(tree)
+    )
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -133,8 +108,34 @@ def extract_all_from_init(pkg_path: Path) -> list[str]:
                             for elt in node.value.elts
                             if isinstance(elt, ast.Constant)
                             and isinstance(elt.value, str)
+                            and elt.value not in shimmed
                         ]
     return []
+
+
+def _deprecated_constant_names(tree: ast.Module) -> frozenset[str]:
+    """Keys of the module's ``_DEPRECATED_CONSTANTS`` table.
+
+    A leaf module lists such a name in ``__all__`` so ``from module import *`` keeps
+    serving it, with its warning, until removal. The manifest must not offer it:
+    it would name the deprecated path as the place to import from.
+    """
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if any(
+            isinstance(t, ast.Name) and t.id == "_DEPRECATED_CONSTANTS" for t in targets
+        ) and isinstance(node.value, ast.Dict):
+            return frozenset(
+                k.value
+                for k in node.value.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            )
+    return frozenset()
 
 
 def discover_public_modules() -> list[tuple[str, str, list[str]]]:
@@ -621,16 +622,7 @@ def cmd_dump() -> None:
         docstring_parser="google",
     )
 
-    source_sha = get_source_sha()
-    source_date = get_source_date(source_sha)
-    sdk_version = get_sdk_version()
-
     output: dict[str, Any] = {
-        "meta": {
-            "sdk_version": sdk_version,
-            "source_sha": source_sha,
-            "source_date": source_date,
-        },
         "subpackages": {},
     }
 
@@ -827,9 +819,7 @@ def cmd_normalize(raw_json_path: str) -> None:
     with open(raw_json_path, encoding="utf-8") as f:
         raw = json.load(f)
 
-    # Meta passes through unchanged
     normalized: dict[str, Any] = {
-        "meta": raw["meta"],
         "subpackages": {},
         "contracts": {},
     }
@@ -887,7 +877,6 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
 
     purposes = _load_purposes(purposes_yaml_path)
 
-    meta = data["meta"]
     subpackages = data["subpackages"]
     contracts = data["contracts"]
 
@@ -900,9 +889,6 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     lines.append(
         "generated-by:  capability-manifest skill (.claude/skills/capability-manifest)"
     )
-    lines.append(f"sdk-version:   {meta['sdk_version']}")
-    lines.append(f"source-sha:    {meta['source_sha']}")
-    lines.append(f"source-date:   {meta['source_date']}")
     lines.append("do-not-edit:   re-run the skill instead of hand-editing")
     lines.append("-->")
     lines.append("")
@@ -917,8 +903,8 @@ def cmd_render(normalized_json_path: str, purposes_yaml_path: str) -> None:
     )
     lines.append(">")
     lines.append(
-        "> **To check if current:** `awk '/^source-sha:/{print $2}' docs/agents/sdk-capabilities.md`"
-        " vs `git log -1 --format=%H -- application_sdk/`"
+        "> **To check if current:** `uv run poe regen-capabilities &&"
+        " git diff --exit-code -- docs/agents/sdk-capabilities.md`"
     )
     lines.append("")
 

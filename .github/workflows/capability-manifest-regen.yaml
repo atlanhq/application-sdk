@@ -12,7 +12,6 @@
 #   - github-actions[bot] identity, NOT atlan-ci (nor the App), so the bot commit
 #     does not auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
 #   - Fork PRs are rejected immediately with an explanatory comment.
-#   - fetch-depth: 0 for the same reason as the drift-check workflow (source-sha).
 #   - Regenerating runs the PR's own `poe` task, so that job never holds the
 #     commit-signing key: the task could leave a git hook or config behind that
 #     reads it. It hands over only the regenerated manifest, and a fresh `commit`
@@ -145,7 +144,6 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.branch }}
           token: ${{ steps.app-token.outputs.token }}
-          fetch-depth: 0
 
       # Recorded before any PR code runs, so the commit job can refuse a branch
       # that moved (or a HEAD the regen task itself moved).
@@ -157,7 +155,7 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       - name: Regenerate capability manifest
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
@@ -177,27 +175,11 @@ jobs:
           fi
 
       - name: Upload the regenerated manifest
-        id: upload-manifest
         if: steps.handover.outputs.changed == 'true'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: regenerated-capability-manifest
           path: ${{ runner.temp }}/manifest/sdk-capabilities.md
-          overwrite: true
-          retention-days: 1
-
-      - name: Wait before the regenerated manifest retry
-        if: steps.handover.outputs.changed == 'true' && steps.upload-manifest.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload the regenerated manifest (retry)
-        if: steps.handover.outputs.changed == 'true' && steps.upload-manifest.outcome == 'failure'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: regenerated-capability-manifest-retry
-          path: ${{ runner.temp }}/manifest/sdk-capabilities.md
-          overwrite: true
           retention-days: 1
 
   # A fresh job: it runs no PR code, so the signing key is never on disk beside
@@ -243,24 +225,9 @@ jobs:
       # `regenerated-capability-manifest-retry`. Both upload attempts overwrite,
       # so the glob resolves to one artifact.
       - name: Download the regenerated manifest
-        id: download-manifest
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
         with:
           pattern: regenerated-capability-manifest*
-          merge-multiple: true
-          path: ${{ runner.temp }}/manifest
-
-      - name: Wait before the regenerated manifest download retry
-        if: steps.download-manifest.outcome == 'failure'
-        run: sleep 20
-
-      - name: Download the regenerated manifest (retry)
-        if: steps.download-manifest.outcome == 'failure'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: regenerated-capability-manifest*
-          merge-multiple: true
           path: ${{ runner.temp }}/manifest
 
       - name: Sign bot commits

@@ -19,6 +19,13 @@ consolidated API host register the same routes through
   ``ATLAN_AZURE_STORAGE_ACCOUNT`` / ``ATLAN_AZURE_STORAGE_CONTAINER``. Without
   any, the routes answer 503, exactly as the worker does without a store.
 
+The host's store reads a failure through the table the worker's store uses
+(:mod:`application_sdk._storage_classify`): it retries the gateway's transient
+``404 "no Route matched"`` the same way, tells a missing object from a missing
+bucket or a gateway that is not ready the same way, and answers 503 for every
+failure that is not a missing config. Like the worker's ``upload_file``, its
+file upload writes a ``{key}.sha256`` sidecar beside the object.
+
 Both write a config to ``persistent-artifacts/apps/{app_name}/{type}/{id}/config.json``.
 On the host ``app_name`` is the hosted app's name, never the host's own, so the
 key is the one that app's worker reads.
@@ -35,7 +42,7 @@ import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 from uuid import uuid4
 
@@ -57,9 +64,20 @@ from starlette.middleware import Middleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from typing_extensions import deprecated
 
-from application_sdk import _env, _obstore_config
+from application_sdk import _env, _obstore_config, _storage_classify
 from application_sdk._logging import get_logger
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (  # noqa: F401 — raise_if_offload_abandoned: importable from here in past releases
+    raise_if_offload_abandoned,
+    run_in_thread,
+)
+
+# Unused here since HostObjectStore calls the worker's primitives, but
+# importable from this module in past releases (docs/standards/symbols.md).
+from application_sdk._storage_classify import (  # noqa: F401
+    StorageFailureKind,
+    classify_storage_failure,
+    past_gateway_no_route,
+)
 from application_sdk.handler.contracts import FileUploadResponse
 from application_sdk.handler.routes import _wrap_response
 from application_sdk.handler.service_errors import (
@@ -70,6 +88,29 @@ from application_sdk.handler.service_errors import (
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
+
+__all__ = [
+    "config_key",
+    "CONFIG_KEY_PATTERN",
+    "DEFAULT_MAX_BODY_BYTES",
+    "DEFAULT_MAX_UPLOAD_BYTES",
+    "host_object_source",
+    "HostObjectStore",
+    "install_body_limit",
+    "MAX_BODY_BYTES_ENV",
+    "MAX_UPLOAD_BYTES_ENV",
+    "ObjectRoutesSource",
+    "ObjectStoreOps",
+    "register_object_routes",
+    "RequestBodyLimitMiddleware",
+    "S3Client",
+    "S3ObjectStore",
+    "SAFE_EXT_RE",
+    "UPLOAD_ROUTE",
+    "valid_upload_prefix",
+    "validated_temp_path",
+]
+
 
 logger = get_logger(__name__)
 
@@ -424,6 +465,9 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
         """Fetch workflow config from object store."""
         try:
             config = await source.load_config(config_id, type)
+        except HTTPException:
+            # Already answered: the host maps a store failure to its own 503.
+            raise
         except Exception as exc:
             # A missing key loads as None (404 below). Anything else (IAM,
             # network, a 5xx, an unreadable object) means the store could not
@@ -528,6 +572,12 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
                 detail="prefix must not start with a reserved object-store root",
             )
         stored_name = f"{file_id}.{extension}" if extension else file_id
+        if _storage_classify.is_internal_key(stored_name):
+            # An extension such as ``sha256`` would put the upload under an
+            # SDK-bookkeeping suffix: the worker would never verify it and its
+            # listings would drop it as a sidecar. Keep the bare id; the
+            # response still reports the extension.
+            stored_name = file_id
         key = f"{effective_prefix}/{stored_name}"
         if source.stored_key(key) != key:
             # The store would write somewhere else (a staging-path alias such
@@ -778,10 +828,13 @@ class HostObjectStore:
 
     The store comes from the constructors the worker uses
     (:mod:`application_sdk._obstore_config`), so the host gets the worker's
-    timeouts, retries, proxy and custom-CA settings. obstore runs its requests
-    on its own Rust runtime, so store latency never blocks the host's event
-    loop. Credentials stay inside the obstore store; ``repr`` names only the
-    kind of store.
+    timeouts, retries, proxy and custom-CA settings. Every request goes
+    through the worker's own primitives (:mod:`application_sdk.storage.ops`,
+    shipped in the ``obstore`` extra): its gateway retry, post-write size
+    check, ``.sha256`` sidecar, transfer budget and telemetry apply here as on
+    the worker. obstore runs its requests on its own Rust runtime, so store
+    latency never blocks the host's event loop. Credentials stay inside the
+    obstore store; ``repr`` names only the kind of store.
     """
 
     def __init__(self, store: ObjectStore, *, kind: str = "obstore") -> None:
@@ -844,40 +897,78 @@ class HostObjectStore:
         """The object at ``key``, or ``None`` when it is missing.
 
         Any other failure (auth, network, throttling, a missing bucket or
-        container) raises: the store could not answer, which is not a missing
-        object.
+        container, a gateway that is not ready) raises: the store could not
+        answer, which is not a missing object. A not-found is confirmed with a
+        listing under the key, which tells a missing object from a missing
+        bucket or container (``storage.ops._get_bytes_confirmed``).
         """
-        import obstore  # noqa: PLC0415 — the obstore extra
-        from obstore.exceptions import NotFoundError  # noqa: PLC0415
-
         try:
-            result = await obstore.get_async(self._store, key)
-            raw = await result.bytes_async()
-        except (FileNotFoundError, NotFoundError):
-            # Current obstore raises the built-in; older releases its own class.
-            # S3, GCS and Azure also answer a missing bucket or container with
-            # a 404, which obstore reports the same way. A listing under the key
-            # tells them apart: it succeeds (empty) when only the object is
-            # missing, and raises when the bucket or container is.
-            await obstore.list_with_delimiter_async(self._store, prefix=key)
-            return None
-        return orjson.loads(bytes(raw))
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
+                _get_bytes_confirmed,
+            )
+        except ModuleNotFoundError as exc:
+            raise _without_storage(exc) from exc
+        raw = await _get_bytes_confirmed(key, self._store, normalize=False)
+        return None if raw is None else orjson.loads(raw)
 
     async def put_json(self, key: str, body: dict[str, Any]) -> None:
-        import obstore  # noqa: PLC0415 — the obstore extra
+        """Store ``body`` as JSON at ``key``, as the worker's ``storage.put_json``.
 
-        await obstore.put_async(
-            self._store,
-            key,
-            orjson.dumps(body),
-            attributes={"Content-Type": "application/json"},
+        No sidecar, as on the worker: a config is small and read whole by its
+        JSON parser, so a truncation cannot read as valid.
+        """
+        try:
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
+                BoundStore,
+                put_json,
+            )
+        except ModuleNotFoundError as exc:
+            raise _without_storage(exc) from exc
+        await put_json(
+            key, body, BoundStore(self._store, _JSON_ATTRIBUTES), normalize=False
         )
 
     async def put_file(self, key: str, local_path: str) -> None:
-        import obstore  # noqa: PLC0415 — the obstore extra
+        """Store the file at ``local_path`` under ``key``, as the worker's
+        ``storage.upload_file``.
 
-        # obstore streams the file from disk, in parts when it is large.
-        await obstore.put_async(self._store, _normalize_key(key), Path(local_path))
+        That writes the ``{key}.sha256`` sidecar a downstream download through
+        ``application_sdk.storage`` verifies the object against
+        (``ATLAN_STORAGE_WRITE_SIDECARS=false`` turns it off), and checks the
+        stored size after the write (``ATLAN_STORAGE_VERIFY_TRANSFERS``). The
+        sidecar is best-effort: the object is stored either way, and a failed
+        sidecar write is logged at WARNING with its classified cause. The key
+        is normalised as it always was here (backslashes to ``/``, outer
+        slashes stripped), so ``dir\\file.csv`` is stored as ``dir/file.csv``.
+        """
+        try:
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — the obstore extra
+                upload_file,
+            )
+        except ModuleNotFoundError as exc:
+            raise _without_storage(exc) from exc
+        # The host's own normalisation (separators and outer slashes), as
+        # before; not the worker's staging-path rewrite, so the key a direct
+        # caller stores is the key it reads back.
+        await upload_file(_normalize_key(key), local_path, self._store, normalize=False)
+
+
+#: The attributes the host writes a config with.
+_JSON_ATTRIBUTES = {"Content-Type": "application/json"}
+
+
+def _without_storage(exc: ModuleNotFoundError) -> Exception:
+    """The error a store call raises when the ``obstore`` extra is missing.
+
+    ``application_sdk.storage`` ships in the api wheel; only obstore can be
+    absent, and :meth:`HostObjectStore.from_env` builds no store without it.
+    Any other missing module is a broken install, raised as is.
+    """
+    if exc.name != "obstore":
+        return exc
+    return RuntimeError(
+        "HostObjectStore needs obstore: install atlan-application-sdk-api[obstore]"
+    )
 
 
 def _s3_store(bucket: str) -> ObjectStore:
@@ -891,8 +982,10 @@ def _s3_store(bucket: str) -> ObjectStore:
         or os.environ.get("AWS_REGION", "")
         or os.environ.get("AWS_DEFAULT_REGION", "")
     )
-    config = {"aws_region": region} if region else None
-    return _obstore_config.make_s3_store(bucket, config, label="host-s3")
+    return _obstore_config.build_s3_store(
+        _obstore_config.S3StoreSettings(bucket=bucket, region=region),
+        label="host-s3",
+    )
 
 
 def _gcs_store(bucket: str) -> ObjectStore | None:
@@ -912,18 +1005,16 @@ def _gcs_store(bucket: str) -> ObjectStore | None:
             "ATLAN_GCP_HMAC_SECRET, so the config and file routes answer 503."
         )
         return None
-    config = {
-        "aws_endpoint": _GCS_ENDPOINT,
-        "aws_access_key_id": access_key,
-        "aws_secret_access_key": secret,
-        # GCS rejects x-amz-tagging, as the worker's binding notes for every
-        # non-AWS endpoint.
-        "aws_disable_tagging": "true",
-    }
-    region = _resolved_env("ATLAN_GCP_REGION")
-    if region:
-        config["aws_region"] = region
-    return _obstore_config.make_s3_store(bucket, config, label="host-gcs")
+    # GCS rejects x-amz-tagging; the shared translation disables it for this
+    # non-AWS endpoint, as it does for every one.
+    settings = _obstore_config.S3StoreSettings(
+        bucket=bucket,
+        region=_resolved_env("ATLAN_GCP_REGION"),
+        endpoint=_GCS_ENDPOINT,
+        access_key_id=access_key,
+        secret_access_key=secret,
+    )
+    return _obstore_config.build_s3_store(settings, label="host-gcs")
 
 
 def _azure_store(account: str) -> ObjectStore | None:
@@ -943,11 +1034,59 @@ def _azure_store(account: str) -> ObjectStore | None:
             "ATLAN_AZURE_STORAGE_CONTAINER, so the config and file routes answer 503."
         )
         return None
-    config = {"azure_storage_account_name": account}
-    access_key = _resolved_env("ATLAN_AZURE_STORAGE_ACCESS_KEY")
-    if access_key:
-        config["azure_storage_account_key"] = access_key
-    return _obstore_config.make_azure_store(container, config, label="host-azure")
+    settings = _obstore_config.AzureStoreSettings(
+        container=container,
+        account_name=account,
+        account_key=_resolved_env("ATLAN_AZURE_STORAGE_ACCESS_KEY"),
+    )
+    return _obstore_config.build_azure_store(settings, label="host-azure")
+
+
+#: The host's answer to each kind of store failure, by the shared table's
+#: verdict. Every one is a 503: the store could not answer. A missing config is
+#: not here; the store reads it as ``None`` and the route answers 404.
+_HOST_STORE_FAILURE_DETAIL: dict[StorageFailureKind, str] = {
+    StorageFailureKind.GATEWAY_NO_ROUTE: (
+        "Object store gateway is not ready; retry shortly"
+    ),
+    StorageFailureKind.GATEWAY_AUTH_UNAVAILABLE: (
+        "Object store gateway could not verify the request; retry shortly"
+    ),
+    StorageFailureKind.AZURE_CONTAINER_MISSING: (
+        "Object store container does not exist"
+    ),
+}
+_HOST_STORE_UNAVAILABLE = "Object store unavailable"
+
+
+def _host_store_failure(
+    exc: Exception, op: str, app_name: str, key: str
+) -> HTTPException:
+    """The 503 a failed host store request answers, logged with its evidence.
+
+    The shared table names the failure, so an operator reads the same verdict
+    the worker's ``StorageError`` leaves carry, not a raw obstore exception.
+    """
+    # The worker's primitives raise a StorageError chained to obstore's own
+    # exception; the shared table reads that one.
+    cause = exc.__cause__ if isinstance(exc.__cause__, Exception) else exc
+    failure = classify_storage_failure(cause)
+    # Only the classified evidence and the exception type, as from_env logs a
+    # store it could not build: obstore's message and traceback can quote the
+    # request's signed URL or the store's credential.
+    # conformance: ignore[L004] exc_info would log that message, and the credential with it.
+    logger.warning(
+        "Object-store %s failed for app=%s key=%s: %s (%s, http_status=%s, provider_code=%s)",
+        op,
+        app_name,
+        key,
+        failure.kind.value,
+        type(cause).__name__,
+        failure.http_status,
+        failure.provider_code,
+    )
+    detail = _HOST_STORE_FAILURE_DETAIL.get(failure.kind, _HOST_STORE_UNAVAILABLE)
+    return HTTPException(status_code=503, detail=detail)
 
 
 def host_object_source(
@@ -958,20 +1097,31 @@ def host_object_source(
     async def load_config(config_id: str, config_type: str) -> dict[str, Any] | None:
         if store is None:
             return None
-        return await store.get_json(config_key(app_name, config_id, config_type))
+        key = config_key(app_name, config_id, config_type)
+        try:
+            return await store.get_json(key)
+        except Exception as exc:
+            raise _host_store_failure(exc, "config read", app_name, key) from exc
 
     async def save_config(
         config_id: str, body: dict[str, Any], config_type: str
     ) -> bool:
         if store is None:
             return False
-        await store.put_json(config_key(app_name, config_id, config_type), body)
+        key = config_key(app_name, config_id, config_type)
+        try:
+            await store.put_json(key, body)
+        except Exception as exc:
+            raise _host_store_failure(exc, "config write", app_name, key) from exc
         return True
 
     async def upload_file(key: str, local_path: str) -> None:
         if store is None:  # the route answers 503 before it gets here
             raise HTTPException(status_code=503, detail="Storage not configured")
-        await store.put_file(key, local_path)
+        try:
+            await store.put_file(key, local_path)
+        except Exception as exc:
+            raise _host_store_failure(exc, "file upload", app_name, key) from exc
 
     return ObjectRoutesSource(
         configured=lambda: store is not None,

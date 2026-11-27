@@ -12,12 +12,10 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _SCRIPTS_DIR.parents[1]
 _MODULE_PATH = _SCRIPTS_DIR / "resolve_e2e_tenant.py"
 
-# Plain sys.path insertion rather than importlib: the module under test itself
-# does `from export_extra_env import …`, so its sibling directory has to be
+# A plain import rather than importlib: the module under test itself does
+# `from export_extra_env import …`, so its sibling directory has to be
 # importable anyway — which is exactly what the runner gives it (sys.path[0] is
-# the script's own directory).
-sys.path.insert(0, str(_SCRIPTS_DIR))
-
+# the script's own directory) and what pytest.ini's `pythonpath` gives here.
 from resolve_e2e_tenant import TenantMatrixError, main, resolve  # noqa: E402
 
 _MATRIX = {
@@ -476,7 +474,9 @@ def test_call_sites_are_the_expected_files() -> None:
         # that tenant the same way a leg does. Audited: it runs the two-pass
         # --mask-only-then-write protocol, which the ordering guard below checks.
         ".github/workflows/e2e-tenant-install.yaml",
-        ".github/workflows/tests-reusable.yaml",
+        # The e2e tier tests-reusable.yaml calls (FND-4676): prepare-tenant and
+        # every leg resolve their cloud's tenant.
+        ".github/workflows/e2e-tests-reusable.yaml",
     }
 
 

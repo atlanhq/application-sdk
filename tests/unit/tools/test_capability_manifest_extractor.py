@@ -478,11 +478,24 @@ def test_discover_public_modules_groups_every_module_under_its_subpackage() -> N
         )
 
 
-def test_discover_public_modules_ignores_modules_without_all() -> None:
+def test_discover_public_modules_ignores_modules_without_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Declaring __all__ is how a module opts into the manifest. Every public SDK
+    # module declares one now (tests/unit/test_module_all_declared.py), so the
+    # rule is pinned on a tree built here.
+    root = tmp_path / "application_sdk"
+    (root / "sub").mkdir(parents=True)
+    (root / "__init__.py").write_text("")
+    (root / "sub" / "__init__.py").write_text(
+        "__all__ = ['go']\nfrom .declared import go\n"
+    )
+    (root / "sub" / "declared.py").write_text("__all__ = ['go']\ndef go(): ...\n")
+    (root / "sub" / "bare.py").write_text("def stay(): ...\n")
+    monkeypatch.setattr(extractor, "PKG_ROOT", root)
     found = {dotted for _, dotted, _ in extractor.discover_public_modules()}
-    # transformers/ declares no __all__ anywhere: declaring one is how a module
-    # opts into the manifest.
-    assert not any(d.startswith("application_sdk.transformers") for d in found)
+    assert "application_sdk.sub.declared" in found
+    assert "application_sdk.sub.bare" not in found
 
 
 # ---------------------------------------------------------------------------
@@ -664,3 +677,27 @@ def test_contract_members_fall_back_to_own_members_without_an_mro() -> None:
             raise ValueError("cannot compute the MRO")
 
     assert extractor._contract_members(_NoMro()) == [("own", "member")]
+
+
+def test_a_leaf_module_does_not_offer_a_name_only_its_deprecation_shim_serves(
+    tmp_path: Path,
+) -> None:
+    # A leaf module lists a deprecated alias in __all__ so a star import keeps
+    # it until removal; the manifest must not name that path as the import.
+    leaf = tmp_path / "leaf.py"
+    leaf.write_text(
+        "__all__ = ['go', 'Old']\n"
+        "def go(): ...\n"
+        "_DEPRECATED_CONSTANTS = {'Old': ('application_sdk.home.Old', 'moved')}\n"
+    )
+    assert extractor.extract_all_from_init(leaf) == ["go"]
+
+
+def test_a_package_keeps_the_deprecated_names_its_all_lists(tmp_path: Path) -> None:
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text(
+        "__all__ = ['go', 'Old']\n"
+        "_DEPRECATED_CONSTANTS = {'Old': ('application_sdk.home.Old', 'moved')}\n"
+    )
+    assert extractor.extract_all_from_init(pkg) == ["go", "Old"]

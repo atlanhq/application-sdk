@@ -32,7 +32,6 @@ import pytest
 
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.contracts.types import FileReference
-from application_sdk.storage.factory import create_local_store
 from application_sdk.storage.reference import (
     materialize_file_reference,
     persist_file_reference,
@@ -47,7 +46,7 @@ from application_sdk.templates.sql_app import SqlApp
 class _FakeSqlClient(BaseSQLClient):
     """In-process SQL client that yields a fixed batch — no network, no driver.
 
-    Mirrors the streaming contract ``SqlApp._extract_entity`` relies on
+    Mirrors the streaming contract ``SqlApp.extract_entity`` relies on
     (``run_query`` yields ``list[dict]`` batches). We bypass ``BaseSQLClient``
     initialisation because we never go through ``client.load()`` —
     ``_init_sql_client`` is patched out below.
@@ -89,12 +88,6 @@ class _ConcreteSqlApp(SqlApp):
                 "qualifiedName": f"{connection_qn}/{record['database_name']}",
             },
         }
-
-
-@pytest.fixture
-def store(tmp_path):
-    """Real local object store backed by a temp directory."""
-    return create_local_store(tmp_path / "store")
 
 
 def _make_extract_input(tmp_path: Path) -> ExtractionTaskInput:
@@ -149,7 +142,7 @@ async def test_extract_persist_materialize_transform_round_trip(store, tmp_path)
     ephemeral_raw = extract_result.raw_file
     assert ephemeral_raw.is_durable is False
     # storage_path is now pre-set to the canonical key (no longer
-    # None pre-persist) — see ``_extract_entity``'s emission site for
+    # None pre-persist) — see ``extract_entity``'s emission site for
     # why we pin the key here. The interceptor's persist honours it
     # instead of auto-generating a ``file_refs/<uuid>`` orphan.
     assert ephemeral_raw.storage_path is not None
@@ -184,7 +177,7 @@ async def test_extract_persist_materialize_transform_round_trip(store, tmp_path)
 
     # ── Step 3: simulate cross-worker — local raw file vanishes ─────────
     # This mimics transform landing on a different Temporal worker pod
-    # that never ran the matching extract. Pre-fix, _transform_entity
+    # that never ran the matching extract. Pre-fix, transform_entity
     # would see the missing file and silently return count=0.
     Path(ephemeral_raw.local_path).unlink()
     sidecar_local = Path(ephemeral_raw.local_path + ".sha256")

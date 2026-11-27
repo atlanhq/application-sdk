@@ -48,8 +48,11 @@ The FastAPI `/metrics` endpoint (or a worker push) merges:
   `server.address`, `network.protocol.version`,
   `http.response.status_code`. The metric is named
   `http_server_request_duration_seconds` (seconds, not milliseconds).
-  Stable conventions are enabled via `OTEL_SEMCONV_STABILITY_OPT_IN=http`
-  — set in the chart by default for v3+ apps.
+  Stable conventions are enabled via `OTEL_SEMCONV_STABILITY_OPT_IN=http`,
+  which the handler service sets itself before instrumenting, so every
+  runtime (chart-deployed, local dev, self-deployed) emits the same names.
+  An explicit value in the environment wins; if you set one, include
+  `http` (or `http/dup` to also emit the legacy `http_server_duration_milliseconds`).
 - **Temporal SDK** families from `MetricsInterceptor` (counters and
   histograms emitted by activity/workflow execution) plus, when enabled
   and reachable, the Rust-core families proxied from `127.0.0.1:9464`

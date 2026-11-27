@@ -12,11 +12,11 @@ paths so a renamed symbol fails the test.
 
 from __future__ import annotations
 
+import os
 import socket as _socket
-import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
-from types import ModuleType
 from typing import Any
 from unittest import mock
 
@@ -686,51 +686,39 @@ class TestCreateTemporalClient:
 
 
 # ---------------------------------------------------------------------------
-# HTTP CONNECT proxy support (HTTPS_PROXY / HTTP_PROXY / NO_PROXY via stdlib)
+# HTTP CONNECT proxy support (HTTPS_PROXY / HTTP_PROXY / ALL_PROXY / NO_PROXY)
 # ---------------------------------------------------------------------------
 
 
 class TestTemporalProxyConfig:
-    """Proxy resolution goes through urllib.request.getproxies /
-    proxy_bypass_environment, so tests patch those to stay platform-independent
-    (plain proxy_bypass reads system config on macOS)."""
-
-    @pytest.fixture(autouse=True)
-    def _private_urllib_request(self) -> Iterator[None]:
-        """Give ``backend`` its own ``urllib.request``, so a patched resolver
-        answers only the code under test and not another test's thread."""
-        with (
-            private_stdlib(backend_module, "urllib") as local_urllib,
-            private_stdlib(local_urllib, "request"),
-        ):
-            yield
-
-    @staticmethod
-    def _request() -> ModuleType:
-        """The private ``urllib.request`` the autouse fixture bound into ``backend``."""
-        request = backend_module.urllib.request
-        assert request is not urllib.request, "the private-copy fixture is not active"
-        return request
+    """Proxy resolution reads the process environment only (``_proxy``), so the
+    tests set the proxy variables themselves; nothing reads macOS system
+    proxy settings."""
 
     @staticmethod
     def _connect_mock():
         return mock.AsyncMock(return_value=mock.MagicMock())
 
-    @classmethod
-    def _proxy_env(cls, proxies: dict, bypass: bool = False):
-        """Patch the stdlib proxy resolver to return *proxies* and *bypass*."""
-        request = cls._request()
-        return (
-            mock.patch.object(request, "getproxies", return_value=proxies),
-            mock.patch.object(request, "proxy_bypass_environment", return_value=bypass),
-        )
+    @staticmethod
+    @contextmanager
+    def _proxy_env(proxies: dict[str, str], **env: str) -> Iterator[None]:
+        """Set ``<scheme>_proxy`` for each entry of *proxies* (``"no"`` is
+        ``no_proxy``), with every other proxy variable unset; *env* sets more
+        variables by name. pytest's monkeypatch restores only these variables."""
+        with pytest.MonkeyPatch.context() as mp:
+            for name in [n for n in os.environ if n.lower().endswith("_proxy")]:
+                mp.delenv(name)
+            for scheme, url in proxies.items():
+                mp.setenv(f"{scheme}_proxy", url)
+            for name, value in env.items():
+                mp.setenv(name, value)
+            yield
 
     async def test_no_proxy_config_when_env_unset(self) -> None:
         """No proxy in the environment -> connect directly (no proxy kwarg)."""
-        getproxies, bypass = self._proxy_env({})
+        proxy_env = self._proxy_env({})
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(
                 backend_module.Client, "connect", new=self._connect_mock()
@@ -741,10 +729,9 @@ class TestTemporalProxyConfig:
 
     async def test_https_proxy_used_when_tls_enabled(self) -> None:
         """The 'https' proxy is used (scheme stripped) when TLS is enabled."""
-        getproxies, bypass = self._proxy_env({"https": "http://proxy.corp:8080"})
+        proxy_env = self._proxy_env({"https": "http://proxy.corp:8080"})
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(
                 backend_module.Client, "connect", new=self._connect_mock()
@@ -756,10 +743,9 @@ class TestTemporalProxyConfig:
         assert proxy.basic_auth is None
 
     async def test_http_proxy_used_when_plaintext(self) -> None:
-        getproxies, bypass = self._proxy_env({"http": "http://plainproxy:3128"})
+        proxy_env = self._proxy_env({"http": "http://plainproxy:3128"})
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(
                 backend_module.Client, "connect", new=self._connect_mock()
@@ -771,10 +757,9 @@ class TestTemporalProxyConfig:
 
     async def test_proxy_selected_by_tls_state(self) -> None:
         """Only an 'http' proxy set -> a TLS connection picks nothing (direct)."""
-        getproxies, bypass = self._proxy_env({"http": "http://proxy.corp:3128"})
+        proxy_env = self._proxy_env({"http": "http://proxy.corp:3128"})
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(
                 backend_module.Client, "connect", new=self._connect_mock()
@@ -785,12 +770,11 @@ class TestTemporalProxyConfig:
 
     async def test_no_proxy_bypass(self) -> None:
         """NO_PROXY match -> connect directly even with a proxy configured."""
-        getproxies, bypass = self._proxy_env(
-            {"https": "http://proxy.corp:8080", "no": "internal.corp"}, bypass=True
+        proxy_env = self._proxy_env(
+            {"https": "http://proxy.corp:8080", "no": "internal.corp"}
         )
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(
                 backend_module.Client, "connect", new=self._connect_mock()
@@ -813,11 +797,8 @@ class TestTemporalProxyConfig:
     )
     def test_no_proxy_matches_on_bare_hostname(self, host: str) -> None:
         """NO_PROXY matches on the hostname regardless of scheme/userinfo/port."""
-        # Real proxy_bypass_environment runs against the extracted hostname.
-        with mock.patch.object(
-            self._request(),
-            "getproxies",
-            return_value={"https": "http://proxy.corp:8080", "no": "internal.corp"},
+        with self._proxy_env(
+            {"https": "http://proxy.corp:8080", "no": "internal.corp"}
         ):
             cfg = backend_module._build_temporal_proxy_config(host, tls_enabled=True)
         assert cfg is None
@@ -826,12 +807,7 @@ class TestTemporalProxyConfig:
         """A schemeless proxy value (ops typo) is rejected with an error log and
         a direct connection, not a silent empty target_host."""
         with (
-            mock.patch.object(
-                self._request(), "getproxies", return_value={"https": "proxy.corp:8080"}
-            ),
-            mock.patch.object(
-                self._request(), "proxy_bypass_environment", return_value=False
-            ),
+            self._proxy_env({"https": "proxy.corp:8080"}),
             mock.patch.object(backend_module.logger, "error") as err,
         ):
             cfg = backend_module._build_temporal_proxy_config(
@@ -842,10 +818,8 @@ class TestTemporalProxyConfig:
 
     def test_build_proxy_config_extracts_credentials_without_leaking(self) -> None:
         """Credentials become basic_auth and never appear in target_host."""
-        getproxies, bypass = self._proxy_env(
-            {"https": "http://user:pass@proxy.corp:8080"}
-        )
-        with getproxies, bypass:
+        proxy_env = self._proxy_env({"https": "http://user:pass@proxy.corp:8080"})
+        with proxy_env:
             cfg = backend_module._build_temporal_proxy_config(
                 "tmprl:443", tls_enabled=True
             )
@@ -855,8 +829,8 @@ class TestTemporalProxyConfig:
 
     def test_build_proxy_config_keeps_token_username_without_password(self) -> None:
         """Token-as-username proxy (http://TOKEN@proxy/) keeps auth, empty pass."""
-        getproxies, bypass = self._proxy_env({"https": "http://TOKEN@proxy.corp:8080"})
-        with getproxies, bypass:
+        proxy_env = self._proxy_env({"https": "http://TOKEN@proxy.corp:8080"})
+        with proxy_env:
             cfg = backend_module._build_temporal_proxy_config(
                 "tmprl:443", tls_enabled=True
             )
@@ -864,10 +838,9 @@ class TestTemporalProxyConfig:
         assert cfg.basic_auth == ("TOKEN", "")
 
     def test_build_proxy_config_warns_on_https_scheme(self) -> None:
-        getproxies, bypass = self._proxy_env({"https": "https://proxy.corp:443"})
+        proxy_env = self._proxy_env({"https": "https://proxy.corp:443"})
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module.logger, "warning") as warn,
         ):
             cfg = backend_module._build_temporal_proxy_config(
@@ -880,10 +853,9 @@ class TestTemporalProxyConfig:
     async def test_proxy_skips_sdr_ipv4_substitution(self) -> None:
         """With a proxy set, _prefer_v4_target is skipped so the proxy sees the
         hostname (not a bare IP) and does DNS itself."""
-        getproxies, bypass = self._proxy_env({"https": "http://proxy.corp:8080"})
+        proxy_env = self._proxy_env({"https": "http://proxy.corp:8080"})
         with (
-            getproxies,
-            bypass,
+            proxy_env,
             mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", True),
             mock.patch.object(
                 backend_module, "_prefer_v4_target", new=mock.AsyncMock()

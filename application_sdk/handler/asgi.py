@@ -36,12 +36,14 @@ from typing import TYPE_CHECKING, Literal
 
 from fastapi import FastAPI
 
+from application_sdk._env import env_str
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import blocking_executor, offload_owner
 from application_sdk.common.task_queue import derive_task_queue
 from application_sdk.handler.base import Handler
 from application_sdk.handler.metadata_routes import (
     MetadataSource,
+    _credential_normalizer,
     generated_dir_of,
     handler_compute_manifest,
     register_metadata_routes,
@@ -62,6 +64,15 @@ from application_sdk.handler.routes import (
 if TYPE_CHECKING:
     from starlette.types import ASGIApp, Receive, Scope, Send
 
+__all__ = [
+    "app_env",
+    "APPENV_PREFIX",
+    "build_asgi_app",
+    "DEFAULT_BLOCKING_THREADS",
+    "default_object_store",
+]
+
+
 logger = get_logger(__name__)
 
 #: Threads in each app's ``run_in_thread`` pool on the host.
@@ -73,7 +84,7 @@ APPENV_PREFIX = "ATLAN_APPENV__"
 
 def app_env(app_name: str, key: str, default: str = "") -> str:
     """``key`` for one hosted app: its ``ATLAN_APPENV__<APP>__<key>``, else
-    ``default``. An empty string counts as set.
+    ``default``. An empty value counts as unset, as for every SDK env read.
 
     Never the bare ``key``: on the host that is the host's own value, shared by
     every hosted app, so reading it would hand one app another app's (or the
@@ -82,7 +93,7 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
     scoped = APPENV_PREFIX + app_name.strip().upper().replace("-", "_").replace(
         ".", "_"
     )
-    return os.environ.get(f"{scoped}__{key}", default)
+    return env_str(f"{scoped}__{key}", default)
 
 
 @functools.cache
@@ -217,7 +228,9 @@ def build_asgi_app(
     the host to shut down. The metadata routes are served when the app ships a
     generated folder (``generated_dir``, else ``<app_package>/generated``). The
     config and file routes use ``object_store`` (by default
-    :func:`default_object_store`) and answer 503 without one.
+    :func:`default_object_store`) and answer 503 without one, or when the
+    store cannot answer (named by the worker's failure table,
+    :mod:`application_sdk._storage_classify`).
     """
     app = FastAPI(title=app_name)
     app.state.app_name = app_name
@@ -231,6 +244,14 @@ def build_asgi_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    generated = (
+        generated_dir
+        if generated_dir is not None
+        else _package_generated_dir(app_package)
+    )
+    # One request normalization for every route that reads a body: the SDK's
+    # credential keys plus the fields of the app's generated credential forms.
+    normalize = _credential_normalizer(lambda: generated)
     register_handler_routes(
         app,
         handler,
@@ -238,11 +259,7 @@ def build_asgi_app(
         app_package=app_package,
         observer=LoggingPreflightObserver(app_name),
         include_app_routers=False,
-    )
-    generated = (
-        generated_dir
-        if generated_dir is not None
-        else _package_generated_dir(app_package)
+        normalize=normalize,
     )
     if generated is not None:
 
@@ -258,6 +275,7 @@ def build_asgi_app(
                 task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
                 compute_manifest=handler_compute_manifest(handler, lambda: app_name),
+                normalize_body=normalize,
                 from_process_env=False,
             ),
         )

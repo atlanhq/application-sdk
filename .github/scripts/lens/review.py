@@ -62,7 +62,7 @@ from .github import GitHub, bot_login
 from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
-from .select import DEFAULT_EXCLUDE, model_visible, select_files
+from .select import DEFAULT_EXCLUDE, excluded, model_visible, select_files
 from .tools import Workspace, parse_args, secret_diff, secret_path
 from .triage import Triage, triage
 
@@ -358,6 +358,88 @@ def exclude_patterns(cfg: Config) -> tuple[str, ...]:
     return tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude)
 
 
+def _close_findings_in_excluded_files(
+    state: PRState, exclude: tuple[str, ...], round_no: int, res: RunResult
+) -> None:
+    """Close each open finding in a file the exclude patterns now name.
+
+    Every prompt that shows a diff drops an excluded file's, verify's included,
+    so a finding raised before its file was excluded could never be judged
+    fixed again and would block the PR for good. The patterns come from the
+    configuration on the base branch (lens runs from it), never from the PR, so
+    a PR cannot close its own findings this way."""
+    closed: list[str] = []
+    for f in state.open_findings():
+        if excluded(f.path, exclude):
+            f.status, f.fixed_round, f.fixed_by = "fixed", round_no, "excluded"
+            closed.append(f.id)
+    if closed:
+        res.resolved_free.extend(closed)
+        trace.line(f"closed (file now excluded from review): {', '.join(closed)}")
+
+
+def _sweep_excluded(
+    gh: GitHub,
+    number: int,
+    state: PRState,
+    cfg: Config,
+    *,
+    post: bool,
+    run_url: str,
+) -> RunResult | None:
+    """Close findings in now-excluded files on a run that reviews nothing.
+
+    None when there are none. Otherwise published like a dismissal: no model
+    call, the summary and the `lens` status refreshed at the reviewed head, and
+    a row in the round history, with the closure as the reason."""
+    res = RunResult(
+        "dismissed",
+        mode="excluded",
+        state=state,
+        run_url=run_url,
+        blob_base=(
+            f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
+            if state.reviewed_head
+            else ""
+        ),
+    )
+    _close_findings_in_excluded_files(state, exclude_patterns(cfg), state.round, res)
+    closed = res.resolved_free
+    if not closed:
+        return None
+    res.mode_label = f"closed · {', '.join(closed)} (file now excluded from review)"
+    _append_closure_row(state, res.mode_label, "excluded", len(closed), run_url)
+    if post:
+        url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+        gh.comment(number, verdict_brief(res, url))
+        if state.reviewed_head:
+            gh.set_status(state.reviewed_head, *verdict_status(res), url)
+    return res
+
+
+def _append_closure_row(
+    state: PRState, label: str, mode: str, resolved: int, run_url: str
+) -> None:
+    """A history row for a run that closed findings without reviewing."""
+    state.history.append(
+        {
+            "round": state.round,
+            "head": state.reviewed_head[:12],
+            "base": "",
+            "mode": mode,
+            "label": label,
+            "new": 0,
+            "resolved": resolved,
+            "blocking": len(state.open_findings(BLOCKING)),
+            "incomplete": False,
+            "usd": 0.0,
+            "calls": 0,
+            "run": run_url,
+        }
+    )
+    del state.history[:-MAX_HISTORY]
+
+
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     for c in gh.issue_comments(number):
         body = c.get("body") or ""
@@ -419,7 +501,17 @@ def run(
         and not force
         and bool(state.pending_files)
     )
-    if state.reviewed_head == head and same_reviewer and not force and not retry_only:
+    head_unchanged = (
+        state.reviewed_head == head and same_reviewer and not force and not retry_only
+    )
+    if head_unchanged or (state.round >= cfg.max_rounds and not force):
+        # About to skip without reviewing. A finding whose file the config has
+        # since excluded is closed here first, or a plain `/lens` on a PR that has
+        # nothing new could never clear it.
+        swept = _sweep_excluded(gh, number, state, cfg, post=post, run_url=run_url)
+        if swept is not None:
+            return swept
+    if head_unchanged:
         trace.line(
             "decision: SKIP — this head was already reviewed by the same model and config"
         )
@@ -573,6 +665,7 @@ def run(
         trace.line(
             f"resolved for free (quoted code gone): {', '.join(res.resolved_free)}"
         )
+    _close_findings_in_excluded_files(state, exclude_patterns(cfg), round_no, res)
 
     # ---- scope -----------------------------------------------------------
     sel = select_files(all_files, exclude=tuple(DEFAULT_EXCLUDE) + tuple(cfg.exclude))
@@ -908,6 +1001,13 @@ def run(
         elif b.stop in ("llm_error", "fatal", "budget"):
             res.incomplete.append(f"{b.label}: {b.stop} — {b.error[:200]}")
             failed_paths.extend(bundle_paths.get(b.label, []))
+        elif b.shallow:
+            # Stopped by the context ceiling before it could read the code
+            # around its diff (FND-5316): not a review of its files.
+            note = shallow_note(b, bundles, "/lens")
+            trace.line(note)
+            res.incomplete.append(note)
+            failed_paths.extend(bundle_paths.get(b.label, []))
     res.retried = list(state.pending_files) if retry_only else []
     # Spend is always booked. But a round in which part of the review did not
     # happen must never be recorded as a review of this head: that would make
@@ -1012,23 +1112,7 @@ def dismiss(
         f"dismiss by @{actor}: closed {closed or 'none'}; refused {refused or 'none'}"
     )
     if closed:
-        state.history.append(
-            {
-                "round": state.round,
-                "head": state.reviewed_head[:12],
-                "base": "",
-                "mode": "dismiss",
-                "label": label,
-                "new": 0,
-                "resolved": len(closed),
-                "blocking": len(state.open_findings(BLOCKING)),
-                "incomplete": False,
-                "usd": 0.0,
-                "calls": 0,
-                "run": run_url,
-            }
-        )
-        del state.history[:-MAX_HISTORY]
+        _append_closure_row(state, label, "dismiss", len(closed), run_url)
     if not post:
         return res
     head = str(((gh.pr(number) or {}).get("head") or {}).get("sha") or "")
@@ -1154,6 +1238,166 @@ class RecheckEvidence:
     absent_on_merge_base: bool
     code_now: str
     at_merge_base: str
+    # Code the author's reason cites, read by lens: shared by every finding in the call.
+    cited: list[Cited] = field(default_factory=list)
+
+
+# ---- the code an author's recheck reason cites ---------------------------------
+
+MAX_CITED = 4  # excerpts per recheck
+CITED_CONTEXT = 10  # lines shown either side of a cited line or range
+CITED_MAX_LINES = 120  # every excerpt together, head and merge-base copies counted
+# `path:N` or `path:N-M`; the path needs an extension, so prose such as `step:2`
+# or a time is never a reference. A bare `:N` after a reference reuses its path
+# ("logger_adaptor.py:576 and :1218"). The lookbehind keeps an absolute path, a
+# URL port and a mid-word colon out.
+_CITE = re.compile(
+    r"(?<![\w./:-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9]+)?:(\d{1,6})(?:-(\d{1,6}))?(?![\w-])"
+)
+
+
+@dataclass(frozen=True)
+class CitedRef:
+    path: str
+    lo: int
+    hi: int
+
+    @property
+    def label(self) -> str:
+        return f"{self.path}:{self.lo}" + (f"-{self.hi}" if self.hi != self.lo else "")
+
+
+@dataclass
+class Cited:
+    """One cited window. `head` is the text at the PR head ("" when the PR
+    deletes the file or its head text was not fetched); `base` is the same
+    lines at the merge base, kept only when the PR changed them ("" when the
+    merge base has no such file)."""
+
+    path: str
+    lo: int
+    hi: int
+    changed_by_this_pr: bool
+    head: str
+    base: str
+
+    @property
+    def fact(self) -> str:
+        return (
+            f"cited in the reason, read by lens: {self.path}:{self.lo}-{self.hi} "
+            + (
+                "(changed by this PR: weigh it like the PR's own code)"
+                if self.changed_by_this_pr
+                else "(unchanged by this PR: as the base branch has it)"
+            )
+        )
+
+
+def cited_refs(reason: str) -> list[CitedRef]:
+    """Every `path:line` / `path:start-end` the reason names, in order, once each."""
+    out: list[CitedRef] = []
+    last: str | None = None
+    for m in _CITE.finditer(reason):
+        path = m.group(1) or last
+        if path is None:
+            continue
+        last = path
+        lo = int(m.group(2))
+        hi = int(m.group(3) or lo)
+        ref = CitedRef(path.removeprefix("./"), lo, hi)
+        if 1 <= lo <= hi and ref not in out:
+            out.append(ref)
+    return out
+
+
+def cited_excerpts(
+    ws: Workspace, reason: str, merge_base_text: Callable[[str], str | None]
+) -> tuple[list[Cited], list[str]]:
+    """The windows the reason cites, read by lens itself, and why each skipped
+    one was skipped (for the trace).
+
+    A file the PR does not touch is read at the merge base: that IS its PR-head
+    copy, and the base-branch checkout may have moved past it. Lines the PR
+    changes, a file it adds, deletes, or whose head text was not fetched, are
+    `changed_by_this_pr`: the author controls them, so their merge-base copy is
+    shown too, and an author cannot plant the proof in the same PR."""
+    got: list[Cited] = []
+    skipped: list[str] = []
+    budget = CITED_MAX_LINES
+    for ref in cited_refs(reason):
+        if len(got) == MAX_CITED:
+            skipped.append(f"{ref.label}: over the {MAX_CITED}-excerpt cap")
+            continue
+        rel = ws._safe(ref.path)
+        fd = ws.diffs.get(rel) if rel else None
+        if rel is None or (fd is not None and secret_diff(fd)):
+            skipped.append(f"{ref.label}: path refused")
+            continue
+        base_path = (
+            fd.old_path if fd and fd.status == "renamed" and fd.old_path else rel
+        )
+        base = (
+            None
+            if fd is not None and fd.status == "added"
+            else merge_base_text(base_path)
+        )
+        # A path the PR renames away has no diff of its own (diffs are keyed by
+        # the new path), only a "" head-text entry: it is touched, not untouched.
+        touched = fd is not None or rel in ws.head_text
+        if not touched:
+            head = base
+        else:
+            head = ws.head_text.get(rel) or None
+        text = head or base
+        if text is None:
+            skipped.append(f"{ref.label}: not found at the PR head or the merge base")
+            continue
+        size = len(text.splitlines())
+        if ref.lo > size:
+            skipped.append(f"{ref.label}: past the end of {rel} ({size} lines)")
+            continue
+        lo = max(ref.lo - CITED_CONTEXT, 1)
+        hi = min(ref.hi + CITED_CONTEXT, size)
+        changed = touched and (
+            head is None
+            or fd is None
+            or bool(fd.changed_lines & set(range(lo, hi + 1)))
+        )
+        copies = 2 if changed and head and base else 1
+        hi = min(hi, lo + budget // copies - 1)
+        if hi < lo or hi < ref.lo:
+            skipped.append(f"{ref.label}: the {CITED_MAX_LINES}-line budget is spent")
+            continue
+        budget -= (hi - lo + 1) * copies
+        got.append(
+            Cited(
+                rel,
+                lo,
+                hi,
+                changed,
+                _numbered(head, lo, hi) if head else "",
+                _numbered(base, lo, hi) if changed and base else "",
+            )
+        )
+    return got, skipped
+
+
+def _cited_block(c: Cited) -> str:
+    path = _inert(c.path).replace('"', "'")
+    if not c.changed_by_this_pr:
+        body = c.head
+    else:
+        body = (
+            "at the PR head:\n"
+            + (c.head or "(not in the PR head, or not fetched)")
+            + "\nat the merge base:\n"
+            + (c.base or "(absent: the file is not on the merge base)")
+        )
+    flag = "true" if c.changed_by_this_pr else "false"
+    return (
+        f'<cited path="{path}" lines="{c.lo}-{c.hi}" changed_by_this_pr="{flag}">\n'
+        f"{_inert(body)}\n</cited>"
+    )
 
 
 def _private(parts: list[str]) -> bool:
@@ -1373,7 +1617,7 @@ def checkout_target_facts(
 # The tags a recheck request is built from. PR-derived text (code, quotes,
 # finding prose, paths) must not be able to open or close one of them.
 _RECHECK_TAGS = re.compile(
-    r"<(/?)(finding|quoted_when_raised|code_now|at_merge_base|evidence|author_claim)\b",
+    r"<(/?)(finding|quoted_when_raised|code_now|at_merge_base|evidence|author_claim|cited)\b",
     re.IGNORECASE,
 )
 
@@ -1410,6 +1654,7 @@ def _recheck_call(
             f"<at_merge_base>\n{_inert(ev.at_merge_base)}\n</at_merge_base>\n"
             "<evidence>\n"
             + "\n".join(f"- {_inert(x)}" for x in ev.facts)
+            + "".join(f"\n{_cited_block(c)}" for c in ev.cited)
             + "\n</evidence>\n</finding>"
         )
     messages = [
@@ -1550,6 +1795,14 @@ def recheck(
         capabilities = caps.read_text(encoding="utf-8") if caps.is_file() else ""
         ask: list[tuple[Finding, RecheckEvidence]] = []
         seen_visibility: dict[str, str | None] = {}
+        cited, cite_skipped = cited_excerpts(ws, reason, read_base)
+        if cited or cite_skipped:
+            trace.line(
+                "recheck cited: read "
+                + (", ".join(f"{c.path}:{c.lo}-{c.hi}" for c in cited) or "none")
+                + "; skipped "
+                + ("; ".join(cite_skipped) or "none")
+            )
 
         def visibility(name: str) -> str | None:
             if name not in seen_visibility:
@@ -1561,6 +1814,8 @@ def recheck(
             ev.facts += checkout_target_facts(
                 f.path, [f.evidence, ev.code_now], visibility
             )
+            ev.cited = cited
+            ev.facts += [c.fact for c in cited]
             trace.line(f"recheck {f.id}: " + "; ".join(ev.facts))
             if f.compatibility and ev.absent_on_merge_base:
                 resolved.append(
@@ -1678,21 +1933,45 @@ def _risk(b: Bundle) -> tuple[int, int]:
     return (0 if risky else 1, -b.changed_lines)
 
 
+NO_REVIEW_FILES_SHOWN = 5  # files named in a shallow-review note
+
+
+def shallow_note(result: BundleResult, bundles: list[Bundle], command: str) -> str:
+    """The incomplete reason for a bundle the context ceiling stopped early
+    (`BundleResult.shallow`): it read little past its own diff, so what it
+    found is not a full review of its files, and they are retried."""
+    paths = next((b.paths for b in bundles if b.label == result.label), [])
+    shown = ", ".join(f"`{p}`" for p in paths[:NO_REVIEW_FILES_SHOWN])
+    if len(paths) > NO_REVIEW_FILES_SHOWN:
+        shown += f" and {len(paths) - NO_REVIEW_FILES_SHOWN} more"
+    return (
+        f"Bundle `{result.label}` was reviewed shallowly: it reached the context "
+        f"ceiling at turn {result.ceiling_turn} of {result.turn_budget}, so its "
+        f"{len(result.findings) + len(result.unplaced)} finding(s) do not cover it "
+        f"({shown}); `{command}` retries it"
+    )
+
+
+# The most diff a re-packed bundle may hold (estimated tokens). It was half
+# the context ceiling, 30,000 at a 60,000 ceiling; the ceiling is now 200,000
+# (FND-5316), and a 100,000-token diff would start a bundle near it with no room
+# to read anything. Kept at the old value: past `max_bundles` the fix is more
+# bundles, not deeper ones.
+MAX_REPACK_DIFF_TOKENS = 30_000
+
+
 def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # noqa: ANN001
     """Bundles in review order — riskiest first — within `max_bundles`.
 
-    Past the cap, bundles are first re-packed larger (up to half the context
-    ceiling) so every file still gets reviewed; only if that is not enough are
+    Past the cap, bundles are first re-packed larger (up to
+    `MAX_REPACK_DIFF_TOKENS` of diff) so every file still gets reviewed; only if that is not enough are
     the lowest-risk bundles set aside, and each skipped file is named in the
     summary. Ordering by risk means that whatever a short budget cuts is the
     least important code, never the credentials path."""
     bundles = group(files)
     if len(bundles) > cfg.max_bundles:
         total = sum(b.diff_tokens() for b in bundles)
-        bigger = min(
-            max(total // cfg.max_bundles + 1, 9000),
-            cfg.limits.context_limit_tokens // 2,
-        )
+        bigger = min(max(total // cfg.max_bundles + 1, 9000), MAX_REPACK_DIFF_TOKENS)
         bundles = group(files, max_diff_tokens=bigger, max_files=12)
     bundles.sort(key=_risk)
     # A file over the token cap is reviewed in parts (`bundle._parts`), and its
@@ -2184,6 +2463,7 @@ _SEV_LABEL = {
 _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
+    "excluded": "closed: its file is now excluded from review",
     "pr-history": "closed: needed history only this PR's own earlier commits could produce",
 }
 _CLOSE_HINT = (
@@ -2251,7 +2531,7 @@ def _history_section(st: PRState) -> list[str]:
             run_kind += " · ⚠️ incomplete"
         log = f"[run]({h['run']})" if h.get("run") else "—"
         out.append(
-            f"| {'after ' if h.get('mode') == 'dismiss' else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
+            f"| {'after ' if h.get('mode') in ('dismiss', 'excluded') else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
             f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} | {log} |"
         )
     out.append("\n</details>")
@@ -2266,6 +2546,8 @@ def _run_title(res: RunResult, round_no: int) -> str:
         return f"dismissal after round {round_no} · {label.removeprefix('dismiss · ')}"
     if res.mode == "recheck":
         return f"re-check after round {round_no} · {label.removeprefix('recheck · ')}"
+    if res.mode == "excluded":
+        return f"closure after round {round_no} · {label.removeprefix('closed · ')}"
     return f"round {round_no} · {label}"
 
 

@@ -56,6 +56,8 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
+from temporalio import workflow
+
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.task import task
 from application_sdk.constants import (
@@ -63,6 +65,7 @@ from application_sdk.constants import (
     CURRENT_STATE_SUBPATH,
     TRANSFORMED_SUBDIR,
 )
+from application_sdk.credentials.ref import _guid_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
@@ -104,6 +107,12 @@ from application_sdk.templates.sql_metadata_extractor import SqlMetadataExtracto
 
 if TYPE_CHECKING:
     from application_sdk.common.incremental.state.store import CurrentStateSnapshot
+
+__all__ = [
+    "IncrementalSqlMetadataExtractor",
+    "MAX_CONCURRENT_COLUMN_BATCHES",
+]
+
 
 logger = get_logger(__name__)
 
@@ -1017,8 +1026,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Override individual tasks to customise connector behaviour; override
         this method only if you need to change the orchestration structure.
         """
-        from temporalio import workflow  # noqa: PLC0415 — defensive: keep inline
-
         workflow_id = input.workflow_id
         run_id = workflow.info().run_id
         conn_qn = input.connection.attributes.qualified_name
@@ -1028,10 +1035,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         # credential_guid (the direct-mode route).
         cred_ref = input.credential_ref
         if cred_ref is None and input.credential_guid:
-            from application_sdk.credentials.ref import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-                _guid_credential_ref,
-            )
-
             cred_ref = _guid_credential_ref(input.credential_guid)
 
         ctx = IncrementalRunContext(

@@ -26,8 +26,8 @@ The other differences are the seams a thin package needs:
   (``app`` on the worker, e.g. ``atlan_mysql_api`` on the host);
 * preflight outcome rows go through a :class:`PreflightObserver` — the worker
   passes the preflight gate's emitters, the host logs;
-* the credential normalization is injected (``normalize``), so the worker keeps
-  resolving ``application_sdk.handler.service._normalize_credentials`` per call.
+* the request normalization is injected (``normalize``): both surfaces pass one
+  built from the app's generated credential forms.
 """
 
 from __future__ import annotations
@@ -95,6 +95,15 @@ from application_sdk.handler.request_contract import (
     validate_request,
 )
 
+__all__ = [
+    "has_warmup",
+    "include_app_routers_on",
+    "LoggingPreflightObserver",
+    "PreflightObserver",
+    "register_handler_routes",
+]
+
+
 # Named for application_sdk.handler.service, not this module: this code moved
 # from there and keeps its logger name, so every log line (and any query or
 # alert on it) is unchanged.
@@ -139,10 +148,11 @@ def _route_failure(
 
     - ``HandlerError`` keeps its own ``http_status`` (unless
       ``honor_handler_error_status`` is false; ``/warmup`` never honoured it).
-      TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+      TODO(E013): Deprecated path — HandlerError is an
       AppError subclass, so it is matched first to preserve http_status.
       Remove once all connector subclasses raise typed AppError leaves.
-      See typed-error-prescription.md §5 (HandlerError row).
+      See .claude/skills/typed-failures/references/typed-error-prescription.md
+      §5 (HandlerError row).
     - Any other ``AppError`` maps through its ``category``
       (:data:`_CATEGORY_TO_HTTP`).
     - Anything else is unexpected: 500.
@@ -556,11 +566,10 @@ def register_handler_routes(
         normalize: The credential normalization every route applies to the
             request body. ``None`` (the API host) uses
             :func:`normalize_credentials` with the contracts default key set.
-            The worker passes a callable that resolves
-            ``application_sdk.handler.service._normalize_credentials`` per
-            request, so an app that rebinds that module's ``_CREDENTIAL_KEYS``
-            or ``_normalize_credentials`` at import time keeps changing every
-            route's normalization, as it did when these routes lived there.
+            Both surfaces pass one that adds the top-level fields of the
+            app's generated credential forms to that set; the worker's also
+            honours the deprecated ``service._CREDENTIAL_KEYS`` /
+            ``service._normalize_credentials`` rebinds until v4.0.0.
     """
     _secret_store = secret_store
     _normalize = normalize or normalize_credentials

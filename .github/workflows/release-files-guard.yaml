@@ -5,7 +5,7 @@ name: Release Files Guard
 # generated and committed only by the release automation; editing them on a
 # feature branch desyncs the package from its published tags and wedges the
 # release pipeline (the motivating incident: a feature PR hand-bumped the
-# conformance version to a never-tagged value, and conformance_release.py
+# conformance version to a never-tagged value, and release_train.py
 # hard-errors when the declared version has no matching conformance-v* tag, so
 # every later conformance merge failed).
 #

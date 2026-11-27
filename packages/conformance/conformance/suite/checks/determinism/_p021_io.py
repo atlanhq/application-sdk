@@ -80,6 +80,7 @@ _SDK_STORAGE_IO = frozenset(
         "read_expected_digest",
         "sha256_file",
         "upload",
+        "upload_bytes",
         "upload_file",
         "upload_file_from_bytes",
         "upload_prefix",

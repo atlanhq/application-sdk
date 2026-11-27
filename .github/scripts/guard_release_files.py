@@ -7,7 +7,6 @@ them on a dedicated ``bump-version-*`` branch:
 
   * conformance       -> bump-version-conformance
                          (packages/conformance/pyproject.toml,
-                          packages/conformance/conformance/__init__.py,
                           packages/conformance/CHANGELOG.md)
   * contract-toolkit  -> bump-version-contract-toolkit
                          (contract-toolkit/src/PklProject,
@@ -16,7 +15,7 @@ them on a dedicated ``bump-version-*`` branch:
 A human editing any of these files on a normal branch desyncs the package from
 its published state and wedges the release automation. The motivating incident:
 a feature PR hand-bumped the conformance version to a value that was never
-tagged/published, and conformance_release.py hard-errors when the declared
+tagged/published, and release_train.py hard-errors when the declared
 version has no matching ``conformance-v*`` tag -- so *every* later conformance
 merge failed and nothing reached the changelog. A second PR hand-edited the
 conformance CHANGELOG's ``[Unreleased]`` section, which fights the generator's
@@ -45,10 +44,11 @@ the ``violation`` output in a separate step, mirroring pr_title_convention.py.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 from dataclasses import dataclass, field
+
+from _gha import set_output
 
 # `diff --git a/<path> b/<path>` -- group 2 is the post-image path, which is
 # the file's name for edits and renames alike. For a deletion the b-side is
@@ -60,7 +60,6 @@ DIFF_GIT_RE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
 # pyproject [project] table is unindented; the toolkit's PklProject nests it
 # under the package block, so it is indented.
 _PYPROJECT_VERSION = re.compile(r"^version\s*=")
-_PY_DUNDER_VERSION = re.compile(r"^__version__\s*=")
 _PKL_VERSION = re.compile(r"^\s+version\s*=")
 
 
@@ -84,7 +83,6 @@ PACKAGES = (
         bump_branch="bump-version-conformance",
         version_files={
             "packages/conformance/pyproject.toml": _PYPROJECT_VERSION,
-            "packages/conformance/conformance/__init__.py": _PY_DUNDER_VERSION,
         },
         changelog_files=("packages/conformance/CHANGELOG.md",),
     ),
@@ -179,16 +177,6 @@ _ERROR_MESSAGE = (
 )
 
 
-def _write_output(key: str, value: str) -> None:
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    line = f"{key}={value}"
-    if github_output:
-        with open(github_output, "a") as fh:
-            fh.write(line + "\n")
-    else:
-        print(line)
-
-
 def run(diff_path: str, head_ref: str, comment_out_path: str):
     """Core decision logic, returned as (violation, violations) for testing."""
     with open(diff_path) as fh:
@@ -225,8 +213,8 @@ def main() -> int:
     print(f"Head branch: {args.head_ref}")
     violation, violations = run(args.diff, args.head_ref, args.comment_out)
 
-    _write_output("violation", "true" if violation else "false")
-    _write_output(
+    set_output("violation", "true" if violation else "false")
+    set_output(
         "error_message",
         _ERROR_MESSAGE.format(paths=", ".join(p for p, _ in violations))
         if violation

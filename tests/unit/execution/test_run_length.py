@@ -23,7 +23,7 @@ import pytest
 from application_sdk.app import App
 from application_sdk.app import base as base_module
 from application_sdk.app.base import _create_task_activity_wrapper
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution import run_length as rl_mod
@@ -41,22 +41,10 @@ from application_sdk.execution.run_length import (
     _load_sla_seconds,
     build_run_length_watch,
 )
+from tests.unit._doubles import FakeClock
 
 _RUN_STARTED = 1_000_000.0
 _SLA = 3600.0
-
-
-@dataclass
-class FakeClock:
-    """A clock the test advances explicitly."""
-
-    now: float
-
-    def __call__(self) -> float:
-        return self.now
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 @dataclass
@@ -393,16 +381,6 @@ class _PlumbingOut(Output, allow_unbounded_fields=True):
     msg: str = ""
 
 
-@pytest.fixture
-def _clean_registries() -> Any:
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
-
-
-@pytest.mark.usefixtures("_clean_registries")
 class TestActivityPlumbing:
     """The activity is where the two halves meet: the run start arrives on the
     ``TaskContext``, and the watch has to reach the loop that ticks it."""

@@ -122,6 +122,13 @@ so it drafts a proposal for human review.  (This rule is backed by a separate
 `suite.checks.run_scratch` check, silent below the SDK release that ships
 `App.run_scratch_dir` — see its module docs.)
 
+The SqlApp run-override rule (P068, FND-4686) is also P-series and
+suggest-only.  The fix adds a `finalize_extraction` call to a `run()` that
+replaces `SqlApp.run()`, but which transform outputs it must be handed depends
+on every entity the override drives, so it drafts a proposal for human review.
+(This rule is backed by `suite.checks.prescriptions`, silent below the SDK
+release that ships `finalize_extraction`.)
+
 The determinism / async-correctness rules (P020–P024) are also P-series
 and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
 concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
@@ -1011,6 +1018,26 @@ package): `docs/concepts/clients.md`.
   `finally`.  There is no case
   where skipping the base close is correct, so do not propose a suppression.
 
+**SqlApp run-override rule (P068)** — suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  Read the whole `run()` and every
+task it calls before drafting.  For the human reading the brief (in the
+`atlanhq/application-sdk` repo, not shipped with this package): the `SqlApp`
+class docstring in `application_sdk/templates/sql_app.py`.
+
+- **P068 SqlAppRunOverrideUnverified** — a `run()` on an `SqlApp` subclass
+  awaits neither `super().run()` (or `<Ancestor>.run(self, ...)`) nor
+  `self.finalize_extraction` in its own body (an un-awaited call, or one in a
+  nested function, does not count), so the `transformed_data_prefix` it returns is never
+  checked against what the transforms declared.  Do not propose
+  `super().run()`: replacing `run()` is a documented path.  Draft: collect
+  every `TransformOutput` the override's `transform_*` calls return, build the
+  `ExtractionOutput` as the override already does, and return
+  `await self.finalize_extraction(base, transform_outputs)` in place of the
+  bare return.  If the override also hands the tree to `App.upload_refs`,
+  call `finalize_extraction` first and keep the hand-off after it.  Propose
+  `# conformance: ignore[P068] <reason>` only when the override verifies its
+  output another way, and name that way in the reason.
+
 **Offload-cancel rules (P064/P065)** — scope=app, WARN-tier.  A cancel stops
 only the coroutine awaiting `run_in_thread`; the thread runs on.  Read the whole
 enclosing function and the offloaded function before drafting.  For the human
@@ -1098,7 +1125,7 @@ function and every reader of the path it builds before drafting.
   `# conformance: ignore[P067]` and confirm the code removes what it makes.
   Cite as evidence `application_sdk/app/base.py` `App.run_scratch_dir`.
 
-**Determinism / async-correctness rules (P020–P024)** — all suggest-only,
+**Determinism / async-correctness rules (P020–P024, P069)** — all suggest-only,
 scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing
 method around `finding.line` first, and confirm it is workflow context (`run` /
 `@entrypoint` / `@signal` / `@query` / `@update`) versus a `@task` activity before
@@ -1124,6 +1151,18 @@ drafting.
   activity and have the workflow `await` it.  No local edit can perform this
   safely (it changes the workflow/activity topology) — draft the refactored shape
   (which call becomes a task, what the task returns) and route to residue.
+
+- **P069 ImportInWorkflow** — an `import` statement runs inside a
+  workflow-context method, on the workflow thread under Temporal's 2s deadlock
+  timer.  Draft the import moved to module level.  Before proposing, check why it
+  was local: if hoisting creates an import cycle, draft the cycle break instead
+  (`if TYPE_CHECKING:` for annotation-only names, or move the shared name to a
+  module both sides import) and say which you chose.  A local import under
+  `if TYPE_CHECKING:` is never flagged and must not be moved.  When the finding
+  is on a call ("Call to a() -> b() reaches an import of …"), the import lives
+  in the helper at the `path:line` the message names, not on `finding.line`:
+  open that file and draft the hoist there.  One hoist clears the finding for
+  every workflow that reaches the helper.
 
 - **P022 UnawaitedCoroutine** — a bare `self.<async-method>(...)` statement drops a
   coroutine.  Propose adding `await` (or wrapping in `asyncio.create_task`/`gather`

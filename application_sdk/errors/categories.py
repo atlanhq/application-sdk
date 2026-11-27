@@ -2,6 +2,11 @@
 
 from enum import Enum
 
+__all__ = [
+    "Audience",
+    "FailureCategory",
+]
+
 
 class FailureCategory(Enum):
     """Single-axis failure classification.

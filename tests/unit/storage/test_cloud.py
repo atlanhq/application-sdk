@@ -3,16 +3,17 @@
 import asyncio
 import base64
 import json
-import threading
-import time
+import os
+import ssl
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import obstore
 import pytest
 from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import GCSStore, LocalStore, MemoryStore
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk.storage import batch as _batch_module
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
@@ -23,6 +24,8 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
     StoragePermissionError,
 )
+from tests.unit._doubles import SiblingProbe
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _async_return(value):
@@ -315,6 +318,328 @@ class TestFromCredentials:
 # ---------------------------------------------------------------------------
 # Async operation tests (with real local store)
 # ---------------------------------------------------------------------------
+
+
+class TestSharedStoreSettings:
+    """CloudStore translates into the same settings the Dapr binding does.
+
+    Before FND-4681 CloudStore built its own obstore config: it dropped the STS
+    session token on static keys and had no endpoint, allow_http, tagging or
+    SSE handling, so the same credentials produced a different store here than
+    through the binding.
+    """
+
+    @staticmethod
+    def _s3_kwargs(credentials: dict) -> dict:
+        with patch("obstore.store.S3Store") as mock_s3_cls:
+            mock_s3_cls.return_value = MemoryStore()
+            CloudStore.from_credentials(credentials)
+        return mock_s3_cls.call_args.kwargs
+
+    def test_static_keys_carry_the_session_token(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "username": "AKID-EXAMPLE",
+                "password": "secret-example",
+                "token": "session-token-example",
+                "extra": {"s3_bucket": "b", "region": "us-east-1"},
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_access_key_id"] == "AKID-EXAMPLE"
+        assert config["aws_secret_access_key"] == "secret-example"
+        assert config["aws_session_token"] == "session-token-example"
+
+    def test_a_token_without_keys_is_not_sent(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "token": "session-token-example",
+                "extra": {"s3_bucket": "b", "region": "us-east-1"},
+            }
+        )
+        assert "aws_session_token" not in kwargs["config"]
+
+    def test_non_aws_endpoint_disables_tagging(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "username": "AKID-EXAMPLE",
+                "password": "secret-example",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "force_path_style": True,
+                },
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_endpoint"] == "https://minio.example.com"
+        assert config["aws_disable_tagging"] == "true"
+        assert config["aws_virtual_hosted_style_request"] == "false"
+        assert "allow_http" not in kwargs["client_options"]
+
+    @pytest.mark.parametrize(
+        "credentials",
+        [
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}},
+            {
+                "authType": "adls",
+                "password": base64.b64encode(b"0" * 32).decode(),
+                "extra": {"storage_account_name": "acct"},
+            },
+        ],
+        ids=["s3", "adls"],
+    )
+    @pytest.mark.parametrize("endpoint", ["http://minio:9000", "HTTP://minio:9000"])
+    def test_plain_http_endpoint_is_refused(self, credentials, endpoint):
+        """A customer credential never turns off TLS: an http:// endpoint
+        would send keys and data in cleartext."""
+        credentials = {
+            **credentials,
+            "extra": {**credentials["extra"], "endpoint": endpoint},
+        }
+        with pytest.raises(StorageConfigError, match="https://"):
+            CloudStore.from_credentials(credentials)
+
+    def test_tls_opt_outs_in_extra_are_ignored(self):
+        """``allow_http`` / ``allow_invalid_certificates`` are not CloudStore
+        options: TLS with certificate checks always applies."""
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "allow_http": "true",
+                    "allow_invalid_certificates": True,
+                },
+            }
+        )
+        assert "allow_http" not in kwargs["client_options"]
+        assert "allow_invalid_certificates" not in kwargs["client_options"]
+
+    def test_explicit_disable_tagging_false_wins_over_auto_detect(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "disable_tagging": "false",
+                },
+            }
+        )
+        assert "aws_disable_tagging" not in kwargs["config"]
+        assert "allow_http" not in kwargs["client_options"]
+
+    def test_server_side_encryption_passes_through(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "server_side_encryption": "aws:kms",
+                    "sse_kms_key_id": "kms-key-example",
+                },
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_server_side_encryption"] == "aws:kms"
+        assert config["aws_sse_kms_key_id"] == "kms-key-example"
+
+    def test_custom_endpoint_skips_the_bucket_region_lookup(self, monkeypatch):
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        assert _cloud_module._needs_region_lookup({"s3_bucket": "b"})
+        assert not _cloud_module._needs_region_lookup(
+            {"s3_bucket": "b", "endpoint": "https://minio.example.com"}
+        )
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://s3.us-west-2.amazonaws.com",
+            "https://s3.cn-north-1.amazonaws.com.cn",
+        ],
+    )
+    def test_aws_endpoint_keeps_the_bucket_region_lookup(self, monkeypatch, endpoint):
+        """An AWS endpoint is still AWS S3: a bucket in another region needs
+        its own region to sign, so the lookup must still run."""
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        assert _cloud_module._needs_region_lookup(
+            {"s3_bucket": "b", "endpoint": endpoint}
+        )
+
+    def test_partial_static_keys_warn_and_fall_back_to_ambient(self):
+        with patch.object(_cloud_module, "_log") as mock_log:
+            kwargs = self._s3_kwargs(
+                {
+                    "authType": "s3",
+                    "username": "AKID-EXAMPLE",
+                    "token": "session-token-example",
+                    "extra": {"s3_bucket": "b", "region": "us-east-1"},
+                }
+            )
+        config = kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_session_token" not in config
+        assert "only one was set" in mock_log.return_value.warning.call_args.args[0]
+
+    def test_remaining_s3_knobs_pass_through(self):
+        kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "us-east-1",
+                    "endpoint": "https://minio.example.com",
+                    "conditional_put": "etag",
+                    "copy_if_not_exists": "header:x-copy:true",
+                    "checksum_algorithm": "SHA256",
+                },
+            }
+        )
+        config = kwargs["config"]
+        assert config["aws_conditional_put"] == "etag"
+        assert config["aws_copy_if_not_exists"] == "header:x-copy:true"
+        assert config["aws_checksum_algorithm"] == "SHA256"
+
+    def test_knobs_default_off(self):
+        kwargs = self._s3_kwargs(
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "us-east-1"}}
+        )
+        config = kwargs["config"] or {}
+        for key in (
+            "aws_conditional_put",
+            "aws_copy_if_not_exists",
+            "aws_checksum_algorithm",
+        ):
+            assert key not in config
+
+    @staticmethod
+    def _gcs_kwargs(credentials: dict) -> dict:
+        with (
+            patch("obstore.store.GCSStore") as mock_gcs_cls,
+            patch(
+                "application_sdk.storage._credential_providers.make_gcs_adc_provider"
+            ) as mock_adc,
+        ):
+            mock_gcs_cls.return_value = MemoryStore()
+            mock_adc.return_value = "adc-provider"
+            CloudStore.from_credentials(credentials)
+        return mock_gcs_cls.call_args.kwargs
+
+    def test_gcs_without_key_uses_the_wif_provider(self, monkeypatch, tmp_path):
+        """Keyless GCS on a Workload Identity Federation ADC file gets the
+        google-auth provider, as the binding does; obstore can't parse it."""
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "external_account"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        kwargs = self._gcs_kwargs({"authType": "gcs", "extra": {"gcs_bucket": "b"}})
+        assert kwargs["config"] is None
+        assert kwargs["credential_provider"] == "adc-provider"
+
+    def test_gcs_with_key_or_plain_adc_gets_no_provider(self, monkeypatch, tmp_path):
+        adc = tmp_path / "adc.json"
+        adc.write_text(json.dumps({"type": "external_account"}))
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(adc))
+        keyed = self._gcs_kwargs(
+            {
+                "authType": "gcs",
+                "password": '{"type":"service_account"}',
+                "extra": {"gcs_bucket": "b"},
+            }
+        )
+        assert "credential_provider" not in keyed
+
+        adc.write_text(json.dumps({"type": "service_account"}))
+        plain = self._gcs_kwargs({"authType": "gcs", "extra": {"gcs_bucket": "b"}})
+        assert "credential_provider" not in plain
+
+    def test_adls_endpoint_reaches_the_store(self):
+        fake_key = base64.b64encode(b"0" * 32).decode()
+        with patch("obstore.store.AzureStore") as mock_az_cls:
+            mock_az_cls.return_value = MemoryStore()
+            CloudStore.from_credentials(
+                {
+                    "authType": "adls",
+                    "password": fake_key,
+                    "extra": {
+                        "storage_account_name": "acct",
+                        "endpoint": "https://azurite.example.com/acct",
+                    },
+                }
+            )
+        kwargs = mock_az_cls.call_args.kwargs
+        assert kwargs["config"]["azure_storage_endpoint"] == (
+            "https://azurite.example.com/acct"
+        )
+        assert "allow_http" not in kwargs["client_options"]
+
+    def test_binding_and_cloudstore_build_the_same_s3_store(self, tmp_path):
+        """The same S3 credentials give one obstore config on both paths."""
+        import yaml
+
+        from application_sdk.storage.binding import create_store_from_binding
+
+        meta = {
+            "bucket": "b",
+            "region": "eu-west-1",
+            "endpoint": "https://minio.example.com",
+            "accessKey": "AKID-EXAMPLE",
+            "secretKey": "secret-example",
+            "sessionToken": "session-token-example",
+            "serverSideEncryption": "AES256",
+        }
+        components = tmp_path / "components"
+        components.mkdir()
+        (components / "objectstore.yaml").write_text(
+            yaml.dump(
+                {
+                    "apiVersion": "dapr.io/v1alpha1",
+                    "kind": "Component",
+                    "metadata": {"name": "objectstore"},
+                    "spec": {
+                        "type": "bindings.aws.s3",
+                        "metadata": [{"name": k, "value": v} for k, v in meta.items()],
+                    },
+                }
+            )
+        )
+        with patch("obstore.store.S3Store") as mock_s3_cls:
+            mock_s3_cls.return_value = MemoryStore()
+            create_store_from_binding("objectstore", components_dir=components)
+        binding_kwargs = mock_s3_cls.call_args.kwargs
+
+        cloud_kwargs = self._s3_kwargs(
+            {
+                "authType": "s3",
+                "username": "AKID-EXAMPLE",
+                "password": "secret-example",
+                "token": "session-token-example",
+                "extra": {
+                    "s3_bucket": "b",
+                    "region": "eu-west-1",
+                    "endpoint": "https://minio.example.com",
+                    "server_side_encryption": "AES256",
+                },
+            }
+        )
+
+        assert cloud_kwargs["bucket"] == binding_kwargs["bucket"]
+        assert cloud_kwargs["config"] == binding_kwargs["config"]
+        # Only the Dapr-parity User-Agent differs, by design.
+        binding_opts = dict(binding_kwargs["client_options"])
+        cloud_opts = dict(cloud_kwargs["client_options"])
+        binding_opts.pop("user_agent")
+        cloud_opts.pop("user_agent")
+        assert cloud_opts == binding_opts
 
 
 class TestCloudStoreOps:
@@ -738,14 +1063,35 @@ class TestCloudStorePutAttributes:
     async def test_from_credentials_s3_storage_class_passed_to_upload_bytes(
         self,
     ) -> None:
-        """from_credentials with storageClass → upload_bytes() calls put_async with attributes."""
+        """from_credentials with storageClass → upload_bytes() writes with the attributes."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from application_sdk.storage.cloud import CloudStore
 
+        seen: list[dict[str, object]] = []
+
+        class _Writer:
+            def __init__(self, *_a, **kwargs):
+                seen.append(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_e):
+                return None
+
+            async def write(self, buffer):
+                return len(buffer)
+
         with (
             patch("application_sdk.storage.cloud._create_s3_store") as mock_create,
-            patch("obstore.put_async", new_callable=AsyncMock) as mock_put,
+            patch("obstore.open_writer_async", _Writer),
+            # The post-write readback HEAD the shared primitive runs.
+            patch(
+                "obstore.head_async",
+                new_callable=AsyncMock,
+                return_value={"size": 5, "e_tag": None},
+            ),
         ):
             mock_store = MagicMock()
             put_attrs = {"Storage-Class": "STANDARD_IA"}
@@ -761,9 +1107,8 @@ class TestCloudStorePutAttributes:
             )
             await cs.upload_bytes("out/f.bin", b"hello")
 
-        mock_put.assert_awaited_once()
-        _, call_kwargs = mock_put.call_args[0], mock_put.call_args
-        assert call_kwargs.kwargs.get("attributes") == put_attrs
+        assert len(seen) == 1
+        assert seen[0].get("attributes") == put_attrs
 
     def test_from_credentials_s3_no_storage_class_gives_none_put_attrs(self) -> None:
         """When storageClass is absent, _put_attributes is None."""
@@ -952,11 +1297,11 @@ class TestS3RegionLookup:
 
         built: list[str | None] = []
 
-        def _make(bucket, config=None, **_kwargs):
-            built.append((config or {}).get("aws_region"))
+        def _make(settings, **_kwargs):
+            built.append(settings.region or None)
             return MemoryStore()
 
-        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.setattr(_obstore_config, "build_s3_store", _make)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         return built
@@ -1100,25 +1445,69 @@ class TestS3RegionLookup:
         assert len(heads) == 1
 
     async def test_lookup_uses_sdk_ssl_context_and_proxy_env(self, monkeypatch):
+        """The SDK TLS context, and the proxy from ``_proxy`` per lookup host:
+        ``NO_PROXY`` applies to each host, and httpx's ``trust_env`` (which
+        also reads OS proxy settings) is off."""
         import httpx
 
         from application_sdk.clients import ssl_utils
 
-        sentinel = object()
+        # Unset every spelling first: Windows env names are case-insensitive,
+        # so deleting NO_PROXY after setting no_proxy would delete both.
+        for scheme in ("HTTPS", "HTTP", "ALL", "NO"):
+            monkeypatch.delenv(f"{scheme}_PROXY", raising=False)
+            monkeypatch.delenv(f"{scheme.lower()}_proxy", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
+        monkeypatch.setenv("no_proxy", "amazonaws.com.cn")
+        sentinel = ssl.create_default_context()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
-        client_kwargs: dict = {}
+        clients: list[dict] = []
         real_init = httpx.AsyncClient.__init__
 
         def _init(self, **kwargs):
-            client_kwargs.update(kwargs)
+            clients.append(kwargs)
             real_init(self, **{**kwargs, "verify": True})
 
         monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
         self._stub_head(monkeypatch, headers={})
         await _REAL_LOOKUP_BUCKET_REGION("b")
-        assert client_kwargs["verify"] is sentinel
-        assert client_kwargs["trust_env"] is True
-        assert client_kwargs["timeout"] == 10.0
+        assert [c["proxy"] for c in clients] == ["http://proxy.internal:3128", None]
+        for client_kwargs in clients:
+            assert client_kwargs["verify"] is sentinel
+            assert client_kwargs["trust_env"] is False
+            assert client_kwargs["timeout"] == 10.0
+
+    async def test_lookup_keeps_ssl_cert_file_trust(self, monkeypatch):
+        """httpx's ``trust_env`` is off for the lookup, but a CA bundle in
+        ``SSL_CERT_FILE`` is still trusted: the context is built with
+        ``trust_env=True`` from the SDK's own verify setting."""
+        import httpx
+
+        from application_sdk.clients import ssl_utils
+
+        monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: True)
+        built: list[dict] = []
+        context = ssl.create_default_context()
+
+        def _create(**kwargs):
+            built.append(kwargs)
+            return context
+
+        monkeypatch.setattr(httpx, "create_ssl_context", _create)
+        clients: list[dict] = []
+        real_init = httpx.AsyncClient.__init__
+
+        def _init(self, **kwargs):
+            clients.append(kwargs)
+            real_init(self, **kwargs)
+
+        monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
+        self._stub_head(monkeypatch, headers={"x-amz-bucket-region": "eu-west-1"})
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == "eu-west-1"
+        assert built == [{"verify": True, "trust_env": True}]
+        assert clients[0]["verify"] is context
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
         from application_sdk import _obstore_config
@@ -1126,11 +1515,12 @@ class TestS3RegionLookup:
 
         built: list[tuple[str, dict]] = []
 
-        def _make(bucket, config=None, **_kwargs):
-            built.append((bucket, dict(config or {})))
+        def _make(settings, **_kwargs):
+            config, _opts = _obstore_config.s3_store_args(settings, {})
+            built.append((settings.bucket, dict(config or {})))
             return MemoryStore()
 
-        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.setattr(_obstore_config, "build_s3_store", _make)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT", raising=False)
         monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))
@@ -1253,18 +1643,50 @@ class TestReadWritePermissionDenied:
         async def _boom(*_a, **_k):
             raise PermissionDeniedError(_GCS_VPC_SC_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().get_bytes("data/a.json")
         assert ei.value.target == "gs://example-bucket/data/a.json"
         assert ei.value.provider_code == "SecurityPolicyViolated"
         assert ei.value.effective_retryable is False
 
-    async def test_upload_bytes_403(self, monkeypatch):
+    async def test_get_bytes_outage_carries_the_shared_evidence(self, monkeypatch):
+        """A failed read gets the primitives' evidence, not a bare StorageError."""
+
         async def _boom(*_a, **_k):
+            raise RuntimeError(
+                "Generic GCS error: Error performing GET "
+                "https://storage.example.invalid/data/a.json in 3ms - Server "
+                "returned non-2xx status code: 503 Service Unavailable: "
+                "<Error><Code>ServiceUnavailable</Code></Error>"
+            )
+
+        monkeypatch.setattr(obstore, "get_async", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert type(ei.value) is StorageError
+        assert ei.value.http_status == 503
+        assert ei.value.provider_code == "ServiceUnavailable"
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+        assert ei.value.effective_retryable is True
+
+    async def test_get_bytes_typed_not_found(self, monkeypatch):
+        from obstore.exceptions import NotFoundError
+
+        async def _boom(*_a, **_k):
+            raise NotFoundError("Object at location data/a.json not found")
+
+        monkeypatch.setattr(obstore, "get_async", _boom)
+        with pytest.raises(StorageNotFoundError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert ei.value.key == "data/a.json"
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+
+    async def test_upload_bytes_403(self, monkeypatch):
+        def _boom_open(*_a, **_k):
             raise RuntimeError(_S3_ACCESS_DENIED_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "put_async", _boom)
+        monkeypatch.setattr(obstore, "open_writer_async", _boom_open)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().upload_bytes("out/a.json", b"x")
         assert ei.value.provider_code == "AccessDenied"
@@ -1358,7 +1780,7 @@ class TestAuthenticationRejected:
         async def _boom(*_a, **_k):
             raise RuntimeError(_AZURE_TOKEN_401)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StoragePermissionError):
             await _gcs_store().get_bytes("specs/api.json")
 
@@ -1366,7 +1788,7 @@ class TestAuthenticationRejected:
         async def _boom(*_a, **_k):
             raise PermissionDeniedError(_GCS_VPC_SC_403)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StoragePermissionError) as ei:
             await _gcs_store().get_bytes("data/a.json")
         assert not isinstance(ei.value, StorageAuthError)
@@ -1389,7 +1811,7 @@ class TestAuthenticationRejected:
         async def _boom(*_a, **_k):
             raise RuntimeError(_GATEWAY_1005_401)
 
-        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        monkeypatch.setattr(obstore, "get_async", _boom)
         with pytest.raises(StorageError) as ei:
             await _gcs_store().get_bytes("data/a.json")
         assert not isinstance(ei.value, StoragePermissionError)
@@ -1400,58 +1822,23 @@ class TestAuthenticationRejected:
 # First failure: no sibling transfer outlives the raise (FND-4277)
 # ---------------------------------------------------------------------------
 
-_SIBLING_THREAD_SECONDS = 0.3
-
-
-class _SiblingProbe:
-    """Siblings that block in ``run_in_thread``; one transfer fails once every
-    sibling's thread is running. With ``asyncio.gather`` the siblings finished
-    -- wrote into the output dir or the bucket -- after the caller had seen the
-    failure."""
-
-    def __init__(self, siblings: int) -> None:
-        self.started = [threading.Event() for _ in range(siblings)]
-        self.finished = [threading.Event() for _ in range(siblings)]
-        self.completed: list[int] = []
-
-    async def sibling(self, index: int) -> None:
-        def _block() -> None:
-            self.started[index].set()
-            time.sleep(_SIBLING_THREAD_SECONDS)
-            self.finished[index].set()
-
-        await run_in_thread(_block)
-        self.completed.append(index)
-
-    async def fail(self, exc: Exception) -> None:
-        for event in self.started:
-            if not await asyncio.to_thread(event.wait, 5.0):
-                raise AssertionError("sibling thread did not start")
-        raise exc
-
-    async def assert_no_sibling_outlived_the_raise(self) -> None:
-        assert all(e.is_set() for e in self.finished), (
-            "a sibling's thread was still running when the failure propagated"
-        )
-        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
-        assert self.completed == [], "a sibling completed after the raise"
-
 
 class TestFirstFailureStopsSiblings:
     async def test_download_prefix_failure_cancels_and_drains_siblings(self, tmp_path):
         store = CloudStore(MemoryStore(), provider="memory")
         for name in ("a", "bad", "c"):
             await store.upload_bytes(f"p/{name}.txt", b"x")
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"p/a.txt": 0, "p/c.txt": 1}
 
-        async def _download(key, local_path, **kwargs):
+        async def _download(key, local_path, *args, **kwargs):
             if key == "p/bad.txt":
                 await probe.fail(StorageError("bad object"))
             await probe.sibling(order[key])
 
+        # CloudStore's prefix download runs on batch's engine.
         with (
-            patch.object(_cloud_module, "download_file_chunked", _download),
+            patch.object(_batch_module, "download_file_chunked", _download),
             pytest.raises(StorageError, match="bad object"),
         ):
             await store.download(prefix="p", output_dir=tmp_path / "out")
@@ -1464,7 +1851,7 @@ class TestFirstFailureStopsSiblings:
         src.mkdir()
         for name in ("a", "bad", "c"):
             (src / f"{name}.txt").write_bytes(b"x")
-        probe = _SiblingProbe(siblings=2)
+        probe = SiblingProbe(siblings=2)
         order = {"a.txt": 0, "c.txt": 1}
 
         async def _upload(self, path, key):
@@ -1481,3 +1868,162 @@ class TestFirstFailureStopsSiblings:
         # A lone failure keeps the bare shape asyncio.gather gave callers.
         assert not isinstance(exc_info.value, BaseExceptionGroup)
         await probe.assert_no_sibling_outlived_the_raise()
+
+
+# ---------------------------------------------------------------------------
+# CloudStore runs on the shared primitives and engines (FND-4684)
+# ---------------------------------------------------------------------------
+
+
+class TestCloudStoreDelegatesToBatch:
+    async def test_upload_dir_ships_local_sha256_files_and_writes_no_sidecars(
+        self, tmp_path
+    ):
+        """A customer's ``.sha256`` file is data, and no SDK sidecar is added."""
+        mem = MemoryStore()
+        store = CloudStore(mem, provider="memory")
+        src = tmp_path / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "a.json").write_bytes(b"{}")
+        (src / "sub" / "release.tar.gz.sha256").write_bytes(b"abc")
+
+        keys = await store.upload_dir(src, "out")
+
+        assert sorted(keys) == ["out/a.json", "out/sub/release.tar.gz.sha256"]
+        assert await store.list("out") == sorted(keys)
+
+    async def test_prefix_download_keeps_sha256_keys(self, tmp_path):
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/data.bin", b"d")
+        await store.upload_bytes("p/data.bin.sha256", b"customer digest")
+
+        paths = await store.download(prefix="p", output_dir=tmp_path)
+
+        assert sorted(p.name for p in paths) == ["data.bin", "data.bin.sha256"]
+        assert (tmp_path / "data.bin.sha256").read_bytes() == b"customer digest"
+
+    async def test_prefix_download_403_names_the_failing_key(
+        self, monkeypatch, tmp_path
+    ):
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/a.json", b"{}")
+
+        async def _denied(key, *_a, **_k):
+            raise StorageError(
+                "denied", key=key, cause=PermissionDeniedError(_GCS_VPC_SC_403)
+            )
+
+        monkeypatch.setattr(batch_module, "download_file_chunked", _denied)
+        with pytest.raises(StoragePermissionError) as ei:
+            await store.download(prefix="p", output_dir=tmp_path)
+        assert ei.value.key == "p/a.json"
+
+    async def test_upload_bytes_readback_catches_a_dropped_object(self):
+
+        class _Discarding:
+            def __init__(self, *_a, **_k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_e):
+                return None
+
+            async def write(self, buffer):
+                return len(buffer)
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with (
+            patch("obstore.open_writer_async", _Discarding),
+            pytest.raises(StorageError, match="absent from the store"),
+        ):
+            await store.upload_bytes("out/x.bin", b"data")
+
+    async def test_upload_bytes_reads_back_by_default(self):
+        """Same protection as upload: one HEAD confirms the write landed."""
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with patch(
+            "obstore.head_async",
+            AsyncMock(return_value={"size": 4, "e_tag": None}),
+        ) as head:
+            await store.upload_bytes("out/x.bin", b"data")
+        head.assert_awaited_once()
+
+    async def test_upload_bytes_verify_false_sends_only_the_write(self):
+        """A PUT-only bucket policy can opt out per call."""
+        from unittest.mock import AsyncMock
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        with (
+            patch(
+                "obstore.head_async",
+                AsyncMock(side_effect=AssertionError("HEAD sent")),
+            ) as head,
+            patch("obstore.list", side_effect=AssertionError("LIST sent")),
+        ):
+            assert await store.upload_bytes("out/x.bin", b"data", verify=False) == 4
+        head.assert_not_called()
+        assert await store.get_bytes("out/x.bin") == b"data"
+
+    async def test_upload_dir_file_vanishing_after_walk_is_a_keyed_storage_error(
+        self, tmp_path
+    ):
+        """A source file gone before its upload surfaces typed, not as OSError."""
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "gone.txt").write_bytes(b"x")
+        real_walk = os.walk
+
+        def _walk_then_delete(*args, **kwargs):
+            entries = list(real_walk(*args, **kwargs))
+            (src / "gone.txt").unlink()
+            return iter(entries)
+
+        with (
+            private_stdlib(batch_module, "os") as local_os,
+            patch.object(local_os, "walk", _walk_then_delete),
+            pytest.raises(StorageError) as ei,
+        ):
+            await store.upload_dir(src, "out")
+        assert "gone.txt" in str(ei.value)
+        assert isinstance(ei.value.__cause__, FileNotFoundError)
+
+    async def test_mixed_prefix_download_failure_still_types_the_403(
+        self, monkeypatch, tmp_path
+    ):
+        """A 403 grouped with a non-storage failure is still a USER error."""
+        from application_sdk.storage import batch as batch_module
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("p/a.json", b"{}")
+        await store.upload_bytes("p/b.json", b"{}")
+        both_started = asyncio.Event()
+        started: list[str] = []
+
+        async def _fail(key, *_a, **_k):
+            started.append(key)
+            if len(started) == 2:
+                both_started.set()
+            await both_started.wait()
+            if key == "p/a.json":
+                raise StorageError(
+                    "denied", key=key, cause=PermissionDeniedError(_GCS_VPC_SC_403)
+                )
+            raise RuntimeError("local failure")
+
+        monkeypatch.setattr(batch_module, "download_file_chunked", _fail)
+        with pytest.raises(BaseExceptionGroup) as ei:
+            await store.download(prefix="p", output_dir=tmp_path, max_concurrency=2)
+        denied, rest = ei.value.split(StoragePermissionError)
+        assert denied is not None and rest is not None
+        (leaf,) = denied.exceptions
+        assert leaf.key == "p/a.json"
+        assert leaf.audience.name == "USER"

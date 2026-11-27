@@ -32,6 +32,11 @@ from application_sdk.transformers.query.errors import (
     SqlTransformNotRegisteredError as SqlTransformNotRegisteredError,
 )
 
+__all__ = [
+    "QueryBasedTransformer",
+]
+
+
 warnings.warn(
     "application_sdk.transformers.query is deprecated; use the connector-side "
     "asset-mapper pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead "

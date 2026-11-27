@@ -1,7 +1,13 @@
 # ADR-0001: Per-App Handlers vs Uber-Handler
 
 ## Status
-**Accepted**
+**Superseded in part by [ADR-0023](0023-consolidated-api-host.md)**
+
+Apps on Atlan's hosted platform that opt in to the consolidated API host no longer run
+a handler service of their own: the host serves their handler routes from one process,
+and ADR-0023 records how it answers the objections to an uber-handler below. This
+decision still holds for apps that have not opted in, and each app still owns its own
+`Handler` code.
 
 ## Context
 
@@ -104,10 +110,10 @@ class MyHandler(Handler):
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput: ...
 ```
 
-`create_app_handler_service()` creates the FastAPI service. The container entrypoint uses `--mode handler` (the app module is supplied via `ATLAN_APP_MODULE` env var in the container image; locally use the `application-sdk` console script):
+`create_app_handler_service()` creates the FastAPI service. The container entrypoint uses `--mode handler`. The app module comes from `ATLAN_APP_MODULE`, which the app's own Dockerfile sets (`ENV ATLAN_APP_MODULE=app.connector:MyApp`); the SDK base image's `entrypoint.sh` passes its arguments to `application_sdk.main` and does not set it. Locally, use the `application-sdk` console script:
 
 ```bash
-# In container (entrypoint.sh sets ATLAN_APP_MODULE):
+# In container (the app's Dockerfile sets ATLAN_APP_MODULE):
 python -m application_sdk.main --mode handler
 
 # Local dev:

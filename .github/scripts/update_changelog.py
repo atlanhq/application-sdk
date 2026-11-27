@@ -7,7 +7,11 @@ introduced since the last release. It categorizes commits according to
 conventional commit types and creates sections that match the project's
 changelog format.
 
-Usage: python update_changelog.py <current_version> <new_version> [--sections all|legacy|auto]
+Usage: python update_changelog.py <current_version> <new_version>
+       [--sections all|legacy|auto] [--archive-dir DIR]
+
+With --archive-dir, every section from a major older than <new_version>'s is
+moved out of CHANGELOG.md into DIR/v<major>.md (see archive_older_majors).
 """
 
 import argparse
@@ -15,8 +19,11 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+
+from _changelog import split_sections
+from conventional_breaking import declares_breaking_change
 
 
 def _get_repo() -> tuple[str, str]:
@@ -188,7 +195,10 @@ def sections_for_repo(root="."):
     return LEGACY_SECTIONS
 
 
-def categorize_commits(commits, sections=SECTIONS):
+def categorize_commits(
+    commits: list[str],
+    sections: tuple[tuple[str, str, tuple[str, ...]], ...] = SECTIONS,
+) -> dict[str, list[tuple[str, str, str]]]:
     """
     Categorize commits based on conventional commit types.
 
@@ -201,8 +211,12 @@ def categorize_commits(commits, sections=SECTIONS):
         `ci` commits and sub-package commits are omitted, as is any type the
         sections don't render (everything outside feat/docs/fix in legacy).
     """
-    categories = {key: [] for key, _, _ in sections}
-    type_to_section = {t: key for key, _, types in sections for t in types}
+    categories: dict[str, list[tuple[str, str, str]]] = {
+        key: [] for key, _, _ in sections
+    }
+    type_to_section: dict[str | None, str] = {
+        t: key for key, _, types in sections for t in types
+    }
 
     owner, repo = _get_repo()
 
@@ -231,7 +245,9 @@ def categorize_commits(commits, sections=SECTIONS):
         if section not in categories:
             continue
         msg = message_subject if section == "other" else match["desc"]
-        if match and match["breaking"]:
+        # The predicate release.py prices a major with, so every major's notes
+        # say which commit made it one (FND-4672).
+        if declares_breaking_change(message_subject):
             msg = f"**BREAKING:** {msg}"
         categories[section].append((commit_link, author_name, msg))
 
@@ -262,7 +278,7 @@ def format_changelog_section(
     Returns:
         str: Formatted changelog section
     """
-    now = datetime.now()
+    now = datetime.now(UTC)
     date_str = now.strftime("%B %d, %Y")
 
     changelog = f"## v{new_version} ({date_str})\n\n"
@@ -283,15 +299,20 @@ def format_changelog_section(
     return changelog
 
 
-def update_changelog_file(changelog_content):
+def update_changelog_file(
+    changelog_content: str, changelog_path: str = "CHANGELOG.md"
+) -> None:
     """
-    Update the CHANGELOG.md file with new content.
+    Prepend a new section to the changelog, below its title and preamble.
 
     Args:
         changelog_content (str): New changelog section
-    """
-    changelog_path = "CHANGELOG.md"
+        changelog_path (str): The changelog to update
 
+    The section goes immediately before the first ``## `` heading, so anything
+    between ``# Changelog`` and the first release (the archive pointer that
+    ``archive_older_majors`` writes) stays at the top.
+    """
     if not os.path.exists(changelog_path) or os.path.getsize(changelog_path) == 0:
         with open(changelog_path, "w", encoding="utf-8") as f:
             f.write("# Changelog\n\n")
@@ -301,37 +322,105 @@ def update_changelog_file(changelog_content):
     with open(changelog_path, "r", encoding="utf-8") as f:
         existing_content = f.read()
 
-    # Find the position to insert new content (after the title)
     title_match = re.search(r"^# Changelog", existing_content, re.MULTILINE)
-    if title_match:
-        # Find the end of the title line
-        title_end = title_match.end()
-
-        # Skip any existing whitespace/newlines after the title
-        insert_pos = title_end
-        while (
-            insert_pos < len(existing_content)
-            and existing_content[insert_pos] in " \t\n"
-        ):
-            insert_pos += 1
-
-        # Insert with consistent spacing: title + double newline + content + newline + rest
-        new_content = (
-            existing_content[:title_end]
-            + "\n\n"
-            + changelog_content
-            + "\n"
-            + existing_content[insert_pos:]
-        )
-    else:
+    if not title_match:
         # If no title, just prepend the new content
         new_content = "# Changelog\n\n" + changelog_content + existing_content
+    else:
+        preamble, sections = split_sections(existing_content)
+        # Title line plus any preamble text, normalised to end in one blank line.
+        head = preamble.rstrip() + "\n\n"
+        rest = "".join(section.text for section in sections)
+        new_content = head + changelog_content + "\n" + rest
 
     with open(changelog_path, "w", encoding="utf-8") as f:
         f.write(new_content)
 
 
-def main(argv=None):
+#: The line ``archive_older_majors`` puts under ``# Changelog``. Written once;
+#: its presence is how a later archive knows not to add it again.
+ARCHIVE_POINTER = (
+    "Releases from earlier major versions are archived in "
+    "[docs/changelog/](https://github.com/{owner}/{repo}/tree/main/{archive_dir}), "
+    "one file per major."
+)
+
+
+def _archive_title(major: int) -> str:
+    return f"# Changelog — v{major}.x (archived)\n\n"
+
+
+def archive_older_majors(
+    new_version: str,
+    archive_dir: str | Path,
+    changelog_path: str | Path = "CHANGELOG.md",
+) -> list[Path]:
+    """Move every section older than ``new_version``'s major out of the changelog.
+
+    Each moved section is prepended, unchanged and in its original order, to
+    ``<archive_dir>/v<major>.md``, and CHANGELOG.md gets a one-line pointer to
+    the archive under its title. CHANGELOG.md is left holding only the current
+    major's releases.
+
+    Runs on every release, so it is idempotent: with nothing from an older major
+    left in CHANGELOG.md it changes nothing, and in steady state it moves
+    anything only on the release that bumps the major. Sections whose heading
+    has no numeric version stay where they are.
+
+    Returns the archive files it wrote (empty when nothing moved).
+    """
+    version_match = re.match(r"v?(\d+)", new_version)
+    if version_match is None:
+        raise ValueError(f"cannot read a major version from {new_version!r}")
+    new_major = int(version_match.group(1))
+    changelog_path = Path(changelog_path)
+    archive_dir = Path(archive_dir)
+
+    preamble, sections = split_sections(changelog_path.read_text(encoding="utf-8"))
+    keep = [s for s in sections if s.major is None or s.major >= new_major]
+    move = [s for s in sections if s.major is not None and s.major < new_major]
+    moved_majors = sorted({s.major for s in move if s.major is not None}, reverse=True)
+    if not move:
+        return []
+
+    written: list[Path] = []
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for major in moved_majors:
+        path = archive_dir / f"v{major}.md"
+        moved = "".join(s.text for s in move if s.major == major)
+        if not moved.endswith("\n\n"):
+            moved = moved.rstrip("\n") + "\n\n"
+        existing = ""
+        if path.exists():
+            existing = "".join(
+                s.text for s in split_sections(path.read_text(encoding="utf-8"))[1]
+            )
+        path.write_text(
+            _archive_title(major) + (moved + existing).rstrip("\n") + "\n",
+            encoding="utf-8",
+        )
+        written.append(path)
+
+    owner, repo = _get_repo()
+    try:
+        # The pointer is a repo path: relative to the changelog's directory.
+        link_dir = archive_dir.resolve().relative_to(changelog_path.resolve().parent)
+    except ValueError:
+        link_dir = archive_dir
+    pointer = ARCHIVE_POINTER.format(
+        owner=owner, repo=repo, archive_dir=link_dir.as_posix()
+    )
+    head = preamble.rstrip("\n")
+    if pointer not in head:
+        head = f"{head}\n\n{pointer}"
+    rest = "".join(s.text for s in keep).rstrip("\n")
+    changelog_path.write_text(
+        head + "\n\n" + rest + "\n" if rest else head + "\n", encoding="utf-8"
+    )
+    return written
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Prepend a CHANGELOG section.")
     parser.add_argument("current_version")
     parser.add_argument("new_version")
@@ -343,6 +432,16 @@ def main(argv=None):
             "all: every type but ci (default). legacy: Features + Bug Fixes "
             "only. auto: all once this repo's workflows gate bump-PR CI on "
             "`gate-check`, else legacy (what fleet app repos pass)."
+        ),
+    )
+    parser.add_argument(
+        "--archive-dir",
+        default="",
+        help=(
+            "Move every section older than the new version's major into "
+            "<dir>/v<major>.md after prepending the new one. Off by default: "
+            "only the SDK's own release.yaml passes it, because the fleet's "
+            "release-version-bump.yaml hands over CHANGELOG.md alone."
         ),
     )
     args = parser.parse_args(argv)
@@ -370,6 +469,9 @@ def main(argv=None):
     # Print the new content to the console
     print(changelog_content)
     update_changelog_file(changelog_content)
+    if args.archive_dir:
+        for path in archive_older_majors(new_version, args.archive_dir):
+            print(f"Archived older-major sections to {path}")
 
     print(f"Changelog updated for version {new_version}")
 

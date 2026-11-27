@@ -32,7 +32,7 @@ application-sdk --mode {worker,handler,combined} --app MODULE:CLASS [options]
 |------|---------|---------|-------------|
 | `--temporal-host` | `ATLAN_TEMPORAL_HOST` | `localhost:7233` | Temporal server address (`host:port`) |
 | `--temporal-namespace` | `ATLAN_TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
-| `--task-queue` | `ATLAN_TASK_QUEUE` | _(derived from app)_ | Task queue name |
+| `--task-queue` | `ATLAN_TASK_QUEUE` | _(derived from app)_ | Task queue name. For local and CLI runs; do not pin `ATLAN_TASK_QUEUE` in a deployed app's deploy or pool env — the on-demand (`-od`) worker breaks (K031). See [Task-queue naming](../configuration.md#task-queue-naming) |
 
 ---
 
@@ -130,8 +130,8 @@ from app.connector import PostgresApp
 asyncio.run(
     run_dev_combined(
         PostgresApp,
-        credentials={"host": "localhost", "port": "5432", ...},
-        example_input={"connection": {"connection_name": "test", ...}},
+        credentials={"host": "localhost", "port": "5432"},  # ...
+        example_input={"connection": {"connection_name": "test"}},  # ...
         temporal_ui=True,
         temporal_ui_port=8233,
     )
@@ -141,4 +141,4 @@ asyncio.run(
 `temporal_ui` is local-dev only. When enabled, the embedded Temporal Web UI
 binds to `http://127.0.0.1:8233` unless `temporal_ui_port` is set.
 
-See [Getting Started](../guides/getting-started.md#step-7-optional-use-run_dev_combined) for details.
+See [Getting Started](../guides/getting-started.md#step-3-run-your-app) for details.

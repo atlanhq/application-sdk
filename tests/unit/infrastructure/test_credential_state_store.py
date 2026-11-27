@@ -10,15 +10,6 @@ import pytest
 from application_sdk.testing.mocks import MockSecretStore, MockStateStore
 
 
-@pytest.fixture(autouse=True)
-def _clean_infrastructure():
-    """Reset infrastructure context after each test to prevent cross-test pollution."""
-    yield
-    from application_sdk.infrastructure.context import clear_infrastructure
-
-    clear_infrastructure()
-
-
 class TestMockProtocolCompliance:
     """Verify Mock classes implement Protocol correctly."""
 
@@ -55,13 +46,12 @@ class TestDaprRequiredStartup:
 
     async def test_no_dapr_raises_runtime_error(self, monkeypatch):
         """_create_infrastructure raises when DAPR_HTTP_PORT not set."""
-        import pytest
 
         from application_sdk.main_errors import DaprNotDetectedError
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
-        from application_sdk.main import _create_infrastructure
+        from application_sdk.infrastructure._bootstrap import _create_infrastructure
 
         with pytest.raises(DaprNotDetectedError) as exc_info:
             await _create_infrastructure()
@@ -73,7 +63,7 @@ class TestDaprRequiredStartup:
 
         monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
 
-        from application_sdk.main import _create_infrastructure
+        from application_sdk.infrastructure._bootstrap import _create_infrastructure
 
         try:
             await _create_infrastructure()

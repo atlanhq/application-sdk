@@ -1,6 +1,7 @@
 """Process-wide record of whether this worker's poll loop is alive.
 
-Written by the poll-state observer in :mod:`application_sdk.main`; read by
+Written by the poll-state observer in
+:mod:`application_sdk.execution._temporal.supervisor`; read by
 :class:`~application_sdk.execution._temporal.auth.TemporalAuthManager` before it
 publishes a ``token_refresh`` lifecycle event.
 
@@ -31,7 +32,7 @@ dead across the fleet:
   a shutdown — clears the state immediately. The default posture is to publish.
 
 This is a leaf module: it imports nothing from the SDK beyond the logger, so
-both :mod:`application_sdk.main` and the auth manager can import it without a
+both the supervisor and the auth manager can import it without a
 cycle.
 """
 

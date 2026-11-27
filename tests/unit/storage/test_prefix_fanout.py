@@ -32,7 +32,6 @@ from application_sdk.storage import batch as batch_module
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix, list_keys, upload_prefix
 from application_sdk.storage.errors import StorageConfigError, StorageError
-from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 
 #: How long the offloaded "slow" call blocks its thread. Long enough that an
@@ -54,11 +53,6 @@ async def _wait_started(event: threading.Event) -> None:
     """
     if not await asyncio.to_thread(event.wait, _START_TIMEOUT):
         raise AssertionError("offloaded call did not start")
-
-
-@pytest.fixture
-def store():
-    return create_memory_store()
 
 
 class _BlockingCall:
@@ -775,3 +769,31 @@ class TestUploadPrefixPrune:
         await upload_prefix(tmp_path, "out", store, normalize=False)
 
         assert "out/old.txt" in await list_keys("out/", store, normalize=False)
+
+
+async def test_download_prefix_builds_its_coroutines_lazily(tmp_path) -> None:
+    """The fan-out is fed a generator, so a large prefix holds bounded coroutines.
+
+    CloudStore's prefix download runs on this engine too (FND-4684); a list
+    here builds one coroutine per object before the first download starts,
+    the per-key cost FND-4082 removed.
+    """
+    import inspect
+
+    from application_sdk.storage import batch as batch_module
+    from application_sdk.storage.factory import create_memory_store
+    from application_sdk.storage.ops import _put
+
+    store = create_memory_store()
+    for i in range(3):
+        await _put(f"p/{i}.bin", b"x", store, normalize=False)
+    real = batch_module._run_bounded
+    kinds: list[bool] = []
+
+    async def _spy(coros, *args, **kwargs):
+        kinds.append(inspect.isgenerator(coros))
+        return await real(coros, *args, **kwargs)
+
+    with patch.object(batch_module, "_run_bounded", _spy):
+        await batch_module.download_prefix("p/", tmp_path, store, strip_prefix=True)
+    assert kinds == [True]

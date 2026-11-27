@@ -14,15 +14,10 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import sys
-from pathlib import Path
 
+import conformance_resync as lane
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import conformance_resync as lane  # noqa: E402
-import resync_approval_conditions as gate  # noqa: E402
+import resync_approval_conditions as gate
 
 REPO = "atlanhq/atlan-example-app"
 AT = "2026-09-28T12:00:00Z"
@@ -214,21 +209,23 @@ def _commit(sha: str, parents: int = 1, author: str = BOT) -> dict:
     }
 
 
-def test_lane_commits_ok_for_the_single_lane_commit():
+def test_lane_parent_of_the_single_lane_commit():
     head = "h" * 40
-    assert lane.lane_commits_ok(REPO, 7, head, _commits_runner([_commit(head)])) is True
+    assert (
+        lane.lane_parent(REPO, 7, head, _commits_runner([_commit(head)])) == "p0" * 20
+    )
 
 
-def test_lane_commits_not_ok_after_update_branch_merge():
+def test_no_lane_parent_after_update_branch_merge():
     head = "h" * 40
     commits = [_commit("a" * 40), _commit(head, parents=2)]
-    assert lane.lane_commits_ok(REPO, 7, head, _commits_runner(commits)) is False
+    assert lane.lane_parent(REPO, 7, head, _commits_runner(commits)) == ""
 
 
-def test_lane_commits_not_ok_for_foreign_commit():
+def test_no_lane_parent_for_foreign_commit():
     head = "h" * 40
     commits = [_commit(head, author="someone")]
-    assert lane.lane_commits_ok(REPO, 7, head, _commits_runner(commits)) is False
+    assert lane.lane_parent(REPO, 7, head, _commits_runner(commits)) == ""
 
 
 def test_pr_title_names_the_pinned_version():

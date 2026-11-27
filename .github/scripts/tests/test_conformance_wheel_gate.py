@@ -13,17 +13,13 @@ from __future__ import annotations
 
 import ast
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from typing import Sequence
 
+import conformance_wheel_gate as gate
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-import conformance_wheel_gate as gate  # noqa: E402
 
 WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 GATE_CMD = "python .github/scripts/conformance_wheel_gate.py"
@@ -288,9 +284,9 @@ def test_find_wheel_wants_exactly_one(tmp_path: Path) -> None:
 def test_path_sourced_packages_are_installed_from_source_not_exported(
     monkeypatch: pytest.MonkeyPatch, wheel_dir: Path
 ) -> None:
-    """The conformance lock path-sources the SDK and api (FND-4256). Exported,
-    they become ``-e ../../`` lines that resolve against the work dir and would
-    install the checkout editable; the gate builds them from source instead."""
+    """The SDK is a workspace member and the api a path source (FND-4671).
+    Exported, they become ``-e`` lines that would install the checkout
+    editable; the gate builds them from source instead."""
     fake, result = _drive(monkeypatch, wheel_dir)
     assert result == 0
     _, export, _ = fake.calls[0]
@@ -309,127 +305,54 @@ def test_path_sourced_packages_are_installed_from_source_not_exported(
     assert fake.steps[4] == "check"
 
 
-def test_a_stale_lock_fails_before_anything_is_exported(
+def test_export_is_the_conformance_closure_of_the_locked_root_lock(
     monkeypatch: pytest.MonkeyPatch, wheel_dir: Path
 ) -> None:
-    """`uv pip check` sees no extras, so a dependency added only to the SDK's
-    `[sql]` extra would slip past it. lock_drift runs first and stops the gate."""
-    monkeypatch.setattr(gate, "lock_drift", lambda: ["stale"])
+    """``--locked``, not ``--frozen``: a root lock that predates a dependency
+    the SDK gained (in any extra) fails the export instead of shipping the old
+    closure. The lock check replaced a hand-written drift comparison when the
+    conformance package's own lock was dropped (FND-4671)."""
     fake, result = _drive(monkeypatch, wheel_dir)
-    assert result == 1
-    assert fake.steps == []
+    assert result == 0
+    _, export, cwd = fake.calls[0]
+    assert "--locked" in export and "--frozen" not in export
+    assert export[export.index("--package") + 1] == gate.DIST
+    assert export[export.index("--extra") + 1] == "test"
+    assert "--no-dev" in export
+    assert cwd == gate.REPO_ROOT
 
 
-def test_the_real_lock_parses_into_core_and_sql_requirements() -> None:
-    """The synthetic lock below must match the format uv really writes. Not a
-    freshness check: that is the gate's job at release, and asserting it here
-    would turn unrelated PRs red whenever a root dependency moves first."""
-    lock = gate.read_lock(gate.PACKAGE_DIR / "uv.lock")
-    core = gate.locked_requirements(lock, "atlan-application-sdk", ())
-    with_sql = gate.locked_requirements(lock, "atlan-application-sdk", ("sql",))
-    assert core and with_sql
-    assert "duckdb" not in {r[0] for r in core}
-    assert "duckdb" in {r[0] for r in with_sql}
-    api = gate.locked_requirements(lock, "atlan-application-sdk-api", ())
-    assert api and "fastapi" in {r[0] for r in api}
+def test_local_packages_are_the_root_lock_s_local_sources() -> None:
+    """Every editable source in the root lock other than conformance itself is
+    one the gate installs from source, so a newly path-sourced package cannot
+    slip into the export as an ``-e`` line."""
+    lock = tomllib.loads((gate.REPO_ROOT / "uv.lock").read_text(encoding="utf-8"))
+    editable = {p["name"] for p in lock["package"] if "editable" in p.get("source", {})}
+    assert gate.DIST in editable
+    assert editable - {gate.DIST} == set(gate.LOCAL_PACKAGES)
 
 
-_SDK_PYPROJECT = """\
-[project]
-name = "atlan-application-sdk"
-version = "{version}"
-dependencies = ["atlan-application-sdk-api=={version}", "httpx>=0.27,<0.29"]
-[project.optional-dependencies]
-sql = [{sql}]
-other = ["boto3>=1"]
-"""
-
-_API_PYPROJECT = """\
-[project]
-name = "atlan-application-sdk-api"
-version = "1.0.0"
-dependencies = ["Typing_Extensions >= 4.12 , < 5"]
-"""
-
-_LOCK = """\
-[[package]]
-name = "atlan-application-sdk"
-[package.metadata]
-requires-dist = [
-    { name = "atlan-application-sdk-api", editable = "../api" },
-    { name = "httpx", specifier = ">=0.27,<0.29" },
-    { name = "pandas", marker = "extra == 'sql'", specifier = ">=2.2.3,<4" },
-    { name = "boto3", marker = "extra == 'other'", specifier = ">=1" },
-]
-
-[[package]]
-name = "atlan-application-sdk-api"
-[package.metadata]
-requires-dist = [{ name = "typing-extensions", specifier = ">=4.12,<5" }]
-"""
-
-
-def _drift(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, sql: str, version: str = "1.0.0"
-) -> list[str]:
-    sdk, api = tmp_path / "sdk", tmp_path / "api"
-    sdk.mkdir()
-    api.mkdir()
-    (sdk / "pyproject.toml").write_text(_SDK_PYPROJECT.format(version=version, sql=sql))
-    (api / "pyproject.toml").write_text(_API_PYPROJECT)
-    (tmp_path / "uv.lock").write_text(_LOCK)
-    monkeypatch.setattr(
-        gate,
-        "LOCAL_PACKAGES",
-        {"atlan-application-sdk": sdk, "atlan-application-sdk-api": api},
-    )
-    return gate.lock_drift(tmp_path / "uv.lock")
-
-
-def test_lock_drift_accepts_a_matching_lock_and_a_version_bump(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # Spelling, spacing and specifier order are normalised; the SDK's pin on
-    # its own api moves every release and is not a dependency change; an
-    # extra the test extra does not select (`other`) is out of scope.
-    assert (
-        _drift(monkeypatch, tmp_path, sql='"pandas<4,>=2.2.3"', version="9.9.9") == []
-    )
+def test_conformance_is_a_workspace_member_with_no_lock_of_its_own() -> None:
+    """One lock for the whole tree (FND-4671). A second ``uv.lock`` under the
+    package would be resolved by nothing in CI and drift silently."""
+    root = tomllib.loads((gate.REPO_ROOT / "pyproject.toml").read_text())
+    assert "packages/conformance" in root["tool"]["uv"]["workspace"]["members"]
+    assert not (gate.PACKAGE_DIR / "uv.lock").exists()
 
 
 @pytest.mark.parametrize(
-    "sql",
+    ("workflow", "job"),
     [
-        '"pandas>=2.2.3,<4", "tomli-w>=1"',  # a dependency added to [sql]
-        '"pandas>=2.3,<4"',  # a [sql] floor raised
-        "",  # a [sql] dependency dropped
+        ("conformance-release.yml", "open-release-pr"),
+        ("conformance-publish.yml", "publish"),
     ],
 )
-def test_lock_drift_reports_a_sql_extra_the_lock_has_not_seen(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sql: str
+def test_the_build_writes_the_wheel_where_the_gate_and_publish_read_it(
+    workflow: str, job: str
 ) -> None:
-    assert _drift(monkeypatch, tmp_path, sql=sql)
-
-
-def test_local_extras_are_the_ones_the_test_extra_selects() -> None:
-    project = tomllib.loads((gate.PACKAGE_DIR / "pyproject.toml").read_text())
-    test = project["project"]["optional-dependencies"]["test"]
-    sdk = [r for r in test if r.startswith("atlan-application-sdk[")]
-    assert len(sdk) == 1, test
-    extras = sdk[0].split("[", 1)[1].split("]", 1)[0].split(",")
-    assert (
-        tuple(e.strip() for e in extras) == gate.LOCAL_EXTRAS["atlan-application-sdk"]
-    )
-    assert set(gate.LOCAL_EXTRAS) == set(gate.LOCAL_PACKAGES)
-
-
-def test_local_packages_match_the_conformance_lock_sources() -> None:
-    """Every editable source in the conformance lock is one the gate installs
-    from source, so a newly path-sourced package cannot slip into the export."""
-    lock = tomllib.loads((gate.PACKAGE_DIR / "uv.lock").read_text(encoding="utf-8"))
-    editable = {
-        p["name"]
-        for p in lock["package"]
-        if "editable" in p.get("source", {}) and p["source"]["editable"] != "."
-    }
-    assert editable == set(gate.LOCAL_PACKAGES)
+    """In a workspace, ``uv build`` in a member writes to the workspace root's
+    ``dist/`` unless told otherwise. The gate defaults to, and ``uv publish``
+    (run from the package directory) reads, ``packages/conformance/dist``."""
+    runs = _step_runs(workflow, job)
+    build = runs[_index(runs, "uv build")]
+    assert "cd packages/conformance && uv build --out-dir dist" in build

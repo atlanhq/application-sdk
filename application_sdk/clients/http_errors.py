@@ -7,6 +7,10 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import SourceUnavailableError
 
+__all__ = [
+    "HttpClientSourceUnavailableError",
+]
+
 
 @dataclass(kw_only=True)
 class HttpClientSourceUnavailableError(SourceUnavailableError):

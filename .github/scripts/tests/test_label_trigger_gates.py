@@ -36,21 +36,17 @@ Two layers of guard here, because each catches what the other cannot:
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
 
+import pr_test_command
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import pr_test_command  # noqa: E402
-from _gha_expr import evaluate as _evaluate  # noqa: E402
-from _gha_expr import evaluate_operand  # noqa: E402
-from conformance.bootstrap import render as bootstrap_render  # noqa: E402
+from _gha_expr import evaluate as _evaluate
+from _gha_expr import evaluate_operand
+from _workflows import REPO_ROOT, WORKFLOWS, load_workflow, tier_jobs
+from conformance.bootstrap import render as bootstrap_render
 
 #: tests-reusable.yaml's inputs as a caller that predates FND-3839 passes them:
 #: it still subscribes to `labeled`, so the label gates below must keep working
@@ -69,18 +65,12 @@ def evaluate(expression: str, contexts: dict[str, Any]) -> Any:
     return _evaluate(expression, contexts)
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_WORKFLOW_DIR = _REPO_ROOT / ".github/workflows"
-_TEMPLATE_DIR = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
+_TEMPLATE_DIR = REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
 
 #: The state check that is only half a gate on a `labeled`-triggered workflow.
 _LABEL_STATE_CHECK = re.compile(
     r"contains\(\s*github\.event\.pull_request\.labels\.\*\.name\s*,\s*'([^']+)'\s*\)"
 )
-
-
-def _load(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def _load_or_skip(path: Path) -> dict[str, Any] | None:
@@ -102,7 +92,7 @@ def _load_or_skip(path: Path) -> dict[str, Any] | None:
     that no new unparseable workflow lands.
     """
     try:
-        return _load(path)
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError:
         return None
 
@@ -173,7 +163,7 @@ def _rendered_template(path: Path) -> dict[str, Any] | None:
 
 
 def _sweep_targets() -> Iterator[tuple[Path, dict[str, Any] | None]]:
-    for path in sorted(_WORKFLOW_DIR.glob("*.y*ml")):
+    for path in sorted(WORKFLOWS.glob("*.y*ml")):
         yield path, _load_or_skip(path)
     for path in sorted(_TEMPLATE_DIR.glob("*.y*ml")):
         workflow = _rendered_template(path)
@@ -212,7 +202,7 @@ def test_every_label_gate_reachable_by_a_labeled_event_is_event_aware() -> None:
 
 
 def _gate(workflow_file: str, job: str) -> str:
-    workflow = _load(_WORKFLOW_DIR / workflow_file)
+    workflow = load_workflow(workflow_file)
     jobs = workflow.get("jobs") or {}
     assert job in jobs, f"job {job!r} is gone from {workflow_file}; update this guard"
     condition = jobs[job].get("if")
@@ -380,7 +370,7 @@ def test_sdk_e2e_jobs_ignore_labels(job: str, labels: tuple[str, ...]) -> None:
 def test_sdk_e2e_jobs_wait_for_the_request(job: str) -> None:
     """Re-running e2e-request (what `/e2e` does) re-runs only its dependents;
     a job that does not depend on it would never see the answer change."""
-    workflow = _load(_WORKFLOW_DIR / "pull_request.yaml")
+    workflow = load_workflow("pull_request.yaml")
     assert "e2e-request" in workflow["jobs"][job]["needs"]
 
 
@@ -433,6 +423,32 @@ def test_storage_integration_waits_for_a_successful_changes_job() -> None:
     needs["changes"]["result"] = "failure"
     github = _pull_request("synchronize", ())
     assert evaluate(expression, {"github": github, "needs": needs}) is False
+
+
+@pytest.mark.parametrize("workflow", ["pull_request.yaml", "schedule.yaml"])
+def test_both_storage_runs_share_one_job_body(workflow: str) -> None:
+    """FND-4928: the PR and nightly runs call one reusable, so a fix to the
+    job lands once. Each caller grants the OIDC permission the reusable's job
+    needs; a called workflow can only narrow it."""
+    job = load_workflow(workflow)["jobs"]["storage-integration"]
+    assert job["uses"] == "./.github/workflows/storage-integration-reusable.yaml"
+    assert job["permissions"] == {"id-token": "write", "contents": "read"}
+
+
+def test_a_change_to_the_storage_job_body_runs_it_on_its_own_pr() -> None:
+    changes = load_workflow("pull_request.yaml")["jobs"]["changes"]
+    filters = next(s for s in changes["steps"] if s.get("id") == "filter")
+    storage = yaml.safe_load(filters["with"]["filters"])["storage"]
+    assert ".github/workflows/storage-integration-reusable.yaml" in storage
+
+
+def test_the_storage_job_fails_rather_than_skips_a_missing_cloud() -> None:
+    reusable = load_workflow("storage-integration-reusable.yaml")
+    (job,) = reusable["jobs"].values()
+    run = next(
+        s for s in job["steps"] if "tests/integration/storage/" in s.get("run", "")
+    )
+    assert run["env"]["STORAGE_CLOUD_REQUIRED"] == "1"
 
 
 # ── FND-851: integration on an `e2e`-labelled PR even under a merge queue ───
@@ -647,7 +663,7 @@ def test_merge_queue_e2e_survives_the_skipped_e2e_request(job: str) -> None:
     term, so the expression evaluating true proves nothing on its own — the
     status function has to be pinned explicitly.
     """
-    workflow = _load(_WORKFLOW_DIR / "pull_request.yaml")
+    workflow = load_workflow("pull_request.yaml")
     needs = workflow["jobs"][job]["needs"]
     assert "e2e-request" in needs
     expression = _gate("pull_request.yaml", job)
@@ -709,18 +725,17 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
     incidental attempt, in the FND-250 lease work, where turning it on had been
     added as a runner-time win rather than as the decision it is.
     """
-    workflow = _load(_WORKFLOW_DIR / "tests-reusable.yaml")
+    # The e2e jobs live in the tier tests-reusable.yaml calls (FND-4676).
+    jobs = tier_jobs()
     e2e_jobs = [
         name
-        for name, job in workflow["jobs"].items()
+        for name, job in jobs.items()
         if isinstance(job, dict)
         and "e2e" in str(job.get("concurrency", {}).get("group", ""))
     ]
     assert e2e_jobs, "no e2e concurrency group found; the guard has drifted"
     for name in e2e_jobs:
-        assert workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False, (
-            name
-        )
+        assert jobs[name]["concurrency"]["cancel-in-progress"] is False, name
 
 
 # ── The done-when criterion of FND-3839 ──────────────────────────────────────
@@ -893,7 +908,7 @@ def test_an_e2e_only_run_still_wakes_the_dataforge_source(
 def test_both_gate_evaluations_excuse_unit_only_on_an_e2e_only_run(job: str) -> None:
     """The skipped unit job of an e2e-only run would otherwise red the gate;
     one verdict, two callers, so both must pass the same flag."""
-    workflow = _load(_WORKFLOW_DIR / "tests-reusable.yaml")
+    workflow = load_workflow("tests-reusable.yaml")
     steps = [
         step
         for step in workflow["jobs"][job]["steps"]

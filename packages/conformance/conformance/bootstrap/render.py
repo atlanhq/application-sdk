@@ -140,6 +140,40 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # application-sdk reusable. The rest of the mothership kit lived outside
 # ``.github/`` and is retired through ``RETIRED_CONNECTOR_REVIEW_FILES`` below.
 #
+# ``.github/scripts/release_gate.py`` (FND-5321): the Release Gate's decision,
+# vendored so ``release-gate.yaml`` ran the pull request's own copy, which a
+# pull request could edit. The shim now checks the script out of
+# application-sdk at ``main`` and runs it from there, so the vendored copy has
+# nothing left to do. The workflow itself stays managed.
+#
+# ``dep-cooldown.yml``: never bootstrap-managed. A per-repo caller of
+# ``atlanhq/.github``'s ``reusable-dep-cooldown.yml`` that enforced the
+# dependency release-age window. The GitHub Security App now enforces the
+# cooldown (its ``checks/dep-cooldown`` run), so the caller only spent a
+# runner job per PR. Retired here so the removal reaches every repo that
+# carries a copy without a hand-raised PR per repo.
+#
+# ``e2e-pr-init-check.yaml`` and ``e2e-tests-feature.yaml``: never
+# bootstrap-managed. Hand-copied per-repo callers of
+# ``atlanhq/marketplace-releases``' ``e2e-pr-init.yaml`` and
+# ``e2e-app-test.yaml``, the dev-tenant Playwright path. The first runs on
+# every pull request to post a ``Playwright E2E — Feature Branch`` status
+# that stays pending and a tenant-availability comment, and fails on about a
+# quarter of runs. The second fires on every PR comment to look for a
+# ``/trigger-dev-tenant-tests`` command. Measured 2026-11-26 across the 16
+# app repos carrying them: neither status is required by any repo's
+# rules, no human comment issued the command on any of the last 100 pull
+# requests that mention it (every mention is the bot's own availability
+# comment), and every comment-triggered run in each repo's last 100 was
+# skipped. The managed ``tests.yaml`` e2e tier is the e2e path these repos
+# run. The Playwright specs themselves live elsewhere and are untouched.
+#
+# ``update-deps.yml``: never bootstrap-managed. A hand-written weekly job
+# that ran ``uv sync --upgrade --all-groups`` and opened a lock-bump PR with
+# a shared org PAT. The upgrade has no release-age bound, so it bypasses the
+# dependency cooldown, and it duplicates the Renovate preset bootstrap
+# always leaves behind in ``renovate.json``.
+#
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, or a config bootstrap supersedes, not
 # only a workflow.
@@ -150,7 +184,12 @@ RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/renovate-auto-approve.yml",
     ".github/workflows/porter-bundle-cnab.yaml",
     ".github/workflows/connector-review-gate.yaml",
+    ".github/workflows/dep-cooldown.yml",
+    ".github/workflows/e2e-pr-init-check.yaml",
+    ".github/workflows/e2e-tests-feature.yaml",
+    ".github/workflows/update-deps.yml",
     ".github/scripts/connector_review_gate.py",
+    ".github/scripts/release_gate.py",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
 )
@@ -165,7 +204,10 @@ RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
 # reported it as absent while it was managed and reports it as retired now.
 # The Dependabot configs are in ``RETIRED_FILES`` but not here: bootstrap never
 # installed them, and C002 has never reported them.
-RETIRED_ACTION_FILES: tuple[str, ...] = (".github/scripts/connector_review_gate.py",)
+RETIRED_ACTION_FILES: tuple[str, ...] = (
+    ".github/scripts/connector_review_gate.py",
+    ".github/scripts/release_gate.py",
+)
 
 # Retiring a shim and retiring the application-sdk reusable it called are two
 # steps, in that order (FND-4654). Bootstrap deletes a retired shim only when a
@@ -202,6 +244,19 @@ RETIRED_SHIMS_WITHOUT_REUSABLE: dict[str, str] = {
         "an inline job that ran the vendored connector_review_gate.py; called"
         " no SDK reusable"
     ),
+    "dep-cooldown.yml": (
+        "never bootstrap-managed; called atlanhq/.github's"
+        " reusable-dep-cooldown.yml, not an SDK reusable"
+    ),
+    "e2e-pr-init-check.yaml": (
+        "never bootstrap-managed; called marketplace-releases'"
+        " e2e-pr-init.yaml, not an SDK reusable"
+    ),
+    "e2e-tests-feature.yaml": (
+        "never bootstrap-managed; called marketplace-releases'"
+        " e2e-app-test.yaml, not an SDK reusable"
+    ),
+    "update-deps.yml": "never bootstrap-managed; an inline job, called no SDK reusable",
 }
 
 
@@ -268,7 +323,6 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     ),
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
-    (".github/scripts/release_gate.py", "release_gate.py"),
 )
 
 # The connector review kit: what ``bootstrap --connector-review-kit``, or the

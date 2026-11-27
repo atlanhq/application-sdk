@@ -23,18 +23,13 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from _gha_expr import evaluate, evaluate_operand  # noqa: E402
-from parse_atlan_yaml import parse  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand
+from parse_atlan_yaml import parse
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-and-publish-app.yaml"

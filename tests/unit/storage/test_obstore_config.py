@@ -13,31 +13,36 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from application_sdk import _obstore_config
 from application_sdk._obstore_config import (
+    AzureStoreSettings,
+    GCSStoreSettings,
+    S3StoreSettings,
     _azure_config_has_explicit_credential,
+    build_azure_store,
     log_obstore_config,
-    make_azure_store,
     obstore_client_options,
     obstore_retry_config,
 )
-from tests.unit.private_stdlib import private_stdlib
 
 
 @contextmanager
-def _getproxies(**kwargs: Any) -> Iterator[MagicMock]:
-    """Patch ``urllib.request.getproxies`` for ``_obstore_config`` alone."""
-    with (
-        private_stdlib(_obstore_config, "urllib") as local_urllib,
-        private_stdlib(local_urllib, "request") as local_request,
-        patch.object(local_request, "getproxies", **kwargs) as mock_getproxies,
-    ):
-        yield mock_getproxies
+def _proxy_env(proxies: dict[str, str], **env: str) -> Iterator[None]:
+    """Set ``<scheme>_proxy`` for each entry of *proxies* (``"no"`` is
+    ``no_proxy``), with every other proxy variable unset; *env* sets more
+    variables by name. pytest's monkeypatch restores only these variables."""
+    with pytest.MonkeyPatch.context() as mp:
+        for name in [n for n in os.environ if n.lower().endswith("_proxy")]:
+            mp.delenv(name)
+        for scheme, url in proxies.items():
+            mp.setenv(f"{scheme}_proxy", url)
+        for name, value in env.items():
+            mp.setenv(name, value)
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +100,7 @@ class TestClientOptionsOverrides:
         # Pin no proxy and no custom CA so the exact-dict assertion is
         # deterministic regardless of the host's proxy env / SSL_CERT_DIR.
         with (
-            _getproxies(return_value={}),
+            _proxy_env({}),
             patch(
                 "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
@@ -113,38 +118,168 @@ class TestClientOptionsOverrides:
         }
 
 
+_DURATION_ENV_DEFAULTS = {
+    "ATLAN_OBSTORE_TIMEOUT": "30m",
+    "ATLAN_OBSTORE_READ_TIMEOUT": "90s",
+    "ATLAN_OBSTORE_CONNECT_TIMEOUT": "30s",
+    "ATLAN_OBSTORE_POOL_IDLE_TIMEOUT": "90s",
+    "ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT": "30s",
+}
+
+
+def _obstore_accepts_duration(value: str) -> bool:
+    """Whether obstore itself parses *value* as a client timeout."""
+    from obstore.exceptions import GenericError
+    from obstore.store import S3Store
+
+    try:
+        S3Store(
+            "probe-bucket",
+            region="us-east-1",
+            skip_signature=True,
+            client_options={"timeout": value},
+        )
+    except GenericError:
+        return False
+    return True
+
+
+class TestDurationEnvValues:
+    """FND-5223: an empty or unparseable duration broke every store construction."""
+
+    @pytest.mark.parametrize("key", sorted(_DURATION_ENV_DEFAULTS))
+    def test_empty_value_is_the_default(self, monkeypatch, key: str) -> None:
+        monkeypatch.setenv(key, "")
+        opts = obstore_client_options()
+        field = key.removeprefix("ATLAN_OBSTORE_").lower()
+        assert opts[field] == _DURATION_ENV_DEFAULTS[key]
+
+    def test_unparseable_value_is_the_default_and_logged(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_OBSTORE_READ_TIMEOUT", "90")
+        with patch.object(_obstore_config.logger, "warning") as warning:
+            opts = obstore_client_options()
+        assert opts["read_timeout"] == "90s"
+        warning.assert_called_once()
+        assert "ATLAN_OBSTORE_READ_TIMEOUT='90'" in warning.call_args.args[1]
+
+    def test_empty_user_agent_is_the_default(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_OBSTORE_USER_AGENT", "")
+        assert obstore_client_options()["user_agent"].startswith(
+            "atlan-application-sdk/"
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            *_DURATION_ENV_DEFAULTS.values(),
+            "0",
+            "0s",
+            "1h 30m",
+            "1h30m",
+            "1.5h",
+            "5 min",
+            "500ms",
+            "1µs",
+            "1nsec",
+            "3 wks",
+            "2 hrs",
+            "1M",
+            "1y2M",
+            "1h\t2m",
+            "30",
+            "s",
+            "-1s",
+            ".5s",
+            "1.s",
+            "1e3s",
+            "+1s",
+            "1H",
+            "1Min",
+            "1h,2m",
+            "1msecs",
+            "1mon",
+            "1micros",
+            "1h2",
+            "forever",
+            "\u0661s",
+            "1.\u0665s",
+            "\uff11s",
+            "1h\u20032m",
+            "\u00a030s",
+        ],
+    )
+    def test_validator_agrees_with_obstore(self, value: str) -> None:
+        """The SDK's duration check and obstore's parser give the same verdict.
+
+        Differential, so an obstore upgrade that changes its grammar fails here
+        instead of letting a value through that breaks every store construction.
+        """
+        from application_sdk._env import is_duration
+
+        assert is_duration(value) == _obstore_accepts_duration(value)
+
+    def test_empty_timeout_constructs_an_s3_store(self) -> None:
+        """The reproduction from the issue, in a fresh interpreter.
+
+        Before, ``build_s3_store`` raised ``Generic Config error: failed to parse
+        "" as Duration`` whenever ``ATLAN_OBSTORE_TIMEOUT`` was set but empty.
+        """
+        import subprocess
+        import sys
+
+        code = (
+            "from application_sdk._obstore_config import S3StoreSettings, "
+            "build_s3_store\n"
+            "build_s3_store(S3StoreSettings(bucket='probe-bucket', "
+            "region='us-east-1', access_key_id='probe', "
+            "secret_access_key='probe'))\n"
+        )
+        env = {**os.environ, "ATLAN_OBSTORE_TIMEOUT": ""}
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+
+
 # ---------------------------------------------------------------------------
 # proxy_url plumbing (obstore does not read proxy env vars itself)
 # ---------------------------------------------------------------------------
 
 
 class TestClientOptionsProxy:
-    """proxy_url is forwarded from the standard proxy env vars; getproxies is
-    patched so the result is platform-independent (it reads system config on
-    macOS)."""
+    """proxy_url is the ``https`` proxy from ``_proxy``: HTTPS_PROXY, then
+    ALL_PROXY, from the process environment only."""
 
     def test_no_proxy_url_when_env_unset(self) -> None:
-        with _getproxies(return_value={}):
+        with _proxy_env({}):
             opts = obstore_client_options()
         assert "proxy_url" not in opts
 
     def test_https_proxy_is_used(self) -> None:
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
+        with _proxy_env(
+            {"https": "http://proxy.corp:8080"},
         ):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://proxy.corp:8080"
 
-    def test_http_proxy_used_as_fallback(self) -> None:
-        with _getproxies(
-            return_value={"http": "http://proxy.corp:3128"},
-        ):
+    def test_http_proxy_is_not_used_for_https(self) -> None:
+        # Object stores are reached over HTTPS; HTTP_PROXY applies to http only.
+        with _proxy_env({"http": "http://proxy.corp:3128"}):
+            opts = obstore_client_options()
+        assert "proxy_url" not in opts
+
+    def test_all_proxy_is_used(self) -> None:
+        with _proxy_env({"all": "http://proxy.corp:3128"}):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://proxy.corp:3128"
 
     def test_https_preferred_over_http(self) -> None:
-        with _getproxies(
-            return_value={
+        with _proxy_env(
+            {
                 "https": "http://secure.corp:8080",
                 "http": "http://plain.corp:3128",
             },
@@ -157,37 +292,32 @@ class TestClientOptionsProxyExcludes:
     """NO_PROXY is forwarded as ``proxy_excludes`` — but only when a proxy URL is
     resolved (obstore ignores it otherwise)."""
 
-    def test_no_proxy_excludes_forwarded_when_proxy_set(self, monkeypatch) -> None:
-        monkeypatch.setenv("NO_PROXY", "localhost,.svc.cluster.local,10.0.0.0/8")
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
+    def test_no_proxy_excludes_forwarded_when_proxy_set(self) -> None:
+        with _proxy_env(
+            {
+                "https": "http://proxy.corp:8080",
+                "no": "localhost,.svc.cluster.local,10.0.0.0/8",
+            }
         ):
             opts = obstore_client_options()
         assert opts["proxy_excludes"] == "localhost,.svc.cluster.local,10.0.0.0/8"
 
-    def test_lowercase_no_proxy_is_honored(self, monkeypatch) -> None:
-        monkeypatch.delenv("NO_PROXY", raising=False)
-        monkeypatch.setenv("no_proxy", "internal.example.com")
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
+    def test_uppercase_no_proxy_is_honored(self) -> None:
+        with _proxy_env(
+            {"https": "http://proxy.corp:8080"}, NO_PROXY="internal.example.com"
         ):
             opts = obstore_client_options()
         assert opts["proxy_excludes"] == "internal.example.com"
 
-    def test_excludes_omitted_without_proxy_url(self, monkeypatch) -> None:
+    def test_excludes_omitted_without_proxy_url(self) -> None:
         # obstore only consults proxy_excludes when proxy_url is set, so don't
         # emit a dangling exclude list when there's no proxy.
-        monkeypatch.setenv("NO_PROXY", "localhost")
-        with _getproxies(return_value={}):
+        with _proxy_env({"no": "localhost"}):
             opts = obstore_client_options()
         assert "proxy_excludes" not in opts
 
-    def test_excludes_omitted_when_no_proxy_unset(self, monkeypatch) -> None:
-        monkeypatch.delenv("NO_PROXY", raising=False)
-        monkeypatch.delenv("no_proxy", raising=False)
-        with _getproxies(
-            return_value={"https": "http://proxy.corp:8080"},
-        ):
+    def test_excludes_omitted_when_no_proxy_unset(self) -> None:
+        with _proxy_env({"https": "http://proxy.corp:8080"}):
             opts = obstore_client_options()
         assert "proxy_excludes" not in opts
 
@@ -203,7 +333,7 @@ class TestClientOptionsRootCertificate:
     def test_root_certificate_set_when_custom_ca_present(self) -> None:
         pem = b"-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----"
         with (
-            _getproxies(return_value={}),
+            _proxy_env({}),
             patch(
                 "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=pem,
@@ -214,7 +344,7 @@ class TestClientOptionsRootCertificate:
 
     def test_root_certificate_omitted_without_custom_ca(self) -> None:
         with (
-            _getproxies(return_value={}),
+            _proxy_env({}),
             patch(
                 "application_sdk.common.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
@@ -245,7 +375,7 @@ class TestRetryConfig:
         )
         read = set(
             re.findall(
-                r'os\.getenv\("(ATLAN_OBSTORE_RETRY_\w+)"\)',
+                r'env_int\(\s*"(ATLAN_OBSTORE_RETRY_\w+)"',
                 inspect.getsource(obstore_retry_config),
             )
         )
@@ -285,6 +415,24 @@ class TestRetryConfig:
         monkeypatch.setenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", "abc")
         cfg = obstore_retry_config()
         assert cfg is None
+
+    @pytest.mark.parametrize(
+        "key",
+        ["ATLAN_OBSTORE_RETRY_MAX_RETRIES", "ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS"],
+    )
+    def test_negative_value_falls_back_to_default(self, monkeypatch, key) -> None:
+        """A bare ``int()`` accepted ``-1`` and handed it to obstore."""
+        monkeypatch.delenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", raising=False)
+        monkeypatch.delenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv(key, "-1")
+        with patch.object(_obstore_config.logger, "warning") as warning:
+            assert obstore_retry_config() is None
+        assert "is below 0" in warning.call_args.args[1]
+
+    def test_zero_retries_is_kept(self, monkeypatch) -> None:
+        monkeypatch.delenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", "0")
+        assert obstore_retry_config() == {"max_retries": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -437,19 +585,25 @@ class TestCloudPlumbsClientOptions:
 
 
 # ---------------------------------------------------------------------------
-# make_azure_store — ambient AZURE_* env isolation
+# build_azure_store — ambient AZURE_* env isolation
 # ---------------------------------------------------------------------------
+
+
+def _azure_settings(config: dict[str, str]) -> AzureStoreSettings:
+    """Settings whose obstore config is *config* (``azure_storage_<field>`` keys)."""
+    fields = {k.removeprefix("azure_storage_"): v for k, v in config.items()}
+    return AzureStoreSettings(container="container", **fields)
 
 
 class TestAzureAmbientEnvIsolation:
     """obstore reads ``AZURE_*`` from the environment at construction and lets a
-    host-injected value outrank the caller's explicit credential. ``make_azure_store``
+    host-injected value outrank the caller's explicit credential. ``build_azure_store``
     must strip the ambient env while building from an explicit credential, and leave it
     in place for the managed/workload-identity case.
     """
 
     def _build_and_capture(self, config: dict | None) -> dict:
-        """Build via make_azure_store with ``obstore.store.AzureStore`` stubbed; return
+        """Build via build_azure_store with ``obstore.store.AzureStore`` stubbed; return
         the AZURE_* env visible *during* construction plus the kwargs passed to obstore."""
         captured: dict = {}
 
@@ -461,7 +615,7 @@ class TestAzureAmbientEnvIsolation:
             return MagicMock(name="AzureStore")
 
         with patch("obstore.store.AzureStore", new=fake_azure_store):
-            make_azure_store("container", config)
+            build_azure_store(_azure_settings(config))
         return captured
 
     def test_explicit_account_key_strips_ambient_env_during_build(self, monkeypatch):
@@ -513,12 +667,10 @@ class TestAzureAmbientEnvIsolation:
 
         with patch("obstore.store.AzureStore", new=boom):
             with pytest.raises(RuntimeError, match="construction failed"):
-                make_azure_store(
-                    "container",
-                    {
-                        "azure_storage_account_name": "a",
-                        "azure_storage_account_key": "k",
-                    },
+                build_azure_store(
+                    AzureStoreSettings(
+                        container="container", account_name="a", account_key="k"
+                    )
                 )
         assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
 
@@ -564,10 +716,12 @@ class TestAzureAmbientEnvIsolation:
 
         fake_provider = MagicMock(name="cert-credential-provider")
         with patch("obstore.store.AzureStore", new=fake_azure_store):
-            make_azure_store(
-                "container",
-                {"azure_storage_account_name": "acct"},
-                credential_provider=fake_provider,
+            build_azure_store(
+                AzureStoreSettings(
+                    container="container",
+                    account_name="acct",
+                    credential_provider=fake_provider,
+                )
             )
 
         assert captured["azure_env"] == {}, (
@@ -583,7 +737,7 @@ class TestAzureAmbientEnvIsolation:
 # ---------------------------------------------------------------------------
 # Config passthrough — regression guard for binding.py / cloud.py
 #
-# These tests verify that make_s3_store / make_gcs_store forward the caller's
+# These tests verify that build_s3_store / build_gcs_store forward the caller's
 # config dict to the obstore constructor without dropping or mutating keys.
 # The Rust-layer credential precedence (explicit config vs. ambient env vars)
 # was confirmed by live requests during the PR audit but cannot be exercised
@@ -594,7 +748,7 @@ class TestAzureAmbientEnvIsolation:
 class TestS3ConfigPassthrough:
     """Regression guard: the config dict reaches S3Store unchanged.
 
-    These tests assert that make_s3_store passes the caller's config dict to the
+    These tests assert that build_s3_store passes the caller's config dict to the
     S3Store constructor without dropping or mutating keys.  They do NOT verify the
     Rust-layer credential precedence (explicit config vs. ambient env vars) — that
     behaviour is tested by integration tests against a real or mocked S3 endpoint.
@@ -606,15 +760,15 @@ class TestS3ConfigPassthrough:
 
         with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
-            from application_sdk._obstore_config import make_s3_store
+            from application_sdk._obstore_config import build_s3_store
 
-            make_s3_store(
-                "test-bucket",
-                {
-                    "aws_access_key_id": "CONFIG-ACCESS-KEY",
-                    "aws_secret_access_key": "CONFIG-SECRET-KEY",
-                    "aws_region": "us-east-1",
-                },
+            build_s3_store(
+                S3StoreSettings(
+                    bucket="test-bucket",
+                    access_key_id="CONFIG-ACCESS-KEY",
+                    secret_access_key="CONFIG-SECRET-KEY",
+                    region="us-east-1",
+                )
             )
 
         config = mock_s3.call_args.kwargs["config"]
@@ -627,9 +781,9 @@ class TestS3ConfigPassthrough:
 
         with patch("obstore.store.S3Store") as mock_s3:
             mock_s3.return_value = MagicMock()
-            from application_sdk._obstore_config import make_s3_store
+            from application_sdk._obstore_config import build_s3_store
 
-            make_s3_store("test-bucket", None)
+            build_s3_store(S3StoreSettings(bucket="test-bucket"))
 
         assert mock_s3.call_args.kwargs["config"] is None
 
@@ -637,7 +791,7 @@ class TestS3ConfigPassthrough:
 class TestGCSConfigPassthrough:
     """Regression guard: the config dict reaches GCSStore unchanged.
 
-    These tests assert that make_gcs_store passes the caller's config dict to the
+    These tests assert that build_gcs_store passes the caller's config dict to the
     GCSStore constructor without dropping or mutating keys.  They do NOT verify the
     Rust-layer credential precedence (SA key in config vs. ADC / Workload Identity) —
     that behaviour is tested by integration tests against a real or mocked GCS endpoint.
@@ -648,11 +802,13 @@ class TestGCSConfigPassthrough:
 
         with patch("obstore.store.GCSStore") as mock_gcs:
             mock_gcs.return_value = MagicMock()
-            from application_sdk._obstore_config import make_gcs_store
+            from application_sdk._obstore_config import build_gcs_store
 
-            make_gcs_store(
-                "test-bucket",
-                {"google_service_account_key": '{"type":"service_account"}'},
+            build_gcs_store(
+                GCSStoreSettings(
+                    bucket="test-bucket",
+                    service_account_key='{"type":"service_account"}',
+                )
             )
 
         config = mock_gcs.call_args.kwargs["config"]
@@ -669,8 +825,70 @@ class TestGCSConfigPassthrough:
 
         with patch("obstore.store.GCSStore") as mock_gcs:
             mock_gcs.return_value = MagicMock()
-            from application_sdk._obstore_config import make_gcs_store
+            from application_sdk._obstore_config import build_gcs_store
 
-            make_gcs_store("test-bucket", None)
+            build_gcs_store(GCSStoreSettings(bucket="test-bucket"))
 
         assert mock_gcs.call_args.kwargs["config"] is None
+
+
+class TestStoreSettingsRepr:
+    """A logged settings object must not carry a credential."""
+
+    def test_s3_settings_repr_hides_credentials(self) -> None:
+        text = repr(
+            S3StoreSettings(
+                bucket="b",
+                access_key_id="AKID-EXAMPLE",
+                secret_access_key="secret-example",
+                session_token="token-example",
+            )
+        )
+        assert "b" in text
+        for secret in ("AKID-EXAMPLE", "secret-example", "token-example"):
+            assert secret not in text
+
+    def test_azure_and_gcs_settings_repr_hide_credentials(self) -> None:
+        az = repr(
+            AzureStoreSettings(
+                container="c",
+                account_key="key-example",
+                sas_key="sas-example",
+                client_secret="cs-example",
+            )
+        )
+        gcs = repr(GCSStoreSettings(bucket="b", service_account_key="sa-example"))
+        for secret in ("key-example", "sas-example", "cs-example"):
+            assert secret not in az
+        assert "sa-example" not in gcs
+
+
+class TestDeprecatedMakeStore:
+    """The pre-settings ``make_*_store(bucket, config)`` names still work.
+
+    They pass the raw config through untouched and warn, naming the
+    ``build_*_store`` replacement and the v4.0.0 removal.
+    """
+
+    @pytest.mark.parametrize(
+        ("name", "cls", "first_kw"),
+        [
+            ("make_s3_store", "S3Store", "bucket"),
+            ("make_gcs_store", "GCSStore", "bucket"),
+            ("make_azure_store", "AzureStore", "container_name"),
+        ],
+    )
+    def test_legacy_signature_passes_config_through_and_warns(
+        self, name: str, cls: str, first_kw: str
+    ) -> None:
+        config = {"probe_key": "probe-value"}
+        provider = MagicMock(name="provider")
+        with patch(f"obstore.store.{cls}") as mock_cls:
+            with pytest.warns(DeprecationWarning, match=r"build_.*v4\.0\.0"):
+                getattr(_obstore_config, name)(
+                    "target", config, label="legacy", credential_provider=provider
+                )
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs[first_kw] == "target"
+        assert kwargs["config"] == config
+        assert kwargs["credential_provider"] is provider

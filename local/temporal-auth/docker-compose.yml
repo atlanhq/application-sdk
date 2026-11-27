@@ -25,7 +25,7 @@ services:
 
   # Temporal persistence. No host port: only the temporal container talks to it.
   postgresql:
-    image: postgres:19.0@sha256:4ae330eb888b3b769aa542424859059d8e37507e365d3d48024446dacd8c4d8d
+    image: postgres:19.0@sha256:4ea94de574c17f0372722806c949757050fbb1cd7648410fe45d6bba275cc00e
     environment:
       POSTGRES_PASSWORD: temporal
       POSTGRES_USER: temporal

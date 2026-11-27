@@ -27,6 +27,13 @@ Determinism note: every operation in this loop is deterministic for Temporal
 replay — a bounded integer counter incremented in workflow code and a
 deterministic string compare on ``ApplicationError.type``. No clocks, no
 random, no I/O.
+
+The cap itself is pod configuration, so it is not consulted on replay. When it
+stops a re-dispatch live, a ``workflow.patched`` marker keyed by the failed
+activity's ``scheduled_event_id`` is recorded; on replay that marker, not the
+replaying pod's cap, decides. A history written before pinning has no such
+markers and replays under the pod's cap, as it always did. A run evicted under ``ATLAN_WORKER_EVICTION_MAX_RETRIES=3``
+therefore replays cleanly on a pod configured with 0 or 10 (see ``run_flags``).
 """
 
 from __future__ import annotations
@@ -39,6 +46,36 @@ from temporalio.exceptions import ActivityError, ApplicationError
 
 from application_sdk.constants import WORKER_EVICTION_MAX_RETRIES
 from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
+from application_sdk.execution._temporal.run_flags import (
+    current_run_flags,
+    pinned_off,
+)
+
+EVICTION_CAP_MARKER_PREFIX = "atlan-sdk/eviction-cap-reached/"
+"""Prefix of the marker recorded when the cap stops a re-dispatch; the failed
+activity's ``scheduled_event_id`` follows it."""
+
+
+def _eviction_cap_reached(
+    err: ActivityError, eviction_attempts: int, max_eviction_retries: int
+) -> bool:
+    """Whether this eviction failure ends the loop rather than re-dispatching.
+
+    Live, the cap decides and a stop is recorded; on replay the record decides.
+    ``scheduled_event_id`` names this activity execution uniquely in the run's
+    history, so each decision has its own marker.
+
+    A run whose flags are not pinned (a history written before pinning, or a
+    worker without ``RunFlagsInterceptor``) recorded no stops, so the cap
+    decides there as it did when that history was written.
+    """
+    flags = current_run_flags()
+    if flags is None or not flags.pinned:
+        return eviction_attempts >= max_eviction_retries
+    return pinned_off(
+        f"{EVICTION_CAP_MARKER_PREFIX}{err.scheduled_event_id}",
+        live_enabled=eviction_attempts < max_eviction_retries,
+    )
 
 
 def _is_worker_evicted(err: ActivityError) -> bool:
@@ -136,7 +173,9 @@ async def execute_activity_with_eviction_retry(
         try:
             return await workflow.execute_activity(*args, **kwargs)
         except ActivityError as err:
-            if _is_worker_evicted(err) and eviction_attempts < max_eviction_retries:
+            if _is_worker_evicted(err) and not _eviction_cap_reached(
+                err, eviction_attempts, max_eviction_retries
+            ):
                 eviction_attempts += 1
                 # ``workflow.logger`` is a ``logging.LoggerAdapter`` whose
                 # underlying ``Logger._log`` only accepts the stdlib reserved

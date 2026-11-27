@@ -135,7 +135,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.8"
+          version: "0.13.9"
 
       - name: Get current version
         id: versions
@@ -272,33 +272,14 @@ jobs:
           cp pyproject.toml uv.lock CHANGELOG.md "$RUNNER_TEMP/bump/"
 
       - name: Upload the bump
-        id: upload-bump
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: atlanhq/application-sdk/.github/actions/upload-artifact-retry@main
         with:
           name: bump-commit-files
           path: |
             ${{ runner.temp }}/bump/pyproject.toml
             ${{ runner.temp }}/bump/uv.lock
             ${{ runner.temp }}/bump/CHANGELOG.md
-          overwrite: true
-          retention-days: 1
-
-      - name: Wait before the the bump retry
-        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && steps.upload-bump.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload the bump (retry)
-        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && steps.upload-bump.outcome == 'failure'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: bump-commit-files-retry
-          path: |
-            ${{ runner.temp }}/bump/pyproject.toml
-            ${{ runner.temp }}/bump/uv.lock
-            ${{ runner.temp }}/bump/CHANGELOG.md
-          overwrite: true
           retention-days: 1
 
   # The job above runs third-party code (`uvx toml-cli`, pip, and `uv lock` over
@@ -342,25 +323,10 @@ jobs:
       # Glob, not the bare name: the upload's retry lands under `bump-commit-files-retry`.
       # Both upload attempts overwrite, so the glob resolves to one artifact.
       - name: Download the bump
-        id: download-bump
         if: needs.bump-version.outputs.push == 'true'
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        uses: atlanhq/application-sdk/.github/actions/download-artifact-retry@main
         with:
           pattern: bump-commit-files*
-          merge-multiple: true
-          path: ${{ runner.temp }}/bump
-
-      - name: Wait before the the bump download retry
-        if: needs.bump-version.outputs.push == 'true' && steps.download-bump.outcome == 'failure'
-        run: sleep 20
-
-      - name: Download the bump (retry)
-        if: needs.bump-version.outputs.push == 'true' && steps.download-bump.outcome == 'failure'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: bump-commit-files*
-          merge-multiple: true
           path: ${{ runner.temp }}/bump
 
       # Signs the bump commit so the PR isn't blocked by the signed-commits

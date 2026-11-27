@@ -6,6 +6,11 @@ from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 
+__all__ = [
+    "MergeSkippedRecordsInput",
+    "MergeSkippedRecordsOutput",
+]
+
 
 class MergeSkippedRecordsInput(Input):
     """Input for ``App.merge_skipped_records``.

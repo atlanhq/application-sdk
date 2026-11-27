@@ -7,7 +7,6 @@ from obstore.store import MemoryStore
 
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
-    clear_infrastructure,
     set_infrastructure,
 )
 from application_sdk.storage.factory import create_memory_store
@@ -24,7 +23,4 @@ def memory_store() -> Iterator[MemoryStore]:
     """
     store = create_memory_store()
     set_infrastructure(InfrastructureContext(storage=store))
-    try:
-        yield store
-    finally:
-        clear_infrastructure()
+    yield store

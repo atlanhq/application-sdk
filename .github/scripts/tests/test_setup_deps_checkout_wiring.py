@@ -29,12 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
+from _workflows import ACTIONS, WORKFLOWS, job, load_workflow, step_named, steps
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-GITHUB = REPO_ROOT / ".github"
-ACTIONS = GITHUB / "actions"
-WORKFLOWS = GITHUB / "workflows"
 SETUP_DEPS = ACTIONS / "setup-deps" / "action.yaml"
 SDR_E2E = ACTIONS / "sdr-e2e" / "action.yaml"
 
@@ -47,14 +43,6 @@ PASS_THROUGH = ("connector-unit-tests", "connector-integration-tests")
 GOVERNED = ("setup-deps", *PASS_THROUGH)
 
 Step = dict[str, Any]
-
-
-def _load(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
-
-
-def _action_steps(path: Path) -> list[Step]:
-    return _load(path)["runs"]["steps"]
 
 
 def _is_checkout(step: Step) -> bool:
@@ -92,7 +80,7 @@ def _checks_out_the_caller_repo(step: Step) -> bool:
 
 
 def test_setup_deps_checkouts_never_persist_the_token() -> None:
-    checkouts = [s for s in _action_steps(SETUP_DEPS) if _is_checkout(s)]
+    checkouts = [s for s in steps(load_workflow(SETUP_DEPS)) if _is_checkout(s)]
 
     assert len(checkouts) == 2, "expected the plain and the LFS checkout"
     for step in checkouts:
@@ -104,7 +92,7 @@ def test_setup_deps_checkouts_never_persist_the_token() -> None:
 
 
 def test_setup_deps_declares_the_checkout_input_defaulting_to_true() -> None:
-    spec = _load(SETUP_DEPS)["inputs"]["checkout"]
+    spec = load_workflow(SETUP_DEPS)["inputs"]["checkout"]
 
     assert spec["default"] == "true", (
         "fleet callers that call setup-deps first rely on it checking out"
@@ -117,7 +105,7 @@ def test_only_the_plain_checkout_is_skippable() -> None:
     The LFS checkout is how the objects are fetched. With no persisted
     credential, a later `git lfs pull` could not authenticate a private repo.
     """
-    plain, lfs = [s for s in _action_steps(SETUP_DEPS) if _is_checkout(s)]
+    plain, lfs = [s for s in steps(load_workflow(SETUP_DEPS)) if _is_checkout(s)]
 
     assert "inputs.checkout != 'false'" in plain["if"]
     assert "inputs.lfs != 'true'" in plain["if"]
@@ -128,9 +116,9 @@ def test_only_the_plain_checkout_is_skippable() -> None:
 @pytest.mark.parametrize("action", PASS_THROUGH)
 def test_connector_actions_forward_the_checkout_input(action: str) -> None:
     path = ACTIONS / action / "action.yaml"
-    assert _load(path)["inputs"]["checkout"]["default"] == "true"
+    assert load_workflow(path)["inputs"]["checkout"]["default"] == "true"
 
-    calls = [s for s in _action_steps(path) if _calls(s, "setup-deps")]
+    calls = [s for s in steps(load_workflow(path)) if _calls(s, "setup-deps")]
     assert len(calls) == 1
     assert _with(calls[0]).get("checkout") == "${{ inputs.checkout }}"
 
@@ -141,20 +129,21 @@ def test_connector_actions_forward_the_checkout_input(action: str) -> None:
 def _workflow_jobs() -> list[tuple[str, str, list[Step]]]:
     jobs: list[tuple[str, str, list[Step]]] = []
     for path in sorted(WORKFLOWS.glob("*.y*ml")):
-        workflow_jobs: dict[str, dict[str, Any]] = _load(path).get("jobs") or {}
-        for job_id, job in workflow_jobs.items():
-            steps: list[Step] = job.get("steps") or []
-            if steps:
-                jobs.append((path.name, job_id, steps))
+        workflow_jobs: dict[str, dict[str, Any]] = load_workflow(path).get("jobs") or {}
+        for job_id, body in workflow_jobs.items():
+            # A reusable-workflow call (`uses:`) has no steps; the sweep skips it.
+            job_steps: list[Step] = body.get("steps") or []
+            if job_steps:
+                jobs.append((path.name, job_id, job_steps))
     return jobs
 
 
 def _governed_calls() -> list[tuple[str, str, int, list[Step]]]:
     found: list[tuple[str, str, int, list[Step]]] = []
-    for workflow, job_id, steps in _workflow_jobs():
-        for i, step in enumerate(steps):
+    for workflow, job_id, job_steps in _workflow_jobs():
+        for i, step in enumerate(job_steps):
             if any(_calls(step, action) for action in GOVERNED):
-                found.append((workflow, job_id, i, steps))
+                found.append((workflow, job_id, i, job_steps))
     return found
 
 
@@ -163,8 +152,8 @@ def test_the_call_site_scan_finds_the_known_callers() -> None:
     sites = {(w, j) for w, j, _, _ in _governed_calls()}
 
     for expected in (
-        ("tests-reusable.yaml", "unit"),
-        ("tests-reusable.yaml", "integration"),
+        ("unit-tests-reusable.yaml", "unit"),
+        ("integration-tests-reusable.yaml", "integration"),
         ("checks-reusable.yaml", "pre-commit"),
         ("codeql.yaml", "lint"),
         ("sdk-tests-reusable.yaml", "integration"),
@@ -204,7 +193,7 @@ def test_composites_that_need_a_prior_checkout_skip_setup_deps_checkout(
     caller's tree before setup-deps, so a checkout is already required."""
     calls = [
         s
-        for s in _action_steps(ACTIONS / action / "action.yaml")
+        for s in steps(load_workflow(ACTIONS / action / "action.yaml"))
         if _calls(s, "setup-deps")
     ]
 
@@ -214,15 +203,21 @@ def test_composites_that_need_a_prior_checkout_skip_setup_deps_checkout(
 
 @pytest.mark.parametrize(
     "workflow,job_id",
-    [("tests-reusable.yaml", "unit"), ("tests-reusable.yaml", "integration")],
+    [
+        ("unit-tests-reusable.yaml", "unit"),
+        ("integration-tests-reusable.yaml", "integration"),
+    ],
 )
 def test_tests_reusable_checks_the_app_out_on_every_run(
     workflow: str, job_id: str
 ) -> None:
     """These jobs used to check the app out only for private-git-deps, and
     relied on setup-deps' checkout otherwise."""
-    steps = _load(WORKFLOWS / workflow)["jobs"][job_id]["steps"]
-    app = [s for s in steps if s.get("name") == "Checkout app"]
+    app = [
+        s
+        for s in steps(job(load_workflow(workflow), job_id))
+        if s.get("name") == "Checkout app"
+    ]
 
     assert len(app) == 1
     assert _checks_out_the_caller_repo(app[0])
@@ -240,10 +235,10 @@ def _sdr_index(steps: list[Step], predicate: Callable[[Step], bool], what: str) 
 
 
 def test_sdr_e2e_restores_the_tree_between_the_build_and_setup_deps() -> None:
-    steps = _action_steps(SDR_E2E)
-    build = _sdr_index(steps, lambda s: _calls(s, "build-app-image"), "build")
-    restore = _sdr_index(steps, lambda s: s.get("name") == RESTORE_STEP, "restore")
-    setup = _sdr_index(steps, lambda s: _calls(s, "setup-deps"), "setup-deps")
+    sdr_steps = steps(load_workflow(SDR_E2E))
+    build = _sdr_index(sdr_steps, lambda s: _calls(s, "build-app-image"), "build")
+    restore = _sdr_index(sdr_steps, lambda s: s.get("name") == RESTORE_STEP, "restore")
+    setup = _sdr_index(sdr_steps, lambda s: _calls(s, "setup-deps"), "setup-deps")
 
     assert build < restore < setup
 
@@ -279,9 +274,7 @@ def test_the_restore_reverts_tracked_edits_and_keeps_untracked_paths(
     own directory sits in the workspace, and wiping it is what the deleted
     workarounds were for.
     """
-    run = next(s for s in _action_steps(SDR_E2E) if s.get("name") == RESTORE_STEP)[
-        "run"
-    ]
+    run = step_named(load_workflow(SDR_E2E), RESTORE_STEP)["run"]
     assert "${{" not in run
 
     repo = tmp_path / "app"

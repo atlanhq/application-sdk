@@ -16,7 +16,7 @@ name: Sync Dapr Version from Base Image
 # own runtime base image (built FROM the Chainguard golden base, so its daprd is
 # identical). It is a **public** repo, so we pull it anonymously — no Chainguard
 # or Harbor credentials needed. This is the same image the Hourly Security Scan
-# (``daily-security-scan.yml``) reads.
+# (``hourly-security-scan.yml``) reads.
 #
 # Trigger: ``harbor-release.yaml`` finishes rebuilding the runtime image for a
 # published SDK release (``workflow_run`` on its completion), plus manual
@@ -53,7 +53,7 @@ env:
   # The SDK's own published runtime base image — built FROM the Chainguard
   # golden base, so its daprd is identical. Public repo: pulled anonymously,
   # no Chainguard/Harbor creds. ``:3`` is the current major tag, matching the
-  # Hourly Security Scan (daily-security-scan.yml).
+  # Hourly Security Scan (hourly-security-scan.yml).
   TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
 
 jobs:

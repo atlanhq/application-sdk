@@ -92,6 +92,7 @@ from typing_extensions import deprecated
 from application_sdk import _deprecation
 from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk.app._app_config_validation import warn_config_problem
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
@@ -113,7 +114,8 @@ from application_sdk.common.sql_filters import (
     safe_substitute_placeholders,
     strip_sql_block_comments,
 )
-from application_sdk.constants import TEMPORARY_PATH, _run_prefix
+from application_sdk.constants import TEMPORARY_PATH as _TEMPORARY_PATH
+from application_sdk.constants import _run_prefix
 from application_sdk.contracts.base import OutputStatus
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StorageTier
@@ -121,20 +123,26 @@ from application_sdk.credentials import CredentialResolver
 from application_sdk.credentials.ref import CredentialRef, _guid_credential_ref
 from application_sdk.errors import (
     AppError,
-    FailureDetails,
     redact_secrets,
-    redact_wire_value,
     safe_traceback,
-    sanitize_cause_repr,
 )
-from application_sdk.errors.categories import Audience, FailureCategory
+
+# ``AppTimeoutError`` is re-exported: importable from here before FND-4687 moved
+# the wire-envelope rebuild into ``errors.wire`` (Symbol Removal Check).
+from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.errors.leaves import (
-    AppTimeoutError,
     AuthError,
     InternalError,
     SourceUnavailableError,
 )
-from application_sdk.errors.wire import secret_named_evidence_keys
+from application_sdk.errors.wire import (
+    FailureDetails,
+    degraded_failure_details,
+    error_from_failure_details,
+    redact_evidence_value,
+    redacted_validation_reason,
+    register_wire_leaf,
+)
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
@@ -143,13 +151,15 @@ from application_sdk.templates._template_errors import (
 )
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
-    ExtractionOutput,
     ExtractionTaskInput,
     ExtractionTaskOutput,
     PrimeAuthOutput,
     TransformInput,
     TransformOutput,
     TreeSelectionExtractionInput,
+)
+from application_sdk.templates.contracts.sql_metadata import (
+    ExtractionOutput as _ExtractionOutput,
 )
 from application_sdk.templates.sql_app_errors import (
     SqlProbeTimeoutError,
@@ -161,6 +171,13 @@ if TYPE_CHECKING:
 
     from application_sdk.clients.sql import BaseSQLClient
 
+__all__ = [
+    "TEMPORARY_PATH",
+    "ExtractionOutput",
+    "SqlApp",
+]
+
+
 logger = get_logger(__name__)
 
 _ET = TypeVar("_ET", bound=ExtractionTaskInput)
@@ -170,29 +187,21 @@ _ET = TypeVar("_ET", bound=ExtractionTaskInput)
 #: (legacy / connector-specific shapes the v3 publisher accepts).
 _MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
 
-#: SQL row batch size used by ``_extract_entity`` when streaming results
+#: SQL row batch size used by ``extract_entity`` when streaming results
 #: through ``client.run_query()``. Caps the in-flight set at
 #: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
 _EXTRACT_BATCH_SIZE: int = 10_000
 
-#: Leaves ``_classify_probe_strings`` can emit, keyed by wire code. Used to
-#: rebuild the typed error on the far side of the activity boundary, where only
-#: the ``FailureDetails`` envelope survives. The base ``TIMEOUT`` code is
-#: accepted alongside the probe-specific one so a verdict from any other
-#: producer still rebuilds as a timeout rather than degrading to internal. A
-#: verdict recorded before FND-4298 carries ``TIMEOUT_SQL_PROBE``, which has no
-#: leaf any more; it rebuilds through ``_EnvelopeError`` with the category the
-#: envelope recorded.
-_PROBE_FAILURE_LEAVES: dict[str, type[AppError]] = {
-    AuthError.code: AuthError,
-    SqlProbeTimeoutError.code: SqlProbeTimeoutError,
-    AppTimeoutError.code: AppTimeoutError,
-    SourceUnavailableError.code: SourceUnavailableError,
-    InternalError.code: InternalError,
-}
+# ``_classify_probe_strings`` emits this leaf; registering it lets the verdict
+# rebuild as itself on the far side of the activity boundary, where only the
+# ``FailureDetails`` envelope survives. The generic leaves it can also emit
+# (``AuthError``, ``SourceUnavailableError``, ``InternalError``) are registered
+# by ``errors.wire``. A verdict recorded before FND-4298 carries
+# ``TIMEOUT_SQL_PROBE``, which has no leaf any more; it rebuilds on the generic
+# envelope-routed leaf with the category the envelope recorded.
+register_wire_leaf(SqlProbeTimeoutError)
 
-
-# Field names every ``AppError`` declares on the base dataclass — the evidence
+# Field names every ``AppError`` declares on the base dataclass — the typed-error
 # redactor skips these (they are handled individually) and redacts only the
 # per-leaf custom fields, mirroring what ``to_failure_details()`` treats as
 # evidence.
@@ -200,248 +209,50 @@ _BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
     f.name for f in dataclasses.fields(AppError)
 )
 
-
-@dataclasses.dataclass(kw_only=True)
-class _EnvelopeError(AppError):
-    """Reconstruction leaf for a wire ``code`` this consumer has no leaf for.
-
-    Routing (``category`` / ``audience``) is taken from the envelope, not from
-    class-level constants, so a newer producer's verdict keeps its original
-    routing instead of degrading to ``INTERNAL`` / ``APP_OWNER``.
-
-    ``category`` / ``audience`` are instance values here, but the base
-    ``to_failure_details()`` reads ``audience`` class-level
-    (``type(self).audience``) — which would return the raw ``property`` object
-    on this subclass and fail validation. The serializer is therefore
-    overridden to read both instance-level, so a reconstructed unknown-code
-    error round-trips.
-
-    ``code`` / ``cause_repr`` / ``evidence`` are likewise carried as
-    passthrough instance fields so the producer's diagnostic context and
-    fine-grained code survive re-serialisation — not just the routing.
-    """
-
-    category_override: FailureCategory
-    audience_override: Audience
-    code_override: str | None = None
-    cause_repr: str | None = None
-    evidence: dict[str, Any] = dataclasses.field(default_factory=dict)
-
-    @property
-    def category(self) -> FailureCategory:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.category_override
-
-    @property
-    def audience(self) -> Audience:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.audience_override
-
-    @property
-    def code(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return self.code_override or super().code
-
-    def to_failure_details(self) -> FailureDetails:
-        # ``category_override`` / ``audience_override`` / ``code_override``
-        # carry routing, not evidence — exclude them alongside the base
-        # fields; the producer's evidence returns as the envelope's evidence.
-        # ``cause_repr`` serialises as its own envelope field, not evidence.
-        evidence: dict[str, Any] = {
-            f.name: getattr(self, f.name)
-            for f in dataclasses.fields(self)
-            if f.name
-            not in _BASE_ERROR_FIELD_NAMES
-            | {
-                "category_override",
-                "audience_override",
-                "code_override",
-                "cause_repr",
-                "evidence",
-            }
-        }
-        evidence.update(self.evidence)
-        return FailureDetails(
-            category=self.category,
-            code=self.code,
-            retryable=self.effective_retryable,
-            audience=self.audience,
-            message=self.message,
-            suggested_action=self.suggested_action,
-            evidence=evidence,
-            app_name=self.app_name,
-            run_id=self.run_id,
-            cause_repr=self.cause_repr,
-        )
-
-
 # Re-exported under its historical private name; the one implementation lives
 # with the shared SQL failure classifier.
 _root_cause = root_cause
 
 
-def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
-    """Redact every string reachable inside an evidence mapping's values.
+def _check_sql_client_class(cls: type[SqlApp]) -> None:
+    """Warn at class definition when a concrete ``SqlApp`` has no usable client.
 
-    Keys are left alone — a secret-*named* key is the wire denylist's job
-    (:func:`secret_named_evidence_keys`); this handles secret-*carrying*
-    values under any key.
+    ``_init_sql_client`` checks ``sql_client_class`` only inside a running
+    task, so a subclass that forgets it otherwise fails in the worker, not at
+    import or in unit tests. Skipped for a template (``_app_registered`` set
+    on the class itself), an abstract base, and a class that overrides
+    ``_init_sql_client`` and so never reads the attribute. Warn-only until
+    ``APP_CONFIG_ERROR_VERSION``.
     """
-    return {k: redact_wire_value(v) for k, v in evidence.items()}
-
-
-def _failure_details_degraded(err: AppError) -> FailureDetails | None:
-    """Re-serialise a verdict the wire envelope rejected, keeping its routing.
-
-    Reached when ``to_failure_details()`` raises — in practice a connector leaf
-    carrying a secret-named evidence field (``api_key``, ``db_password``, …),
-    which the ``FailureDetails`` denylist refuses. Falling straight back to
-    ``error_type`` / ``error_message`` would throw away the connector's
-    explicit verdict and re-derive it from a class name no string hint matches,
-    silently inverting e.g. ``AuthError`` / ``USER`` into ``InternalError`` /
-    ``APP_OWNER`` — the exact CNCT-197 misrouting the typed path exists to fix.
-
-    So degrade the *evidence*, never the routing: drop the offending keys, and
-    if the envelope still refuses, drop evidence entirely. Only a verdict that
-    fails both attempts returns ``None`` (the caller then falls back to
-    strings). ``category`` / ``audience`` / ``code`` / ``retryable`` are read
-    instance-level so a reconstruction leaf's property overrides are honoured
-    alongside a normal leaf's class constants.
-
-    Args:
-        err: The classified verdict whose serialisation was rejected.
-
-    Returns:
-        The degraded envelope, or ``None`` if it could not be built at all.
-    """
-    evidence: dict[str, Any] = {
-        f.name: getattr(err, f.name)
-        for f in dataclasses.fields(err)
-        if f.name not in _BASE_ERROR_FIELD_NAMES
-    }
-    cause_repr = sanitize_cause_repr(err.cause) if err.cause else None
-    if isinstance(err, _EnvelopeError):
-        # Mirror its ``to_failure_details()``: routing overrides are not
-        # evidence, ``cause_repr`` is its own wire field, and the producer's
-        # evidence rides in a field rather than as per-leaf dataclass fields.
-        for name in (
-            "category_override",
-            "audience_override",
-            "code_override",
-            "cause_repr",
-            "evidence",
-        ):
-            evidence.pop(name, None)
-        evidence.update(err.evidence)
-        cause_repr = err.cause_repr or cause_repr
-
-    dropped = secret_named_evidence_keys(evidence)
-    attempts: list[dict[str, Any]] = [
-        {k: v for k, v in evidence.items() if k not in dropped}
-    ]
-    if attempts[0]:
-        # Second attempt only differs if the first still carried something.
-        attempts.append({})
-    for attempt in attempts:
-        try:
-            return FailureDetails(
-                category=err.category,
-                code=err.code,
-                retryable=err.effective_retryable,
-                audience=err.audience,
-                message=err.message,
-                suggested_action=err.suggested_action,
-                evidence=_redact_evidence(attempt),
-                app_name=err.app_name,
-                run_id=err.run_id,
-                cause_repr=cause_repr,
-            )
-        except ValidationError as degrade_error:
-            logger.warning(
-                "Degraded prime failure verdict (%s) still would not serialise "
-                "with %d evidence key(s); retrying with less. %s",
-                type(err).__name__,
-                len(attempt),
-                _redacted_validation_reason(degrade_error),
-            )
-    return None
-
-
-def _redacted_validation_reason(exc: ValidationError) -> str:
-    """Return the validator messages only, dropping the rejected input.
-
-    ``str(ValidationError)`` embeds ``input_value=…`` — for a rejected
-    ``evidence`` dict that is the secret-named payload the denylist exists to
-    keep off the wire, so neither the exception nor ``exc_info`` may be logged.
-    The ``msg`` fields name the offending keys and nothing else.
-    """
-    return "; ".join(str(err.get("msg", "")) for err in exc.errors())
-
-
-def _error_from_failure_details(details: FailureDetails) -> AppError:
-    """Rebuild a typed error from its wire envelope.
-
-    ``evidence`` keys are the producing dataclass's field names, so they map
-    straight back onto the leaf's constructor. Keys the leaf does not declare
-    are dropped rather than raising — a newer producer must not break an older
-    consumer replaying its history.
-
-    An unknown ``code`` (a newer producer than this consumer) has no registered
-    leaf. Rebuilding it as ``InternalError`` would force ``INTERNAL`` /
-    ``APP_OWNER`` routing and silently re-route a customer-owned failure to
-    Atlan, so the unknown-code path instead preserves the envelope's own
-    ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
-    leaf.
-
-    Reconstruction re-redacts the two free-text fields it copies. This is
-    defence in depth, not the policy: ``FailureDetails`` redacts ``message`` and
-    ``suggested_action`` in a ``field_validator``, and that validator runs on
-    ``model_validate`` too, so an envelope replayed off Temporal history arrives
-    already scrubbed. Kept because it costs one idempotent pass and this is an
-    unredacted trust boundary — a hand-built ``PrimeAuthOutput`` reaches here
-    without ever having been a ``FailureDetails``. What the envelope still does
-    *not* cover is ``cause_repr`` (redacted at construction by
-    :func:`sanitize_cause_repr` instead) and nested values under an
-    evidence key, where the denylist judges the key name alone.
-    """
-    message = redact_secrets(details.message)
-    suggested_action = (
-        redact_secrets(details.suggested_action)
-        if details.suggested_action is not None
-        else None
-    )
-    leaf = _PROBE_FAILURE_LEAVES.get(details.code)
-    if leaf is None:
-        return _EnvelopeError(
-            category_override=details.category,
-            audience_override=details.audience,
-            code_override=details.code,
-            cause_repr=(
-                redact_secrets(details.cause_repr)
-                if details.cause_repr is not None
-                else None
-            ),
-            evidence=_redact_evidence(dict(details.evidence)),
-            message=message,
-            retryable=details.retryable,
-            suggested_action=suggested_action,
-            app_name=details.app_name,
-            run_id=details.run_id,
+    if (
+        cls.__dict__.get("_app_registered", False)
+        or _temporal_workflow.unsafe.in_sandbox()
+    ):
+        return
+    # ABCMeta fills __abstractmethods__ only after __init_subclass__ runs, so
+    # scan the way App.__init_subclass__ does.
+    if any(
+        getattr(getattr(cls, m, None), "__isabstractmethod__", False) for m in dir(cls)
+    ):
+        return
+    if cls._init_sql_client is not SqlApp._init_sql_client:
+        return
+    client_class = cls.sql_client_class
+    if client_class is None:
+        problem = (
+            "on a concrete SqlApp means every extract task fails in the "
+            "worker with SqlClientClassNotSetError; set it to your "
+            "BaseSQLClient subclass"
         )
-    # ``declared`` must exclude the base ``AppError`` fields: they are passed
-    # as explicit constructor arguments below, so an evidence key that shadows
-    # one (``message``, ``retryable``, …) would splat alongside the explicit
-    # arg and crash reconstruction with ``TypeError: got multiple values``.
-    # Mirrors the serializer, which never serialises base fields as evidence.
-    declared = {f.name for f in dataclasses.fields(leaf)} - _BASE_ERROR_FIELD_NAMES
-    evidence = _redact_evidence(
-        {k: v for k, v in details.evidence.items() if k in declared}
-    )
-    return leaf(
-        message=message,
-        retryable=details.retryable,
-        suggested_action=suggested_action,
-        app_name=details.app_name,
-        run_id=details.run_id,
-        **evidence,
-    )
+    else:
+        from application_sdk.clients.sql import (  # noqa: PLC0415 — only for a declared client; keeps template import light
+            BaseSQLClient,
+        )
+
+        if isinstance(client_class, type) and issubclass(client_class, BaseSQLClient):
+            return
+        problem = "is not a BaseSQLClient subclass"
+    warn_config_problem(cls, "sql_client_class", client_class, problem)
 
 
 class SqlApp(App):
@@ -505,12 +316,47 @@ class SqlApp(App):
     A connector that also has to bridge the tree across an SDR store boundary
     passes the finalised declaration to ``App.upload_refs`` — which verifies
     its own delivery — and returns the prefix that comes back.
+
+    An override that does not call ``super().run()`` must end in
+    :meth:`finalize_extraction`: it is the only thing that checks the
+    transformed tree is whole before publish diffs the tenant against it.
+    Conformance rule P068 flags an override that does neither.
+
+    **The per-entity surface.** Below ``run()``, these are the supported
+    extension points; everything else is implementation:
+
+    - ``sql_client_class`` and the ``fetch_*_sql`` templates — set them.
+    - ``map_*`` — override; the base raises for the ones you have not
+      written.
+    - ``extract_*`` / ``transform_*`` — override to change one entity's SQL
+      or mapper, or to split it across targets.
+    - :meth:`extract_entity` / :meth:`transform_entity` — call them from those
+      overrides. They own the streaming, the event-loop offload, the progress
+      marks and the canonical ``FileReference`` keys; re-implementing them is
+      how a connector's output ends up where publish does not look.
+    - :meth:`resolve_output_path` — the directory those two write under, for
+      a connector writing files of its own beside them.
+    - ``entity_envelope`` and :meth:`decorate_entity` — declare how the
+      finished line is shaped. No connector overrides ``decorate_entity``
+      today; it exists so the first one that owes a downstream app a
+      root-level field adds it to ``EntityDecorations`` instead of
+      post-processing the line.
+
+    Some connectors also override ``_init_sql_client`` or ``_prepare_sql``.
+    Those are not yet promoted to this surface, so a rename can still reach
+    them; raise it before adding another override of an underscore name.
     """
 
     _app_registered: ClassVar[bool] = True  # abstract template, not concrete
 
     # ── SQL client ──────────────────────────────────────────────────────
     sql_client_class: ClassVar[type[BaseSQLClient] | None] = None
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # Before super(): App registration sets _app_registered on cls,
+        # which would make every concrete app read as a template.
+        _check_sql_client_class(cls)
+        super().__init_subclass__(**kwargs)
 
     # ── SQL templates (set in subclass) ─────────────────────────────────
     fetch_database_sql: ClassVar[str] = ""
@@ -598,7 +444,7 @@ class SqlApp(App):
     @task(timeout_seconds=120, retry_max_attempts=1)
     async def prime_sql_auth(self, input: ExtractionTaskInput) -> PrimeAuthOutput:
         """Single sequential probe that primes the SQL server's auth cache
-        before the parallel ``_extract_entity`` burst.
+        before the parallel ``extract_entity`` burst.
 
         Background — why this exists (BLDX-1295):
             v3's parallel-activity execution model fans out
@@ -711,19 +557,25 @@ class SqlApp(App):
             # error_type / error_message path instead would re-derive routing
             # from a class name no string hint matches, inverting the
             # connector's explicit verdict (CNCT-197 all over again).
+            failure: FailureDetails | None
             try:
                 failure = classified.to_failure_details()
             except ValidationError as verdict_error:
-                failure = _failure_details_degraded(classified)
+                try:
+                    failure = degraded_failure_details(classified)
+                    outcome = "kept the typed verdict with degraded evidence"
+                except ValidationError as degrade_error:
+                    failure = None
+                    outcome = (
+                        "falling back to error_type/error_message classification "
+                        "(degraded verdict also refused: %s)"
+                        % redacted_validation_reason(degrade_error)
+                    )
                 logger.warning(
                     "Could not serialise the prime failure verdict (%s) as-is; %s. %s",
                     type(classified).__name__,
-                    (
-                        "kept the typed verdict with degraded evidence"
-                        if failure is not None
-                        else "falling back to error_type/error_message classification"
-                    ),
-                    _redacted_validation_reason(verdict_error),
+                    outcome,
+                    redacted_validation_reason(verdict_error),
                 )
             # We want the traceback frames in worker logs — the long-tail
             # (TLS negotiation, driver bugs, version skew) is only diagnosable
@@ -773,7 +625,7 @@ class SqlApp(App):
         ``PrimeAuthOutput`` by hand.
         """
         if prime_result.failure is not None:
-            return _error_from_failure_details(prime_result.failure)
+            return error_from_failure_details(prime_result.failure)
         # Defence-in-depth: the fallback trusts a hand-built or pre-redaction-era
         # replayed output whose producer may not have redacted. Re-redact at this
         # trust boundary so a secret in error_message never reaches the verdict.
@@ -822,7 +674,7 @@ class SqlApp(App):
         for f in dataclasses.fields(err):
             if f.name in _BASE_ERROR_FIELD_NAMES:
                 continue
-            setattr(err, f.name, redact_wire_value(getattr(err, f.name)))
+            setattr(err, f.name, redact_evidence_value(getattr(err, f.name)))
         return err
 
     @staticmethod
@@ -950,67 +802,62 @@ class SqlApp(App):
     # ``transform_*`` so the activity boundary is a durable retry point
     # and so future change-detection can compare raw streams between runs
     # before paying mapper cost.
+    #
+    # The ``extract_*`` / ``transform_*`` tasks declare no timing values on
+    # purpose: their runtime scales with source size, so any number here is a
+    # guess (ADR-0018). They take the process-wide defaults —
+    # ``ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS`` (24 h backstop) and
+    # ``ATLAN_HEARTBEAT_TIMEOUT_SECONDS`` — which operators tune per app.
+    # tests/unit/templates/test_template_task_literals.py pins this.
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_databases(
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
         """Stream database/catalog rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="database",
             sql_template=self.fetch_database_sql,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_schemas(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream schema rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="schema",
             sql_template=self.fetch_schema_sql,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_tables(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream table rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="table",
             sql_template=self.fetch_table_sql,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_columns(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream column rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="column",
             sql_template=self.fetch_column_sql,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_views(self, input: ExtractionTaskInput) -> ExtractionTaskOutput:
         """Stream view rows from SQL into raw JSONL."""
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="view",
             sql_template=self.fetch_view_sql,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def extract_procedures(
         self, input: ExtractionTaskInput
     ) -> ExtractionTaskOutput:
@@ -1021,7 +868,7 @@ class SqlApp(App):
         (Process / ColumnProcess entities) — matches the legacy Argo
         crawler output layout.
         """
-        return await self._extract_entity(
+        return await self.extract_entity(
             entity_type="extras-procedure",
             sql_template=self.fetch_procedure_sql,
             input=input,
@@ -1037,53 +884,43 @@ class SqlApp(App):
     # Activity boundary keeps transform retry-able without re-running the
     # SQL extraction.
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_databases(self, input: TransformInput) -> TransformOutput:
         """Map raw database records to Atlan assets via ``map_database``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="database",
             mapper_fn=self.map_database,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_schemas(self, input: TransformInput) -> TransformOutput:
         """Map raw schema records to Atlan assets via ``map_schema``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="schema",
             mapper_fn=self.map_schema,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_tables(self, input: TransformInput) -> TransformOutput:
         """Map raw table records to Atlan assets via ``map_table``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="table",
             mapper_fn=self.map_table,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_columns(self, input: TransformInput) -> TransformOutput:
         """Map raw column records to Atlan assets via ``map_column``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="column",
             mapper_fn=self.map_column,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_views(self, input: TransformInput) -> TransformOutput:
         """Map raw view records to Atlan assets via ``map_table``.
 
@@ -1091,18 +928,16 @@ class SqlApp(App):
         Table specialisation (typeName ``View``) — connectors differentiate
         via the ``table_kind`` field on the record.
         """
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="view",
             mapper_fn=self.map_table,
             input=input,
         )
 
-    @task(
-        timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30
-    )
+    @task()
     async def transform_procedures(self, input: TransformInput) -> TransformOutput:
         """Map raw procedure records to Atlan assets via ``map_procedure``."""
-        return await self._transform_entity(
+        return await self.transform_entity(
             entity_type="extras-procedure",
             mapper_fn=self.map_procedure,
             input=input,
@@ -1202,7 +1037,7 @@ class SqlApp(App):
 
     async def run(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, input: ExtractionInput
-    ) -> ExtractionOutput:
+    ) -> _ExtractionOutput:
         """Default extraction orchestration.
 
         1. Resolve credentials
@@ -1322,7 +1157,7 @@ class SqlApp(App):
         else:
             info = _temporal_workflow.info()
             resolved_base = os.path.join(
-                TEMPORARY_PATH,
+                _TEMPORARY_PATH,
                 _run_prefix(
                     AppRegistry.resolve_running_app_name(prefer=self._app_name),
                     info.workflow_id,
@@ -1352,7 +1187,7 @@ class SqlApp(App):
         # calls, deliberately: the two cannot drift, and an override adding a
         # fifth entity gets the identical assertion rather than a recipe it has
         # to reproduce correctly.
-        base = ExtractionOutput(
+        base = _ExtractionOutput(
             databases_extracted=db_result.total_record_count,
             schemas_extracted=schema_result.total_record_count,
             tables_extracted=table_result.total_record_count,
@@ -1375,9 +1210,9 @@ class SqlApp(App):
 
     async def finalize_extraction(
         self,
-        base: ExtractionOutput,
+        base: _ExtractionOutput,
         extra: Sequence[TransformOutput] = (),
-    ) -> ExtractionOutput:
+    ) -> _ExtractionOutput:
         """Fold extra transforms into ``base``'s declaration and verify it all.
 
         Call this from a ``run()`` override that adds entities the default
@@ -1581,12 +1416,23 @@ class SqlApp(App):
         )
 
     @staticmethod
-    def _resolve_output_path(input: ExtractionTaskInput) -> str:
-        """Resolve output_path — auto-set from build_output_path() in activity context."""
+    def resolve_output_path(input: ExtractionTaskInput) -> str:
+        """Return the local directory this task writes under.
+
+        ``input.output_path`` when the caller set one; otherwise the run's
+        path under ``TEMPORARY_PATH``, from ``build_output_path()``, which
+        reads the activity context — so call this inside a task, not in
+        ``run()``.
+
+        Public because connectors that write their own files beside the
+        template's (a custom extract, a miner) need the same directory
+        :meth:`extract_entity` and :meth:`transform_entity` use, or their
+        output lands outside the tree the upload walks.
+        """
         if not input.output_path:
             resolved = build_output_path()
             logger.info("Auto-resolved output_path: %s", resolved)
-            return os.path.join(TEMPORARY_PATH, resolved)
+            return os.path.join(_TEMPORARY_PATH, resolved)
         return input.output_path
 
     async def _init_sql_client(self, input: ExtractionTaskInput) -> BaseSQLClient:
@@ -1705,8 +1551,26 @@ class SqlApp(App):
         own ``credential_ref``, routes direct (credential_guid) / agent
         (agent_json) modes, and degrades to a GUID ref or ``None`` on a
         routing edge case.
+
+        When the input names no credential at all (no GUID, pre-built ref,
+        declared named refs or agent signal), falls back to the connection's
+        ``defaultCredentialGuid``. The eligibility rule is the one the injected
+        gate uses, so a miner input that reuses a crawler's connection resolves
+        the same credential in both places. Before this fallback such an input
+        returned ``None`` here.
         """
-        return CredentialRef.resolve_or_none(input)
+        ref = CredentialRef.resolve_or_none(input)
+        if ref is not None:
+            return ref
+        from application_sdk.credentials.ref import (  # noqa: PLC0415
+            _guid_credential_ref,
+        )
+        from application_sdk.credentials.routing import (  # noqa: PLC0415
+            _connection_credential_fallback_guid,
+        )
+
+        guid = _connection_credential_fallback_guid(input)
+        return _guid_credential_ref(guid) if guid else None
 
     # =====================================================================
     # Deprecated private aliases — remove in v4.0.0
@@ -1723,6 +1587,15 @@ class SqlApp(App):
     # A rename with no shim breaks every one of them on their next SDK bump,
     # which is a fleet-wide outage traded for a tidier diff. They delegate, so
     # there is exactly one implementation either way.
+    #
+    # ``_extract_entity``, ``_transform_entity`` and ``_resolve_output_path``
+    # joined them in FND-4686. Of the seven connectors that subclass SqlApp,
+    # app code in db2, mssql and sapase calls ``_transform_entity``, db2 and
+    # teradata call ``_extract_entity``, and db2, mssql (app + miner) and
+    # sapase call ``_resolve_output_path``; clickhouse and db2 tests call
+    # ``_transform_entity`` directly. That is the surface they actually build
+    # on. None of the seven overrides any of the three, so delegating shims
+    # keep every caller working unchanged.
     #
     # What the shims do NOT save: a test that patches one of these names. The
     # patch lands on the shim while every SDK-internal caller now goes to the
@@ -1770,10 +1643,27 @@ class SqlApp(App):
         """
         return SqlApp.build_transform_input(base, raw_file)
 
-    # =====================================================================
-    # Internal helpers
-    # =====================================================================
+    @staticmethod
+    @deprecated(
+        "SqlApp._resolve_output_path is deprecated; use the public "
+        "SqlApp.resolve_output_path instead. Will be removed in v4.0.0."
+    )
+    def _resolve_output_path(input: ExtractionTaskInput) -> str:
+        """**Deprecated** — use :meth:`resolve_output_path`.
 
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching this name no longer intercepts the SDK** — see
+            :meth:`_resolve_credential_ref` for why. Move the patch site to
+            :meth:`resolve_output_path`.
+        """
+        return SqlApp.resolve_output_path(input)
+
+    @deprecated(
+        "SqlApp._extract_entity is deprecated; use the public "
+        "SqlApp.extract_entity instead. Will be removed in v4.0.0."
+    )
     async def _extract_entity(
         self,
         *,
@@ -1781,7 +1671,75 @@ class SqlApp(App):
         sql_template: str,
         input: ExtractionTaskInput,
     ) -> ExtractionTaskOutput:
+        """**Deprecated** — use :meth:`extract_entity`.
+
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching or overriding this name no longer intercepts the SDK**
+            — see :meth:`_resolve_credential_ref` for why. Move the patch site
+            or the override to :meth:`extract_entity`.
+        """
+        return await self.extract_entity(
+            entity_type=entity_type, sql_template=sql_template, input=input
+        )
+
+    @deprecated(
+        "SqlApp._transform_entity is deprecated; use the public "
+        "SqlApp.transform_entity instead. Will be removed in v4.0.0."
+    )
+    async def _transform_entity(
+        self,
+        *,
+        entity_type: str,
+        mapper_fn: _MapperFn,
+        input: TransformInput,
+    ) -> TransformOutput:
+        """**Deprecated** — use :meth:`transform_entity`.
+
+        Removed in v4.0.0.
+
+        .. warning::
+            **Patching or overriding this name no longer intercepts the SDK**
+            — see :meth:`_resolve_credential_ref` for why. Move the patch site
+            or the override to :meth:`transform_entity`.
+        """
+        return await self.transform_entity(
+            entity_type=entity_type, mapper_fn=mapper_fn, input=input
+        )
+
+    # =====================================================================
+    # Per-entity engine — extract_entity / transform_entity
+    # =====================================================================
+    #
+    # Public because they are what connectors build on: every SQL app that
+    # adds an entity, splits a source across targets, or runs flavour-specific
+    # mappers calls these from its own extract_* / transform_* tasks rather
+    # than re-implementing the streaming, the offload and the FileReference
+    # pinning below.
+
+    async def extract_entity(
+        self,
+        *,
+        entity_type: str,
+        sql_template: str,
+        input: ExtractionTaskInput,
+    ) -> ExtractionTaskOutput:
         """Stream SQL rows verbatim into ``raw/<entity>/records.json`` JSONL.
+
+        The body of every ``extract_*`` task. Call it from your own override
+        to extract an entity with different SQL, or one the template does not
+        know about::
+
+            @task()
+            async def extract_functions(
+                self, input: ExtractionTaskInput
+            ) -> ExtractionTaskOutput:
+                return await self.extract_entity(
+                    entity_type="function",
+                    sql_template=self.fetch_function_sql,
+                    input=input,
+                )
 
         1. Open SQL client, render the template with the input filters.
         2. Stream rows in batches of ``_EXTRACT_BATCH_SIZE`` via the
@@ -1797,7 +1755,7 @@ class SqlApp(App):
             logger.warning("No SQL configured for %s — skipping", entity_type)
             return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
 
-        output_path = self._resolve_output_path(input)
+        output_path = self.resolve_output_path(input)
         if not output_path:
             return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
 
@@ -1900,7 +1858,7 @@ class SqlApp(App):
             raw_file=raw_ref,
         )
 
-    async def _transform_entity(
+    async def transform_entity(
         self,
         *,
         entity_type: str,
@@ -1908,6 +1866,23 @@ class SqlApp(App):
         input: TransformInput,
     ) -> TransformOutput:
         """Read raw JSONL → mapper → transformed JSONL.
+
+        The body of every ``transform_*`` task. Call it from your own override
+        to run an entity through a different mapper::
+
+            @task()
+            async def transform_functions(
+                self, input: TransformInput
+            ) -> TransformOutput:
+                return await self.transform_entity(
+                    entity_type="function",
+                    mapper_fn=self.map_function,
+                    input=input,
+                )
+
+        It also applies ``entity_envelope``, :meth:`decorate_entity`, and the
+        ``connectionName`` / ``lastSync*`` attributes to every line, so going
+        through it is how a custom entity's output matches the rest.
 
         Reads the raw records.json via the ``FileReference`` threaded
         through from the matching ``extract_*`` activity, runs each
@@ -1928,7 +1903,7 @@ class SqlApp(App):
             returning ``total_record_count=0`` — matches the historical
             contract that the publish step relies on.
         """
-        output_path = self._resolve_output_path(input)
+        output_path = self.resolve_output_path(input)
         if not output_path:
             return TransformOutput(typename=entity_type, total_record_count=0)
 
@@ -2051,7 +2026,7 @@ class SqlApp(App):
         # entity gets archived as "removed from source" on the next
         # publish run. ``get_object_store_prefix`` strips
         # ``TEMPORARY_PATH`` from the local path to derive the
-        # matching object-store key; see ``_extract_entity`` for the
+        # matching object-store key; see ``extract_entity`` for the
         # corresponding canonical key on the raw side.
         #
         # Tier = RETAINED (vs. TRANSIENT on raw_file): the
@@ -2076,6 +2051,12 @@ class SqlApp(App):
         )
 
 
+if TYPE_CHECKING:
+    # Served at runtime by the deprecation __getattr__ below; bound here so
+    # type checkers see the real type and __all__ names a defined symbol.
+    from application_sdk.constants import TEMPORARY_PATH
+    from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
+
 # ── Deprecated re-exports ────────────────────────────────────────────────────
 #: name -> (replacement, why). This module imported ``legacy_credential_ref``
 #: until FND-4691 switched it to the private GUID constructor, which left the
@@ -2083,7 +2064,46 @@ class SqlApp(App):
 #: by ``__getattr__`` below (PEP 562) so the removal waits for v4.0.0.
 #: ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` likewise, since FND-4921 composes the run
 #: prefix through ``application_sdk.constants._run_prefix``.
+#: FND-4687 moved the ``FailureDetails`` → ``AppError`` rebuild into
+#: ``application_sdk.errors.wire``; the names it imported for that, and the
+#: rebuild itself (which a connector imports), are served from there.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "ExtractionOutput": (
+        "application_sdk.templates.contracts.sql_metadata.ExtractionOutput",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "TEMPORARY_PATH": (
+        "application_sdk.constants.TEMPORARY_PATH",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "_error_from_failure_details": (
+        "application_sdk.errors.wire.error_from_failure_details",
+        "the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it",
+    ),
+    "_redacted_validation_reason": (
+        "application_sdk.errors.wire.redacted_validation_reason",
+        "the FailureDetails rebuild moved to errors.wire so non-SQL apps can use it",
+    ),
+    "Audience": (
+        "application_sdk.errors.categories.Audience",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "FailureCategory": (
+        "application_sdk.errors.categories.FailureCategory",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "redact_wire_value": (
+        "application_sdk.errors.base.redact_wire_value",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "sanitize_cause_repr": (
+        "application_sdk.errors.base.sanitize_cause_repr",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "secret_named_evidence_keys": (
+        "application_sdk.errors.wire.secret_named_evidence_keys",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
     "legacy_credential_ref": (
         "application_sdk.credentials.ref.legacy_credential_ref",
         "it was only ever re-exported here as a side effect of an import",

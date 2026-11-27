@@ -12,6 +12,17 @@ from typing import Any
 from application_sdk.common._listing import prune_internal_dirs
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "begin_collection",
+    "describe_inputs",
+    "end_collection",
+    "InputCollector",
+    "InputSize",
+    "report_input_bytes",
+    "report_local_paths",
+]
+
+
 _logger = get_logger(__name__)
 
 # One stat per file, so bound the walk: a partial count beats an activity slowed

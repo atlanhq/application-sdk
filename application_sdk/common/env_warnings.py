@@ -18,6 +18,11 @@ from __future__ import annotations
 
 import os
 
+__all__ = [
+    "warn_removed_env_vars",
+]
+
+
 #: Env vars the SDK no longer reads. Keep curated — every entry that is set
 #: in the environment becomes part of one warning line at startup.
 _REMOVED_ENV_VARS: frozenset[str] = frozenset(
@@ -54,6 +59,19 @@ _REMOVED_ENV_VARS: frozenset[str] = frozenset(
         # The preflight gate posture is read from App.preflight_gate_mode only,
         # so the worker and the workflow can never disagree about it.
         "ATLAN_PREFLIGHT_GATE_MODE",
+        # Dropped when env config was consolidated through AppConfig (#1544):
+        # the local dashboard / Temporal UI addresses and the SQL server version
+        # floor had no remaining reader. The activity concurrency cap is now
+        # TEMPORAL_MAX_CONCURRENT_ACTIVITIES.
+        "ATLAN_APP_DASHBOARD_HOST",
+        "ATLAN_APP_DASHBOARD_PORT",
+        "ATLAN_MAX_CONCURRENT_ACTIVITIES",
+        "ATLAN_SQL_SERVER_MIN_VERSION",
+        "ATLAN_WORKFLOW_UI_HOST",
+        "ATLAN_WORKFLOW_UI_PORT",
+        # ATLAN_LOCAL_DEVELOPMENT is deliberately absent: the SDK stopped reading
+        # it (#641), but connector main.py files still do, and the shared
+        # connector-integration-tests action sets it. See docs/configuration.md.
     }
 )
 
