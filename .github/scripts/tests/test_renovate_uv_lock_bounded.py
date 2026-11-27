@@ -384,6 +384,15 @@ class TestBuildUvCommand:
             "pyatlan=P0D",
         ]
 
+    def test_no_upgrade_drops_only_the_upgrade_flag(self):
+        # FND-5472: the range-bump lane keeps the bound and every ceiling; it
+        # only stops asking uv to move what the manifest does not force.
+        ceilings = {"boto3": "2026-08-14T19:24:54Z"}
+        upgraded = bounded.build_uv_command("P3D", ["pyatlan"], ceilings)
+        kept = bounded.build_uv_command("P3D", ["pyatlan"], ceilings, upgrade=False)
+        assert [a for a in upgraded if a != "--upgrade"] == kept
+        assert "--upgrade" in upgraded
+
     def test_bound_is_always_present_even_with_no_exemptions(self):
         command = bounded.build_uv_command("P7D", [])
         assert "--exclude-newer" in command
@@ -1143,6 +1152,107 @@ class TestBaselineRef:
             ]
         )
         assert exit_code == 1
+
+    def _range_bump_branch(self, tmp_path: Path) -> tuple[str, str]:
+        """A Renovate range-bump branch, as on #3656 (FND-5472).
+
+        The base locks fastmcp 3 beside a boto3 that has a newer release. The
+        branch commit carries Renovate's unbounded relock: fastmcp at an
+        hour-old release, and (as any unbounded relock may) boto3 moved too.
+        """
+        base = (
+            "version = 1\n"
+            + self._package("boto3", "1.0.0", "2020-01-01T00:00:00Z")
+            + self._package("fastmcp", "3.4.11", "2026-10-20T22:44:36Z")
+        )
+        renovate = (
+            "version = 1\n"
+            + self._package("boto3", "1.1.0", self._stamp(days=10))
+            + self._package("fastmcp", "4.2.6", self._stamp(hours=1))
+        )
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+        (tmp_path / "uv.lock").write_text(base)
+        self._git(tmp_path, "init", "-q")
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-qm", "base")
+        self._git(tmp_path, "branch", "base")
+        (tmp_path / "uv.lock").write_text(renovate)
+        self._git(tmp_path, "add", "-A")
+        self._git(tmp_path, "commit", "-qm", "chore(deps): update fastmcp to v4")
+        return base, renovate
+
+    def test_no_upgrade_relocks_from_the_base_lock_without_upgrade(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        """FND-5472: a range bump moves the bumped package's closure, nothing else.
+
+        Without --upgrade uv keeps whatever the lock it starts from pins, so the
+        driver has to start it from the base branch's lock: starting from
+        Renovate's would keep the hour-old fastmcp the bound exists to refuse.
+        """
+        base, _ = self._range_bump_branch(tmp_path)
+        bounded_lock = (
+            "version = 1\n"
+            + self._package("boto3", "1.0.0", "2020-01-01T00:00:00Z")
+            + self._package("fastmcp", "4.2.4", self._stamp(days=6))
+        )
+        seen: list[tuple[list[str], str]] = []
+
+        def fake_run(command, cwd):
+            lock_path = Path(cwd) / "uv.lock"
+            seen.append((command, lock_path.read_text()))
+            lock_path.write_text(with_options(bounded_lock))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(tmp_path)]
+        assert (
+            bounded.main(
+                [
+                    *argv,
+                    "--baseline-ref",
+                    "base",
+                    "--no-upgrade",
+                    "--caller-owns-commit",
+                ]
+            )
+            == 0
+        )
+        command, started_from = seen[0]
+        assert "--upgrade" not in command
+        assert ["--exclude-newer", "P3D"] == command[2:4]
+        assert started_from == base
+        result = (tmp_path / "uv.lock").read_text()
+        assert "[options]" not in result
+        assert bounded.lock_versions(result) == {"boto3": "1.0.0", "fastmcp": "4.2.4"}
+
+    def test_without_no_upgrade_the_refresh_still_upgrades_from_renovates_lock(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        # The control for the test above: the lock-refresh lane is unchanged.
+        _, renovate = self._range_bump_branch(tmp_path)
+        seen: list[tuple[list[str], str]] = []
+
+        def fake_run(command, cwd):
+            lock_path = Path(cwd) / "uv.lock"
+            seen.append((command, lock_path.read_text()))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        bounded.main(
+            [
+                "--window",
+                "P3D",
+                "--project-dir",
+                str(tmp_path),
+                "--baseline-ref",
+                "base",
+                "--caller-owns-commit",
+            ]
+        )
+        command, started_from = seen[0]
+        assert command[:3] == ["uv", "lock", "--upgrade"]
+        assert started_from == renovate
 
 
 class TestWithholds:

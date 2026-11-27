@@ -40,7 +40,20 @@ shape:
    required-check suite. The bounded lock and the regenerated table ride in a
    single commit, one CI wave instead of one per file.
 
-4. **A pyatlan move regenerates the table derived from it.** The conformance
+4. **Range-bump branches too (FND-5472).** When Renovate rewrites a range in
+   ``pyproject.toml`` (a major, or the non-critical group), its own relock
+   takes the newest release the new range admits, which for a package that
+   publishes faster than the window is always too young: ``checks/dep-cooldown``
+   fails and the PR can never merge (fastmcp 4 sat 83 days that way).
+   ``--no-upgrade`` bounds those branches without turning them into a lock
+   refresh: the driver starts from the base branch's lock and drops
+   ``--upgrade``, so every package the new manifest still admits stays where
+   main has it and only the bumped package's closure resolves, inside the
+   window. Renovate's own pick already passed its release-age rule, so the
+   floor it wrote is satisfiable; one younger than the window is a deliberate
+   floor, which the driver admits and reports.
+
+5. **A pyatlan move regenerates the table derived from it.** The conformance
    package commits ``relationship_directions.json``, built from the installed
    pyatlan's models and pinned to it by a drift test. A refresh that moves
    pyatlan without regenerating it is a red PR nobody on the lane can fix, so
@@ -130,7 +143,14 @@ OUTPUT_PATHS: tuple[str, ...] = (
 )
 
 
-def bound_project(project: Project, window: str, baseline_ref: str, root: Path) -> int:
+def bound_project(
+    project: Project,
+    window: str,
+    baseline_ref: str,
+    root: Path,
+    *,
+    no_upgrade: bool = False,
+) -> int:
     """Run the shipped driver over one project. Returns its exit code."""
     argv = [
         "--window",
@@ -150,6 +170,8 @@ def bound_project(project: Project, window: str, baseline_ref: str, root: Path) 
         argv += ["--exempt", name]
     for name in project.hold:
         argv += ["--hold", name]
+    if no_upgrade:
+        argv.append("--no-upgrade")
     return bounded.main(argv)
 
 
@@ -308,6 +330,13 @@ def main(argv: list[str] | None = None) -> int:
         "after Renovate has committed the refresh, so the driver's HEAD default "
         "would silently make the bound a no-op.",
     )
+    parser.add_argument(
+        "--no-upgrade",
+        action="store_true",
+        help="Bound a Renovate range-bump branch rather than the lock refresh: "
+        "relock from the base branch's lock without --upgrade, so only the "
+        "bumped package's closure moves, inside the window (FND-5472).",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--no-commit",
@@ -346,7 +375,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--window and --baseline-ref are required to bound")
 
     for project in PROJECTS:
-        code = bound_project(project, args.window, args.baseline_ref, root)
+        code = bound_project(
+            project,
+            args.window,
+            args.baseline_ref,
+            root,
+            no_upgrade=args.no_upgrade,
+        )
         if code != 0:
             print(
                 f"Bound failed for {project.directory!r}; committing nothing so "

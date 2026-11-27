@@ -1716,8 +1716,19 @@ lanes are a deliberate exception to the baseline, recorded here (FND-4651).
 | Third-party PyPI (major, minor, patch) | 3 days | `renovate-config/default.json`, PyPI release-age rule |
 | Lock refresh (`lockFileMaintenance`), fleet | 3 days | `renovate-config/self-hosted.js`, `--window P3D` |
 | Lock refresh, application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D` |
+| Range-bump relock (a range Renovate rewrote in `pyproject.toml`), application-sdk itself | 3 days | `.github/workflows/renovate-lock-cooldown.yaml`, `--window P3D --no-upgrade` |
 | pkl toolchain | 3 days | `renovate.json`, pkl release-age rule |
 | pre-commit hooks | 3 days | `renovate.json`, pre-commit release-age rule |
+
+**Why the range-bump relock is bounded too (FND-5472).** Renovate age-checks the
+version it writes into a range, but its relock then takes the newest release
+that range admits. For a package that publishes faster than the window, that
+release is always too young, so `checks/dep-cooldown` fails on every relock and
+the PR never merges. The `bound-bump` job relocks the branch from `main`'s lock
+without `--upgrade`, so only the bumped package's closure moves, inside the
+window. It skips `renovate/pyatlan`, `renovate/major-pyatlan` (first-party,
+owned by the table-sync lane) and `renovate/**-vulnerability` (security updates
+bypass the cooldown).
 
 First-party packages (`atlan-application-sdk`, `-conformance`, `pyatlan`, the
 app-contract-toolkit, and `atlanhq/**` actions and reusable workflows) have no

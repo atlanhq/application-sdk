@@ -594,8 +594,15 @@ def build_uv_command(
     exempt: list[str],
     ceilings: dict[str, str] | None = None,
     holds: dict[str, str] | None = None,
+    *,
+    upgrade: bool = True,
 ) -> list[str]:
     """The bounded resolve, plus one ceiling flag per package that needs one.
+
+    ``upgrade=False`` drops ``--upgrade``: uv then keeps every locked version
+    the manifest still admits and re-resolves only what a manifest change
+    forces. That is the shape of a Renovate range-bump branch (FND-5472), where
+    the lock should move by the bumped package's closure and nothing else.
 
     Exemptions win over a retention ceiling for the same package: an exempt
     package must be free to move forward, not merely be held where it is. Holds
@@ -604,7 +611,13 @@ def build_uv_command(
     flag, so precedence never rests on how uv treats a repeated name.
     """
     holds = holds or {}
-    command = ["uv", "lock", "--upgrade", "--exclude-newer", window]
+    command = [
+        "uv",
+        "lock",
+        *(["--upgrade"] if upgrade else []),
+        "--exclude-newer",
+        window,
+    ]
     exempt_normalised = {normalise(name) for name in exempt}
     for name, admit in sorted((ceilings or {}).items()):
         if name not in exempt_normalised and name not in holds:
@@ -792,6 +805,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--project-dir", default=".")
     parser.add_argument(
+        "--no-upgrade",
+        action="store_true",
+        help="Relock from the BASELINE lock without --upgrade, so only what the "
+        "manifest change forces moves (FND-5472). For a Renovate range-bump "
+        "branch, where Renovate rewrote a range in pyproject.toml and its "
+        "unbounded relock took the newest release in the new range, however "
+        "young. Without --upgrade every other package stays where the base "
+        "branch has it, and the bumped package's closure resolves inside the "
+        "window. Off for the lock-refresh lane, whose job is to move everything.",
+    )
+    parser.add_argument(
         "--caller-owns-commit",
         action="store_true",
         help="The caller controls what gets committed, so a bound that admits "
@@ -903,8 +927,17 @@ def main(argv: list[str] | None = None) -> int:
     held |= transitive
     holds = hold_ceilings(upload_times, [*args.hold, *sorted(transitive)])
 
+    upgrade = not args.no_upgrade
+    if args.no_upgrade and baseline:
+        # Renovate's unbounded relock is already in the tree, and without
+        # --upgrade uv keeps what a lock pins: start from the base branch's
+        # lock instead, or the bound would keep exactly the young release it
+        # exists to refuse.
+        lock_path.write_text(baseline)
+
     result = run_uv_lock(
-        build_uv_command(args.window, exempt, ceilings, holds), project_dir
+        build_uv_command(args.window, exempt, ceilings, holds, upgrade=upgrade),
+        project_dir,
     )
     admitted_early: list[str] = []
 
@@ -937,7 +970,9 @@ def main(argv: list[str] | None = None) -> int:
                 caller_owns_commit=args.caller_owns_commit,
             )
         result = run_uv_lock(
-            build_uv_command(args.window, exempt + admitted_early, ceilings, holds),
+            build_uv_command(
+                args.window, exempt + admitted_early, ceilings, holds, upgrade=upgrade
+            ),
             project_dir,
         )
         if result.returncode != 0:
@@ -1063,7 +1098,13 @@ def main(argv: list[str] | None = None) -> int:
     lines = [
         f"**Release-age bound applied:** `{args.window}` "
         f"(exempt: {', '.join(exempt) or 'none'}; "
-        f"held: {', '.join(args.hold) or 'none'})",
+        f"held: {', '.join(args.hold) or 'none'}"
+        + (
+            "; relocked from the base branch without --upgrade"
+            if args.no_upgrade
+            else ""
+        )
+        + ")",
         "",
         f"- {len(transitive)} transitive package(s) held at the base branch's "
         "version because the framework lane moves them"

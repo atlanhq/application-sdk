@@ -18,13 +18,32 @@ name: Bound the Renovate lock refresh
 # its own: statuses are per-SHA and Renovate stamps only its own commits, so
 # the publishing job carries that state forward (carry_artifact_status.py).
 #
-# Scope is `renovate/lock-file-maintenance` alone. The `update-lockfile` lanes
-# (SDK, conformance) also write uv.lock, but each moves a single named package
-# that is first-party and explicitly chosen — the cooldown has no business
-# delaying a deliberate pick, only the unattended upgrade-everything refresh.
-# The one workspace lock never resolves atlan-application-sdk from PyPI (it is
-# the workspace root; packages/conformance is a member, FND-4671), so the bound
-# does not hold it.
+# Two lanes, one job each, chosen by branch:
+#
+#   - `bound`: renovate/lock-file-maintenance, the unattended
+#     upgrade-everything refresh. The driver re-resolves with --upgrade.
+#   - `bound-bump` (FND-5472): every other Renovate branch that relocks
+#     uv.lock, i.e. a range Renovate rewrote in pyproject.toml (a third-party
+#     major, the non-critical group, ruff). Renovate age-checks the version it
+#     writes into the range, but its relock then takes the newest release that
+#     range admits, however young, so `checks/dep-cooldown` fails. For a
+#     package that publishes faster than the window that is every relock, and
+#     the PR can never merge: fastmcp 4 (#3656) sat 83 days that way. Here the
+#     driver runs with --no-upgrade: it relocks from main's lock, so only the
+#     bumped package's closure moves, inside the window.
+#
+# Not bounded, by the branch filter below:
+#
+#   - renovate/pyatlan and renovate/major-pyatlan. pyatlan is Atlan-published
+#     and has no window (FND-378), and renovate-pyatlan-table-sync.yaml owns
+#     those branches: two lanes pushing to one branch would race.
+#   - renovate/**-vulnerability, Renovate's vulnerability-alert branches.
+#     Security updates bypass the cooldown (renovate-config/default.json,
+#     vulnerabilityAlerts), and the bound would hold a CVE fix back.
+#
+# The workspace lock never resolves atlan-application-sdk from PyPI (it is the
+# workspace root; packages/conformance is a member, FND-4671), so neither lane
+# can hold a first-party pick back.
 #
 # When the bounded lock moves pyatlan, the driver also regenerates the
 # conformance package's relationship_directions.json, which a drift test pins to
@@ -38,8 +57,13 @@ name: Bound the Renovate lock refresh
 
 on:
   push:
+    # Last matching pattern wins. Keep this disjoint from
+    # renovate-pyatlan-table-sync.yaml's list (a test pins it).
     branches:
-      - renovate/lock-file-maintenance
+      - "renovate/**"
+      - "!renovate/pyatlan"
+      - "!renovate/major-pyatlan"
+      - "!renovate/**-vulnerability"
     paths:
       - "uv.lock"
 
@@ -56,6 +80,7 @@ concurrency:
 jobs:
   bound:
     name: Bound the refreshed locks
+    if: github.ref == 'refs/heads/renovate/lock-file-maintenance'
     # The actor allowlist and the re-entrancy guard live on the reusable's
     # `generate` job, keyed by `own-commit-subject`. Renovate's own commit
     # subject is "chore(deps): lock file maintenance", so this never skips a
@@ -73,6 +98,26 @@ jobs:
       # the connectors again, which is half of what FND-376 exists to fix.
       generate-args: --window P3D
       artifact-name: bounded-locks
+      own-commit-subject: "chore(deps): bound the refreshed locks"
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+      BOT_SIGNING_KEY: ${{ secrets.BOT_SIGNING_KEY }}
+
+  bound-bump:
+    name: Bound the range-bump relock
+    # Every branch the trigger admits except the lock refresh, above.
+    if: github.ref != 'refs/heads/renovate/lock-file-maintenance'
+    permissions:
+      contents: read
+      statuses: write
+    uses: ./.github/workflows/renovate-branch-fixup.yaml
+    with:
+      script: .github/scripts/bound_lock_branch.py
+      # Same window as `bound`; --no-upgrade relocks from main's lock so only
+      # the bumped package's closure moves.
+      generate-args: --window P3D --no-upgrade
+      artifact-name: bounded-bump-lock
       own-commit-subject: "chore(deps): bound the refreshed locks"
     secrets:
       FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
