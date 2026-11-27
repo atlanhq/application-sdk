@@ -46,7 +46,7 @@ def test_parse_window(spec: str, expected: list[str]):
     "spec", [">=3.11", ">=3.11,<4", "<3.15,>=3.11", ">=3.14,<3.14"]
 )
 def test_parse_window_rejects_uncapped_or_unexpected(spec: str):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="requires-python"):
         psw.parse_window(spec)
 
 
