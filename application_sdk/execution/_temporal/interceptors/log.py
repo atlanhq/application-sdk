@@ -41,7 +41,6 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk import _deprecation
 from application_sdk.errors.base import AppError, redact_secrets
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
@@ -801,50 +800,3 @@ class LogInterceptor(Interceptor):
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
         return _LogActivityInboundInterceptor(next)
-
-
-# ── Deprecated re-exports (FND-1936) ─────────────────────────────────────────
-#
-# #3872 imported these two from ``application_sdk.constants`` so the lifecycle
-# lines could stamp them as structured attributes. That import also made them
-# importable *from this module*, and v3.37.0/v3.38.0 shipped them that way.
-# The attributes are gone — the build identity now rides in the ``App started``
-# / ``App completed`` message, which is the only field the run-logs path
-# preserves end to end — but the names were part of the released importable
-# surface, so they cannot simply vanish.
-#
-# The gate that enforces this treats a public name in a private module as
-# binding precisely because the fleet has imported SDK privates before
-# (FND-2388), so ``_temporal`` in the path does not exempt them. Their real
-# home is and always was ``application_sdk.constants``; nothing should have
-# been reaching them through an interceptor.
-#
-# Module-level constants cannot carry ``@deprecated``, so PEP 562 module
-# ``__getattr__`` is the vehicle: it fires on *access*, so nothing is paid by
-# a caller who never touches one, and the warning names the caller's own line.
-#: name -> (replacement, why)
-_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
-    "APPLICATION_VERSION": (
-        "application_sdk.constants.APPLICATION_VERSION",
-        "the same constant, at the module that owns it",
-    ),
-    "COMMIT_SHA": (
-        "application_sdk.constants.COMMIT_SHA",
-        "the same constant, at the module that owns it",
-    ),
-}
-
-
-if TYPE_CHECKING:
-    # PEP 562's ``__getattr__`` can only be typed ``-> object``, which is all a
-    # type checker infers for every name it serves. Declaring the names here
-    # restores their real types for static analysis only — these statements
-    # never execute, so every runtime access still misses the module globals,
-    # still reaches ``__getattr__``, and still warns.
-    APPLICATION_VERSION: str
-    COMMIT_SHA: str
-
-
-__getattr__ = _deprecation.deprecated_module_getattr(
-    __name__, _DEPRECATED_CONSTANTS, remove_in="3.41.0"
-)
