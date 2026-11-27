@@ -63,6 +63,7 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
         "pip install --force-reinstall --no-deps atlan-application-sdk-api"
     )
 
+from application_sdk import _env as _sdk_env
 from application_sdk._loop_stall_watchdog import (
     LoopStallWatchdog,
 )
@@ -317,15 +318,6 @@ class AppConfig:
             or _derive_service_name(app_module)
         )
 
-        # v2-compat: remove when all deployments use ATLAN_TEMPORAL_HOST instead.
-        # v2 fallback: combine ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT into host:port
-        _v2_workflow_host = _env("ATLAN_WORKFLOW_HOST")
-        _v2_temporal_host = (
-            f"{_v2_workflow_host}:{_env('ATLAN_WORKFLOW_PORT', '7233')}"
-            if _v2_workflow_host
-            else ""
-        )
-
         # Task queue: prefer ATLAN_APPLICATION_NAME+ATLAN_DEPLOYMENT_NAME (matches v2
         # TemporalWorkflowClient.get_worker_task_queue()), fall back to class-name derivation.
         _default_task_queue = _derive_task_queue(app_module)
@@ -338,7 +330,8 @@ class AppConfig:
             or None,
             temporal_host=getattr(args, "temporal_host", None)
             or _env("ATLAN_TEMPORAL_HOST")
-            or _v2_temporal_host
+            # v2-compat: ATLAN_WORKFLOW_HOST + ATLAN_WORKFLOW_PORT.
+            or _sdk_env.legacy_workflow_host()
             or "localhost:7233",
             temporal_namespace=getattr(args, "temporal_namespace", None)
             or _env("ATLAN_TEMPORAL_NAMESPACE")

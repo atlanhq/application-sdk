@@ -42,13 +42,17 @@ unresolved base name and does not recurse, so ``IncrementalExtractionOutput``
 cannot reach ``ExtractionOutput``'s fields through its own registry entry.
 
 **Template contracts — excluded.** Bare names that another SDK contract module
-also declares (``UploadInput`` / ``UploadOutput``, declared by both
-``templates.contracts.base_metadata_extraction`` and ``contracts.storage`` with
-different fields). The registry is keyed by bare class name, matching how the
-resolver sees an unresolved base, so it cannot tell the two apart; registering
-either one's fields would mis-resolve consumers of the other. Leaving them out
-keeps the conservative behaviour — no fields resolved, as for every unregistered
-name. ``tests/test_sdk_contract_mixins.py`` pins that collision set.
+also declares. The registry is keyed by bare class name, matching how the
+resolver sees an unresolved base, so it cannot tell two such classes apart;
+registering either one's fields would mis-resolve consumers of the other.
+Leaving them out keeps the conservative behaviour — no fields resolved, as for
+every unregistered name. The set is empty: the one collision,
+``UploadInput`` / ``UploadOutput`` in both
+``templates.contracts.base_metadata_extraction`` and ``contracts.storage``, was
+renamed to ``UploadToAtlanInput`` / ``UploadToAtlanOutput`` on the template side
+(FND-4095). The old template names survive only as deprecated aliases, which
+declare no class, so a consumer subclassing them still resolves no fields.
+``tests/test_sdk_contract_mixins.py`` pins that the set stays empty.
 
 **Template run() contracts.** An app that subclasses a template and writes no
 ``run()`` of its own inherits the template's, and ``_collect_implicit_ep``

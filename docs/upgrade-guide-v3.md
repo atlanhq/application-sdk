@@ -1502,6 +1502,21 @@ Every other name a module only imported still imports today, without a warning, 
 
 ---
 
+## Renamed to end a name collision (deprecated, removed in v4.0.0)
+
+Each old name shared a name with a different SDK symbol, so which one an import meant depended on the module it came from. The old names still work and warn, and B001 flags each import.
+
+| Deprecated | Use | It collided with |
+|---|---|---|
+| `application_sdk.testing.Handler`, `application_sdk.testing.fake_source.Handler` | `FakeSourceHandler`, same modules | `application_sdk.handler.Handler`. `from application_sdk.testing import *` rebound it over the app's own import, so the star-import no longer exports `Handler` at all. |
+| `UploadInput` / `UploadOutput` from `application_sdk.templates.contracts`, `templates.contracts.base_metadata_extraction` or `templates.base_metadata_extractor` | `UploadToAtlanInput` / `UploadToAtlanOutput` | `application_sdk.contracts.storage.UploadInput` / `UploadOutput`, which have different fields. These are the contracts of the deprecated `upload_to_atlan` task; new code calls `App.upload` with the storage `UploadInput`. |
+
+## `ExecutionSettings.host`, `namespace` and `task_queue` (deprecated, removed in v4.0.0)
+
+The SDK's worker and client never read these three fields, or the `TEMPORAL_HOST`, `TEMPORAL_NAMESPACE` and `TEMPORAL_TASK_QUEUE` variables that set them: they connect with `AppConfig`, which reads `ATLAN_TEMPORAL_HOST`, `ATLAN_TEMPORAL_NAMESPACE` and `ATLAN_TASK_QUEUE`. `load_execution_settings()` still fills the fields, so nothing changes until v4.0.0, and setting the variables does not warn: an app may set them for its own code. If you read the address from `load_execution_settings().host`, read `ATLAN_TEMPORAL_HOST` instead. If you set `TEMPORAL_*` only so the SDK would connect, set the `ATLAN_*` name: the SDK's worker and client never read `TEMPORAL_*`.
+
+---
+
 ## `retry_policy` together with the `@task` retry scalars (warns now, an error in v4.0.0)
 
 `retry_policy` replaces `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds`. The task is dispatched with the policy as-is and the three scalars are never read, so `@task(retry_policy=RetryPolicy(max_attempts=2), retry_max_attempts=5)` ran with 2 attempts and the 5 was dropped without a word. `@task` now emits a `DeprecationWarning` and logs a WARNING at decoration when `retry_policy` is passed together with any of the three, even when the value passed equals the default. From v4.0.0 it raises `TaskDeclarationError`. Retry behaviour is unchanged: the policy still wins.

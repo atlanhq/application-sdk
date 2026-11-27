@@ -1003,7 +1003,7 @@ and will be removed in the next major SDK release.
 
 <!-- legacy-example: the deprecated call this section migrates off -->
 ```python
-await self.upload_to_atlan(UploadInput(output_path=input.output_path))
+await self.upload_to_atlan(UploadToAtlanInput(output_path=input.output_path))
 ```
 
 **Replacement:**

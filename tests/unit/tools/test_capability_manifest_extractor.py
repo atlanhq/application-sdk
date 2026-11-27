@@ -21,6 +21,7 @@ file path (same pattern used for .github/scripts/*.py in
 
 import importlib.util
 import inspect
+import json
 import os
 import subprocess
 import sys
@@ -701,3 +702,170 @@ def test_a_package_keeps_the_deprecated_names_its_all_lists(tmp_path: Path) -> N
         "_DEPRECATED_CONSTANTS = {'Old': ('application_sdk.home.Old', 'moved')}\n"
     )
     assert extractor.extract_all_from_init(pkg) == ["go", "Old"]
+
+
+# ---------------------------------------------------------------------------
+# Deprecated symbols are listed as deprecated, not as recommended (FND-4095)
+# ---------------------------------------------------------------------------
+
+
+def test_load_deprecations_keeps_module_level_names_only(tmp_path: Path) -> None:
+    path = tmp_path / "deprecated_symbols.json"
+    path.write_text(
+        '{"symbols": ['
+        '{"module": "application_sdk.a", "symbol": "Old", "message": "Old is deprecated."},'
+        '{"module": "application_sdk.a", "symbol": "Cls.method", "message": "m."}'
+        "]}",
+        encoding="utf-8",
+    )
+    assert extractor.load_deprecations(path) == {
+        "application_sdk.a:Old": "Old is deprecated."
+    }
+
+
+def test_load_deprecations_reads_the_committed_table() -> None:
+    """The real table is where the extractor looks, and it is not empty."""
+    deprecations = extractor.load_deprecations()
+    assert "application_sdk.testing.fake_source:Handler" in deprecations
+
+
+@pytest.mark.parametrize(
+    ("modules", "filepath", "expected"),
+    [
+        # Recorded at an export path.
+        (["application_sdk.a"], "", "notice"),
+        # Recorded where it is defined, exported from a package.
+        (["application_sdk"], "application_sdk/a.py", "notice"),
+        (["application_sdk.b"], "application_sdk/a/__init__.py", "notice"),
+        # Neither path is the recorded one.
+        (["application_sdk.b"], "application_sdk/b.py", None),
+    ],
+)
+def test_deprecation_for_matches_export_or_defining_module(
+    modules: list[str], filepath: str, expected: str | None
+) -> None:
+    deprecations = {"application_sdk.a:Old": "notice"}
+    assert extractor.deprecation_for("Old", modules, filepath, deprecations) == expected
+
+
+def test_render_marks_deprecated_symbols_and_contracts(tmp_path: Path) -> None:
+    normalized = {
+        "subpackages": {
+            "a": {
+                "all": ["New", "Old"],
+                "symbols": [
+                    {
+                        "name": "New",
+                        "kind": "class",
+                        "signature": "class New",
+                        "summary": "Use me.",
+                        "filepath": "",
+                        "module": "application_sdk.a",
+                    },
+                    {
+                        "name": "Old",
+                        "kind": "class",
+                        "signature": "class Old",
+                        "summary": "Legacy.",
+                        "filepath": "",
+                        "module": "application_sdk.a",
+                        "deprecated": "Old is deprecated; use New",
+                    },
+                ],
+            }
+        },
+        "contracts": {
+            "application_sdk.contracts": [
+                {
+                    "name": "OldInput",
+                    "namespace": "application_sdk.contracts",
+                    "summary": "x",
+                    "filepath": "",
+                    "fields": [],
+                    "deprecated": "OldInput is deprecated.",
+                }
+            ]
+        },
+    }
+    data_path = tmp_path / "normalized.json"
+    data_path.write_text(json.dumps(normalized), encoding="utf-8")
+    purposes = tmp_path / "purposes.yaml"
+    purposes.write_text("", encoding="utf-8")
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            str(_EXTRACTOR_DIR / "extractor.py"),
+            "render",
+            str(data_path),
+            str(purposes),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+    assert "#### `New`\n" in out
+    assert "#### `Old` (deprecated)\n" in out
+    assert (
+        "- **Deprecated:** Old is deprecated; use New. Do not use in new code." in out
+    )
+    assert "#### `OldInput` (deprecated)\n" in out
+    assert "- **Deprecated:** OldInput is deprecated. Do not use in new code." in out
+
+
+def test_normalize_sorts_deprecated_symbols_after_the_rest(tmp_path: Path) -> None:
+    raw = {
+        "subpackages": {
+            "a": {
+                "all": [],
+                "symbols": [
+                    {"name": "Aold", "kind": "class", "deprecated": "x"},
+                    {"name": "Bnew", "kind": "class"},
+                ],
+            }
+        },
+        "contracts": {},
+    }
+    raw_path = tmp_path / "raw.json"
+    raw_path.write_text(json.dumps(raw), encoding="utf-8")
+    out = subprocess.run(
+        [
+            sys.executable,
+            str(_EXTRACTOR_DIR / "extractor.py"),
+            "normalize",
+            str(raw_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    names = [s["name"] for s in json.loads(out)["subpackages"]["a"]["symbols"]]
+    assert names == ["Bnew", "Aold"]
+
+
+def test_deprecated_names_by_subpackage_keeps_public_modules_shortest_first() -> None:
+    deprecations = {
+        "application_sdk.testing.fake_source:Handler": "a",
+        "application_sdk.testing:Handler": "b",
+        "application_sdk._private:Gone": "c",
+        "application_sdk.execution._temporal.x:Gone": "d",
+    }
+    assert extractor.deprecated_names_by_subpackage(deprecations) == {
+        "testing": [
+            ("application_sdk.testing", "Handler", "b"),
+            ("application_sdk.testing.fake_source", "Handler", "a"),
+        ]
+    }
+
+
+def test_committed_manifest_lists_aliases_kept_out_of_all() -> None:
+    """``testing.Handler`` is out of ``__all__`` but still imports; the manifest says so."""
+    manifest = (
+        Path(__file__).resolve().parents[3] / "docs" / "agents" / "sdk-capabilities.md"
+    ).read_text(encoding="utf-8")
+    after_heading = manifest.split("#### `Handler` (deprecated)\n\n", 1)[1]
+    entry = after_heading.split("\n\n", 1)[0]
+    assert "use application_sdk.testing.FakeSourceHandler" in entry
+    assert "- **Import:** `from application_sdk.testing import Handler`" in entry
+    assert "`application_sdk.testing.fake_source`" in entry

@@ -68,11 +68,12 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Generic, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
 import orjson
 
+from application_sdk import _deprecation
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing._errors import (
     CursorPageLimitError,
@@ -87,8 +88,8 @@ __all__ = [
     "FakeRequest",
     "FakeResponse",
     "FakeSourceNotRunningError",
+    "FakeSourceHandler",
     "FakeSourceRouteError",
-    "Handler",
     "HandlerResult",
     "HttpFakeSource",
     "HttpFakeSourceFactory",
@@ -283,8 +284,28 @@ HandlerResult = (
 )
 """Everything :func:`_coerce` accepts from a handler or authorizer."""
 
-Handler = Callable[[FakeRequest], HandlerResult]
+FakeSourceHandler = Callable[[FakeRequest], HandlerResult]
+"""A route handler: takes the :class:`FakeRequest`, returns a :data:`HandlerResult`.
+
+Not ``Handler``: ``application_sdk.handler.Handler`` owns that name, and
+``from application_sdk.testing import *`` rebound it over the app's own import.
+"""
 Authorizer = Callable[[FakeRequest], HandlerResult]
+
+#: name -> (replacement, why); served with a warning by ``__getattr__`` below.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "Handler": (
+        "application_sdk.testing.fake_source.FakeSourceHandler",
+        "the same alias, renamed so a star-import no longer rebinds application_sdk.handler.Handler",
+    ),
+}
+
+if TYPE_CHECKING:
+    Handler = FakeSourceHandler
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 def _merge_headers(
@@ -308,7 +329,7 @@ def _candidate_paths(path: str) -> tuple[str, ...]:
 class _Route:
     pattern: re.Pattern[str]
     methods: frozenset[str]
-    handler: Handler
+    handler: FakeSourceHandler
 
     def matches_path(self, path: str) -> re.Match[str] | None:
         return self.pattern.fullmatch(path)
@@ -429,7 +450,7 @@ class HttpFakeSource:
     def __init__(
         self,
         *,
-        routes: Iterable[tuple[str, Handler]] = (),
+        routes: Iterable[tuple[str, FakeSourceHandler]] = (),
         default_content_type: str = "application/json",
         not_found_body: object = None,
         authorize: Authorizer | None = None,
@@ -465,7 +486,7 @@ class HttpFakeSource:
     def route(
         self,
         pattern: str,
-        handler: Handler,
+        handler: FakeSourceHandler,
         *,
         methods: Sequence[str] = ("GET",),
     ) -> Self:
@@ -942,7 +963,7 @@ class HttpFakeSourceFactory:
     def __call__(
         self,
         *,
-        routes: Iterable[tuple[str, Handler]] = (),
+        routes: Iterable[tuple[str, FakeSourceHandler]] = (),
         default_content_type: str = "application/json",
         not_found_body: object = None,
         authorize: Authorizer | None = None,

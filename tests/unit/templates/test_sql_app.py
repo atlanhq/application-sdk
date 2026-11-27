@@ -7,6 +7,7 @@ import json
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import psycopg2.errors
 import pytest
 
 from application_sdk.common.entity_envelope import (
@@ -2708,6 +2709,29 @@ class TestPrimeFailureClassification:
             ),
             (TimeoutError("probe deadline exceeded"), "SqlProbeTimeoutError"),
             (Exception("something no driver has produced before"), "InternalError"),
+            # A per-SQLSTATE driver subclass is classified by its base too, the
+            # same verdict ``load()`` reaches: 57P01 is an OperationalError.
+            (
+                psycopg2.errors.AdminShutdown(
+                    "terminating connection due to administrator command"
+                ),
+                "SourceUnavailableError",
+            ),
+            # SQLSTATE 57014: a statement timeout on the probe's query is a
+            # probe timeout, not an unreachable source.
+            (
+                psycopg2.errors.QueryCanceled(
+                    "canceling statement due to statement timeout"
+                ),
+                "SqlProbeTimeoutError",
+            ),
+            # SQLSTATE 28000: the class name, not the message, marks it auth.
+            (
+                psycopg2.errors.InvalidAuthorizationSpecification(
+                    'FATAL:  role "example_user" does not exist'
+                ),
+                "AuthError",
+            ),
         ],
     )
     async def test_each_failure_shape_reaches_its_own_verdict(
