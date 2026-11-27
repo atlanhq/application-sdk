@@ -711,13 +711,22 @@ class TestWaitForDaprSidecar:
             patch(
                 "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
             ) as mock_cls,
-            patch("application_sdk.infrastructure._dapr.http.logger"),
+            patch("application_sdk.infrastructure._dapr.http.logger") as logger,
         ):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=MagicMock(get=mock_get)
             )
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+        mock_get.assert_awaited()
+        logger.warning.assert_called_once()
+        assert logger.warning.call_args.args[0] == (
+            "Dapr sidecar not reachable after %.0fs — proceeding anyway"
+        )
+        assert isinstance(
+            logger.warning.call_args.kwargs["exc_info"], _httpx.ConnectError
+        )
 
     async def test_ready_arms_shared_cold_start_gate(self, monkeypatch):
         """A successful health probe arms the same gate
@@ -887,13 +896,16 @@ class TestWaitForDaprSidecar:
             patch(
                 "application_sdk.infrastructure._dapr.http._sidecar_wait_duration",
                 side_effect=RuntimeError("meter down"),
-            ),
+            ) as wait_duration,
         ):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=MagicMock(get=mock_get)
             )
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+
+        mock_get.assert_awaited_once()
+        wait_duration.assert_called_once_with()
 
 
 class TestRetryPastDaprColdStart:

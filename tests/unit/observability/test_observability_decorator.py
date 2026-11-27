@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -353,6 +353,13 @@ class TestRecordHelpers:
             start_time=0.0,
         )
 
+        traces.record_trace.assert_called_once()
+        metrics.record_metric.assert_called_once()
+        assert logger.warning.call_args_list == [
+            call("Failed to record trace: %s", "f", exc_info=True),
+            call("Failed to record metric: %s", "f", exc_info=True),
+        ]
+
     def test_record_error_observability_swallows_double_failure(self) -> None:
         logger, metrics, traces = _mock_components()
         traces.record_trace.side_effect = RuntimeError("trace")
@@ -370,6 +377,13 @@ class TestRecordHelpers:
             start_time=0.0,
             error=ValueError("oops"),
         )
+
+        traces.record_trace.assert_called_once()
+        metrics.record_metric.assert_called_once()
+        assert logger.warning.call_args_list == [
+            call("Failed to record error trace: %s", "f", exc_info=True),
+            call("Failed to record error metric: %s", "f", exc_info=True),
+        ]
 
 
 # ---------------------------------------------------------------------------

@@ -111,12 +111,20 @@ class TestEmitTokenRefreshEvent:
         manager = _make_manager()
         expires_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
-        with mock.patch(
-            _PUBLISH_TARGET,
-            side_effect=RuntimeError("binding unavailable"),
+        with (
+            mock.patch(
+                _PUBLISH_TARGET,
+                side_effect=RuntimeError("binding unavailable"),
+            ) as mock_publish,
+            mock.patch("application_sdk.execution._temporal.auth.logger") as logger,
         ):
             # Should not raise
             await manager._emit_token_refresh_event(expires_at)
+
+        mock_publish.assert_awaited_once()
+        logger.warning.assert_called_once_with(
+            "Failed to emit token_refresh event", exc_info=True
+        )
 
     async def test_does_not_raise_on_import_failure(self) -> None:
         """_emit_token_refresh_event handles import errors gracefully."""

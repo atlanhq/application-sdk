@@ -246,7 +246,13 @@ class TestRecordObservation:
     def test_never_raises_when_the_meter_is_broken(self, mock_histogram):
         """Called from an activity's finally; raising would replace its outcome."""
         mock_histogram.side_effect = RuntimeError("otel down")
-        sizing_module.record_observation(self._obs())  # must not raise
+        with patch.object(sizing_module, "_logger") as logger:
+            sizing_module.record_observation(self._obs())  # must not raise
+
+        mock_histogram.assert_called_once()
+        logger.debug.assert_called_once_with(
+            "sizing observation emission failed", exc_info=True
+        )
 
     def test_logs_one_json_line_with_the_marker(self, mock_histogram):
         with patch.object(sizing_module, "_logger") as mock_log:

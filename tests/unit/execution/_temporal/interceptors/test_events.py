@@ -663,12 +663,20 @@ class TestSendLifecycleEventToSegment:
             event_name=ApplicationEventNames.WORKFLOW_END.value,
             data={},
         )
-        with mock.patch(
-            "application_sdk.observability.metrics_adaptor.get_metrics",
-            side_effect=RuntimeError("metrics unavailable"),
+        with (
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.get_metrics",
+                side_effect=RuntimeError("metrics unavailable"),
+            ) as get_metrics,
+            mock.patch.object(events_module, "logger") as logger,
         ):
             # Must not raise — best-effort side-channel.
             _send_lifecycle_event_to_segment(event)
+
+        get_metrics.assert_called_once_with()
+        logger.debug.assert_called_once_with(
+            "Failed to send lifecycle event to Segment", exc_info=True
+        )
 
 
 class TestPublishEventViaBinding:

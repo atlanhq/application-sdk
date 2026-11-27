@@ -227,16 +227,33 @@ class TestPersist:
 
     def test_never_raises_when_the_sink_is_broken(self):
         """Called from an activity's finally; must cost the record, not the run."""
-        with patch.object(
-            sizing_sink, "get_sink", side_effect=RuntimeError("no store")
+        with (
+            patch.object(
+                sizing_sink, "get_sink", side_effect=RuntimeError("no store")
+            ) as get_sink,
+            patch.object(sizing_sink, "logger") as logger,
         ):
             persist(_observation())  # must not raise
+
+        get_sink.assert_called_once_with()
+        logger.debug.assert_called_once_with(
+            "sizing observation not persisted", exc_info=True
+        )
 
     def test_never_raises_when_add_record_fails(self):
         fake = MagicMock()
         fake.add_record.side_effect = RuntimeError("buffer full")
-        with patch.object(sizing_sink, "get_sink", return_value=fake):
-            persist(_observation())  # must not raise
+        observation = _observation()
+        with (
+            patch.object(sizing_sink, "get_sink", return_value=fake),
+            patch.object(sizing_sink, "logger") as logger,
+        ):
+            persist(observation)  # must not raise
+
+        fake.add_record.assert_called_once_with(observation)
+        logger.debug.assert_called_once_with(
+            "sizing observation not persisted", exc_info=True
+        )
 
     def test_unavailable_sink_is_tolerated(self):
         with patch.object(sizing_sink, "get_sink", return_value=None):
@@ -350,11 +367,19 @@ class TestTheFlushActuallyHappens:
     async def test_drain_never_raises(self, sink):
         """Runs on the shutdown path; a failure must not block termination."""
         sizing_sink._sink = sink
-        with patch.object(
-            sink, "_flush_buffer", side_effect=RuntimeError("store gone")
+        with (
+            patch.object(
+                sink, "_flush_buffer", side_effect=RuntimeError("store gone")
+            ) as flush_buffer,
+            patch.object(sizing_sink, "logger") as logger,
         ):
             await sizing_sink.drain()  # must not raise
         sizing_sink._reset_for_testing()
+
+        flush_buffer.assert_awaited_once_with()
+        logger.warning.assert_called_once_with(
+            "sizing drain failed; buffered rows lost", exc_info=True
+        )
 
     async def test_flush_logs_at_info(self, sink, tmp_path):
         """'Is it writing?' must be answerable from logs, not by exec-ing into a pod.

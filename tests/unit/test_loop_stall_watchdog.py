@@ -23,7 +23,7 @@ import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 import pytest
 
@@ -294,10 +294,14 @@ class TestShutdownArming:
     def test_off_the_main_thread_leaves_arming_to_the_loop(
         self, fake_faulthandler, fake_signal
     ) -> None:
+        arm, _ = fake_faulthandler
         _, _, local_signal = fake_signal
         local_signal.signal.side_effect = ValueError("main thread only")
 
         LoopStallWatchdog(3).install((signal.SIGTERM,))
+
+        local_signal.signal.assert_called_once_with(signal.SIGTERM, ANY)
+        arm.assert_not_called()
 
     def test_stopped_watchdog_ignores_the_signal(self, fake_faulthandler) -> None:
         arm, _ = fake_faulthandler
