@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 import orjson
 
+from application_sdk import _deprecation
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
 from application_sdk._env import dapr_components_path
 from application_sdk._install import worker_only_missing
@@ -48,6 +49,20 @@ __all__ = [
     "LOCAL_OBS_SUBDIR_MAP",
     "OBSERVABILITY_S3_PREFIX_MAP",
 ]
+
+#: name -> (replacement, why). The shared sentence and the removal version live
+#: in __getattr__ below.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "env_str": (
+        "application_sdk.common._env.env_str",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 def _has_running_loop() -> bool:

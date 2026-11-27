@@ -38,6 +38,7 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk import _deprecation
 from application_sdk._env import dapr_components_path
 from application_sdk.contracts.events import (
     ApplicationEventNames,
@@ -50,6 +51,21 @@ from application_sdk.execution._temporal.run_flags import current_run_flags
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+#: name -> (replacement, why). The shared sentence and the removal version live
+#: in __getattr__ below.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "env_str": (
+        "application_sdk.common._env.env_str",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 activity.logger = logger
 workflow.logger = logger
 

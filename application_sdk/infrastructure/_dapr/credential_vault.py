@@ -586,6 +586,10 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "application_sdk.infrastructure.DAPR_SECRET_STORE_COMPONENT",
         "it was only ever re-exported here as a side effect of an import",
     ),
+    "env_str": (
+        "application_sdk.common._env.env_str",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
 }
 
 
