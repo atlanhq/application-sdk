@@ -2717,6 +2717,14 @@ class TestPrimeFailureClassification:
                 ),
                 "SourceUnavailableError",
             ),
+            # SQLSTATE 57014: a statement timeout on the probe's query is a
+            # probe timeout, not an unreachable source.
+            (
+                psycopg2.errors.QueryCanceled(
+                    "canceling statement due to statement timeout"
+                ),
+                "SqlProbeTimeoutError",
+            ),
             # SQLSTATE 28000: the class name, not the message, marks it auth.
             (
                 psycopg2.errors.InvalidAuthorizationSpecification(

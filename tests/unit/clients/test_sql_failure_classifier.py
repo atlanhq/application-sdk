@@ -128,6 +128,10 @@ class InvalidAuthorizationSpecification(OperationalError):
     refuses): an OperationalError whose message carries no auth phrase."""
 
 
+class QueryCanceled(OperationalError):
+    """psycopg's class for SQLSTATE 57014, a cancelled statement."""
+
+
 class ProgrammingError(Exception):
     """Stands in for a DBAPI ``ProgrammingError``."""
 
@@ -203,6 +207,10 @@ def test_root_cause_stops_on_a_cycle() -> None:
         # The message still decides an overloaded base class.
         (AdminShutdown("password authentication failed for user"), AUTH),
         (AdminShutdown("connection timed out"), TIMEOUT),
+        # SQLSTATE 57014 on a statement or lock timeout is a timeout, not a
+        # source outage, although QueryCanceled is an OperationalError.
+        (QueryCanceled("canceling statement due to statement timeout"), TIMEOUT),
+        (QueryCanceled("canceling statement due to lock timeout"), TIMEOUT),
         # SQLSTATE 28000 says auth only in its class name, never its message.
         (
             InvalidAuthorizationSpecification('role "example_user" does not exist'),

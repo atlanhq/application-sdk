@@ -39,7 +39,19 @@ def root_cause(exc: BaseException) -> BaseException:
 # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout" in the
 # class name and no "timed out" in the message, so a generic substring check
 # misses it. Match the driver phrasings explicitly.
-_TIMEOUT_MSG_HINTS = ("timed out", "login timeout", "timeout expired", "hyt00")
+#
+# Postgres cancels a statement that outruns ``statement_timeout`` or
+# ``lock_timeout`` with SQLSTATE 57014 ("canceling statement due to statement
+# timeout"), raised by psycopg as ``QueryCanceled`` — an ``OperationalError``
+# subclass, so without these phrasings it would read as an unreachable source.
+_TIMEOUT_MSG_HINTS = (
+    "timed out",
+    "login timeout",
+    "timeout expired",
+    "hyt00",
+    "statement timeout",
+    "lock timeout",
+)
 
 # Driver error_type for MySQL ``Access denied`` is ``OperationalError`` — that
 # class is overloaded across both auth and network failures, so message content
