@@ -48,8 +48,16 @@ from application_sdk.testing.fake_source import (
 from tests.unit.private_stdlib import private_stdlib
 
 # What a bind on a port another socket holds exclusively fails with: EADDRINUSE
-# on POSIX, WSAEACCES on Windows (CPython reports Winsock codes as the errno).
-_PORT_TAKEN = {errno.EADDRINUSE, getattr(errno, "WSAEACCES", errno.EADDRINUSE)}
+# on POSIX; on Windows, WSAEACCES (10013), which CPython reports as
+# PermissionError with errno EACCES and the Winsock code in ``winerror``.
+_WSAEACCES = 10013
+
+
+def _is_port_taken(exc: OSError) -> bool:
+    return exc.errno == errno.EADDRINUSE or getattr(exc, "winerror", None) == (
+        _WSAEACCES
+    )
+
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
 
@@ -277,10 +285,10 @@ class TestLifecycle:
                 # The refusal is the port being taken: EADDRINUSE on POSIX,
                 # WSAEACCES on Windows under the fake's exclusive claim. Any
                 # other OSError (a bad address, say) is not that refusal. The
-                # OS words the two differently, so the errno is the check.
+                # OS words the two differently, so the error code is the check.
                 with pytest.raises(OSError) as refused:  # noqa: PT011
                     intruder.bind(("127.0.0.1", source.port))
-                assert refused.value.errno in _PORT_TAKEN, refused.value
+                assert _is_port_taken(refused.value), refused.value
             finally:
                 intruder.close()
 
