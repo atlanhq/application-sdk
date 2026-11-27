@@ -958,9 +958,12 @@ def _create_s3_store(
             # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
             # (and preserves CloudStore's historical session name).
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
-            # No region: scoping the STS session to the bucket's region breaks
-            # AssumeRole for opt-in regions (e.g. me-central-1); region belongs
-            # on the S3 store's own config, not the STS call.
+            # The bucket's region is a fallback STS endpoint, not the session
+            # region: STS in an opt-in region the caller's account has not
+            # enabled rejects the call (InvalidClientTokenId), while the global
+            # endpoint can issue a token an opt-in region's S3 rejects
+            # (InvalidToken). The provider tries both in a safe order.
+            fallback_region=extra.get("region") or None,
             base_access_key=access_key or None,
             base_secret_key=secret_key or None,
             base_session_token=session_token or None,

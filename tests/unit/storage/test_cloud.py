@@ -175,6 +175,9 @@ class TestFromCredentials:
         assert store.provider == "s3"
 
     @patch(
+        "application_sdk.storage._credential_providers._RegionFallbackStsCredentialProvider"
+    )
+    @patch(
         "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
     )
     @patch("boto3.Session")
@@ -184,6 +187,8 @@ class TestFromCredentials:
         mock_s3_cls: MagicMock,
         mock_session_cls: MagicMock,
         mock_sts_cls: MagicMock,
+        mock_fallback_cls: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """BLDX-1441: cross-account ``aws_role_arn`` with no base keys must wire
         an STS assume-role credential provider against the *user-entered* bucket.
@@ -193,9 +198,12 @@ class TestFromCredentials:
         (tenant) identity and can't reach the customer's cross-account bucket.
         The role must be assumed via a credential provider (as ``binding.py`` does).
         """
+        monkeypatch.delenv("AWS_REGION", raising=False)
         mock_s3_cls.return_value = MagicMock()
         mock_sts_cls.return_value = MagicMock()
-        mock_session_cls.return_value = MagicMock()
+        mock_fallback_cls.return_value = MagicMock()
+        # A pod with no ambient region: the session resolves none.
+        mock_session_cls.return_value = MagicMock(region_name=None)
 
         store = CloudStore.from_credentials(
             {
@@ -209,8 +217,11 @@ class TestFromCredentials:
         )
 
         assert store.provider == "s3"
-        # The STS assume-role provider was actually constructed (not skipped).
-        mock_sts_cls.assert_called_once()
+        # The STS assume-role provider was actually constructed (not skipped):
+        # with a bucket region and no ambient region it is the endpoint-
+        # fallback provider.
+        mock_fallback_cls.assert_called_once()
+        mock_sts_cls.assert_not_called()
         call_kwargs = mock_s3_cls.call_args.kwargs
         # The user-entered bucket is honored, not swapped for a default.
         assert call_kwargs["bucket"] == "customer-cross-account-bucket"
@@ -220,10 +231,15 @@ class TestFromCredentials:
         config = call_kwargs.get("config") or {}
         assert "aws_role_arn" not in config
         assert "aws_role_session_name" not in config
-        # Region stays on the S3 store's config; must not reach the STS session.
+        # Region stays on the S3 store's config. It is never the base STS
+        # session's region (that broke AssumeRole for opt-in regions); it is
+        # a separate fallback session, tried before the global endpoint.
         assert config.get("aws_region") == "us-east-1"
-        session_kwargs = mock_session_cls.call_args.kwargs
-        assert "region_name" not in session_kwargs
+        session_calls = [c.kwargs for c in mock_session_cls.call_args_list]
+        assert "region_name" not in session_calls[0]
+        assert session_calls[1].get("region_name") == "us-east-1"
+        sessions = mock_fallback_cls.call_args.args[0]
+        assert len(sessions) == 2
 
     @pytest.mark.parametrize(
         ("external_id", "expected"),

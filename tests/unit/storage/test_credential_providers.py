@@ -24,12 +24,14 @@ from pathlib import Path
 
 import pytest
 import trustme
+from botocore.exceptions import ClientError
 from cryptography.hazmat.primitives import serialization
 from dateutil.tz import tzutc
 from obstore.auth.azure import AzureCredentialProvider
 from obstore.auth.boto3 import StsCredentialProvider
 
 from application_sdk.storage._credential_providers import (
+    _RegionFallbackStsCredentialProvider,
     make_azure_certificate_provider,
     make_s3_assume_role_provider,
 )
@@ -297,6 +299,162 @@ class TestMakeS3AssumeRoleProvider:
             "token": "temp-token",
             "expires_at": datetime(2026, 1, 1, tzinfo=UTC),
         }
+
+
+class RegionalFakeSession(FakeSession):
+    """FakeSession for one STS endpoint that can reject the call with *error_code*."""
+
+    def __init__(self, region_name: str | None, error_code: str | None = None) -> None:
+        super().__init__()
+        self.region_name = region_name
+        self.error_code = error_code
+
+    def client(self, service_name: str) -> FakeStsClient:
+        if self.error_code:
+            self.client_requests.append(service_name)
+            raise ClientError(
+                {"Error": {"Code": self.error_code, "Message": "rejected"}},
+                "AssumeRole",
+            )
+        return super().client(service_name)
+
+
+@pytest.fixture
+def no_ambient_region(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No AWS_REGION / AWS_DEFAULT_REGION / profile region: the pod case."""
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "no-config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+
+
+class TestS3AssumeRoleStsEndpointOrder:
+    """Which STS endpoint the provider calls, and when it moves to the next."""
+
+    def test_no_fallback_region_keeps_single_endpoint_provider(
+        self, no_ambient_region: None
+    ) -> None:
+        provider = make_s3_assume_role_provider(role_arn=ROLE_ARN)
+        assert not isinstance(provider, _RegionFallbackStsCredentialProvider)
+        assert provider.session.region_name is None  # global endpoint, as before
+
+    def test_no_ambient_region_tries_bucket_region_before_global(
+        self, no_ambient_region: None
+    ) -> None:
+        # Pod with no AWS_REGION, bucket in an opt-in region.
+        provider = make_s3_assume_role_provider(
+            role_arn=ROLE_ARN, fallback_region="eu-south-2"
+        )
+        assert isinstance(provider, _RegionFallbackStsCredentialProvider)
+        assert [s.region_name for s in provider._sessions] == ["eu-south-2", None]
+        assert provider.session.client("sts").meta.endpoint_url == (
+            "https://sts.eu-south-2.amazonaws.com"
+        )
+        # Store region stays the bucket's region.
+        assert provider.config == {"region": "eu-south-2"}
+
+    def test_ambient_region_goes_first(
+        self, no_ambient_region: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_REGION", "eu-west-1")
+        provider = make_s3_assume_role_provider(
+            role_arn=ROLE_ARN, fallback_region="me-central-1"
+        )
+        assert [s.region_name for s in provider._sessions] == [
+            "eu-west-1",
+            "me-central-1",
+        ]
+
+    def test_fallback_equal_to_ambient_region_is_single_endpoint(
+        self, no_ambient_region: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_REGION", "eu-south-2")
+        provider = make_s3_assume_role_provider(
+            role_arn=ROLE_ARN, fallback_region="eu-south-2"
+        )
+        assert not isinstance(provider, _RegionFallbackStsCredentialProvider)
+        assert provider.session.region_name == "eu-south-2"
+
+    def test_base_credentials_reach_every_endpoint_session(
+        self, no_ambient_region: None
+    ) -> None:
+        provider = make_s3_assume_role_provider(
+            role_arn=ROLE_ARN,
+            base_access_key="AK",
+            base_secret_key="SK",
+            external_id="ext-1",
+            fallback_region="eu-south-2",
+        )
+        for session in provider._sessions:
+            frozen = session.get_credentials().get_frozen_credentials()
+            assert (frozen.access_key, frozen.secret_key) == ("AK", "SK")
+        assert provider.kwargs["ExternalId"] == "ext-1"
+
+    def test_bucket_region_success_uses_regional_endpoint_only(self) -> None:
+        # Pod and bucket in the same opt-in region: the regional call works
+        # and the global endpoint is never called.
+        regional = RegionalFakeSession("eu-south-2")
+        global_ = RegionalFakeSession(None)
+        provider = _RegionFallbackStsCredentialProvider(
+            [regional, global_], RoleArn=ROLE_ARN, RoleSessionName="s"
+        )
+
+        credential = provider()
+
+        assert credential["token"] == "temp-token"
+        assert len(regional.sts.assume_role_calls) == 1
+        assert global_.client_requests == []
+
+    @pytest.mark.parametrize(
+        "code", ["InvalidClientTokenId", "RegionDisabledException"]
+    )
+    def test_region_rejection_falls_back_and_is_remembered(self, code: str) -> None:
+        # Bucket in an opt-in region the caller's account has not enabled:
+        # STS there rejects the call, the global endpoint serves it, and the
+        # next refresh goes straight to the global endpoint.
+        regional = RegionalFakeSession("me-central-1", error_code=code)
+        global_ = RegionalFakeSession(None)
+        provider = _RegionFallbackStsCredentialProvider(
+            [regional, global_], RoleArn=ROLE_ARN, RoleSessionName="s"
+        )
+
+        assert provider()["access_key_id"] == "ASIA-TEMP"
+        assert provider()["access_key_id"] == "ASIA-TEMP"
+
+        assert regional.client_requests == ["sts"]  # tried once, then skipped
+        assert len(global_.sts.assume_role_calls) == 2
+
+    def test_other_errors_are_raised_without_fallback(self) -> None:
+        # AccessDenied (trust policy, ExternalId) is the same on every
+        # endpoint, so it is raised at once.
+        regional = RegionalFakeSession("eu-south-2", error_code="AccessDenied")
+        global_ = RegionalFakeSession(None)
+        provider = _RegionFallbackStsCredentialProvider(
+            [regional, global_], RoleArn=ROLE_ARN, RoleSessionName="s"
+        )
+
+        with pytest.raises(ClientError, match="AccessDenied"):
+            provider()
+        assert global_.client_requests == []
+
+    def test_last_endpoint_error_is_raised(self) -> None:
+        regional = RegionalFakeSession("eu-south-2", error_code="InvalidClientTokenId")
+        global_ = RegionalFakeSession(None, error_code="InvalidClientTokenId")
+        provider = _RegionFallbackStsCredentialProvider(
+            [regional, global_], RoleArn=ROLE_ARN, RoleSessionName="s"
+        )
+
+        with pytest.raises(ClientError, match="InvalidClientTokenId"):
+            provider()
+
+    def test_fallback_credential_expiry_is_stdlib_utc(self) -> None:
+        regional = RegionalFakeSession("eu-south-2")
+        regional.sts = BotocoreTzStsClient()
+        provider = _RegionFallbackStsCredentialProvider(
+            [regional], RoleArn=ROLE_ARN, RoleSessionName="s"
+        )
+        assert provider()["expires_at"].tzinfo is timezone.utc
 
 
 class TestMakeAzureCertificateProvider:
