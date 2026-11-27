@@ -10,10 +10,10 @@ from typing import Any, Callable, ClassVar
 from loguru import logger
 from opentelemetry import trace as otel_trace
 from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry.context import Context
 from opentelemetry.metrics import Counter
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-from opentelemetry.trace.span import TraceFlags
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation, _env
@@ -1395,22 +1395,28 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # (tracing disabled — the production default today), fall back to
         # zeros exactly as before. ``correlation_id`` stays the business key;
         # trace context is not a substitute for it.
-        otel_trace_id, otel_span_id, otel_trace_flags = 0, 0, TraceFlags(0)
+        #
+        # The trace context reaches the record through ``context=``: the
+        # ``trace_id=``/``span_id=``/``trace_flags=`` constructor is deprecated
+        # since opentelemetry-api 1.35 and its marker never warns at runtime
+        # (guarded by tests/unit/observability/test_otel_public_imports.py).
+        # The context always carries a span, valid or ``INVALID_SPAN``: an
+        # empty ``Context()`` is falsy, and ``LogRecord`` would then read
+        # ``get_current()`` itself, outside the guard below.
+        log_context = otel_trace.set_span_in_context(otel_trace.INVALID_SPAN, Context())
         try:
             span_context = otel_trace.get_current_span().get_span_context()
             if span_context.is_valid:
-                otel_trace_id = span_context.trace_id
-                otel_span_id = span_context.span_id
-                otel_trace_flags = TraceFlags(span_context.trace_flags)
+                log_context = otel_trace.set_span_in_context(
+                    otel_trace.NonRecordingSpan(span_context), Context()
+                )
         except Exception:  # noqa: S110, BLE001 — degrade to untraced record, never drop the log; best-effort trace enrichment; a broken span context must never block log emission
             pass
 
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),
             observed_timestamp=int(record["timestamp"] * 1e9),
-            trace_id=otel_trace_id,
-            span_id=otel_span_id,
-            trace_flags=otel_trace_flags,
+            context=log_context,
             severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],

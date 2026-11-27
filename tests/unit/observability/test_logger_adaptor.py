@@ -16,6 +16,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
+from opentelemetry import trace as otel_trace
 
 from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
 from application_sdk.observability.console_sink import flush_console_logs
@@ -3364,7 +3365,21 @@ class TestLogSourceProvenance:
 
 
 class TestOtelTraceContextOnLogRecord:
-    """CNCT-106: real trace_id/span_id from the active span (not hard-coded 0)."""
+    """CNCT-106: real trace context from the active span (not hard-coded 0).
+
+    The record is built with ``context=``, not the ``trace_id=``/``span_id=``/
+    ``trace_flags=`` overload deprecated since opentelemetry-api 1.35 (FND-5473).
+    Each test builds under ``warnings.simplefilter("error")`` and asserts
+    through ``record.context``, which the deprecated path never set to the
+    span the adapter read.
+    """
+
+    _SPAN_CONTEXT = otel_trace.SpanContext(
+        trace_id=0xABCDEF,
+        span_id=0x123456,
+        is_remote=False,
+        trace_flags=otel_trace.TraceFlags(otel_trace.TraceFlags.SAMPLED),
+    )
 
     def _record(self) -> dict:
         return {
@@ -3377,36 +3392,65 @@ class TestOtelTraceContextOnLogRecord:
             "extra": {},
         }
 
+    def _build(self, adapter: Any) -> Any:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            return adapter._create_log_record(self._record())
+
     def test_no_active_span_falls_back_to_zeros(self):
-        adapter = get_logger("app.trace_test")
-        log_record = adapter._create_log_record(self._record())
+        log_record = self._build(get_logger("app.trace_test"))
+        assert (
+            not otel_trace.get_current_span(log_record.context)
+            .get_span_context()
+            .is_valid
+        )
         assert log_record.trace_id == 0
         assert log_record.span_id == 0
+        assert log_record.trace_flags == otel_trace.TraceFlags(0)
 
     def test_active_span_context_is_propagated(self):
         adapter = get_logger("app.trace_test_2")
-        span_ctx = mock.MagicMock()
-        span_ctx.is_valid = True
-        span_ctx.trace_id = 0xABCDEF
-        span_ctx.span_id = 0x123456
-        span_ctx.trace_flags = 1
-        span = mock.MagicMock()
-        span.get_span_context.return_value = span_ctx
         with mock.patch(
             "application_sdk.observability.logger_adaptor.otel_trace.get_current_span",
-            return_value=span,
+            return_value=otel_trace.NonRecordingSpan(self._SPAN_CONTEXT),
         ):
-            log_record = adapter._create_log_record(self._record())
+            log_record = self._build(adapter)
+        assert (
+            otel_trace.get_current_span(log_record.context).get_span_context()
+            == self._SPAN_CONTEXT
+        )
         assert log_record.trace_id == 0xABCDEF
         assert log_record.span_id == 0x123456
+        assert log_record.trace_flags == otel_trace.TraceFlags.SAMPLED
+
+    def test_real_active_span_is_propagated(self):
+        """No patch: the span the emitting code is inside reaches the record."""
+        adapter = get_logger("app.trace_test_real")
+        with otel_trace.use_span(otel_trace.NonRecordingSpan(self._SPAN_CONTEXT)):
+            log_record = self._build(adapter)
+        assert (
+            otel_trace.get_current_span(log_record.context).get_span_context()
+            == self._SPAN_CONTEXT
+        )
+        assert log_record.trace_id == 0xABCDEF
 
     def test_broken_span_context_never_blocks_emission(self):
         adapter = get_logger("app.trace_test_3")
-        with mock.patch(
-            "application_sdk.observability.logger_adaptor.otel_trace.get_current_span",
-            side_effect=RuntimeError("boom"),
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.otel_trace.get_current_span",
+                side_effect=RuntimeError("boom"),
+            ),
+            # A live span in the ambient context must not leak in when the
+            # adapter's own read failed: the record carries INVALID_SPAN.
+            otel_trace.use_span(otel_trace.NonRecordingSpan(self._SPAN_CONTEXT)),
         ):
-            log_record = adapter._create_log_record(self._record())
+            log_record = self._build(adapter)
+        assert (
+            not otel_trace.get_current_span(log_record.context)
+            .get_span_context()
+            .is_valid
+        )
         assert log_record.trace_id == 0
         assert log_record.span_id == 0
 

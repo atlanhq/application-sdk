@@ -4,6 +4,8 @@
 
 - **Observability Module**: The `application_sdk/observability/` module uses **loguru** directly to implement the `AtlanLoggerAdapter` / `get_logger` wrapper. Stdlib `logging` is used internally for fallback error reporting (e.g. `InterceptHandler`, `basicConfig`) and to silence noisy third-party loggers — this is an internal implementation detail. **All application code must use `get_logger`** and must not call stdlib `logging.*` directly, as it bypasses the OTel pipeline.
 
+- **OpenTelemetry surface**: The OTLP log path uses only OpenTelemetry's public, non-deprecated API. Import from public modules (`opentelemetry.sdk._logs.export`), never an `_internal` path. Build an OTel `LogRecord` with `context=` (a `Context` holding the span), not the `trace_id=` / `span_id=` / `trace_flags=` keywords: those are deprecated since opentelemetry-api 1.35, and the marker never warns at runtime. `tests/unit/observability/test_otel_public_imports.py` enforces both rules.
+
 - **Logger Configuration**
     - Use `AtlanLoggerAdapter` for all logging
     - Configure loggers using `get_logger(__name__)`
