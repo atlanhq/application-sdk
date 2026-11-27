@@ -9,6 +9,11 @@ from typing import Optional, Union
 
 from pydantic import BaseModel
 
+__all__ = [
+    "Artifact",
+    "Metric",
+]
+
 
 class Metric(BaseModel):
     """A single metric to expose in workflow output.

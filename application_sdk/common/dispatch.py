@@ -17,6 +17,13 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+__all__ = [
+    "canonical_workflow_type",
+    "EntryPointIdentity",
+    "resolve_dispatch_workflow_id",
+    "StampFailurePolicy",
+]
+
 
 class EntryPointIdentity(Protocol):
     """The two fields of an entry point its workflow type is derived from.

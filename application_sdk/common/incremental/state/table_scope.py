@@ -37,6 +37,17 @@ from application_sdk.common.incremental.storage.rocksdb_utils import (
 from application_sdk.constants import INCREMENTAL_DEFAULT_STATE
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "add_table_to_scope",
+    "close_scope",
+    "get_current_table_scope",
+    "get_scope_length",
+    "get_table_qns_from_columns",
+    "get_table_state",
+    "iter_scope_table_qns",
+]
+
+
 logger = get_logger(__name__)
 
 

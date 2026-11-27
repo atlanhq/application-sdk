@@ -24,7 +24,7 @@ from application_sdk.observability.decorators.observability_decorator import (
     _record_success_observability,
     observability,
 )
-from application_sdk.observability.metrics_adaptor import MetricType
+from application_sdk.observability.models import MetricType
 from tests.unit._doubles import FakeClock
 from tests.unit.private_stdlib import private_stdlib
 

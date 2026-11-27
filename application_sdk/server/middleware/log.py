@@ -12,6 +12,11 @@ from application_sdk.observability.context import request_context
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.middleware._constants import EXCLUDED_LOG_PATHS
 
+__all__ = [
+    "LogMiddleware",
+]
+
+
 logger = get_logger(__name__)
 
 

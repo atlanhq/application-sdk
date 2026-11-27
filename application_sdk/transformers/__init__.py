@@ -8,6 +8,11 @@ if TYPE_CHECKING:
     import pandas as pd
     import pyarrow as pa
 
+__all__ = [
+    "TransformerInterface",
+]
+
+
 warnings.warn(
     "application_sdk.transformers is deprecated; use the connector-side asset-mapper "
     "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — will be "

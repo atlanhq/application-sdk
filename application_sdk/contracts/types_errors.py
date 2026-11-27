@@ -7,6 +7,10 @@ from typing import ClassVar
 
 from application_sdk.errors.leaves import InvalidInputError
 
+__all__ = [
+    "RunPrefixRequiredError",
+]
+
 
 @dataclass(kw_only=True)
 class RunPrefixRequiredError(InvalidInputError):

@@ -8,6 +8,36 @@ from typing import ClassVar
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 
+__all__ = [
+    "AlreadyExistsError",
+    "AppPermissionDeniedError",
+    "AppTimeoutError",
+    "AuthError",
+    "CancelledError",
+    "ColdStartRaceError",
+    "DaprSidecarUnreachableError",
+    "DataIntegrityError",
+    "DependencyUnavailableError",
+    "DiskFullError",
+    "InternalError",
+    "InvalidInputError",
+    "InvalidInputValueError",
+    "LocalVolumeUnwritableError",
+    "NotFoundError",
+    "ObjectStoreDownloadError",
+    "ObjectStoreReadError",
+    "PreconditionError",
+    "RateLimitedError",
+    "ResourceExhaustedError",
+    "SDR_DISK_FULL_ACTION",
+    "SdrDiskFullError",
+    "SourceUnavailableError",
+    "SourceWarmupExhaustedError",
+    "TaskStalledError",
+    "UnimplementedError",
+    "WORKER_EVICTED_TYPE",
+]
+
 
 @dataclass(kw_only=True)
 class CancelledError(AppError):

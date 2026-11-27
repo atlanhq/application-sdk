@@ -17,6 +17,14 @@ from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "CredentialConfigNotFoundError",
+    "CredentialVault",
+    "CredentialVaultError",
+    "CredentialVaultUnavailableError",
+]
+
+
 logger = get_logger(__name__)
 
 

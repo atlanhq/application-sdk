@@ -10,6 +10,17 @@ from pydantic import BaseModel, ConfigDict
 
 from application_sdk._logging import get_logger
 
+__all__ = [
+    "ApiKeyCredential",
+    "BasicCredential",
+    "BearerTokenCredential",
+    "CertificateCredential",
+    "Credential",
+    "OAuthClientCredential",
+    "RawCredential",
+]
+
+
 logger = get_logger(__name__)
 
 # TODO(credentials): Add AwsCredential and migrate SQL client IAM auth to typed

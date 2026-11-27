@@ -15,6 +15,18 @@ from application_sdk.errors.categories import Audience, FailureCategory
 if TYPE_CHECKING:
     from application_sdk.errors.wire import FailureDetails
 
+__all__ = [
+    "AppError",
+    "Audience",
+    "FailureCategory",
+    "redact_and_cap",
+    "redact_secrets",
+    "redact_wire_value",
+    "safe_traceback",
+    "sanitize_cause_repr",
+]
+
+
 # Fields present on every AppError — excluded from the wire `evidence` dict.
 _BASE_FIELDS: frozenset[str] = frozenset(
     {"message", "retryable", "cause", "app_name", "run_id", "suggested_action"}

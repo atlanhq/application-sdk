@@ -55,6 +55,11 @@ if TYPE_CHECKING:
 
     from application_sdk.storage.ops import BoundStore
 
+__all__ = [
+    "download_file_chunked",
+]
+
+
 logger = get_logger(__name__)
 
 #: Per-destination writer exclusion for the chunked transfer primitive.

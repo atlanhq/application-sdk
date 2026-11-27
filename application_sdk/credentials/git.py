@@ -11,6 +11,11 @@ from application_sdk.credentials.types import (
     CertificateCredential,
 )
 
+__all__ = [
+    "GitSshCredential",
+    "GitTokenCredential",
+]
+
 
 class GitSshCredential(CertificateCredential, frozen=True):
     """SSH key credential for Git operations.

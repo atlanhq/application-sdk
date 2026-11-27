@@ -18,6 +18,16 @@ from application_sdk.errors.leaves import (
     InvalidInputError,
 )
 
+__all__ = [
+    "AzureClientAuthError",
+    "AzureConnectionError",
+    "AzureCredentialError",
+    "AzureCredentialParseError",
+    "AzureCredentialTypeError",
+    "AzureInputValidationError",
+    "AzureServiceError",
+]
+
 
 @dataclass(kw_only=True)
 class AzureCredentialParseError(CredentialParseError):

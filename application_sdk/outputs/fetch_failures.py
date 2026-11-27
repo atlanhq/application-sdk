@@ -83,6 +83,24 @@ from application_sdk.outputs.skipped import (
     activity_part_stem,
 )
 
+__all__ = [
+    "current_fetch_failures",
+    "FETCH_FAILURES_ARTIFACT",
+    "FETCH_FAILURES_FILE",
+    "FETCH_FAILURES_LAYOUT",
+    "FETCH_FAILURES_METRIC",
+    "FETCH_FAILURES_PARTS_DIR",
+    "FETCH_FAILURES_TRUNCATED_METRIC",
+    "FETCH_FAILURES_UNPERSISTED_METRIC",
+    "FetchFailureReason",
+    "FetchFailureSink",
+    "FetchFailureSnapshot",
+    "persist_activity_fetch_failures",
+    "reason_metric_name",
+    "record_fetch_failure",
+]
+
+
 _logger = get_logger(__name__)
 
 FETCH_FAILURES_METRIC: Final = "fetch-failures"

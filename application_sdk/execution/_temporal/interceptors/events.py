@@ -380,9 +380,11 @@ def _send_lifecycle_event_to_segment(event: Event) -> None:
             ATLAN_BASE_URL,
         )
         from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — cold path: metrics adaptor only on emit
+            get_metrics,
+        )
+        from application_sdk.observability.models import (  # noqa: PLC0415 — cold path: metrics adaptor only on emit
             MetricRecord,
             MetricType,
-            get_metrics,
         )
 
         metrics = get_metrics()

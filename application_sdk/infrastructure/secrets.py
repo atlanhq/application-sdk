@@ -23,6 +23,20 @@ from application_sdk.errors.leaves import (  # PreconditionError re-exported for
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "AgentSecretReadError",
+    "EnvironmentSecretStore",
+    "get_deployment_secret",
+    "SecretNotFoundError",
+    "SecretStore",
+    "SecretStoreError",
+    "SecretStoreNotConfiguredError",
+    "SecretStoreTransientError",
+    "SecretStoreUnavailableError",
+    "SecretStoreUnreachableError",
+]
+
+
 logger = get_logger(__name__)
 
 

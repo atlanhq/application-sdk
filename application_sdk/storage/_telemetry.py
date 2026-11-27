@@ -71,8 +71,10 @@ def _record_transfer_metric(
     try:
         try:
             from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — lazy: avoid import-time cycle observability<->storage
-                MetricType,
                 get_metrics,
+            )
+            from application_sdk.observability.models import (  # noqa: PLC0415 — lazy: avoid import-time cycle observability<->storage
+                MetricType,
             )
         except ModuleNotFoundError as exc:
             if not worker_only_missing(exc):

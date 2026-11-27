@@ -6,6 +6,11 @@ from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
 
+__all__ = [
+    "MergeFetchFailuresInput",
+    "MergeFetchFailuresOutput",
+]
+
 
 class MergeFetchFailuresInput(Input):
     """Input for ``App.merge_fetch_failures``.

@@ -27,6 +27,11 @@ from application_sdk.constants import (
 from application_sdk.errors.http import classify_http_exception
 from application_sdk.errors.leaves import SourceUnavailableError
 
+__all__ = [
+    "BaseClient",
+]
+
+
 logger = get_logger(__name__)
 
 

@@ -69,6 +69,20 @@ from application_sdk.storage.batch import download_prefix, upload_prefix
 if TYPE_CHECKING:
     from duckdb import DuckDBPyConnection
 
+__all__ = [
+    "cleanup_previous_state",
+    "copy_non_column_entities",
+    "create_current_state_snapshot",
+    "CurrentStateResult",
+    "download_transformed_data",
+    "get_persistent_s3_prefix",
+    "materialize_previous_state",
+    "prepare_current_state_directory",
+    "prepare_previous_state",
+    "upload_current_state",
+]
+
+
 logger = get_logger(__name__)
 
 _T = TypeVar("_T")

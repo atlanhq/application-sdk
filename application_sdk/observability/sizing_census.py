@@ -6,6 +6,10 @@ from __future__ import annotations
 
 import threading
 
+__all__ = [
+    "CENSUS",
+]
+
 
 class _Census:
     """High-water mark per window, not an instant count: an activity joined

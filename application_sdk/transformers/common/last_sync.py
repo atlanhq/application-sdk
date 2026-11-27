@@ -26,6 +26,9 @@ from __future__ import annotations
 
 from application_sdk import _deprecation
 
+__all__: list[str] = []
+
+
 #: name -> (replacement, why). The shared sentence and the removal version live
 #: in ``__getattr__`` below.
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {

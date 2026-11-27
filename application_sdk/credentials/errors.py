@@ -21,6 +21,17 @@ from application_sdk.errors.base import sanitize_cause_repr as sanitize_cause_re
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
+__all__ = [
+    "AtlanCredentialTypeError",
+    "CredentialError",
+    "CredentialNotFoundError",
+    "CredentialParseError",
+    "CredentialResolvableTypeError",
+    "CredentialRoutingError",
+    "CredentialValidationError",
+]
+
+
 # ---------------------------------------------------------------------------
 # Routing / type-check errors (simple typed leaves — no custom __init__)
 # ---------------------------------------------------------------------------

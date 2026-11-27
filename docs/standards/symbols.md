@@ -293,6 +293,58 @@ suppression: `# conformance: ignore[B008] no public equivalent — tracked in
 
 ---
 
+## A module's surface is its `__all__`
+
+Every public module under `application_sdk/` (outside `testing/`) declares
+`__all__`, and `tests/unit/test_module_all_declared.py` fails one that does
+not. `__all__` lists what the module defines on purpose: its classes,
+functions and constants, plus any re-export it keeps deliberately.
+
+This matters to the gate. A module **without** `__all__` publishes every
+`application_sdk` import it binds, so moving code out of it, or tidying an
+import, reads as a removal. A module **with** `__all__` publishes only its
+definitions and the names `__all__` lists. Its other imports are
+implementation details, and you may drop them freely.
+
+FND-4259 added `__all__` to the 190 public modules that had none. About 1,000
+imported names dropped out of the surface:
+
+- **No importer anywhere.** A sweep of every non-archived atlanhq repo found
+  no importer for nearly all of them. They still import today. The gate reported
+  them as advisory (below), and from the next release on they are not surface.
+- **Imported by apps, kept declared.** Fifteen stay listed in `__all__`. Nine
+  are re-exports their module keeps on purpose: each is marked in the source,
+  served by its package, or pinned by a test (`contracts.types.MaxItems`,
+  `credentials.utils.parse_credentials_extra`). The other six share a name with
+  an export of a parent package (`errors.base.FailureCategory` and
+  `errors.FailureCategory`, `contracts.storage.FileReference` and
+  `contracts.FileReference`). B001 matches `from <package> import X` against
+  a deprecated `X` in any submodule of that package. A deprecated alias in the
+  submodule would therefore flag the canonical package import in every app.
+- **Imported by apps, deprecated.** Ten names became `_DEPRECATED_CONSTANTS`
+  aliases of their home, removed in v4.0.0. They are listed in
+  `docs/upgrade-guide-v3.md` under "Names a module only imported".
+
+Before you deprecate a name a module only imports, check that no parent
+package exports the same name, for the B001 reason above.
+
+The gate tells the two `__all__` cases apart:
+
+- A module that had **no** `__all__` at the base release, and now declares one
+  that leaves out an import it still binds, gets an **advisory** finding
+  (`undeclared`). The name still imports, so nothing breaks. This is how a
+  module states its surface for the first time.
+- A module that **already** declared `__all__` gets no such pass. Taking a name
+  out of an existing `__all__` is a blocking removal, even if the import stays.
+  Otherwise "unlist it now, delete it next release" would remove a declared
+  name with no deprecation cycle.
+
+When you add a module, give it an `__all__`. When a split leaves a module
+re-exporting what moved out, decide whether that re-export is surface. If it
+is, list it in `__all__`. If it is not, leave it out.
+
+---
+
 ## Deliberate breaks
 
 Sometimes an alias is genuinely impossible, or the symbol is so new that nobody
@@ -350,7 +402,10 @@ Read the job summary — it lists every name, with the tier.
   above). This is the normal outcome.
 - **Blocking, and the break is deliberate** → declare it in the commit subject.
 - **Advisory** → nothing is required. It is telling you an SDK private that some
-  app may be importing has gone; B008 is what moves those apps off it.
+  app may be importing has gone; B008 is what moves those apps off it. An
+  advisory `undeclared` finding means a module's first `__all__` left out an
+  import it still binds (see [A module's surface is its
+  `__all__`](#a-modules-surface-is-its-__all__)).
 - **You believe it is a false positive** → say so on the PR rather than working
   around it. The gate has no suppression mechanism on purpose; a surface gate
   you can silence per-line is a surface gate that gets silenced.

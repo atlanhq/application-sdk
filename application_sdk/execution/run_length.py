@@ -55,6 +55,13 @@ from typing import Any
 from application_sdk.common._env import env_int
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "build_run_length_watch",
+    "RUN_LENGTH_SLA_SECONDS",
+    "RunLengthWatch",
+]
+
+
 logger = get_logger(__name__)
 
 #: Meter for the signal this module owns. Shared with ``progress_telemetry``:

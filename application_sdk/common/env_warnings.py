@@ -18,6 +18,11 @@ from __future__ import annotations
 
 import os
 
+__all__ = [
+    "warn_removed_env_vars",
+]
+
+
 #: Env vars the SDK no longer reads. Keep curated — every entry that is set
 #: in the environment becomes part of one warning line at startup.
 _REMOVED_ENV_VARS: frozenset[str] = frozenset(

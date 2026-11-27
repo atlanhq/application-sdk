@@ -219,6 +219,15 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "get_correlation_context is deprecated; use application_sdk.observability.correlation.get_correlation_context \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.app.context",
+      "removal_version": "4.0.0",
+      "symbol": "get_correlation_context"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "CONTRACT_VALIDATION is deprecated; use the code ClassVar of a typed application_sdk.errors.AppError subclass \u2014 AAF-* codes are a second error vocabulary beside code. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.app.entrypoint",
@@ -404,6 +413,42 @@
       "module": "application_sdk.clients.redis_errors",
       "removal_version": "4.0.0",
       "symbol": "RedisTimeoutError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "EngineNotInitializedError is deprecated; use application_sdk.clients.sql_errors.EngineNotInitializedError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "EngineNotInitializedError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SqlBindParameterError is deprecated; use application_sdk.clients.sql_errors.SqlBindParameterError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "SqlBindParameterError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "SqlPandasResultError is deprecated; use application_sdk.clients.sql_errors.SqlPandasResultError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "SqlPandasResultError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "UnsupportedSqlCursorError is deprecated; use application_sdk.clients.sql_errors.UnsupportedSqlCursorError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.clients.sql",
+      "removal_version": "4.0.0",
+      "symbol": "UnsupportedSqlCursorError"
     },
     {
       "kind": "function",
@@ -962,6 +1007,15 @@
       "module": "application_sdk.contracts.events",
       "removal_version": "4.0",
       "symbol": "EventRegistration"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "CredentialRef is deprecated; use application_sdk.credentials.ref.CredentialRef \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.contracts.types",
+      "removal_version": "4.0.0",
+      "symbol": "CredentialRef"
     },
     {
       "kind": "method",
@@ -1657,6 +1711,15 @@
       "symbol": "HandlerError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "AgentCredentialSpec is deprecated; use application_sdk.credentials.spec.AgentCredentialSpec \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0.0",
+      "symbol": "AgentCredentialSpec"
+    },
+    {
       "kind": "enum_member",
       "marker_via": "enum-member",
       "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
@@ -2096,6 +2159,15 @@
       "module": "application_sdk.observability.metrics_adaptor",
       "removal_version": "4.0.0",
       "symbol": "METRICS_RETENTION_DAYS"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "MetricType is deprecated; use application_sdk.observability.models.MetricType \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.observability.metrics_adaptor",
+      "removal_version": "4.0.0",
+      "symbol": "MetricType"
     },
     {
       "kind": "function",
@@ -2559,11 +2631,29 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "ExtractionOutput is deprecated; use application_sdk.templates.contracts.sql_metadata.ExtractionOutput \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "ExtractionOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "FailureCategory is deprecated; use application_sdk.errors.categories.FailureCategory \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_app",
       "removal_version": "4.0.0",
       "symbol": "FailureCategory"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_app",
+      "removal_version": "4.0.0",
+      "symbol": "TEMPORARY_PATH"
     },
     {
       "kind": "constant",

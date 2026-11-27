@@ -68,6 +68,11 @@ import orjson
 
 from application_sdk._env import env_str
 
+__all__ = [
+    "main",
+]
+
+
 # daprd (logrus) log levels → AtlanLoggerAdapter method names.
 _LEVEL_TO_METHOD = {
     "debug": "debug",

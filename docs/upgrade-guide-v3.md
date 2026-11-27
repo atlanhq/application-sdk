@@ -1484,6 +1484,24 @@ An SDK error class names its failure with one vocabulary, its `code` ClassVar (`
 
 ---
 
+## Names a module only imported (deprecated, removed in v4.0.0)
+
+Every public SDK module now declares `__all__`, listing what it defines. A name a module only imported from elsewhere in the SDK is no longer part of that module's surface. Each name below was imported by connector apps from a module that only imported it. It still works and warns, and B001 flags each import. Import it from its home instead.
+
+| Deprecated | Import from |
+|---|---|
+| `application_sdk.app.context.get_correlation_context` | `application_sdk.observability.correlation` |
+| `application_sdk.clients.sql.EngineNotInitializedError`, `SqlBindParameterError`, `SqlPandasResultError`, `UnsupportedSqlCursorError` | `application_sdk.clients.sql_errors` |
+| `application_sdk.contracts.types.CredentialRef` | `application_sdk.credentials.ref` |
+| `application_sdk.handler.contracts.AgentCredentialSpec` | `application_sdk.credentials.spec` |
+| `application_sdk.observability.metrics_adaptor.MetricType` | `application_sdk.observability.models` |
+| `application_sdk.templates.sql_app.ExtractionOutput` | `application_sdk.templates.contracts.sql_metadata` |
+| `application_sdk.templates.sql_app.TEMPORARY_PATH` | `application_sdk.constants` |
+
+Every other name a module only imported still imports today, without a warning, but it is no longer surface and can go in any release. If you import one, import it from the module that defines it.
+
+---
+
 ## `retry_policy` together with the `@task` retry scalars (warns now, an error in v4.0.0)
 
 `retry_policy` replaces `retry_max_attempts`, `retry_initial_interval_seconds` and `retry_max_interval_seconds`. The task is dispatched with the policy as-is and the three scalars are never read, so `@task(retry_policy=RetryPolicy(max_attempts=2), retry_max_attempts=5)` ran with 2 attempts and the 5 was dropped without a word. `@task` now emits a `DeprecationWarning` and logs a WARNING at decoration when `retry_policy` is passed together with any of the three, even when the value passed equals the default. From v4.0.0 it raises `TaskDeclarationError`. Retry behaviour is unchanged: the policy still wins.

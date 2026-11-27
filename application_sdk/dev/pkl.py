@@ -77,6 +77,16 @@ from application_sdk.dev._pkl_errors import (
 )
 from application_sdk.pkl_version import PKL_VERSION
 
+__all__ = [
+    "asset_name",
+    "asset_url",
+    "ensure_pkl",
+    "main",
+    "parse_version",
+    "platform_key",
+    "runtime_version",
+]
+
 
 def _progress(message: str) -> None:
     """Report download progress on **stderr**.

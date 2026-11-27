@@ -14,6 +14,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from temporalio.worker.workflow_sandbox import SandboxRestrictions
 
+__all__ = [
+    "host_library_modules",
+    "SandboxConfig",
+]
+
 
 # Every top-level module and subpackage of application_sdk, classified. The
 # sandbox passes a module through by name prefix, so one "application_sdk"

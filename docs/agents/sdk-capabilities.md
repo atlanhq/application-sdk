@@ -15,25 +15,30 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 44 |
-| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 19 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 65 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 47 |
-| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
-| `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 40 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 51 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 43 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 75 |
+| `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 54 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 234 |
+| `application_sdk.constants` | Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup) | 146 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 69 |
+| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 81 |
+| `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 11 |
+| `application_sdk.discovery` | Dynamic App and Handler loading from "module.path:ClassName" strings at container startup | 4 |
+| `application_sdk.errors` | Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary | 45 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 69 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 119 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 47 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
-| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 30 |
-| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 15 |
+| `application_sdk.main_errors` | Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection | 4 |
+| `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 144 |
+| `application_sdk.outputs` | Output collectors and record models for Automation Engine | 44 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
-| `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 49 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 465 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 87 |
+| `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 29 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 128 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 19 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 427 |
+| `application_sdk.tools` | Developer command-line tools — provision-credentials for local development | 1 |
+| `application_sdk.transformers` | Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md). | 27 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 95 |
 
 ## Subpackage Details
 
@@ -43,6 +48,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 ### Classes
 
+#### `AbstractRunNotImplementedError`
+
+- **Import:** `from application_sdk.app.base_errors import AbstractRunNotImplementedError`
+- **Signature:** `class AbstractRunNotImplementedError(*, ...)`
+- **Summary:** App.run() called but the subclass has not implemented it.
+- **Defined in:** `application_sdk/app/base_errors.py`
+
 #### `App`
 
 - **Import:** `from application_sdk.app import App`
@@ -51,9 +63,17 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Base class for all Apps.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `AppAlreadyRegisteredError`
+
+- **Import:** `from application_sdk.app.registry import AppAlreadyRegisteredError`
+- **Signature:** `class AppAlreadyRegisteredError(name: str, version: str, *, error_code: ErrorCode | None = None) -> None`
+- **Summary:** Deprecated: use ``application_sdk.app.registry.AppVersionAlreadyRegisteredError`` — removed in v4.0.
+- **Defined in:** `application_sdk/app/registry.py`
+
 #### `AppContext`
 
 - **Import:** `from application_sdk.app import AppContext`
+- **Also importable from:** `application_sdk.app.context`
 - **Signature:** `class AppContext(app_name: str, ...)`
 - **Summary:** Execution context passed to Apps during execution.
 - **Defined in:** `application_sdk/app/context.py`
@@ -73,9 +93,32 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Deprecated: use ``application_sdk.errors.AppError`` directly — removed in v4.0.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `AppMetadata`
+
+- **Import:** `from application_sdk.app.context import AppMetadata`
+- **Also importable from:** `application_sdk.app.registry`
+- **Signature:** `class AppMetadata(tags: list[str] = list(), properties: dict[str, str] = dict()) -> None`
+- **Summary:** Typed metadata for App execution context.
+- **Defined in:** `application_sdk/app/context.py`
+
+#### `AppNotFoundError`
+
+- **Import:** `from application_sdk.app.registry import AppNotFoundError`
+- **Signature:** `class AppNotFoundError(name: str, version: str | None = None, *, error_code: ErrorCode | None = None) -> None`
+- **Summary:** Deprecated: use ``application_sdk.app.registry.AppNotRegisteredError`` — removed in v4.0.
+- **Defined in:** `application_sdk/app/registry.py`
+
+#### `AppNotRegisteredError`
+
+- **Import:** `from application_sdk.app.registry import AppNotRegisteredError`
+- **Signature:** `class AppNotRegisteredError(*, ...)`
+- **Summary:** No app (or no such version of it) is registered under the requested name.
+- **Defined in:** `application_sdk/app/registry.py`
+
 #### `AppRegistry`
 
 - **Import:** `from application_sdk.app import AppRegistry`
+- **Also importable from:** `application_sdk.app.registry`
 - **Signature:** `class AppRegistry`
 - **Summary:** Registry for App discovery and registration.
 - **Defined in:** `application_sdk/app/registry.py`
@@ -87,6 +130,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Accessor for in-memory state scoped to app execution.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `AppVersionAlreadyRegisteredError`
+
+- **Import:** `from application_sdk.app.registry import AppVersionAlreadyRegisteredError`
+- **Signature:** `class AppVersionAlreadyRegisteredError(*, ...)`
+- **Summary:** The app name and version are already registered and override was not requested.
+- **Defined in:** `application_sdk/app/registry.py`
+
 #### `AtlanClientMixin`
 
 - **Import:** `from application_sdk.app import AtlanClientMixin`
@@ -94,9 +144,31 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Mixin providing cached async Atlan client access for App subclasses.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
+#### `ChildAppContext`
+
+- **Import:** `from application_sdk.app.context import ChildAppContext`
+- **Signature:** `class ChildAppContext(parent: AppContext, child_app_name: str) -> None`
+- **Summary:** Context for calling child Apps from within a parent App.
+- **Defined in:** `application_sdk/app/context.py`
+
+#### `EntryPointContractError`
+
+- **Import:** `from application_sdk.app.entrypoint import EntryPointContractError`
+- **Signature:** `class EntryPointContractError(message: str, *, error_code: ErrorCode | None = None) -> None`
+- **Summary:** Deprecated: use ``application_sdk.app.entrypoint.EntryPointDeclarationError`` — removed in v4.0.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `EntryPointDeclarationError`
+
+- **Import:** `from application_sdk.app.entrypoint import EntryPointDeclarationError`
+- **Signature:** `class EntryPointDeclarationError(*, ...)`
+- **Summary:** An ``@entrypoint`` method or an app's entry-point declaration breaks the contract.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
 #### `EntryPointMetadata`
 
 - **Import:** `from application_sdk.app import EntryPointMetadata`
+- **Also importable from:** `application_sdk.app.entrypoint`
 - **Signature:** `class EntryPointMetadata(name: str, ...)`
 - **Summary:** Metadata about a registered entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
@@ -122,6 +194,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `class NonRetryableError(message: str, ...)`
 - **Summary:** Deprecated: use a typed ``AppError`` subclass with ``default_retryable = False`` — removed in v4.0.0.
 - **Defined in:** `application_sdk/app/base.py`
+
+#### `ObjectStoreNotConfiguredError`
+
+- **Import:** `from application_sdk.app.base_errors import ObjectStoreNotConfiguredError`
+- **Signature:** `class ObjectStoreNotConfiguredError(*, ...)`
+- **Summary:** Object store required by a @task but not configured in the deployment.
+- **Defined in:** `application_sdk/_context_errors.py`
 
 #### `Output`
 
@@ -159,16 +238,74 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Configuration for retry behavior.
 - **Defined in:** `application_sdk/execution/retry.py`
 
+#### `SecretStoreNotConfiguredError`
+
+- **Import:** `from application_sdk.app.base_errors import SecretStoreNotConfiguredError`
+- **Signature:** `class SecretStoreNotConfiguredError(*, ...)`
+- **Summary:** Secret store required by get_secret / resolve_credential but not configured.
+- **Defined in:** `application_sdk/_context_errors.py`
+
+#### `SingleStoreUnknownInWorkflowError`
+
+- **Import:** `from application_sdk.app.base_errors import SingleStoreUnknownInWorkflowError`
+- **Signature:** `class SingleStoreUnknownInWorkflowError(*, ...)`
+- **Summary:** ``AppContext.single_store`` read from workflow code, which holds no stores.
+- **Defined in:** `application_sdk/app/base_errors.py`
+
+#### `StateStoreNotConfiguredError`
+
+- **Import:** `from application_sdk.app.base_errors import StateStoreNotConfiguredError`
+- **Signature:** `class StateStoreNotConfiguredError(*, ...)`
+- **Summary:** State store required by save_state / load_state but not configured.
+- **Defined in:** `application_sdk/app/base_errors.py`
+
+#### `TaskContractError`
+
+- **Import:** `from application_sdk.app.task import TaskContractError`
+- **Signature:** `class TaskContractError(message: str, *, error_code: ErrorCode | None = None) -> None`
+- **Summary:** Deprecated: use ``application_sdk.app.task.TaskDeclarationError`` — removed in v4.0.
+- **Defined in:** `application_sdk/app/task.py`
+
+#### `TaskDeclarationError`
+
+- **Import:** `from application_sdk.app.task import TaskDeclarationError`
+- **Signature:** `class TaskDeclarationError(*, ...)`
+- **Summary:** A ``@task`` method or its decorator arguments break the task contract.
+- **Defined in:** `application_sdk/app/task.py`
+
+#### `TaskExecutionContext`
+
+- **Import:** `from application_sdk.app.context import TaskExecutionContext`
+- **Signature:** `class TaskExecutionContext(app_context: AppContext, task_name: str, heartbeat_controller: HeartbeatController) -> None`
+- **Summary:** Execution context available during @task method execution.
+- **Defined in:** `application_sdk/app/context.py`
+
 #### `TaskMetadata`
 
 - **Import:** `from application_sdk.app import TaskMetadata`
+- **Also importable from:** `application_sdk.app.task`
 - **Signature:** `class TaskMetadata(name: str, ...)`
 - **Summary:** Metadata about a registered task.
 - **Defined in:** `application_sdk/app/task.py`
 
+#### `TaskNotFoundError`
+
+- **Import:** `from application_sdk.app.registry import TaskNotFoundError`
+- **Signature:** `class TaskNotFoundError(app_name: str, task_name: str, *, error_code: ErrorCode | None = None) -> None`
+- **Summary:** Deprecated: use ``application_sdk.app.registry.TaskNotRegisteredError`` — removed in v4.0.
+- **Defined in:** `application_sdk/app/registry.py`
+
+#### `TaskNotRegisteredError`
+
+- **Import:** `from application_sdk.app.registry import TaskNotRegisteredError`
+- **Signature:** `class TaskNotRegisteredError(*, ...)`
+- **Summary:** No task of the requested name is registered for the app.
+- **Defined in:** `application_sdk/app/registry.py`
+
 #### `TaskRegistry`
 
 - **Import:** `from application_sdk.app import TaskRegistry`
+- **Also importable from:** `application_sdk.app.registry`
 - **Signature:** `class TaskRegistry`
 - **Summary:** Registry for Task discovery and registration.
 - **Defined in:** `application_sdk/app/registry.py`
@@ -180,11 +317,33 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Accessor for app state from within a task (not a @task method on an App).
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `UnresolvableEntrypointAnnotationsError`
+
+- **Import:** `from application_sdk.app.entrypoint import UnresolvableEntrypointAnnotationsError`
+- **Signature:** `class UnresolvableEntrypointAnnotationsError(*, ...)`
+- **Summary:** Entry point has string annotations that cannot be resolved at decoration time.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `UnresolvableTaskAnnotationsError`
+
+- **Import:** `from application_sdk.app.task import UnresolvableTaskAnnotationsError`
+- **Signature:** `class UnresolvableTaskAnnotationsError(*, ...)`
+- **Summary:** Task has string annotations that cannot be resolved at decoration time.
+- **Defined in:** `application_sdk/app/task.py`
+
+#### `UpstreamObjectStoreNotConfiguredError`
+
+- **Import:** `from application_sdk.app.base_errors import UpstreamObjectStoreNotConfiguredError`
+- **Signature:** `class UpstreamObjectStoreNotConfiguredError(*, ...)`
+- **Summary:** ENABLE_ATLAN_UPLOAD is on, but the upstream object store did not resolve.
+- **Defined in:** `application_sdk/app/base_errors.py`
+
 ### Decorators
 
 #### `@entrypoint`
 
 - **Import:** `from application_sdk.app import entrypoint`
+- **Also importable from:** `application_sdk.app.entrypoint`
 - **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None, default: bool = False) -> F | Callable[[F], F]`
 - **Summary:** Decorator to mark a method as an independently-triggerable entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
@@ -192,7 +351,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@task`
 
 - **Import:** `from application_sdk.app import task`
-- **Also importable from:** `application_sdk.app.base`
+- **Also importable from:** `application_sdk.app.base`, `application_sdk.app.task`
 - **Signature:** `task(func: F | None = None, *, ...)`
 - **Summary:** Decorator to mark a method as a task (Temporal activity).
 - **Defined in:** `application_sdk/app/task.py`
@@ -262,9 +421,17 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `build_workflow_type_index`
+
+- **Import:** `from application_sdk.app.entrypoint import build_workflow_type_index`
+- **Signature:** `build_workflow_type_index(app_name: str, ...)`
+- **Summary:** Map every registered Temporal workflow type back to its entry point.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
 #### `canonical_workflow_type`
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
+- **Also importable from:** `application_sdk.app.entrypoint`
 - **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointIdentity)`
 - **Summary:** The convention-derived Temporal workflow type for *ep*.
 - **Defined in:** `application_sdk/common/dispatch.py`
@@ -272,6 +439,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `entrypoint_module_segment`
 
 - **Import:** `from application_sdk.app import entrypoint_module_segment`
+- **Also importable from:** `application_sdk.app.entrypoint`
 - **Signature:** `entrypoint_module_segment(name: str)`
 - **Summary:** Convert a kebab-case entry-point name to its Python module segment.
 - **Defined in:** `application_sdk/app/entrypoint.py`
@@ -283,12 +451,61 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Generate a Temporal workflow class for one entry point.
 - **Defined in:** `application_sdk/app/base.py`
 
+#### `get_activity_name`
+
+- **Import:** `from application_sdk.app.registry import get_activity_name`
+- **Signature:** `get_activity_name(app_name: str, task_name: str) -> str`
+- **Summary:** Canonical ``{app_name}:{task_name}`` activity-name formatter.
+- **Defined in:** `application_sdk/app/registry.py`
+
+#### `get_entrypoint_metadata`
+
+- **Import:** `from application_sdk.app.entrypoint import get_entrypoint_metadata`
+- **Signature:** `get_entrypoint_metadata(obj: object) -> EntryPointMetadata | None`
+- **Summary:** Get entry point metadata from a decorated function.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `get_task_metadata`
+
+- **Import:** `from application_sdk.app.task import get_task_metadata`
+- **Signature:** `get_task_metadata(obj: object) -> TaskMetadata | None`
+- **Summary:** Get task metadata from a decorated function.
+- **Defined in:** `application_sdk/app/task.py`
+
+#### `is_entrypoint`
+
+- **Import:** `from application_sdk.app.entrypoint import is_entrypoint`
+- **Signature:** `is_entrypoint(obj: object) -> bool`
+- **Summary:** Check if an object is decorated with @entrypoint.
+- **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `is_task`
+
+- **Import:** `from application_sdk.app.task import is_task`
+- **Signature:** `is_task(obj: object) -> bool`
+- **Summary:** Check if an object is decorated with @task.
+- **Defined in:** `application_sdk/app/task.py`
+
 #### `mcp_tool`
 
 - **Import:** `from application_sdk.app import mcp_tool`
 - **Signature:** `mcp_tool(name: str | None = None, description: str | None = None, visible: bool = True, *args, **kwargs)`
 - **Summary:** Decorator to mark functions as MCP tools.
 - **Defined in:** `application_sdk/server/mcp/decorators.py`
+
+#### `resolve_pool_queue`
+
+- **Import:** `from application_sdk.app.registry import resolve_pool_queue`
+- **Signature:** `resolve_pool_queue(pool: str) -> str | None`
+- **Summary:** Resolve the Temporal task queue for a named worker pool.
+- **Defined in:** `application_sdk/app/registry.py`
+
+#### `workflow_type_class_segment`
+
+- **Import:** `from application_sdk.app.entrypoint import workflow_type_class_segment`
+- **Signature:** `workflow_type_class_segment(workflow_type: str) -> str`
+- **Summary:** Convert a Temporal workflow type into its generated-class name segment.
+- **Defined in:** `application_sdk/app/entrypoint.py`
 
 ### Constants and Enums
 
@@ -305,6 +522,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `_app_state_lock`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/app/base.py`
+
+#### `HEARTBEAT_TIMEOUT_ENV`
+
+- **Import:** `from application_sdk.app.task import HEARTBEAT_TIMEOUT_ENV`
+- **Signature:** `HEARTBEAT_TIMEOUT_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/task.py`
 
 #### `InteractionUnfinishedPolicy`
 
@@ -341,6 +565,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Sleep for a given duration inside an app run (deterministic).
 - **Defined in:** `application_sdk/app/__init__.py`
 
+#### `TaskMethod`
+
+- **Import:** `from application_sdk.app.task import TaskMethod`
+- **Signature:** `TaskMethod`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/app/task.py`
+
 #### `update`
 
 - **Import:** `from application_sdk.app import update`
@@ -368,9 +599,17 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 
 ### Classes
 
+#### `AbstractClientLoadError`
+
+- **Import:** `from application_sdk.clients.sql_errors import AbstractClientLoadError`
+- **Signature:** `class AbstractClientLoadError(*, ...)`
+- **Summary:** load() called on a ClientInterface subclass that has not implemented it.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
 #### `AsyncBaseSQLClient`
 
 - **Import:** `from application_sdk.clients import AsyncBaseSQLClient`
+- **Also importable from:** `application_sdk.clients.sql`
 - **Signature:** `class AsyncBaseSQLClient`
 - **Summary:** Asynchronous SQL client for database operations.
 - **Defined in:** `application_sdk/clients/sql.py`
@@ -378,6 +617,7 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 #### `AzureAuthProvider`
 
 - **Import:** `from application_sdk.clients import AzureAuthProvider`
+- **Also importable from:** `application_sdk.clients.azure.auth`
 - **Signature:** `class AzureAuthProvider()`
 - **Summary:** Azure authentication provider for handling Service Principal authentication.
 - **Defined in:** `application_sdk/clients/azure/auth.py`
@@ -385,20 +625,79 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 #### `AzureClient`
 
 - **Import:** `from application_sdk.clients import AzureClient`
+- **Also importable from:** `application_sdk.clients.azure.client`
 - **Signature:** `class AzureClient(credentials: dict[str, Any] | None = None, max_workers: int = 10, **kwargs: Any)`
 - **Summary:** Main Azure client for the application-sdk framework.
 - **Defined in:** `application_sdk/clients/azure/client.py`
 
+#### `AzureClientAuthError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureClientAuthError`
+- **Signature:** `class AzureClientAuthError(*, ...)`
+- **Summary:** Azure client authentication or connection failed.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
+#### `AzureConnectionError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureConnectionError`
+- **Signature:** `class AzureConnectionError(*, ...)`
+- **Summary:** Azure service is unavailable.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
+#### `AzureCredentialError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureCredentialError`
+- **Signature:** `class AzureCredentialError(*, ...)`
+- **Summary:** Azure credential authentication failed.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
+#### `AzureCredentialParseError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureCredentialParseError`
+- **Signature:** `class AzureCredentialParseError(*, ...)`
+- **Summary:** Azure credential parsing or validation failed.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
+#### `AzureCredentialTypeError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureCredentialTypeError`
+- **Signature:** `class AzureCredentialTypeError(*, ...)`
+- **Summary:** Azure credential has invalid parameter types.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
+#### `AzureInputValidationError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureInputValidationError`
+- **Signature:** `class AzureInputValidationError(*, ...)`
+- **Summary:** Azure operation received invalid input parameters.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
+#### `AzureServiceError`
+
+- **Import:** `from application_sdk.clients.azure.azure_errors import AzureServiceError`
+- **Signature:** `class AzureServiceError(*, ...)`
+- **Summary:** Azure service returned an error.
+- **Defined in:** `application_sdk/clients/azure/azure_errors.py`
+
 #### `BaseClient`
 
 - **Import:** `from application_sdk.clients import BaseClient`
+- **Also importable from:** `application_sdk.clients.base`
 - **Signature:** `class BaseClient(credentials: dict[str, Any] = {}, http_headers: HeaderTypes = {})`
 - **Summary:** Base client for non-SQL based applications.
 - **Defined in:** `application_sdk/clients/base.py`
 
+#### `BaseRedisClient`
+
+- **Import:** `from application_sdk.clients.redis import BaseRedisClient`
+- **Signature:** `class BaseRedisClient()`
+- **Summary:** Base Redis client with common functionality.
+- **Defined in:** `application_sdk/clients/redis.py`
+
 #### `BaseSQLClient`
 
 - **Import:** `from application_sdk.clients import BaseSQLClient`
+- **Also importable from:** `application_sdk.clients.sql`
 - **Signature:** `class BaseSQLClient(use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR, ...)`
 - **Summary:** SQL client for database operations.
 - **Defined in:** `application_sdk/clients/sql.py`
@@ -413,13 +712,57 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 #### `DatabaseConfig`
 
 - **Import:** `from application_sdk.clients import DatabaseConfig`
+- **Also importable from:** `application_sdk.clients.models`
 - **Signature:** `class DatabaseConfig`
 - **Summary:** Pydantic model for database connection configuration.
 - **Defined in:** `application_sdk/clients/models.py`
 
+#### `EngineNotInitializedError`
+
+- **Import:** `from application_sdk.clients.sql_errors import EngineNotInitializedError`
+- **Signature:** `class EngineNotInitializedError(*, ...)`
+- **Summary:** SQL engine is not initialized; call load() before running queries.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `HealthStatus`
+
+- **Import:** `from application_sdk.clients.azure.client import HealthStatus`
+- **Signature:** `class HealthStatus`
+- **Summary:** Model for overall Azure client health status.
+- **Defined in:** `application_sdk/clients/azure/client.py`
+
+#### `HttpClientSourceUnavailableError`
+
+- **Import:** `from application_sdk.clients.http_errors import HttpClientSourceUnavailableError`
+- **Signature:** `class HttpClientSourceUnavailableError(*, ...)`
+- **Summary:** An HTTP helper request got no response from the source.
+- **Defined in:** `application_sdk/clients/http_errors.py`
+
+#### `InvalidSqlEngineTypeError`
+
+- **Import:** `from application_sdk.clients.sql_errors import InvalidSqlEngineTypeError`
+- **Signature:** `class InvalidSqlEngineTypeError(*, ...)`
+- **Summary:** The engine is a raw connection string, not a SQLAlchemy engine object.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `LockReleaseResult`
+
+- **Import:** `from application_sdk.clients.redis import LockReleaseResult`
+- **Signature:** `class LockReleaseResult`
+- **Summary:** Enum for lock release operation results.
+- **Defined in:** `application_sdk/clients/redis.py`
+
+#### `MissingSqlParamError`
+
+- **Import:** `from application_sdk.clients.sql_errors import MissingSqlParamError`
+- **Signature:** `class MissingSqlParamError(*, ...)`
+- **Summary:** A required SQL connection parameter is missing.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
 #### `RedisClient`
 
 - **Import:** `from application_sdk.clients import RedisClient`
+- **Also importable from:** `application_sdk.clients.redis`
 - **Signature:** `class RedisClient()`
 - **Summary:** Deprecated: use ``redis`` directly — removed in v4.0.0. Still works until then.
 - **Defined in:** `application_sdk/clients/redis.py`
@@ -427,11 +770,131 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 #### `RedisClientAsync`
 
 - **Import:** `from application_sdk.clients import RedisClientAsync`
+- **Also importable from:** `application_sdk.clients.redis`
 - **Signature:** `class RedisClientAsync()`
 - **Summary:** Deprecated: use ``redis.asyncio`` directly — removed in v4.0.0. Still works until then.
 - **Defined in:** `application_sdk/clients/redis.py`
 
+#### `RedisConfigError`
+
+- **Import:** `from application_sdk.clients.redis_errors import RedisConfigError`
+- **Signature:** `class RedisConfigError(*, ...)`
+- **Summary:** Redis configuration is missing or invalid; deployment fix required.
+- **Defined in:** `application_sdk/clients/redis_errors.py`
+
+#### `RedisConnectionError`
+
+- **Import:** `from application_sdk.clients.redis_errors import RedisConnectionError`
+- **Signature:** `class RedisConnectionError(*, ...)`
+- **Summary:** Redis connection failed or is unavailable.
+- **Defined in:** `application_sdk/clients/redis_errors.py`
+
+#### `RedisProtocolError`
+
+- **Import:** `from application_sdk.clients.redis_errors import RedisProtocolError`
+- **Signature:** `class RedisProtocolError(*, ...)`
+- **Summary:** Redis returned an unexpected or malformed response.
+- **Defined in:** `application_sdk/clients/redis_errors.py`
+
+#### `RedisTimeoutError`
+
+- **Import:** `from application_sdk.clients.redis_errors import RedisTimeoutError`
+- **Signature:** `class RedisTimeoutError(*, ...)`
+- **Summary:** Redis operation timed out.
+- **Defined in:** `application_sdk/clients/redis_errors.py`
+
+#### `ServiceHealth`
+
+- **Import:** `from application_sdk.clients.azure.client import ServiceHealth`
+- **Signature:** `class ServiceHealth`
+- **Summary:** Model for individual service health status.
+- **Defined in:** `application_sdk/clients/azure/client.py`
+
+#### `ServicePrincipalCredentials`
+
+- **Import:** `from application_sdk.clients.azure.auth import ServicePrincipalCredentials`
+- **Signature:** `class ServicePrincipalCredentials`
+- **Summary:** Pydantic model for Azure Service Principal credentials.
+- **Defined in:** `application_sdk/clients/azure/auth.py`
+
+#### `SqlAwsCredentialsError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlAwsCredentialsError`
+- **Signature:** `class SqlAwsCredentialsError(*, ...)`
+- **Summary:** AWS IAM credentials required for RDS authentication are missing.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlBindParameterError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlBindParameterError`
+- **Signature:** `class SqlBindParameterError(*, ...)`
+- **Summary:** ``run_query`` was given bind parameters it cannot apply.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlClientAuthFailedError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlClientAuthFailedError`
+- **Signature:** `class SqlClientAuthFailedError(*, ...)`
+- **Summary:** SQL database authentication failed.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlClientConfigError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlClientConfigError`
+- **Signature:** `class SqlClientConfigError(*, ...)`
+- **Summary:** DB_CONFIG is not set on this SQL client subclass.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlClientConnectTimeoutError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlClientConnectTimeoutError`
+- **Signature:** `class SqlClientConnectTimeoutError(*, ...)`
+- **Summary:** The SQL client's connect or login ran out of time waiting on the source.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlClientConnectUnclassifiedError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlClientConnectUnclassifiedError`
+- **Signature:** `class SqlClientConnectUnclassifiedError(*, ...)`
+- **Summary:** The SQL client failed to connect for a reason the classifier does not know.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlClientSourceUnavailableError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlClientSourceUnavailableError`
+- **Signature:** `class SqlClientSourceUnavailableError(*, ...)`
+- **Summary:** The SQL client could not reach the source while connecting.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlCredentialsParseError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlCredentialsParseError`
+- **Signature:** `class SqlCredentialsParseError(*, ...)`
+- **Summary:** SQL credentials could not be parsed or are missing required fields.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `SqlPandasResultError`
+
+- **Import:** `from application_sdk.clients.sql_errors import SqlPandasResultError`
+- **Signature:** `class SqlPandasResultError(*, ...)`
+- **Summary:** A SQL read operation failed to produce a valid pandas DataFrame result.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
+#### `UnsupportedSqlCursorError`
+
+- **Import:** `from application_sdk.clients.sql_errors import UnsupportedSqlCursorError`
+- **Signature:** `class UnsupportedSqlCursorError(*, ...)`
+- **Summary:** The current SQL engine or connection does not support cursors.
+- **Defined in:** `application_sdk/clients/sql_errors.py`
+
 ### Functions
+
+#### `attach_tolerant_text_decoder`
+
+- **Import:** `from application_sdk.clients.sql_typecasters import attach_tolerant_text_decoder`
+- **Signature:** `attach_tolerant_text_decoder(dbapi_connection: Any) -> bool`
+- **Summary:** Attach a tolerant UTF-8 text decoder to a DBAPI connection.
+- **Defined in:** `application_sdk/clients/sql_typecasters.py`
 
 #### `create_ssl_context_with_custom_certs`
 
@@ -477,6 +940,20 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Summary:** Get the SSL verification context for HTTP clients such as httpx.
 - **Defined in:** `application_sdk/common/ssl_utils.py`
 
+#### `install_tolerant_connection_decoder`
+
+- **Import:** `from application_sdk.clients.sql_typecasters import install_tolerant_connection_decoder`
+- **Signature:** `install_tolerant_connection_decoder() -> bool`
+- **Summary:** Make psycopg2's *connection-level* text decode tolerant.
+- **Defined in:** `application_sdk/clients/sql_typecasters.py`
+
+#### `install_tolerant_text_decoder_hook`
+
+- **Import:** `from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook`
+- **Signature:** `install_tolerant_text_decoder_hook(engine: Any) -> None`
+- **Summary:** Wire :func:`attach_tolerant_text_decoder` into a SQLAlchemy engine.
+- **Defined in:** `application_sdk/clients/sql_typecasters.py`
+
 ### Constants and Enums
 
 #### `AZURE_MANAGEMENT_API_ENDPOINT`
@@ -500,6 +977,13 @@ Connection clients (SQL, Redis, Azure) and ClientInterface ABC
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/common/ssl_utils.py`
 
+#### `SqlBindValue`
+
+- **Import:** `from application_sdk.clients.sql import SqlBindValue`
+- **Signature:** `SqlBindValue`
+- **Summary:** A value ``run_query`` can bind to a ``:name`` placeholder: a scalar every DB-API driver accepts.
+- **Defined in:** `application_sdk/clients/sql.py`
+
 #### `SSL_CERT_DIR`
 
 - **Import:** `from application_sdk.clients.ssl_utils import SSL_CERT_DIR`
@@ -513,12 +997,153 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 ### Classes
 
+#### `ActivityError`
+
+- **Import:** `from application_sdk.common.error_codes import ActivityError`
+- **Signature:** `class ActivityError`
+- **Summary:** Activity error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `ApiError`
+
+- **Import:** `from application_sdk.common.error_codes import ApiError`
+- **Signature:** `class ApiError`
+- **Summary:** Api/Server error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `AtlanError`
+
+- **Import:** `from application_sdk.common.error_codes import AtlanError`
+- **Signature:** `class AtlanError(message: str = '', **kwargs: object) -> None`
+- **Summary:** Deprecated: use ``application_sdk.errors.AppError`` — removed in v4.0.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `AtomicWriteModeError`
+
+- **Import:** `from application_sdk.common.errors import AtomicWriteModeError`
+- **Signature:** `class AtomicWriteModeError(*, ...)`
+- **Summary:** ``atomic_write`` was given a mode it cannot honour.
+- **Defined in:** `application_sdk/common/errors.py`
+
+#### `AwsAssumeRoleError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsAssumeRoleError`
+- **Signature:** `class AwsAssumeRoleError(*, ...)`
+- **Summary:** Failed to assume an AWS IAM role via STS.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `AwsClientCreationError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsClientCreationError`
+- **Signature:** `class AwsClientCreationError(*, ...)`
+- **Summary:** Failed to create an AWS service client.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `AwsCredentialSourceConflictError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsCredentialSourceConflictError`
+- **Signature:** `class AwsCredentialSourceConflictError(*, ...)`
+- **Summary:** More than one credential source was provided to create_aws_client.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `AwsCredentialSourceMissingError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsCredentialSourceMissingError`
+- **Signature:** `class AwsCredentialSourceMissingError(*, ...)`
+- **Summary:** No credential source was provided to create_aws_client.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `AwsPartialCredentialsError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsPartialCredentialsError`
+- **Signature:** `class AwsPartialCredentialsError(*, ...)`
+- **Summary:** Explicit AWS credentials were only partly supplied.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `AwsRdsTokenError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsRdsTokenError`
+- **Signature:** `class AwsRdsTokenError(*, ...)`
+- **Summary:** Failed to generate an RDS IAM authentication token.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `AwsRegionNotFoundError`
+
+- **Import:** `from application_sdk.common.aws_utils_errors import AwsRegionNotFoundError`
+- **Signature:** `class AwsRegionNotFoundError(*, ...)`
+- **Summary:** Could not extract a valid AWS region from the given hostname.
+- **Defined in:** `application_sdk/common/aws_utils_errors.py`
+
+#### `Backoff`
+
+- **Import:** `from application_sdk.common.backoff import Backoff`
+- **Signature:** `class Backoff(base: float = 0.0, ...)`
+- **Summary:** The shape of one retry ladder.
+- **Defined in:** `application_sdk/common/backoff.py`
+
+#### `ClientError`
+
+- **Import:** `from application_sdk.common.error_codes import ClientError`
+- **Signature:** `class ClientError`
+- **Summary:** Client-related error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `ColumnBatchInputError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import ColumnBatchInputError`
+- **Signature:** `class ColumnBatchInputError(*, ...)`
+- **Summary:** No transformed tables were found when backfill analysis requires them.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
 #### `ColumnExtractionAnalysis`
 
 - **Import:** `from application_sdk.common.incremental.column_extraction import ColumnExtractionAnalysis`
+- **Also importable from:** `application_sdk.common.incremental.column_extraction.analysis`
 - **Signature:** `class ColumnExtractionAnalysis`
 - **Summary:** What :func:`get_tables_needing_column_extraction` found.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
+
+#### `ColumnExtractionAnalysisError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import ColumnExtractionAnalysisError`
+- **Signature:** `class ColumnExtractionAnalysisError(*, ...)`
+- **Summary:** Table analysis failed during incremental column extraction.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `CommonError`
+
+- **Import:** `from application_sdk.common.error_codes import CommonError`
+- **Signature:** `class CommonError`
+- **Summary:** Common utility error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `ConnectionInfo`
+
+- **Import:** `from application_sdk.common.incremental.models import ConnectionInfo`
+- **Signature:** `class ConnectionInfo`
+- **Summary:** Connection information for the database.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
+#### `ConnectionQualifiedNameEmptyError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import ConnectionQualifiedNameEmptyError`
+- **Signature:** `class ConnectionQualifiedNameEmptyError(*, ...)`
+- **Summary:** connection_qualified_name was provided but is empty.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `ConnectionQualifiedNameFormatError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import ConnectionQualifiedNameFormatError`
+- **Signature:** `class ConnectionQualifiedNameFormatError(*, ...)`
+- **Summary:** connection_qualified_name does not match the expected tenant/connector/epoch format.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `ConnectionQualifiedNameMissingError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import ConnectionQualifiedNameMissingError`
+- **Signature:** `class ConnectionQualifiedNameMissingError(*, ...)`
+- **Summary:** connection_qualified_name was not provided at all.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
 
 #### `ConvertFile`
 
@@ -527,12 +1152,83 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/common/file_converter.py`
 
+#### `CurrentStateManifestError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import CurrentStateManifestError`
+- **Signature:** `class CurrentStateManifestError(*, ...)`
+- **Summary:** The committed current-state manifest is unreadable or names missing keys.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `CurrentStateResult`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import CurrentStateResult`
+- **Signature:** `class CurrentStateResult(current_state_dir: Path, ...)`
+- **Summary:** Result of current state creation operation.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
+#### `CurrentStateSnapshot`
+
+- **Import:** `from application_sdk.common.incremental.state.store import CurrentStateSnapshot`
+- **Signature:** `class CurrentStateSnapshot(s3_prefix: str, ...)`
+- **Summary:** One committed current-state snapshot, as found by :meth:`CurrentStateStore.probe`.
+- **Defined in:** `application_sdk/common/incremental/state/store.py`
+
+#### `CurrentStateStore`
+
+- **Import:** `from application_sdk.common.incremental.state.store import CurrentStateStore`
+- **Signature:** `class CurrentStateStore(s3_prefix: str, store: ObjectStore | None = None) -> None`
+- **Summary:** Probe, materialize and commit one connection's current-state snapshot.
+- **Defined in:** `application_sdk/common/incremental/state/store.py`
+
+#### `DamagedManifestPolicy`
+
+- **Import:** `from application_sdk.common.incremental.state.store import DamagedManifestPolicy`
+- **Signature:** `class DamagedManifestPolicy`
+- **Summary:** What :meth:`CurrentStateStore.probe` does with a damaged manifest.
+- **Defined in:** `application_sdk/common/incremental/state/store.py`
+
 #### `DataframeType`
 
 - **Import:** `from application_sdk.common import DataframeType`
+- **Also importable from:** `application_sdk.common.types`
 - **Signature:** `class DataframeType`
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
+
+#### `DocGenError`
+
+- **Import:** `from application_sdk.common.error_codes import DocGenError`
+- **Signature:** `class DocGenError`
+- **Summary:** Documentation generation error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `DuckDbConnectionClosedError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import DuckDbConnectionClosedError`
+- **Signature:** `class DuckDbConnectionClosedError(*, ...)`
+- **Summary:** Operation attempted on a DuckDB connection that has already been closed.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `DuckDBConnectionLike`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import DuckDBConnectionLike`
+- **Signature:** `class DuckDBConnectionLike`
+- **Summary:** The subset of ``duckdb.DuckDBPyConnection`` the incremental helpers call.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `DuckDBConnectionManager`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import DuckDBConnectionManager`
+- **Signature:** `class DuckDBConnectionManager(base_path: str = DUCKDB_COMMON_TEMP_FOLDER, ...)`
+- **Summary:** File-backed DuckDB connection with automatic cleanup.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `DuckDBResult`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import DuckDBResult`
+- **Signature:** `class DuckDBResult`
+- **Summary:** The result side of a DuckDB connection: what ``execute`` hands back.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
 
 #### `EntityDecorations`
 
@@ -548,12 +1244,47 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** How one connector's serialised entities are shaped.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
 
+#### `EntityType`
+
+- **Import:** `from application_sdk.common.incremental.models import EntityType`
+- **Signature:** `class EntityType`
+- **Summary:** Metadata entity types used across the extraction workflow.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
+#### `EntryPointIdentity`
+
+- **Import:** `from application_sdk.common.dispatch import EntryPointIdentity`
+- **Signature:** `class EntryPointIdentity`
+- **Summary:** The two fields of an entry point its workflow type is derived from.
+- **Defined in:** `application_sdk/common/dispatch.py`
+
 #### `EnvelopeShape`
 
 - **Import:** `from application_sdk.common.entity_envelope import EnvelopeShape`
 - **Signature:** `class EnvelopeShape`
 - **Summary:** Where relationship references live in the serialised entity.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `ErrorCode`
+
+- **Import:** `from application_sdk.common.error_codes import ErrorCode`
+- **Signature:** `class ErrorCode(component: ErrorComponent, http_code: str, unique_id: str, description: str)`
+- **Summary:** Error code with component, HTTP code, and description.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `ErrorComponent`
+
+- **Import:** `from application_sdk.common.error_codes import ErrorComponent`
+- **Signature:** `class ErrorComponent`
+- **Summary:** Components that can generate errors in the system.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `FileConverterNotFoundError`
+
+- **Import:** `from application_sdk.common.errors import FileConverterNotFoundError`
+- **Signature:** `class FileConverterNotFoundError(*, ...)`
+- **Summary:** No converter registered for the given file type.
+- **Defined in:** `application_sdk/common/errors.py`
 
 #### `FileType`
 
@@ -570,6 +1301,62 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
 - **Defined in:** `application_sdk/common/filter_matching.py`
 
+#### `IncrementalDiffResult`
+
+- **Import:** `from application_sdk.common.incremental.models import IncrementalDiffResult`
+- **Signature:** `class IncrementalDiffResult`
+- **Summary:** Result of incremental diff creation.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
+#### `IncrementalWorkflowArgs`
+
+- **Import:** `from application_sdk.common.incremental.models import IncrementalWorkflowArgs`
+- **Signature:** `class IncrementalWorkflowArgs`
+- **Summary:** Complete workflow arguments for incremental metadata extraction.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
+#### `InvalidSqlFilterError`
+
+- **Import:** `from application_sdk.common.sql_filters_errors import InvalidSqlFilterError`
+- **Signature:** `class InvalidSqlFilterError(*, ...)`
+- **Summary:** Filter input could not be parsed as valid JSON.
+- **Defined in:** `application_sdk/common/sql_filters_errors.py`
+
+#### `InvalidSqlFilterValueError`
+
+- **Import:** `from application_sdk.common.sql_filters_errors import InvalidSqlFilterValueError`
+- **Signature:** `class InvalidSqlFilterValueError(*, ...)`
+- **Summary:** A filter value was refused before SQL substitution on a raw-dict path.
+- **Defined in:** `application_sdk/common/sql_filters_errors.py`
+
+#### `IOError`
+
+- **Import:** `from application_sdk.common.error_codes import IOError`
+- **Signature:** `class IOError`
+- **Summary:** Input/Output error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `Jitter`
+
+- **Import:** `from application_sdk.common.backoff import Jitter`
+- **Signature:** `class Jitter`
+- **Summary:** How a nominal delay is randomised. See the module docstring.
+- **Defined in:** `application_sdk/common/backoff.py`
+
+#### `JsonParseError`
+
+- **Import:** `from application_sdk.common.errors import JsonParseError`
+- **Signature:** `class JsonParseError(*, ...)`
+- **Summary:** JSON string could not be parsed.
+- **Defined in:** `application_sdk/common/errors.py`
+
+#### `JsonScanError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import JsonScanError`
+- **Signature:** `class JsonScanError(*, ...)`
+- **Summary:** Scanning JSON files in the incremental base directory failed.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
 #### `LastSyncDetails`
 
 - **Import:** `from application_sdk.common.last_sync import LastSyncDetails`
@@ -584,9 +1371,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Any asset object that declares the three run-identity fields.
 - **Defined in:** `application_sdk/common/last_sync.py`
 
+#### `ManifestTokenResolution`
+
+- **Import:** `from application_sdk.common.task_queue import ManifestTokenResolution`
+- **Signature:** `class ManifestTokenResolution(raw: bytes, ...)`
+- **Summary:** Outcome of :func:`resolve_manifest_tokens`.
+- **Defined in:** `application_sdk/common/task_queue.py`
+
 #### `MarkerPair`
 
 - **Import:** `from application_sdk.common.incremental import MarkerPair`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `class MarkerPair(marker: str | None, next_marker: str)`
 - **Summary:** The markers a run starts with: :func:`fetch_marker`'s result.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
@@ -594,9 +1389,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `MarkerPersistResult`
 
 - **Import:** `from application_sdk.common.incremental import MarkerPersistResult`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `class MarkerPersistResult(marker_timestamp: str, s3_key: str)`
 - **Summary:** Where :func:`persist_marker` wrote the marker.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
+
+#### `MarkerUploadError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import MarkerUploadError`
+- **Signature:** `class MarkerUploadError(*, ...)`
+- **Summary:** Incremental marker could not be uploaded to S3.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
 
 #### `ModelDumpAsset`
 
@@ -619,9 +1422,122 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** An asset that renders itself as an Atlas nested-format ``dict``.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `OrchestratorError`
+
+- **Import:** `from application_sdk.common.error_codes import OrchestratorError`
+- **Signature:** `class OrchestratorError`
+- **Summary:** Orchestrator error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `PathEmptyError`
+
+- **Import:** `from application_sdk.common.errors import PathEmptyError`
+- **Signature:** `class PathEmptyError(*, ...)`
+- **Summary:** Path argument is empty string.
+- **Defined in:** `application_sdk/common/errors.py`
+
+#### `ProbeableStatesStore`
+
+- **Import:** `from application_sdk.common.incremental.storage.rocksdb_utils import ProbeableStatesStore`
+- **Signature:** `class ProbeableStatesStore`
+- **Summary:** A :class:`StatesStore` with a Bloom-filter probe for fast negative lookups.
+- **Defined in:** `application_sdk/common/incremental/storage/rocksdb_utils.py`
+
+#### `ResponseKeyMissingError`
+
+- **Import:** `from application_sdk.common.errors import ResponseKeyMissingError`
+- **Signature:** `class ResponseKeyMissingError(*, ...)`
+- **Summary:** Response dict is missing expected key.
+- **Defined in:** `application_sdk/common/errors.py`
+
+#### `ResponseTypeError`
+
+- **Import:** `from application_sdk.common.errors import ResponseTypeError`
+- **Signature:** `class ResponseTypeError(*, ...)`
+- **Summary:** Response has unsupported type.
+- **Defined in:** `application_sdk/common/errors.py`
+
+#### `RetryExhausted`
+
+- **Import:** `from application_sdk.common.backoff import RetryExhausted`
+- **Signature:** `class RetryExhausted(error: Exception, attempts: int, elapsed_seconds: float) -> None`
+- **Summary:** What :func:`retry_async` knows when it stops retrying.
+- **Defined in:** `application_sdk/common/backoff.py`
+
+#### `RocksStatesStore`
+
+- **Import:** `from application_sdk.common.incremental.storage.rocksdb_utils import RocksStatesStore`
+- **Signature:** `class RocksStatesStore`
+- **Summary:** The disk-backed :class:`StatesStore` that :func:`create_states_db` returns.
+- **Defined in:** `application_sdk/common/incremental/storage/rocksdb_utils.py`
+
+#### `RunStateDirs`
+
+- **Import:** `from application_sdk.common.incremental.state.store import RunStateDirs`
+- **Signature:** `class RunStateDirs(root: Path) -> None`
+- **Summary:** The run-scoped local directories of one incremental run.
+- **Defined in:** `application_sdk/common/incremental/state/store.py`
+
+#### `SafeFileOps`
+
+- **Import:** `from application_sdk.common.file_ops import SafeFileOps`
+- **Signature:** `class SafeFileOps`
+- **Summary:** Safe file operations with Windows extended-length path support.
+- **Defined in:** `application_sdk/common/file_ops.py`
+
+#### `SpillableDict`
+
+- **Import:** `from application_sdk.common.spillable_dict import SpillableDict`
+- **Signature:** `class SpillableDict() -> None`
+- **Summary:** A disk-backed dictionary using RocksDB.
+- **Defined in:** `application_sdk/common/spillable_dict.py`
+
+#### `StampFailurePolicy`
+
+- **Import:** `from application_sdk.common.dispatch import StampFailurePolicy`
+- **Signature:** `class StampFailurePolicy`
+- **Summary:** What a rejected ``workflow_id`` stamp does to the dispatch.
+- **Defined in:** `application_sdk/common/dispatch.py`
+
+#### `StateDownloadError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import StateDownloadError`
+- **Signature:** `class StateDownloadError(*, ...)`
+- **Summary:** Previous incremental state could not be downloaded.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `StatesStore`
+
+- **Import:** `from application_sdk.common.incremental.storage.rocksdb_utils import StatesStore`
+- **Signature:** `class StatesStore`
+- **Summary:** Table qualified name -> incremental state mapping, as ``TableScope`` uses it.
+- **Defined in:** `application_sdk/common/incremental/storage/rocksdb_utils.py`
+
+#### `TableScope`
+
+- **Import:** `from application_sdk.common.incremental.models import TableScope`
+- **Signature:** `class TableScope`
+- **Summary:** Current extracted assets with include/exclude filters.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
+#### `TableScopeLoadError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import TableScopeLoadError`
+- **Signature:** `class TableScopeLoadError(*, ...)`
+- **Summary:** Incremental table scope could not be loaded.
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
+#### `TableState`
+
+- **Import:** `from application_sdk.common.incremental.models import TableState`
+- **Signature:** `class TableState`
+- **Summary:** A table's incremental state, as the transform stamps it.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
 #### `TaskResult`
 
 - **Import:** `from application_sdk.common import TaskResult`
+- **Also importable from:** `application_sdk.common.models`
 - **Signature:** `class TaskResult`
 - **Summary:** A ``{status, message, metadata}`` dict.
 - **Defined in:** `application_sdk/common/models.py`
@@ -629,9 +1545,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `TaskStatistics`
 
 - **Import:** `from application_sdk.common import TaskStatistics`
+- **Also importable from:** `application_sdk.common.models`
 - **Signature:** `class TaskStatistics(total_record_count: int = 0, ...)`
 - **Summary:** Statistics produced by a completed task.
 - **Defined in:** `application_sdk/common/models.py`
+
+#### `UnserializableMapperResultError`
+
+- **Import:** `from application_sdk.common.errors import UnserializableMapperResultError`
+- **Signature:** `class UnserializableMapperResultError(*, ...)`
+- **Summary:** An asset mapper returned a type the SDK cannot serialise (FND-2056).
+- **Defined in:** `application_sdk/common/errors.py`
 
 #### `UnserializableValue`
 
@@ -640,7 +1564,42 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** A nested value ``orjson_default`` cannot render, naming its type.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `WorkflowError`
+
+- **Import:** `from application_sdk.common.error_codes import WorkflowError`
+- **Signature:** `class WorkflowError`
+- **Summary:** Workflow error codes.
+- **Defined in:** `application_sdk/common/error_codes.py`
+
+#### `WorkflowMetadata`
+
+- **Import:** `from application_sdk.common.incremental.models import WorkflowMetadata`
+- **Signature:** `class WorkflowMetadata`
+- **Summary:** Metadata configuration for the incremental extraction workflow.
+- **Defined in:** `application_sdk/common/incremental/models.py`
+
 ### Functions
+
+#### `act_on_restart`
+
+- **Import:** `from application_sdk.common.restart_marker import act_on_restart`
+- **Signature:** `act_on_restart(shutdown_event: asyncio.Event, budget: int) -> None`
+- **Summary:** Ask what this restart earns, and wait only if the answer says to.
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `add_table_to_scope`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import add_table_to_scope`
+- **Signature:** `add_table_to_scope(scope: TableScope, qualified_name: str, state: TableState | str) -> None`
+- **Summary:** Add a table to the scope with its incremental state.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
+#### `application_name_from_env`
+
+- **Import:** `from application_sdk.common.task_queue import application_name_from_env`
+- **Signature:** `application_name_from_env() -> str`
+- **Summary:** ``ATLAN_APPLICATION_NAME``, empty string when unset.
+- **Defined in:** `application_sdk/common/task_queue.py`
 
 #### `apply_envelope`
 
@@ -648,6 +1607,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `apply_envelope(entity: dict[str, *, ...)`
 - **Summary:** Apply *policy* and *decorations* to one serialised entity dict.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `ask_what_this_restart_earns`
+
+- **Import:** `from application_sdk.common.restart_marker import ask_what_this_restart_earns`
+- **Signature:** `ask_what_this_restart_earns() -> tuple[bool, str, int] | None`
+- **Summary:** Ask the rerouter about this pod. ``None`` when there was no usable answer.
+- **Defined in:** `application_sdk/common/restart_marker.py`
 
 #### `atomic_copy`
 
@@ -666,6 +1632,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `atomic_write`
 
 - **Import:** `from application_sdk.common.atomic import atomic_write`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `atomic_write(path: str | Path, *, ...)`
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
 - **Defined in:** `application_sdk/common/atomic.py`
@@ -677,12 +1644,61 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Return this image's build identity, or ``""`` when it carries none.
 - **Defined in:** `application_sdk/common/build_identity.py`
 
+#### `camel_to_kebab`
+
+- **Import:** `from application_sdk.common.transforms import camel_to_kebab`
+- **Signature:** `camel_to_kebab(key: str) -> str`
+- **Summary:** Convert a camelCase key to kebab-case.
+- **Defined in:** `application_sdk/common/transforms.py`
+
+#### `canonical_workflow_type`
+
+- **Import:** `from application_sdk.common.dispatch import canonical_workflow_type`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointIdentity) -> str`
+- **Summary:** The convention-derived Temporal workflow type for *ep*.
+- **Defined in:** `application_sdk/common/dispatch.py`
+
+#### `check_and_update_the_marker`
+
+- **Import:** `from application_sdk.common.restart_marker import check_and_update_the_marker`
+- **Signature:** `check_and_update_the_marker() -> int`
+- **Summary:** Read the marker left by earlier containers in this pod, then leave one for
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
 #### `classify_unwritable_oserror`
 
 - **Import:** `from application_sdk.common.atomic import classify_unwritable_oserror`
 - **Signature:** `classify_unwritable_oserror(exc: BaseException) -> LocalVolumeUnwritableError | None`
 - **Summary:** Return a typed error for a read-only / permission-denied local-write ``OSError``.
 - **Defined in:** `application_sdk/common/atomic.py`
+
+#### `cleanup_previous_state`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import cleanup_previous_state`
+- **Signature:** `cleanup_previous_state(previous_state_dir: Path | None) -> None`
+- **Summary:** Clean up temporary previous state directory.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
+#### `clear`
+
+- **Import:** `from application_sdk.common.restart_marker import clear`
+- **Signature:** `clear() -> None`
+- **Summary:** Remove the marker after a clean return, so the next start is not a restart.
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `close_scope`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import close_scope`
+- **Signature:** `close_scope(scope: TableScope) -> None`
+- **Summary:** Close RocksDB table_states and cleanup its temporary directory.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
+#### `close_states_db`
+
+- **Import:** `from application_sdk.common.incremental.storage.rocksdb_utils import close_states_db`
+- **Signature:** `close_states_db(db: StatesStore | None) -> None`
+- **Summary:** Close RocksDB and cleanup its temporary directory.
+- **Defined in:** `application_sdk/common/incremental/storage/rocksdb_utils.py`
 
 #### `convert_data_files`
 
@@ -705,19 +1721,169 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Convert the downloaded files from parquet to json
 - **Defined in:** `application_sdk/common/file_converter.py`
 
+#### `convert_to_extended_path`
+
+- **Import:** `from application_sdk.common.path import convert_to_extended_path`
+- **Signature:** `convert_to_extended_path(path: str | Path) -> str`
+- **Summary:** Robust conversion to Windows extended-length path ({WINDOWS_EXTENDED_PATH_PREFIX}).
+- **Defined in:** `application_sdk/common/path.py`
+
+#### `copy_directory_parallel`
+
+- **Import:** `from application_sdk.common.incremental.helpers import copy_directory_parallel`
+- **Signature:** `copy_directory_parallel(src_dir: Path, dest_dir: Path, pattern: str = '*.json', max_workers: int = 3) -> int`
+- **Summary:** Copy files from source to destination directory.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `copy_non_column_entities`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import copy_non_column_entities`
+- **Signature:** `copy_non_column_entities(transformed_dir: Path, current_state_dir: Path, copy_workers: int = 4) -> dict[str, int]`
+- **Summary:** Copy non-column entity files from transformed to current-state.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
+#### `count_json_files_recursive`
+
+- **Import:** `from application_sdk.common.incremental.helpers import count_json_files_recursive`
+- **Also importable from:** `application_sdk.common.incremental.state.state_reader`
+- **Signature:** `count_json_files_recursive(directory: Path) -> int`
+- **Summary:** Recursively count JSON files under *directory*.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `create_aws_client`
+
+- **Import:** `from application_sdk.common.aws_utils import create_aws_client`
+- **Signature:** `create_aws_client(service: str, ...)`
+- **Summary:** Create an AWS client with flexible credential options.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
+#### `create_aws_session`
+
+- **Import:** `from application_sdk.common.aws_utils import create_aws_session`
+- **Signature:** `create_aws_session(credentials: dict[str, Any]) -> boto3.Session`
+- **Summary:** Create a boto3 session with AWS credentials.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
+#### `create_current_state_snapshot`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import create_current_state_snapshot`
+- **Signature:** `create_current_state_snapshot(connection_qualified_name: str, *, ...)`
+- **Summary:** Create lightweight current-state snapshot with diff and deletion detection.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
+#### `create_engine_url`
+
+- **Import:** `from application_sdk.common.aws_utils import create_engine_url`
+- **Signature:** `create_engine_url(drivername: str, ...)`
+- **Summary:** Create SQLAlchemy engine URL for Redshift connection.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
+#### `create_incremental_diff`
+
+- **Import:** `from application_sdk.common.incremental.state.incremental_diff import create_incremental_diff`
+- **Signature:** `create_incremental_diff(transformed_dir: Path, ...)`
+- **Summary:** Create incremental-diff folder with changed and deleted assets from this run.
+- **Defined in:** `application_sdk/common/incremental/state/incremental_diff.py`
+
 #### `create_next_marker`
 
 - **Import:** `from application_sdk.common.incremental import create_next_marker`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `create_next_marker()`
 - **Summary:** Generate next marker timestamp for the current extraction run.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
+#### `create_ssl_context_with_custom_certs`
+
+- **Import:** `from application_sdk.common.ssl_utils import create_ssl_context_with_custom_certs`
+- **Signature:** `create_ssl_context_with_custom_certs(cert_dir: str) -> ssl.SSLContext`
+- **Summary:** Create an SSL context that includes both default system certificates and custom certificates.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `create_states_db`
+
+- **Import:** `from application_sdk.common.incremental.storage.rocksdb_utils import create_states_db`
+- **Signature:** `create_states_db() -> RocksStatesStore`
+- **Summary:** Create a temporary RocksDB for table states.
+- **Defined in:** `application_sdk/common/incremental/storage/rocksdb_utils.py`
+
+#### `default_duckdb_memory_limit`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import default_duckdb_memory_limit`
+- **Signature:** `default_duckdb_memory_limit(open_connections: int = 0) -> str`
+- **Summary:** DuckDB memory limit for a connection opened without an explicit one.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `deployment_name_from_env`
+
+- **Import:** `from application_sdk.common.task_queue import deployment_name_from_env`
+- **Signature:** `deployment_name_from_env() -> str`
+- **Summary:** ``ATLAN_DEPLOYMENT_NAME``, empty string when unset.
+- **Defined in:** `application_sdk/common/task_queue.py`
+
+#### `derive_task_queue`
+
+- **Import:** `from application_sdk.common.task_queue import derive_task_queue`
+- **Signature:** `derive_task_queue(app_name: str | None, deployment_name: str | None) -> str | None`
+- **Summary:** Derive the Temporal task-queue name for an app deployment.
+- **Defined in:** `application_sdk/common/task_queue.py`
+
 #### `disk_full_guard`
 
 - **Import:** `from application_sdk.common.atomic import disk_full_guard`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `disk_full_guard(path: str | Path, *, operation: str, required_bytes: int | None = None) -> Iterator[None]`
 - **Summary:** Map a disk-full ``OSError`` raised inside the block to ``DiskFullError``.
 - **Defined in:** `application_sdk/common/atomic.py`
+
+#### `download_current_state`
+
+- **Import:** `from application_sdk.common.incremental.state.state_reader import download_current_state`
+- **Signature:** `download_current_state(connection_qualified_name: str, application_name: str = '') -> Tuple[Path, str, bool, int]`
+- **Summary:** Download the committed current-state snapshot to the connection's fixed directory.
+- **Defined in:** `application_sdk/common/incremental/state/state_reader.py`
+
+#### `download_file`
+
+- **Import:** `from application_sdk.common.incremental.helpers import download_file`
+- **Signature:** `download_file(key: str, *, ...)`
+- **Summary:** Deprecated alias of :func:`application_sdk.storage.ops.download_file`.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `download_file_from_upload_response`
+
+- **Import:** `from application_sdk.common.utils import download_file_from_upload_response`
+- **Signature:** `download_file_from_upload_response(response: dict | str | BaseModel) -> str`
+- **Summary:** Download a file that was uploaded via the /file endpoint.
+- **Defined in:** `application_sdk/common/utils.py`
+
+#### `download_marker_from_s3`
+
+- **Import:** `from application_sdk.common.incremental.helpers import download_marker_from_s3`
+- **Signature:** `download_marker_from_s3(connection_qualified_name: str, application_name: str = '') -> str | None`
+- **Summary:** Read marker.txt from S3 into memory and return it, or None if not found.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `download_prefix`
+
+- **Import:** `from application_sdk.common.incremental.state.state_reader import download_prefix`
+- **Signature:** `download_prefix(prefix: str, *, ...)`
+- **Summary:** Deprecated alias of :func:`application_sdk.storage.batch.download_prefix`.
+- **Defined in:** `application_sdk/common/incremental/state/state_reader.py`
+
+#### `download_s3_prefix_with_structure`
+
+- **Import:** `from application_sdk.common.incremental.helpers import download_s3_prefix_with_structure`
+- **Signature:** `download_s3_prefix_with_structure(s3_prefix: str, ...)`
+- **Summary:** Download files under *s3_prefix* into *local_destination*, prefix stripped.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
+#### `download_transformed_data`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import download_transformed_data`
+- **Signature:** `download_transformed_data(output_path: str) -> Path`
+- **Summary:** Download transformed files from S3 to local storage.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
 
 #### `ensure_free_space`
 
@@ -740,16 +1906,46 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Helps us register custom function for enum values
 - **Defined in:** `application_sdk/common/file_converter.py`
 
+#### `escape_sql_string`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import escape_sql_string`
+- **Signature:** `escape_sql_string(value: str) -> str`
+- **Summary:** Escape single quotes for safe SQL embedding.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `expand_dotted_keys`
+
+- **Import:** `from application_sdk.common.transforms import expand_dotted_keys`
+- **Signature:** `expand_dotted_keys(flat: dict[str, Any]) -> dict[str, Any]`
+- **Summary:** Expand dotted keys into nested dicts.
+- **Defined in:** `application_sdk/common/transforms.py`
+
+#### `extract_database_names_from_regex_common`
+
+- **Import:** `from application_sdk.common.sql_filters import extract_database_names_from_regex_common`
+- **Signature:** `extract_database_names_from_regex_common(normalized_regex: str, ...)`
+- **Summary:** Common implementation for extracting database names from regex patterns.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
 #### `extract_epoch_id_from_qualified_name`
 
 - **Import:** `from application_sdk.common.incremental import extract_epoch_id_from_qualified_name`
+- **Also importable from:** `application_sdk.common.incremental.helpers`
 - **Signature:** `extract_epoch_id_from_qualified_name(connection_qualified_name: str)`
 - **Summary:** Extract the connection ID (epoch) from a connection qualified name.
 - **Defined in:** `application_sdk/common/incremental/helpers.py`
 
+#### `fetch_count`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import fetch_count`
+- **Signature:** `fetch_count(result: DuckDBResult) -> int`
+- **Summary:** Read a ``SELECT COUNT(*)`` result: its one value, or 0 when there is no row.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
 #### `fetch_marker`
 
 - **Import:** `from application_sdk.common.incremental import fetch_marker`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `fetch_marker(connection_qualified_name: str, ...)`
 - **Summary:** Fetch and process the incremental marker from storage.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
@@ -757,15 +1953,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `fetch_marker_from_storage`
 
 - **Import:** `from application_sdk.common.incremental import fetch_marker_from_storage`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
 - **Summary:** Fetch the marker as a ``(marker, next_marker)`` tuple.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
-#### `file_converter_registry`
+#### `fetch_str_set`
 
-- **Import:** `from application_sdk.common.file_converter import file_converter_registry`
-- **Signature:** `file_converter_registry(...)`
-- **Summary:** _(no docstring)_
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import fetch_str_set`
+- **Signature:** `fetch_str_set(result: DuckDBResult) -> set[str]`
+- **Summary:** Collect the first column of every row as a set of strings, skipping NULLs.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
 
 #### `filter_matches`
 
@@ -789,19 +1987,84 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Flatten a template's nested ``columns:`` mapping into a list of columns.
 - **Defined in:** `application_sdk/common/yaml_templates.py`
 
+#### `generate_aws_rds_token_with_iam_role`
+
+- **Import:** `from application_sdk.common.aws_utils import generate_aws_rds_token_with_iam_role`
+- **Signature:** `generate_aws_rds_token_with_iam_role(role_arn: str, ...)`
+- **Summary:** Get temporary AWS credentials by assuming a role and generate RDS auth token.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
+#### `generate_aws_rds_token_with_iam_user`
+
+- **Import:** `from application_sdk.common.aws_utils import generate_aws_rds_token_with_iam_user`
+- **Signature:** `generate_aws_rds_token_with_iam_user(aws_access_key_id: str, ...)`
+- **Summary:** Generate RDS auth token using IAM user credentials.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
 #### `get_actual_cpu_count`
 
 - **Import:** `from application_sdk.common import get_actual_cpu_count`
+- **Also importable from:** `application_sdk.common.concurrency`
 - **Signature:** `get_actual_cpu_count()`
 - **Summary:** Whole CPUs this process may use: the tighter of affinity and the CPU limit.
 - **Defined in:** `application_sdk/common/concurrency.py`
 
+#### `get_all_aws_regions`
+
+- **Import:** `from application_sdk.common.aws_utils import get_all_aws_regions`
+- **Signature:** `get_all_aws_regions() -> list[str]`
+- **Summary:** Get all available AWS regions dynamically using EC2 describe_regions API.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
 #### `get_backfill_tables`
 
 - **Import:** `from application_sdk.common.incremental.column_extraction import get_backfill_tables`
+- **Also importable from:** `application_sdk.common.incremental.column_extraction.backfill`
 - **Signature:** `get_backfill_tables(current_transformed_dir: Path, previous_current_state_dir: Path | None)`
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
+
+#### `get_certificate_files`
+
+- **Import:** `from application_sdk.common.ssl_utils import get_certificate_files`
+- **Signature:** `get_certificate_files(cert_dir: str) -> list[str]`
+- **Summary:** Get all certificate files from a directory.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_cluster_credentials`
+
+- **Import:** `from application_sdk.common.aws_utils import get_cluster_credentials`
+- **Signature:** `get_cluster_credentials(aws_client, credentials: dict[str, Any], extra: dict[str, Any]) -> dict[str, str]`
+- **Summary:** Retrieve cluster credentials using IAM authentication.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
+#### `get_cluster_identifier`
+
+- **Import:** `from application_sdk.common.aws_utils import get_cluster_identifier`
+- **Signature:** `get_cluster_identifier(aws_client) -> str | None`
+- **Summary:** The first Redshift cluster's identifier, or ``None`` when there is none.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
+#### `get_current_table_scope`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import get_current_table_scope`
+- **Signature:** `get_current_table_scope(transformed_dir: Path, conn: DuckDBConnection = None) -> TableScope | None`
+- **Summary:** Get current table scope within the current run's include/exclude filters.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
+#### `get_custom_ca_cert_bytes`
+
+- **Import:** `from application_sdk.common.ssl_utils import get_custom_ca_cert_bytes`
+- **Signature:** `get_custom_ca_cert_bytes() -> bytes | None`
+- **Summary:** Get CA certificate bytes combining default system certificates AND custom certificates.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_database_names`
+
+- **Import:** `from application_sdk.common.sql_filters import get_database_names`
+- **Signature:** `get_database_names(sql_client, workflow_args, fetch_database_sql) -> list[str] | None`
+- **Summary:** Get database names from include-filter or by running a SQL query.
+- **Defined in:** `application_sdk/common/sql_filters.py`
 
 #### `get_logger`
 
@@ -811,9 +2074,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
+#### `get_parent_table_qn_expr`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import get_parent_table_qn_expr`
+- **Signature:** `get_parent_table_qn_expr() -> str`
+- **Summary:** SQL expression to extract parent table QN from column JSON.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
 #### `get_persistent_artifacts_path`
 
 - **Import:** `from application_sdk.common.incremental import get_persistent_artifacts_path`
+- **Also importable from:** `application_sdk.common.incremental.helpers`, `application_sdk.common.incremental.marker`
 - **Signature:** `get_persistent_artifacts_path(connection_qualified_name: str, artifact_subpath: str, application_name: str = '')`
 - **Summary:** Get local filesystem path for connection-scoped persistent artifacts.
 - **Defined in:** `application_sdk/common/incremental/helpers.py`
@@ -821,20 +2092,65 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `get_persistent_s3_prefix`
 
 - **Import:** `from application_sdk.common.incremental import get_persistent_s3_prefix`
+- **Also importable from:** `application_sdk.common.incremental.helpers`, `application_sdk.common.incremental.state.state_reader`, `application_sdk.common.incremental.state.state_writer`
 - **Signature:** `get_persistent_s3_prefix(connection_qualified_name: str, application_name: str = '')`
 - **Summary:** Get the S3 key prefix for connection-scoped persistent artifacts.
 - **Defined in:** `application_sdk/common/incremental/helpers.py`
 
+#### `get_region_name_from_hostname`
+
+- **Import:** `from application_sdk.common.aws_utils import get_region_name_from_hostname`
+- **Signature:** `get_region_name_from_hostname(hostname: str) -> str`
+- **Summary:** Extract region name from AWS RDS endpoint.
+- **Defined in:** `application_sdk/common/aws_utils.py`
+
 #### `get_safe_num_threads`
 
 - **Import:** `from application_sdk.common import get_safe_num_threads`
+- **Also importable from:** `application_sdk.common.concurrency`
 - **Signature:** `get_safe_num_threads()`
 - **Summary:** Get recommended number of threads for parallel processing.
 - **Defined in:** `application_sdk/common/concurrency.py`
 
+#### `get_scope_length`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import get_scope_length`
+- **Signature:** `get_scope_length(scope: TableScope) -> int`
+- **Summary:** Return the number of tables in scope.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
+#### `get_ssl_cert_dir`
+
+- **Import:** `from application_sdk.common.ssl_utils import get_ssl_cert_dir`
+- **Signature:** `get_ssl_cert_dir() -> str | None`
+- **Summary:** Get the SSL certificate directory from configuration.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_ssl_context`
+
+- **Import:** `from application_sdk.common.ssl_utils import get_ssl_context`
+- **Signature:** `get_ssl_context() -> bool | ssl.SSLContext`
+- **Summary:** Get the SSL verification context for HTTP clients such as httpx.
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `get_table_qns_from_columns`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import get_table_qns_from_columns`
+- **Signature:** `get_table_qns_from_columns(column_dir: Path, conn: DuckDBConnection = None) -> set[str] | None`
+- **Summary:** Extract table qualified names from column files in the given directory.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
+#### `get_table_state`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import get_table_state`
+- **Signature:** `get_table_state(scope: TableScope, qualified_name: str) -> str | None`
+- **Summary:** Get the incremental state for a table.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
 #### `get_tables_needing_column_extraction`
 
 - **Import:** `from application_sdk.common.incremental.column_extraction import get_tables_needing_column_extraction`
+- **Also importable from:** `application_sdk.common.incremental.column_extraction.analysis`
 - **Signature:** `get_tables_needing_column_extraction(transformed_dir: Path, backfill_qualified_names: set[str] | None = None)`
 - **Summary:** Get tables needing column extraction using DuckDB.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
@@ -842,16 +2158,74 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `get_transformed_dir`
 
 - **Import:** `from application_sdk.common.incremental.column_extraction import get_transformed_dir`
+- **Also importable from:** `application_sdk.common.incremental.column_extraction.analysis`
 - **Signature:** `get_transformed_dir(workflow_args: dict[str, Any])`
 - **Summary:** Return current run's transformed directory.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
 
+#### `interrupt_on_cancel`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import interrupt_on_cancel`
+- **Signature:** `interrupt_on_cancel(conn: DuckDBPyConnection) -> AbstractContextManager[None]`
+- **Summary:** Within the block, interrupt *conn*'s query if this ``run_in_thread`` call is abandoned.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `iter_scope_table_qns`
+
+- **Import:** `from application_sdk.common.incremental.state.table_scope import iter_scope_table_qns`
+- **Signature:** `iter_scope_table_qns(scope: TableScope) -> Iterator[str]`
+- **Summary:** Iterate over all table qualified names in scope.
+- **Defined in:** `application_sdk/common/incremental/state/table_scope.py`
+
+#### `json_scan`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import json_scan`
+- **Signature:** `json_scan(files: list[Path] | list[str]) -> str`
+- **Summary:** Generate DuckDB read_json_auto SQL fragment.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `kebab_to_camel`
+
+- **Import:** `from application_sdk.common.transforms import kebab_to_camel`
+- **Signature:** `kebab_to_camel(key: str) -> str`
+- **Summary:** Convert a kebab-case key to camelCase.
+- **Defined in:** `application_sdk/common/transforms.py`
+
+#### `managed_duckdb_connection`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import managed_duckdb_connection`
+- **Signature:** `managed_duckdb_connection(conn: DuckDBConnection = None) -> Generator[DuckDBConnectionLike, None, None]`
+- **Summary:** Context manager for optional connection reuse.
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `materialize_previous_state`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import materialize_previous_state`
+- **Signature:** `materialize_previous_state(store: CurrentStateStore, dest: Path, snapshot: CurrentStateSnapshot | None = None) -> Path`
+- **Summary:** Materialize the committed snapshot into *dest* for diffing; return *dest*.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
+- **Also importable from:** `application_sdk.common.sql_filters`
 - **Signature:** `normalize_filters(filter_dict: dict[str, FilterValue], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `normalize_legacy_filter_value`
+
+- **Import:** `from application_sdk.common.sql_filters import normalize_legacy_filter_value`
+- **Signature:** `normalize_legacy_filter_value(value: str) -> str`
+- **Summary:** Translate a legacy quoted-CSV filter value into a v3 alternation regex.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `normalize_marker_timestamp`
+
+- **Import:** `from application_sdk.common.incremental.helpers import normalize_marker_timestamp`
+- **Signature:** `normalize_marker_timestamp(marker: str) -> str`
+- **Summary:** Remove nanoseconds from marker timestamp (e.g., .123456789Z -> Z).
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
 
 #### `orjson_default`
 
@@ -860,9 +2234,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Fallback serialiser for orjson — covers types it doesn't handle natively.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `parse_filter_input`
+
+- **Import:** `from application_sdk.common.sql_filters import parse_filter_input`
+- **Signature:** `parse_filter_input(filter_input: str | dict[str, Any] | None) -> dict[str, Any]`
+- **Summary:** Robustly parse filter input from various formats.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
 #### `persist_marker`
 
 - **Import:** `from application_sdk.common.incremental import persist_marker`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `persist_marker(connection_qualified_name: str, marker_value: str, application_name: str = '')`
 - **Summary:** Persist marker timestamp to S3 storage.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
@@ -870,27 +2252,52 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `persist_marker_to_storage`
 
 - **Import:** `from application_sdk.common.incremental import persist_marker_to_storage`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `persist_marker_to_storage(connection_qualified_name: str, marker_value: str, application_name: str = '')`
 - **Summary:** Persist the marker and describe the write as a dict.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
+#### `prepare_current_state_directory`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import prepare_current_state_directory`
+- **Signature:** `prepare_current_state_directory(current_state_dir: Path) -> None`
+- **Summary:** Clear and recreate current-state directory.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
 #### `prepare_filters`
 
 - **Import:** `from application_sdk.common import prepare_filters`
+- **Also importable from:** `application_sdk.common.sql_filters`
 - **Signature:** `prepare_filters(include_filter_str: str, exclude_filter_str: str)`
 - **Summary:** Prepare include/exclude filters for SQL queries.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `prepare_previous_state`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import prepare_previous_state`
+- **Signature:** `prepare_previous_state(connection_qualified_name: str, ...)`
+- **Summary:** Materialize the previous state beside *current_state_dir* for comparison.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
 #### `prepare_query`
 
 - **Import:** `from application_sdk.common import prepare_query`
+- **Also importable from:** `application_sdk.common.sql_filters`
 - **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
+#### `prepone_marker_timestamp`
+
+- **Import:** `from application_sdk.common.incremental.helpers import prepone_marker_timestamp`
+- **Signature:** `prepone_marker_timestamp(marker: str, hours: float) -> str`
+- **Summary:** Move marker timestamp back by specified hours.
+- **Defined in:** `application_sdk/common/incremental/helpers.py`
+
 #### `process_marker_timestamp`
 
 - **Import:** `from application_sdk.common.incremental import process_marker_timestamp`
+- **Also importable from:** `application_sdk.common.incremental.marker`
 - **Signature:** `process_marker_timestamp(marker: str, prepone_enabled: bool = False, prepone_hours: float = 0)`
 - **Summary:** Process and optionally prepone a marker timestamp.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
@@ -898,9 +2305,17 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `read_sql_files`
 
 - **Import:** `from application_sdk.common import read_sql_files`
+- **Also importable from:** `application_sdk.common.sql_filters`
 - **Signature:** `read_sql_files(queries_prefix: str = f'{os.path.dirname(os.path.abspath(__file__))}/queries')`
 - **Summary:** Read all SQL files from a directory and return as a name→content mapping.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `resolve_dispatch_workflow_id`
+
+- **Import:** `from application_sdk.common.dispatch import resolve_dispatch_workflow_id`
+- **Signature:** `resolve_dispatch_workflow_id(input_data: Any, *, ...)`
+- **Summary:** Resolve the Temporal dispatch ID and stamp it onto ``input_data``.
+- **Defined in:** `application_sdk/common/dispatch.py`
 
 #### `resolve_last_sync_details`
 
@@ -908,6 +2323,34 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `resolve_last_sync_details(*, *, ...)`
 - **Summary:** Resolve last-sync values from the current execution + correlation
 - **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `resolve_manifest_tokens`
+
+- **Import:** `from application_sdk.common.task_queue import resolve_manifest_tokens`
+- **Signature:** `resolve_manifest_tokens(raw: bytes, *, ...)`
+- **Summary:** Resolve ``{app_name}`` / ``{deployment_name}`` tokens in a served manifest.
+- **Defined in:** `application_sdk/common/task_queue.py`
+
+#### `retry_async`
+
+- **Import:** `from application_sdk.common.backoff import retry_async`
+- **Signature:** `retry_async(call: Callable[[], *, ...)`
+- **Summary:** Call *call* until it succeeds, *retry_if* rejects its error, or
+- **Defined in:** `application_sdk/common/backoff.py`
+
+#### `run_in_thread`
+
+- **Import:** `from application_sdk.common.incremental.state.state_reader import run_in_thread`
+- **Signature:** `run_in_thread(func: Callable[..., _T], *args: Any, **kwargs: Any) -> _T`
+- **Summary:** Deprecated alias of :func:`application_sdk._runtime.offload.run_in_thread`.
+- **Defined in:** `application_sdk/common/incremental/state/state_reader.py`
+
+#### `safe_substitute_placeholders`
+
+- **Import:** `from application_sdk.common.sql_filters import safe_substitute_placeholders`
+- **Signature:** `safe_substitute_placeholders(template: str, mapping: dict[str, str]) -> str`
+- **Summary:** Single-pass placeholder substitution — replacement values are never re-scanned.
+- **Defined in:** `application_sdk/common/sql_filters.py`
 
 #### `set_last_sync_details_on_asset`
 
@@ -923,12 +2366,89 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Stamp last-sync details on every asset in ``assets``.
 - **Defined in:** `application_sdk/common/last_sync.py`
 
+#### `strip_sql_block_comments`
+
+- **Import:** `from application_sdk.common.sql_filters import strip_sql_block_comments`
+- **Signature:** `strip_sql_block_comments(fragment: str) -> str`
+- **Summary:** Remove ``/* ... */`` block comments from a SQL fragment template.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `task_queue_from_env`
+
+- **Import:** `from application_sdk.common.task_queue import task_queue_from_env`
+- **Signature:** `task_queue_from_env() -> str | None`
+- **Summary:** :func:`derive_task_queue` applied to the deployment's own environment.
+- **Defined in:** `application_sdk/common/task_queue.py`
+
 #### `to_atlas_format_dict`
 
 - **Import:** `from application_sdk.common.entity_envelope import to_atlas_format_dict`
 - **Signature:** `to_atlas_format_dict(asset: object) -> dict[str, Any] | None`
 - **Summary:** ``pyatlan_v9.to_atlas_format(asset)``, or ``None`` if it doesn't apply.
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `transform_agent_credentials`
+
+- **Import:** `from application_sdk.common.transforms import transform_agent_credentials`
+- **Signature:** `transform_agent_credentials(agent_json: dict[str, Any]) -> dict[str, Any]`
+- **Summary:** Transform raw agent JSON into the format connectors expect.
+- **Defined in:** `application_sdk/common/transforms.py`
+
+#### `transform_posix_regex`
+
+- **Import:** `from application_sdk.common.sql_filters import transform_posix_regex`
+- **Signature:** `transform_posix_regex(regex_pattern: str) -> str`
+- **Summary:** Transform regex pattern for POSIX compatibility.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `upload_current_state`
+
+- **Import:** `from application_sdk.common.incremental.state.state_writer import upload_current_state`
+- **Signature:** `upload_current_state(current_state_dir: Path, connection_qualified_name: str, application_name: str = '') -> str`
+- **Summary:** Commit a directory as the connection's current-state snapshot.
+- **Defined in:** `application_sdk/common/incremental/state/state_writer.py`
+
+#### `upload_file`
+
+- **Import:** `from application_sdk.common.incremental.marker import upload_file`
+- **Signature:** `upload_file(key: str, *, ...)`
+- **Summary:** Deprecated alias of :func:`application_sdk.storage.ops.upload_file`.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
+#### `validate_filter_no_sql_injection`
+
+- **Import:** `from application_sdk.common.sql_filters import validate_filter_no_sql_injection`
+- **Signature:** `validate_filter_no_sql_injection(v: Any) -> Any`
+- **Summary:** Reject filter values containing SQL-meaningful character sequences.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `validate_filter_regex_syntax`
+
+- **Import:** `from application_sdk.common.sql_filters import validate_filter_regex_syntax`
+- **Signature:** `validate_filter_regex_syntax(v: Any) -> Any`
+- **Summary:** Reject filter patterns that no regex dialect can compile.
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `wait_for_pod_to_get_replaced`
+
+- **Import:** `from application_sdk.common.restart_marker import wait_for_pod_to_get_replaced`
+- **Signature:** `wait_for_pod_to_get_replaced(shutdown_event: asyncio.Event, budget: int) -> None`
+- **Summary:** Idle until this pod is replaced, or the budget is spent.
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `wait_if_pod_restarted`
+
+- **Import:** `from application_sdk.common.restart_marker import wait_if_pod_restarted`
+- **Signature:** `wait_if_pod_restarted(shutdown_event: asyncio.Event) -> None`
+- **Summary:** Hold this worker back if an earlier container already ran in this pod.
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `warn_removed_env_vars`
+
+- **Import:** `from application_sdk.common.env_warnings import warn_removed_env_vars`
+- **Signature:** `warn_removed_env_vars() -> None`
+- **Summary:** Warn once at startup if any removed env vars are set.
+- **Defined in:** `application_sdk/common/env_warnings.py`
 
 #### `yaml_template_paths`
 
@@ -938,6 +2458,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/yaml_templates.py`
 
 ### Constants and Enums
+
+#### `ADVICE_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.common.restart_marker import ADVICE_TIMEOUT_SECONDS`
+- **Signature:** `ADVICE_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `ADVICE_URL_ENV`
+
+- **Import:** `from application_sdk.common.restart_marker import ADVICE_URL_ENV`
+- **Signature:** `ADVICE_URL_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `APP_NAME_TOKEN`
+
+- **Import:** `from application_sdk.common.task_queue import APP_NAME_TOKEN`
+- **Signature:** `APP_NAME_TOKEN`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/task_queue.py`
 
 #### `BUILD_ID_ENV`
 
@@ -960,12 +2501,110 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/common/build_identity.py`
 
+#### `CERT_FILE_EXTENSIONS`
+
+- **Import:** `from application_sdk.common.ssl_utils import CERT_FILE_EXTENSIONS`
+- **Signature:** `CERT_FILE_EXTENSIONS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `CHECK_API`
+
+- **Import:** `from application_sdk.common.restart_marker import CHECK_API`
+- **Signature:** `CHECK_API`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `DaftAnalysisError`
+
+- **Import:** `from application_sdk.common.incremental.incremental_errors import DaftAnalysisError`
+- **Signature:** `DaftAnalysisError`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/incremental/incremental_errors.py`
+
 #### `DEFAULT_ENVELOPE`
 
 - **Import:** `from application_sdk.common.entity_envelope import DEFAULT_ENVELOPE`
 - **Signature:** `DEFAULT_ENVELOPE: Final[EntityEnvelopePolicy]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/common/entity_envelope.py`
+
+#### `DEPLOYMENT_NAME_TOKEN`
+
+- **Import:** `from application_sdk.common.task_queue import DEPLOYMENT_NAME_TOKEN`
+- **Signature:** `DEPLOYMENT_NAME_TOKEN`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/task_queue.py`
+
+#### `DuckDBConnection`
+
+- **Import:** `from application_sdk.common.incremental.storage.duckdb_utils import DuckDBConnection`
+- **Signature:** `DuckDBConnection: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/incremental/storage/duckdb_utils.py`
+
+#### `FilterValue`
+
+- **Import:** `from application_sdk.common.sql_filters import FilterValue`
+- **Signature:** `FilterValue: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `HEARTBEAT_SECONDS`
+
+- **Import:** `from application_sdk.common.restart_marker import HEARTBEAT_SECONDS`
+- **Signature:** `HEARTBEAT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `MANIFEST_NAME`
+
+- **Import:** `from application_sdk.common.incremental.state.store import MANIFEST_NAME`
+- **Signature:** `MANIFEST_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/incremental/state/store.py`
+
+#### `MARKER_DIR`
+
+- **Import:** `from application_sdk.common.restart_marker import MARKER_DIR`
+- **Signature:** `MARKER_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `MARKER_NAME`
+
+- **Import:** `from application_sdk.common.restart_marker import MARKER_NAME`
+- **Signature:** `MARKER_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `PARK_METRIC`
+
+- **Import:** `from application_sdk.common.restart_marker import PARK_METRIC`
+- **Signature:** `PARK_METRIC`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `PARK_REPLACED`
+
+- **Import:** `from application_sdk.common.restart_marker import PARK_REPLACED`
+- **Signature:** `PARK_REPLACED`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `PARK_SECONDS_METRIC`
+
+- **Import:** `from application_sdk.common.restart_marker import PARK_SECONDS_METRIC`
+- **Signature:** `PARK_SECONDS_METRIC`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `PARK_SPENT`
+
+- **Import:** `from application_sdk.common.restart_marker import PARK_SPENT`
+- **Signature:** `PARK_SPENT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
 
 #### `PARTIAL_DIRNAME`
 
@@ -974,18 +2613,1128 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/common/_listing.py`
 
+#### `QUEUE_PREFIX`
+
+- **Import:** `from application_sdk.common.task_queue import QUEUE_PREFIX`
+- **Signature:** `QUEUE_PREFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/task_queue.py`
+
+#### `RECHECK_SECONDS`
+
+- **Import:** `from application_sdk.common.restart_marker import RECHECK_SECONDS`
+- **Signature:** `RECHECK_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/restart_marker.py`
+
+#### `ROCKSDB_KEY_TYPES`
+
+- **Import:** `from application_sdk.common.spillable_dict import ROCKSDB_KEY_TYPES`
+- **Signature:** `ROCKSDB_KEY_TYPES: tuple[type, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/spillable_dict.py`
+
+#### `SAFE_FILTER_PATTERN`
+
+- **Import:** `from application_sdk.common.sql_filters import SAFE_FILTER_PATTERN`
+- **Signature:** `SAFE_FILTER_PATTERN: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `SpillableKey`
+
+- **Import:** `from application_sdk.common.spillable_dict import SpillableKey`
+- **Signature:** `SpillableKey: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/spillable_dict.py`
+
+#### `SPREAD_BOUNDS`
+
+- **Import:** `from application_sdk.common.backoff import SPREAD_BOUNDS`
+- **Signature:** `SPREAD_BOUNDS: tuple[float, float]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/backoff.py`
+
+#### `SSL_CERT_DIR`
+
+- **Import:** `from application_sdk.common.ssl_utils import SSL_CERT_DIR`
+- **Signature:** `SSL_CERT_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/ssl_utils.py`
+
+#### `WINDOWS_EXTENDED_PATH_PREFIX`
+
+- **Import:** `from application_sdk.common.path import WINDOWS_EXTENDED_PATH_PREFIX`
+- **Signature:** `WINDOWS_EXTENDED_PATH_PREFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/path.py`
+
+## `application_sdk.constants`
+
+Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup)
+
+### Classes
+
+#### `ShutdownBudget`
+
+- **Import:** `from application_sdk.constants import ShutdownBudget`
+- **Signature:** `class ShutdownBudget(grace_seconds: int, ...)`
+- **Summary:** Every shutdown bound, derived from one grace period.
+- **Defined in:** `application_sdk/constants.py`
+
+### Functions
+
+#### `derive_shutdown_budget`
+
+- **Import:** `from application_sdk.constants import derive_shutdown_budget`
+- **Signature:** `derive_shutdown_budget(grace_seconds: int, ...)`
+- **Summary:** Split a pod grace period into the bounds each shutdown step gets, drain first.
+- **Defined in:** `application_sdk/constants.py`
+
+#### `load_shutdown_budget`
+
+- **Import:** `from application_sdk.constants import load_shutdown_budget`
+- **Signature:** `load_shutdown_budget() -> ShutdownBudget | None`
+- **Summary:** Read ``ATLAN_SHUTDOWN_GRACE_SECONDS`` and derive the budget from it.
+- **Defined in:** `application_sdk/constants.py`
+
+#### `load_worker_loop_stall_timeout_override`
+
+- **Import:** `from application_sdk.constants import load_worker_loop_stall_timeout_override`
+- **Signature:** `load_worker_loop_stall_timeout_override() -> float | None`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+### Constants and Enums
+
+#### `APP_BUILD_ID`
+
+- **Import:** `from application_sdk.constants import APP_BUILD_ID`
+- **Signature:** `APP_BUILD_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APP_DEPLOYMENT_NAME`
+
+- **Import:** `from application_sdk.constants import APP_DEPLOYMENT_NAME`
+- **Signature:** `APP_DEPLOYMENT_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APP_ID`
+
+- **Import:** `from application_sdk.constants import APP_ID`
+- **Signature:** `APP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APP_SDK_VERSION`
+
+- **Import:** `from application_sdk.constants import APP_SDK_VERSION`
+- **Signature:** `APP_SDK_VERSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APP_TENANT_ID`
+
+- **Import:** `from application_sdk.constants import APP_TENANT_ID`
+- **Signature:** `APP_TENANT_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APP_TYPE`
+
+- **Import:** `from application_sdk.constants import APP_TYPE`
+- **Signature:** `APP_TYPE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APPLICATION_NAME`
+
+- **Import:** `from application_sdk.constants import APPLICATION_NAME`
+- **Signature:** `APPLICATION_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `APPLICATION_VERSION`
+
+- **Import:** `from application_sdk.constants import APPLICATION_VERSION`
+- **Signature:** `APPLICATION_VERSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS`
+
+- **Import:** `from application_sdk.constants import ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS`
+- **Signature:** `ARTIFACT_VALIDATION_MAX_ITEMS_PER_AXIS: int`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ARTIFACT_VALIDATION_MODE_ENV`
+
+- **Import:** `from application_sdk.constants import ARTIFACT_VALIDATION_MODE_ENV`
+- **Signature:** `ARTIFACT_VALIDATION_MODE_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`
+
+- **Import:** `from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS`
+- **Signature:** `ASSET_VALIDATION_MAX_ITEMS_PER_AXIS: int`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ATLAN_BASE_URL`
+
+- **Import:** `from application_sdk.constants import ATLAN_BASE_URL`
+- **Signature:** `ATLAN_BASE_URL`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `AUTH_ENABLED`
+
+- **Import:** `from application_sdk.constants import AUTH_ENABLED`
+- **Signature:** `AUTH_ENABLED`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `AUTH_URL`
+
+- **Import:** `from application_sdk.constants import AUTH_URL`
+- **Signature:** `AUTH_URL`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `AWS_SESSION_NAME`
+
+- **Import:** `from application_sdk.constants import AWS_SESSION_NAME`
+- **Signature:** `AWS_SESSION_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `CLEANUP_BASE_PATHS`
+
+- **Import:** `from application_sdk.constants import CLEANUP_BASE_PATHS`
+- **Signature:** `CLEANUP_BASE_PATHS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `COLUMN_BATCHES_SUBPATH`
+
+- **Import:** `from application_sdk.constants import COLUMN_BATCHES_SUBPATH`
+- **Signature:** `COLUMN_BATCHES_SUBPATH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `COMMIT_SHA`
+
+- **Import:** `from application_sdk.constants import COMMIT_SHA`
+- **Signature:** `COMMIT_SHA`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `CONTRACT_GENERATED_DIR`
+
+- **Import:** `from application_sdk.constants import CONTRACT_GENERATED_DIR`
+- **Signature:** `CONTRACT_GENERATED_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `CURRENT_STATE_SUBPATH`
+
+- **Import:** `from application_sdk.constants import CURRENT_STATE_SUBPATH`
+- **Signature:** `CURRENT_STATE_SUBPATH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DAPR_MAX_GRPC_MESSAGE_LENGTH`
+
+- **Import:** `from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH`
+- **Signature:** `DAPR_MAX_GRPC_MESSAGE_LENGTH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED`
+
+- **Import:** `from application_sdk.constants import DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED`
+- **Signature:** `DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED`
+
+- **Import:** `from application_sdk.constants import DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED`
+- **Signature:** `DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DEPLOYMENT_NAME`
+
+- **Import:** `from application_sdk.constants import DEPLOYMENT_NAME`
+- **Signature:** `DEPLOYMENT_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DEPLOYMENT_OBJECT_STORE_NAME`
+
+- **Import:** `from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME`
+- **Signature:** `DEPLOYMENT_OBJECT_STORE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DEPLOYMENT_SECRET_PATH`
+
+- **Import:** `from application_sdk.constants import DEPLOYMENT_SECRET_PATH`
+- **Signature:** `DEPLOYMENT_SECRET_PATH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DEPLOYMENT_SECRET_STORE_NAME`
+
+- **Import:** `from application_sdk.constants import DEPLOYMENT_SECRET_STORE_NAME`
+- **Signature:** `DEPLOYMENT_SECRET_STORE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DIRTY_RESTART_IDLE_MAX_SECONDS`
+
+- **Import:** `from application_sdk.constants import DIRTY_RESTART_IDLE_MAX_SECONDS`
+- **Signature:** `DIRTY_RESTART_IDLE_MAX_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DOMAIN_NAME`
+
+- **Import:** `from application_sdk.constants import DOMAIN_NAME`
+- **Signature:** `DOMAIN_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DUCKDB_COMMON_TEMP_FOLDER`
+
+- **Import:** `from application_sdk.constants import DUCKDB_COMMON_TEMP_FOLDER`
+- **Signature:** `DUCKDB_COMMON_TEMP_FOLDER`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DUCKDB_DEFAULT_MEMORY_LIMIT`
+
+- **Import:** `from application_sdk.constants import DUCKDB_DEFAULT_MEMORY_LIMIT`
+- **Signature:** `DUCKDB_DEFAULT_MEMORY_LIMIT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DUCKDB_MAX_MEMORY_LIMIT_BYTES`
+
+- **Import:** `from application_sdk.constants import DUCKDB_MAX_MEMORY_LIMIT_BYTES`
+- **Signature:** `DUCKDB_MAX_MEMORY_LIMIT_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DUCKDB_MEMORY_LIMIT_FRACTION`
+
+- **Import:** `from application_sdk.constants import DUCKDB_MEMORY_LIMIT_FRACTION`
+- **Signature:** `DUCKDB_MEMORY_LIMIT_FRACTION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DUCKDB_MEMORY_LIMIT_OVERRIDE`
+
+- **Import:** `from application_sdk.constants import DUCKDB_MEMORY_LIMIT_OVERRIDE`
+- **Signature:** `DUCKDB_MEMORY_LIMIT_OVERRIDE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `DUCKDB_MIN_MEMORY_LIMIT_BYTES`
+
+- **Import:** `from application_sdk.constants import DUCKDB_MIN_MEMORY_LIMIT_BYTES`
+- **Signature:** `DUCKDB_MIN_MEMORY_LIMIT_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_ATLAN_UPLOAD`
+
+- **Import:** `from application_sdk.constants import ENABLE_ATLAN_UPLOAD`
+- **Signature:** `ENABLE_ATLAN_UPLOAD`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_LOG_DIAGNOSE`
+
+- **Import:** `from application_sdk.constants import ENABLE_LOG_DIAGNOSE`
+- **Signature:** `ENABLE_LOG_DIAGNOSE: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_MCP`
+
+- **Import:** `from application_sdk.constants import ENABLE_MCP`
+- **Signature:** `ENABLE_MCP`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_OBSERVABILITY_STORE_SINK`
+
+- **Import:** `from application_sdk.constants import ENABLE_OBSERVABILITY_STORE_SINK`
+- **Signature:** `ENABLE_OBSERVABILITY_STORE_SINK: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_OTLP_LOGS`
+
+- **Import:** `from application_sdk.constants import ENABLE_OTLP_LOGS`
+- **Signature:** `ENABLE_OTLP_LOGS: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_OTLP_TRACES`
+
+- **Import:** `from application_sdk.constants import ENABLE_OTLP_TRACES`
+- **Signature:** `ENABLE_OTLP_TRACES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_OTLP_WORKFLOW_LOGS`
+
+- **Import:** `from application_sdk.constants import ENABLE_OTLP_WORKFLOW_LOGS`
+- **Signature:** `ENABLE_OTLP_WORKFLOW_LOGS: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_TRACES_CONSOLE`
+
+- **Import:** `from application_sdk.constants import ENABLE_TRACES_CONSOLE`
+- **Signature:** `ENABLE_TRACES_CONSOLE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `ENABLE_WORKFLOW_REPLAY_LOGS`
+
+- **Import:** `from application_sdk.constants import ENABLE_WORKFLOW_REPLAY_LOGS`
+- **Signature:** `ENABLE_WORKFLOW_REPLAY_LOGS: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `EVENT_INGRESS_DIRECT_FALLBACK`
+
+- **Import:** `from application_sdk.constants import EVENT_INGRESS_DIRECT_FALLBACK`
+- **Signature:** `EVENT_INGRESS_DIRECT_FALLBACK`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `EVENT_STORE_NAME`
+
+- **Import:** `from application_sdk.constants import EVENT_STORE_NAME`
+- **Signature:** `EVENT_STORE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `FILE_REF_CHUNK_CONCURRENCY`
+
+- **Import:** `from application_sdk.constants import FILE_REF_CHUNK_CONCURRENCY`
+- **Signature:** `FILE_REF_CHUNK_CONCURRENCY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `FILE_REF_CHUNK_SIZE_BYTES`
+
+- **Import:** `from application_sdk.constants import FILE_REF_CHUNK_SIZE_BYTES`
+- **Signature:** `FILE_REF_CHUNK_SIZE_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `FILE_REF_CHUNKED_THRESHOLD_BYTES`
+
+- **Import:** `from application_sdk.constants import FILE_REF_CHUNKED_THRESHOLD_BYTES`
+- **Signature:** `FILE_REF_CHUNKED_THRESHOLD_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `INCREMENTAL_DEFAULT_STATE`
+
+- **Import:** `from application_sdk.constants import INCREMENTAL_DEFAULT_STATE`
+- **Signature:** `INCREMENTAL_DEFAULT_STATE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `INCREMENTAL_DIFF_SUBPATH_TEMPLATE`
+
+- **Import:** `from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE`
+- **Signature:** `INCREMENTAL_DIFF_SUBPATH_TEMPLATE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOCAL_ENVIRONMENT`
+
+- **Import:** `from application_sdk.constants import LOCAL_ENVIRONMENT`
+- **Signature:** `LOCAL_ENVIRONMENT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOCAL_WORKFLOW_ID`
+
+- **Import:** `from application_sdk.constants import LOCAL_WORKFLOW_ID`
+- **Signature:** `LOCAL_WORKFLOW_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOG_BATCH_SIZE`
+
+- **Import:** `from application_sdk.constants import LOG_BATCH_SIZE`
+- **Signature:** `LOG_BATCH_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.constants import LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS`
+- **Signature:** `LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOG_FILE_NAME`
+
+- **Import:** `from application_sdk.constants import LOG_FILE_NAME`
+- **Signature:** `LOG_FILE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOG_FLUSH_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.constants import LOG_FLUSH_INTERVAL_SECONDS`
+- **Signature:** `LOG_FLUSH_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOG_LEVEL`
+
+- **Import:** `from application_sdk.constants import LOG_LEVEL`
+- **Signature:** `LOG_LEVEL`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `LOG_SOURCE_APP_LABEL`
+
+- **Import:** `from application_sdk.constants import LOG_SOURCE_APP_LABEL`
+- **Signature:** `LOG_SOURCE_APP_LABEL: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `MARKER_FILENAME`
+
+- **Import:** `from application_sdk.constants import MARKER_FILENAME`
+- **Signature:** `MARKER_FILENAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `MARKER_TIMESTAMP_FORMAT`
+
+- **Import:** `from application_sdk.constants import MARKER_TIMESTAMP_FORMAT`
+- **Signature:** `MARKER_TIMESTAMP_FORMAT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `MAX_CONCURRENT_COLUMN_BATCHES`
+
+- **Import:** `from application_sdk.constants import MAX_CONCURRENT_COLUMN_BATCHES`
+- **Signature:** `MAX_CONCURRENT_COLUMN_BATCHES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `MAX_CONCURRENT_STORAGE_TRANSFERS`
+
+- **Import:** `from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS`
+- **Signature:** `MAX_CONCURRENT_STORAGE_TRANSFERS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `MCP_METADATA_KEY`
+
+- **Import:** `from application_sdk.constants import MCP_METADATA_KEY`
+- **Signature:** `MCP_METADATA_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `METRICS_BATCH_SIZE`
+
+- **Import:** `from application_sdk.constants import METRICS_BATCH_SIZE`
+- **Signature:** `METRICS_BATCH_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `METRICS_FILE_NAME`
+
+- **Import:** `from application_sdk.constants import METRICS_FILE_NAME`
+- **Signature:** `METRICS_FILE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `METRICS_FLUSH_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.constants import METRICS_FLUSH_INTERVAL_SECONDS`
+- **Signature:** `METRICS_FLUSH_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OBSERVABILITY_DIR`
+
+- **Import:** `from application_sdk.constants import OBSERVABILITY_DIR`
+- **Signature:** `OBSERVABILITY_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS`
+- **Signature:** `OBSERVABILITY_SHUTDOWN_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OOM_RESTART_CHECK`
+
+- **Import:** `from application_sdk.constants import OOM_RESTART_CHECK`
+- **Signature:** `OOM_RESTART_CHECK`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_BATCH_DELAY_MS`
+
+- **Import:** `from application_sdk.constants import OTEL_BATCH_DELAY_MS`
+- **Signature:** `OTEL_BATCH_DELAY_MS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_BATCH_SIZE`
+
+- **Import:** `from application_sdk.constants import OTEL_BATCH_SIZE`
+- **Signature:** `OTEL_BATCH_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_EXPORTER_OTLP_ENDPOINT`
+
+- **Import:** `from application_sdk.constants import OTEL_EXPORTER_OTLP_ENDPOINT`
+- **Signature:** `OTEL_EXPORTER_OTLP_ENDPOINT: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_EXPORTER_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import OTEL_EXPORTER_TIMEOUT_SECONDS`
+- **Signature:** `OTEL_EXPORTER_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_QUEUE_SIZE`
+
+- **Import:** `from application_sdk.constants import OTEL_QUEUE_SIZE`
+- **Signature:** `OTEL_QUEUE_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_RESOURCE_ATTRIBUTES`
+
+- **Import:** `from application_sdk.constants import OTEL_RESOURCE_ATTRIBUTES`
+- **Signature:** `OTEL_RESOURCE_ATTRIBUTES: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_WF_NODE_NAME`
+
+- **Import:** `from application_sdk.constants import OTEL_WF_NODE_NAME`
+- **Signature:** `OTEL_WF_NODE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `OTEL_WORKFLOW_LOGS_ENDPOINT`
+
+- **Import:** `from application_sdk.constants import OTEL_WORKFLOW_LOGS_ENDPOINT`
+- **Signature:** `OTEL_WORKFLOW_LOGS_ENDPOINT: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE`
+
+- **Import:** `from application_sdk.constants import PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE`
+- **Signature:** `PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PREFLIGHT_GATE_MODE_ENV`
+
+- **Import:** `from application_sdk.constants import PREFLIGHT_GATE_MODE_ENV`
+- **Signature:** `PREFLIGHT_GATE_MODE_ENV`
+- **Summary:** Removed lever, kept one release as an import shim.
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PREFLIGHT_RESULTS_ENDPOINT`
+
+- **Import:** `from application_sdk.constants import PREFLIGHT_RESULTS_ENDPOINT`
+- **Signature:** `PREFLIGHT_RESULTS_ENDPOINT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PREFLIGHT_RESULTS_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import PREFLIGHT_RESULTS_TIMEOUT_SECONDS`
+- **Signature:** `PREFLIGHT_RESULTS_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROMETHEUS_PUSHGATEWAY_URL`
+
+- **Import:** `from application_sdk.constants import PROMETHEUS_PUSHGATEWAY_URL`
+- **Signature:** `PROMETHEUS_PUSHGATEWAY_URL`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PROTECTED_STORAGE_PREFIXES`
+
+- **Import:** `from application_sdk.constants import PROTECTED_STORAGE_PREFIXES`
+- **Signature:** `PROTECTED_STORAGE_PREFIXES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `PUBLISHED_AT`
+
+- **Import:** `from application_sdk.constants import PUBLISHED_AT`
+- **Signature:** `PUBLISHED_AT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `RELEASE_CHANNEL`
+
+- **Import:** `from application_sdk.constants import RELEASE_CHANNEL`
+- **Signature:** `RELEASE_CHANNEL`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `RELEASE_ID`
+
+- **Import:** `from application_sdk.constants import RELEASE_ID`
+- **Signature:** `RELEASE_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SECRET_STORE_NAME`
+
+- **Import:** `from application_sdk.constants import SECRET_STORE_NAME`
+- **Signature:** `SECRET_STORE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SEGMENT_API_URL`
+
+- **Import:** `from application_sdk.constants import SEGMENT_API_URL`
+- **Signature:** `SEGMENT_API_URL`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SEGMENT_BATCH_SIZE`
+
+- **Import:** `from application_sdk.constants import SEGMENT_BATCH_SIZE`
+- **Signature:** `SEGMENT_BATCH_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SEGMENT_BATCH_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import SEGMENT_BATCH_TIMEOUT_SECONDS`
+- **Signature:** `SEGMENT_BATCH_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SEGMENT_DEFAULT_USER_ID`
+
+- **Import:** `from application_sdk.constants import SEGMENT_DEFAULT_USER_ID`
+- **Signature:** `SEGMENT_DEFAULT_USER_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SEGMENT_WRITE_KEY`
+
+- **Import:** `from application_sdk.constants import SEGMENT_WRITE_KEY`
+- **Signature:** `SEGMENT_WRITE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SERVICE_NAME`
+
+- **Import:** `from application_sdk.constants import SERVICE_NAME`
+- **Signature:** `SERVICE_NAME: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SERVICE_VERSION`
+
+- **Import:** `from application_sdk.constants import SERVICE_VERSION`
+- **Signature:** `SERVICE_VERSION: str`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SHUTDOWN_DRAIN_DELAY_SECONDS`
+
+- **Import:** `from application_sdk.constants import SHUTDOWN_DRAIN_DELAY_SECONDS`
+- **Signature:** `SHUTDOWN_DRAIN_DELAY_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SHUTDOWN_GRACE_SECONDS_ENV`
+
+- **Import:** `from application_sdk.constants import SHUTDOWN_GRACE_SECONDS_ENV`
+- **Signature:** `SHUTDOWN_GRACE_SECONDS_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SIZING_BATCH_SIZE`
+
+- **Import:** `from application_sdk.constants import SIZING_BATCH_SIZE`
+- **Signature:** `SIZING_BATCH_SIZE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SIZING_FILE_NAME`
+
+- **Import:** `from application_sdk.constants import SIZING_FILE_NAME`
+- **Signature:** `SIZING_FILE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SIZING_FLUSH_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.constants import SIZING_FLUSH_INTERVAL_SECONDS`
+- **Signature:** `SIZING_FLUSH_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SQL_CLIENT_CONNECT_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import SQL_CLIENT_CONNECT_TIMEOUT_SECONDS`
+- **Signature:** `SQL_CLIENT_CONNECT_TIMEOUT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `SSL_CERT_DIR`
+
+- **Import:** `from application_sdk.constants import SSL_CERT_DIR`
+- **Signature:** `SSL_CERT_DIR`
+- **Summary:** Custom SSL/TLS certificate directory for corporate/private CAs.
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STATE_STORE_NAME`
+
+- **Import:** `from application_sdk.constants import STATE_STORE_NAME`
+- **Signature:** `STATE_STORE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STATE_STORE_PATH_TEMPLATE`
+
+- **Import:** `from application_sdk.constants import STATE_STORE_PATH_TEMPLATE`
+- **Signature:** `STATE_STORE_PATH_TEMPLATE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_LOCK_WAIT_PROGRESS_SECONDS`
+
+- **Import:** `from application_sdk.constants import STORAGE_LOCK_WAIT_PROGRESS_SECONDS`
+- **Signature:** `STORAGE_LOCK_WAIT_PROGRESS_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_PROGRESS_LOG_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.constants import STORAGE_PROGRESS_LOG_INTERVAL_SECONDS`
+- **Signature:** `STORAGE_PROGRESS_LOG_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_RESUME_DOWNLOADS`
+
+- **Import:** `from application_sdk.constants import STORAGE_RESUME_DOWNLOADS`
+- **Signature:** `STORAGE_RESUME_DOWNLOADS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_TRANSFER_MEMORY_BUDGET_BYTES`
+
+- **Import:** `from application_sdk.constants import STORAGE_TRANSFER_MEMORY_BUDGET_BYTES`
+- **Signature:** `STORAGE_TRANSFER_MEMORY_BUDGET_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_UPLOAD_MAX_CONCURRENCY`
+
+- **Import:** `from application_sdk.constants import STORAGE_UPLOAD_MAX_CONCURRENCY`
+- **Signature:** `STORAGE_UPLOAD_MAX_CONCURRENCY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_UPLOAD_PART_SIZE_BYTES`
+
+- **Import:** `from application_sdk.constants import STORAGE_UPLOAD_PART_SIZE_BYTES`
+- **Signature:** `STORAGE_UPLOAD_PART_SIZE_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN`
+
+- **Import:** `from application_sdk.constants import STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN`
+- **Signature:** `STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_VERIFY_TRANSFERS`
+
+- **Import:** `from application_sdk.constants import STORAGE_VERIFY_TRANSFERS`
+- **Signature:** `STORAGE_VERIFY_TRANSFERS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORAGE_WRITE_SIDECARS`
+
+- **Import:** `from application_sdk.constants import STORAGE_WRITE_SIDECARS`
+- **Signature:** `STORAGE_WRITE_SIDECARS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `STORE_ASSERT_ENABLED`
+
+- **Import:** `from application_sdk.constants import STORE_ASSERT_ENABLED`
+- **Signature:** `STORE_ASSERT_ENABLED`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TEMPORAL_CORE_METRICS_MAX_BYTES`
+
+- **Import:** `from application_sdk.constants import TEMPORAL_CORE_METRICS_MAX_BYTES`
+- **Signature:** `TEMPORAL_CORE_METRICS_MAX_BYTES: int`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS`
+- **Signature:** `TEMPORAL_CORE_METRICS_PROXY_TIMEOUT_SECONDS: float`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TEMPORAL_PROMETHEUS_BIND_ADDRESS`
+
+- **Import:** `from application_sdk.constants import TEMPORAL_PROMETHEUS_BIND_ADDRESS`
+- **Signature:** `TEMPORAL_PROMETHEUS_BIND_ADDRESS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TEMPORARY_PATH`
+
+- **Import:** `from application_sdk.constants import TEMPORARY_PATH`
+- **Signature:** `TEMPORARY_PATH`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TRACES_FILE_NAME`
+
+- **Import:** `from application_sdk.constants import TRACES_FILE_NAME`
+- **Signature:** `TRACES_FILE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TRACKED_FILE_REFS_KEY`
+
+- **Import:** `from application_sdk.constants import TRACKED_FILE_REFS_KEY`
+- **Signature:** `TRACKED_FILE_REFS_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `TRANSFORMED_SUBDIR`
+
+- **Import:** `from application_sdk.constants import TRANSFORMED_SUBDIR`
+- **Signature:** `TRANSFORMED_SUBDIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `UPSTREAM_OBJECT_STORE_NAME`
+
+- **Import:** `from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME`
+- **Signature:** `UPSTREAM_OBJECT_STORE_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `USE_SERVER_SIDE_CURSOR`
+
+- **Import:** `from application_sdk.constants import USE_SERVER_SIDE_CURSOR`
+- **Signature:** `USE_SERVER_SIDE_CURSOR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `VALIDATE_ARTIFACTS`
+
+- **Import:** `from application_sdk.constants import VALIDATE_ARTIFACTS`
+- **Signature:** `VALIDATE_ARTIFACTS: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `VALIDATE_ASSETS_ON_UPLOAD`
+
+- **Import:** `from application_sdk.constants import VALIDATE_ASSETS_ON_UPLOAD`
+- **Signature:** `VALIDATE_ASSETS_ON_UPLOAD: bool`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `VALIDATE_ASSETS_TIMEOUT_SECONDS`
+
+- **Import:** `from application_sdk.constants import VALIDATE_ASSETS_TIMEOUT_SECONDS`
+- **Signature:** `VALIDATE_ASSETS_TIMEOUT_SECONDS: float`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WINDOWS_EXTENDED_PATH_PREFIX`
+
+- **Import:** `from application_sdk.constants import WINDOWS_EXTENDED_PATH_PREFIX`
+- **Signature:** `WINDOWS_EXTENDED_PATH_PREFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKER_EVICTION_MAX_RETRIES`
+
+- **Import:** `from application_sdk.constants import WORKER_EVICTION_MAX_RETRIES`
+- **Signature:** `WORKER_EVICTION_MAX_RETRIES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKER_LIVENESS_FATAL_RECOVERY_SECONDS`
+
+- **Import:** `from application_sdk.constants import WORKER_LIVENESS_FATAL_RECOVERY_SECONDS`
+- **Signature:** `WORKER_LIVENESS_FATAL_RECOVERY_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKER_LIVENESS_MAX_IDLE_SECONDS`
+
+- **Import:** `from application_sdk.constants import WORKER_LIVENESS_MAX_IDLE_SECONDS`
+- **Signature:** `WORKER_LIVENESS_MAX_IDLE_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS`
+
+- **Import:** `from application_sdk.constants import WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS`
+- **Signature:** `WORKER_LIVENESS_MAX_IMPORT_WAIT_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS`
+
+- **Import:** `from application_sdk.constants import WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS`
+- **Signature:** `WORKER_LIVENESS_MAX_ZERO_POLLER_READINGS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKER_START_EVENT_VERSION`
+
+- **Import:** `from application_sdk.constants import WORKER_START_EVENT_VERSION`
+- **Signature:** `WORKER_START_EVENT_VERSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKFLOW_AUTH_CLIENT_ID_KEY`
+
+- **Import:** `from application_sdk.constants import WORKFLOW_AUTH_CLIENT_ID_KEY`
+- **Signature:** `WORKFLOW_AUTH_CLIENT_ID_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKFLOW_AUTH_CLIENT_SECRET_KEY`
+
+- **Import:** `from application_sdk.constants import WORKFLOW_AUTH_CLIENT_SECRET_KEY`
+- **Signature:** `WORKFLOW_AUTH_CLIENT_SECRET_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
+#### `WORKFLOW_OUTPUT_PATH_TEMPLATE`
+
+- **Import:** `from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE`
+- **Signature:** `WORKFLOW_OUTPUT_PATH_TEMPLATE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/constants.py`
+
 ## `application_sdk.contracts`
 
 Typed Pydantic Input/Output base classes, payload safety, storage and type helpers
 
 ### Classes
 
+#### `ApplicationEventNames`
+
+- **Import:** `from application_sdk.contracts.events import ApplicationEventNames`
+- **Signature:** `class ApplicationEventNames`
+- **Summary:** Enumeration of application event names.
+- **Defined in:** `application_sdk/contracts/events.py`
+
 #### `AssetArtifact`
 
 - **Import:** `from application_sdk.contracts import AssetArtifact`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `class AssetArtifact`
 - **Summary:** Marker: this ``FileReference`` field's declaration **is** a typed model.
 - **Defined in:** `application_sdk/contracts/types.py`
+
+#### `CleanupInput`
+
+- **Import:** `from application_sdk.contracts.cleanup import CleanupInput`
+- **Signature:** `class CleanupInput`
+- **Summary:** Input for ``App.cleanup_files``.
+- **Defined in:** `application_sdk/contracts/cleanup.py`
+
+#### `CleanupOutput`
+
+- **Import:** `from application_sdk.contracts.cleanup import CleanupOutput`
+- **Signature:** `class CleanupOutput`
+- **Summary:** Output from ``App.cleanup_files``.
+- **Defined in:** `application_sdk/contracts/cleanup.py`
 
 #### `CompatibilityError`
 
@@ -994,6 +3743,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Raised by :func:`assert_backwards_compatible` on incompatible contracts.
 - **Defined in:** `application_sdk/contracts/compat.py`
 
+#### `ConnectionAttributes`
+
+- **Import:** `from application_sdk.contracts.types import ConnectionAttributes`
+- **Signature:** `class ConnectionAttributes`
+- **Summary:** Minimal normalized attributes from an AE Connection object.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `ConnectionRef`
 
 - **Import:** `from application_sdk.contracts import ConnectionRef`
@@ -1001,9 +3757,17 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Typed replacement for ``connection: dict[str, Any]`` in Temporal contracts.
 - **Defined in:** `application_sdk/contracts/types.py`
 
+#### `Consumes`
+
+- **Import:** `from application_sdk.contracts.events import Consumes`
+- **Signature:** `class Consumes`
+- **Summary:** Model for event consumption configuration.
+- **Defined in:** `application_sdk/contracts/events.py`
+
 #### `ContractDeclarationError`
 
 - **Import:** `from application_sdk.contracts import ContractDeclarationError`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `class ContractDeclarationError(*, ...)`
 - **Summary:** A class used as a contract is not one, or declares a field it may not.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1043,6 +3807,41 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Output from ``App.download``.
 - **Defined in:** `application_sdk/contracts/storage.py`
 
+#### `Event`
+
+- **Import:** `from application_sdk.contracts.events import Event`
+- **Signature:** `class Event`
+- **Summary:** Base class for all events.
+- **Defined in:** `application_sdk/contracts/events.py`
+
+#### `EventFilter`
+
+- **Import:** `from application_sdk.contracts.events import EventFilter`
+- **Signature:** `class EventFilter`
+- **Summary:** Filter for events.
+- **Defined in:** `application_sdk/contracts/events.py`
+
+#### `EventMetadata`
+
+- **Import:** `from application_sdk.contracts.events import EventMetadata`
+- **Signature:** `class EventMetadata`
+- **Summary:** Metadata for events.
+- **Defined in:** `application_sdk/contracts/events.py`
+
+#### `EventRegistration`
+
+- **Import:** `from application_sdk.contracts.events import EventRegistration`
+- **Signature:** `class EventRegistration`
+- **Summary:** Model for event registration.
+- **Defined in:** `application_sdk/contracts/events.py`
+
+#### `EventTypes`
+
+- **Import:** `from application_sdk.contracts.events import EventTypes`
+- **Signature:** `class EventTypes`
+- **Summary:** Enumeration of event types.
+- **Defined in:** `application_sdk/contracts/events.py`
+
 #### `FileReference`
 
 - **Import:** `from application_sdk.contracts import FileReference`
@@ -1081,6 +3880,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `InputContract`
 
 - **Import:** `from application_sdk.contracts import InputContract`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `class InputContract`
 - **Summary:** Protocol marker for App input contracts.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1088,6 +3888,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `Lazy`
 
 - **Import:** `from application_sdk.contracts import Lazy`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `class Lazy`
 - **Summary:** Marker: this FileReference field is NOT auto-materialized before the activity runs.
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1095,9 +3896,38 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `MaxItems`
 
 - **Import:** `from application_sdk.contracts import MaxItems`
+- **Also importable from:** `application_sdk.contracts.base`, `application_sdk.contracts.types`
 - **Signature:** `class MaxItems(limit: int)`
 - **Summary:** Constraint marker indicating maximum collection size.
 - **Defined in:** `application_sdk/contracts/base.py`
+
+#### `MergeFetchFailuresInput`
+
+- **Import:** `from application_sdk.contracts.fetch_failures import MergeFetchFailuresInput`
+- **Signature:** `class MergeFetchFailuresInput`
+- **Summary:** Input for ``App.merge_fetch_failures``.
+- **Defined in:** `application_sdk/contracts/fetch_failures.py`
+
+#### `MergeFetchFailuresOutput`
+
+- **Import:** `from application_sdk.contracts.fetch_failures import MergeFetchFailuresOutput`
+- **Signature:** `class MergeFetchFailuresOutput`
+- **Summary:** Output from ``App.merge_fetch_failures``.
+- **Defined in:** `application_sdk/contracts/fetch_failures.py`
+
+#### `MergeSkippedRecordsInput`
+
+- **Import:** `from application_sdk.contracts.skipped_records import MergeSkippedRecordsInput`
+- **Signature:** `class MergeSkippedRecordsInput`
+- **Summary:** Input for ``App.merge_skipped_records``.
+- **Defined in:** `application_sdk/contracts/skipped_records.py`
+
+#### `MergeSkippedRecordsOutput`
+
+- **Import:** `from application_sdk.contracts.skipped_records import MergeSkippedRecordsOutput`
+- **Signature:** `class MergeSkippedRecordsOutput`
+- **Summary:** Output from ``App.merge_skipped_records``.
+- **Defined in:** `application_sdk/contracts/skipped_records.py`
 
 #### `Output`
 
@@ -1109,13 +3939,22 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `OutputContract`
 
 - **Import:** `from application_sdk.contracts import OutputContract`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `class OutputContract`
 - **Summary:** Protocol marker for App output contracts.
+- **Defined in:** `application_sdk/contracts/base.py`
+
+#### `OutputStatus`
+
+- **Import:** `from application_sdk.contracts.base import OutputStatus`
+- **Signature:** `class OutputStatus`
+- **Summary:** Standard run-result status used on :class:`Output`.
 - **Defined in:** `application_sdk/contracts/base.py`
 
 #### `PayloadSafetyError`
 
 - **Import:** `from application_sdk.contracts import PayloadSafetyError`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `class PayloadSafetyError(cls_name: str, field_name: str, field_type: type, reason: str)`
 - **Summary:** Raised when a contract field uses a type that risks exceeding payload limits.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1134,16 +3973,39 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Base class for domain records passed between Apps.
 - **Defined in:** `application_sdk/contracts/base.py`
 
+#### `RunPrefixRequiredError`
+
+- **Import:** `from application_sdk.contracts.types_errors import RunPrefixRequiredError`
+- **Signature:** `class RunPrefixRequiredError(*, ...)`
+- **Summary:** run_prefix is required for RETAINED-tier StorageTier operations.
+- **Defined in:** `application_sdk/contracts/types_errors.py`
+
 #### `SerializableEnum`
 
 - **Import:** `from application_sdk.contracts import SerializableEnum`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `class SerializableEnum`
 - **Summary:** Base class for enums that need to be serialized through Temporal.
 - **Defined in:** `application_sdk/contracts/base.py`
 
+#### `StorageCleanupInput`
+
+- **Import:** `from application_sdk.contracts.cleanup import StorageCleanupInput`
+- **Signature:** `class StorageCleanupInput`
+- **Summary:** Input for ``App.cleanup_storage``.
+- **Defined in:** `application_sdk/contracts/cleanup.py`
+
+#### `StorageCleanupOutput`
+
+- **Import:** `from application_sdk.contracts.cleanup import StorageCleanupOutput`
+- **Signature:** `class StorageCleanupOutput`
+- **Summary:** Output from ``App.cleanup_storage``.
+- **Defined in:** `application_sdk/contracts/cleanup.py`
+
 #### `StorageTier`
 
 - **Import:** `from application_sdk.contracts import StorageTier`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `class StorageTier`
 - **Summary:** Storage lifecycle tier for a ``FileReference``.
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1151,6 +4013,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `StoreTarget`
 
 - **Import:** `from application_sdk.contracts import StoreTarget`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `class StoreTarget`
 - **Summary:** Which object store an operation addresses.
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1197,6 +4060,27 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Output from ``App.verify_refs``.
 - **Defined in:** `application_sdk/contracts/storage.py`
 
+#### `WorkerStartEventData`
+
+- **Import:** `from application_sdk.contracts.events import WorkerStartEventData`
+- **Signature:** `class WorkerStartEventData`
+- **Summary:** Model for worker creation event data.
+- **Defined in:** `application_sdk/contracts/events.py`
+
+#### `WorkerTokenRefreshEventData`
+
+- **Import:** `from application_sdk.contracts.events import WorkerTokenRefreshEventData`
+- **Signature:** `class WorkerTokenRefreshEventData`
+- **Summary:** Model for token refresh event data.
+- **Defined in:** `application_sdk/contracts/events.py`
+
+#### `WorkflowStates`
+
+- **Import:** `from application_sdk.contracts.events import WorkflowStates`
+- **Signature:** `class WorkflowStates`
+- **Summary:** Enumeration of workflow states.
+- **Defined in:** `application_sdk/contracts/events.py`
+
 ### Functions
 
 #### `assert_backwards_compatible`
@@ -1209,6 +4093,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `asset_artifact_fields`
 
 - **Import:** `from application_sdk.contracts import asset_artifact_fields`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `asset_artifact_fields(contract: type)`
 - **Summary:** Every field on *contract* carrying the :class:`AssetArtifact` marker.
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1216,14 +4101,16 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `asset_artifact_marker`
 
 - **Import:** `from application_sdk.contracts import asset_artifact_marker`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `asset_artifact_marker(contract: type | None, field: str)`
 - **Summary:** The :class:`AssetArtifact` marker on ``contract``'s *field*, or ``None``.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `canonical_type_str`
 
-- **Import:** `from application_sdk.contracts.compat import canonical_type_str`
-- **Signature:** `canonical_type_str(tp: object)`
+- **Import:** `from application_sdk.contracts.base import canonical_type_str`
+- **Also importable from:** `application_sdk.contracts.compat`
+- **Signature:** `canonical_type_str(tp: object) -> str`
 - **Summary:** Return a normalized string representation of a type annotation.
 - **Defined in:** `application_sdk/contracts/base.py`
 
@@ -1237,6 +4124,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `connection_qualified_name_defect`
 
 - **Import:** `from application_sdk.contracts import connection_qualified_name_defect`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `connection_qualified_name_defect(qualified_name: str)`
 - **Summary:** Why *qualified_name* cannot address a Connection, or ``None`` when it can.
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1251,6 +4139,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `get_contract_fields`
 
 - **Import:** `from application_sdk.contracts import get_contract_fields`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `get_contract_fields(cls: type)`
 - **Summary:** Get the fields and their types from a contract class.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1258,6 +4147,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `has_default`
 
 - **Import:** `from application_sdk.contracts import has_default`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `has_default(cls: type, field_name: str)`
 - **Summary:** Check if a contract field has a default value.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1265,6 +4155,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `is_backwards_compatible`
 
 - **Import:** `from application_sdk.contracts import is_backwards_compatible`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `is_backwards_compatible(old_cls: type, new_cls: type)`
 - **Summary:** Check if a new contract version is backwards compatible with the old.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1272,6 +4163,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `validate_is_contract`
 
 - **Import:** `from application_sdk.contracts import validate_is_contract`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `validate_is_contract(cls: type, context: str = 'contract')`
 - **Summary:** Validate that a class is an Input, Output, HeartbeatDetails, or Record subclass.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1279,6 +4171,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `validate_payload_safety`
 
 - **Import:** `from application_sdk.contracts import validate_payload_safety`
+- **Also importable from:** `application_sdk.contracts.base`
 - **Signature:** `validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None)`
 - **Summary:** Validate that all fields in a contract use payload-safe types.
 - **Defined in:** `application_sdk/contracts/base.py`
@@ -1288,6 +4181,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `BoundedDict`
 
 - **Import:** `from application_sdk.contracts import BoundedDict`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `BoundedDict`
 - **Summary:** Bounded dict type. Use: Annotated[dict[K, V], MaxItems(N)]
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1295,6 +4189,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `BoundedList`
 
 - **Import:** `from application_sdk.contracts import BoundedList`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `BoundedList`
 - **Summary:** Bounded list type. Use: Annotated[list[T], MaxItems(N)]
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1302,13 +4197,22 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 #### `CONNECTION_QN_MIN_SEGMENTS`
 
 - **Import:** `from application_sdk.contracts import CONNECTION_QN_MIN_SEGMENTS`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `CONNECTION_QN_MIN_SEGMENTS`
 - **Summary:** Segments in the shortest addressable connection QN: ``default/<connector>/<id>``.
 - **Defined in:** `application_sdk/contracts/types.py`
 
+#### `STORAGE_CLEANUP_FILE_REFS_MAX`
+
+- **Import:** `from application_sdk.contracts.cleanup import STORAGE_CLEANUP_FILE_REFS_MAX`
+- **Signature:** `STORAGE_CLEANUP_FILE_REFS_MAX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/contracts/cleanup.py`
+
 #### `TreeSelection`
 
 - **Import:** `from application_sdk.contracts import TreeSelection`
+- **Also importable from:** `application_sdk.contracts.types`
 - **Signature:** `TreeSelection`
 - **Summary:** A selection from a tree widget, in the nested shape the widget emits.
 - **Defined in:** `application_sdk/contracts/types.py`
@@ -1322,6 +4226,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `AgentCredentialSpec`
 
 - **Import:** `from application_sdk.credentials import AgentCredentialSpec`
+- **Also importable from:** `application_sdk.credentials.ref`, `application_sdk.credentials.spec`
 - **Signature:** `class AgentCredentialSpec`
 - **Summary:** Typed envelope for an agent-shape credential payload.
 - **Defined in:** `application_sdk/credentials/spec.py`
@@ -1329,6 +4234,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `ApiKeyCredential`
 
 - **Import:** `from application_sdk.credentials import ApiKeyCredential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class ApiKeyCredential`
 - **Summary:** API key credential.
 - **Defined in:** `application_sdk/credentials/types.py`
@@ -1336,6 +4242,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `AtlanApiToken`
 
 - **Import:** `from application_sdk.credentials import AtlanApiToken`
+- **Also importable from:** `application_sdk.credentials.atlan`
 - **Signature:** `class AtlanApiToken`
 - **Summary:** Atlan API token credential.
 - **Defined in:** `application_sdk/credentials/atlan.py`
@@ -1343,13 +4250,22 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `AtlanClientMixin`
 
 - **Import:** `from application_sdk.credentials import AtlanClientMixin`
+- **Also importable from:** `application_sdk.credentials.atlan_client`
 - **Signature:** `class AtlanClientMixin`
 - **Summary:** Mixin providing cached async Atlan client access for App subclasses.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
+#### `AtlanCredentialTypeError`
+
+- **Import:** `from application_sdk.credentials.errors import AtlanCredentialTypeError`
+- **Signature:** `class AtlanCredentialTypeError(*, ...)`
+- **Summary:** Credential is not an AtlanApiToken or AtlanOAuthClient.
+- **Defined in:** `application_sdk/credentials/errors.py`
+
 #### `AtlanOAuthClient`
 
 - **Import:** `from application_sdk.credentials import AtlanOAuthClient`
+- **Also importable from:** `application_sdk.credentials.atlan`
 - **Signature:** `class AtlanOAuthClient`
 - **Summary:** Atlan OAuth 2.0 client credential.
 - **Defined in:** `application_sdk/credentials/atlan.py`
@@ -1357,6 +4273,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `BasicCredential`
 
 - **Import:** `from application_sdk.credentials import BasicCredential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class BasicCredential`
 - **Summary:** Username + password credential.
 - **Defined in:** `application_sdk/credentials/types.py`
@@ -1364,6 +4281,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `BearerTokenCredential`
 
 - **Import:** `from application_sdk.credentials import BearerTokenCredential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class BearerTokenCredential`
 - **Summary:** Bearer token credential.
 - **Defined in:** `application_sdk/credentials/types.py`
@@ -1371,6 +4289,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CertificateCredential`
 
 - **Import:** `from application_sdk.credentials import CertificateCredential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class CertificateCredential`
 - **Summary:** Certificate-based credential (mTLS / client cert).
 - **Defined in:** `application_sdk/credentials/types.py`
@@ -1378,13 +4297,22 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `Credential`
 
 - **Import:** `from application_sdk.credentials import Credential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class Credential`
 - **Summary:** Protocol for typed credentials.
 - **Defined in:** `application_sdk/credentials/types.py`
 
+#### `CredentialDir`
+
+- **Import:** `from application_sdk.credentials.utils import CredentialDir`
+- **Signature:** `class CredentialDir`
+- **Summary:** A private directory for credential files, made by :func:`credential_dir`.
+- **Defined in:** `application_sdk/credentials/utils.py`
+
 #### `CredentialError`
 
 - **Import:** `from application_sdk.credentials import CredentialError`
+- **Also importable from:** `application_sdk.credentials.errors`
 - **Signature:** `class CredentialError(message: str, ...)`
 - **Summary:** Generic credential-subsystem failure (category=AUTH).
 - **Defined in:** `application_sdk/credentials/errors.py`
@@ -1392,6 +4320,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialNotFoundError`
 
 - **Import:** `from application_sdk.credentials import CredentialNotFoundError`
+- **Also importable from:** `application_sdk.credentials.errors`
 - **Signature:** `class CredentialNotFoundError(credential_name: str)`
 - **Summary:** The requested credential was not found in the secret store or registry.
 - **Defined in:** `application_sdk/credentials/errors.py`
@@ -1399,6 +4328,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialParseError`
 
 - **Import:** `from application_sdk.credentials import CredentialParseError`
+- **Also importable from:** `application_sdk.credentials.errors`
 - **Signature:** `class CredentialParseError(message: str, ...)`
 - **Summary:** Credential data could not be parsed (malformed payload).
 - **Defined in:** `application_sdk/credentials/errors.py`
@@ -1406,6 +4336,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialRef`
 
 - **Import:** `from application_sdk.credentials import CredentialRef`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `class CredentialRef`
 - **Summary:** A reference to a credential in the secret store.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1413,20 +4344,44 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialResolvable`
 
 - **Import:** `from application_sdk.credentials import CredentialResolvable`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `class CredentialResolvable`
 - **Summary:** Protocol for inputs that carry credential routing fields.
 - **Defined in:** `application_sdk/credentials/ref.py`
 
+#### `CredentialResolvableTypeError`
+
+- **Import:** `from application_sdk.credentials.errors import CredentialResolvableTypeError`
+- **Signature:** `class CredentialResolvableTypeError(*, ...)`
+- **Summary:** source is not a CredentialResolvable (missing extraction_method / agent_json / credential_guid).
+- **Defined in:** `application_sdk/credentials/errors.py`
+
 #### `CredentialResolver`
 
 - **Import:** `from application_sdk.credentials import CredentialResolver`
+- **Also importable from:** `application_sdk.credentials.resolver`
 - **Signature:** `class CredentialResolver(secret_store: SecretStore, registry: CredentialTypeRegistry | None = None)`
 - **Summary:** Resolves a CredentialRef to a typed Credential.
 - **Defined in:** `application_sdk/credentials/resolver.py`
 
+#### `CredentialRoutingError`
+
+- **Import:** `from application_sdk.credentials.errors import CredentialRoutingError`
+- **Signature:** `class CredentialRoutingError(*, ...)`
+- **Summary:** No routable credential source present in input.
+- **Defined in:** `application_sdk/credentials/errors.py`
+
+#### `CredentialSlot`
+
+- **Import:** `from application_sdk.credentials.requirements import CredentialSlot`
+- **Signature:** `class CredentialSlot(field: str, credential_type: str, required: bool) -> None`
+- **Summary:** One credential the workflow form asks for.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
 #### `CredentialTypeRegistry`
 
 - **Import:** `from application_sdk.credentials import CredentialTypeRegistry`
+- **Also importable from:** `application_sdk.credentials.registry`
 - **Signature:** `class CredentialTypeRegistry`
 - **Summary:** Singleton registry mapping credential_type strings to (class, parser) pairs.
 - **Defined in:** `application_sdk/credentials/registry.py`
@@ -1434,6 +4389,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialValidationError`
 
 - **Import:** `from application_sdk.credentials import CredentialValidationError`
+- **Also importable from:** `application_sdk.credentials.errors`
 - **Signature:** `class CredentialValidationError(message: str, ...)`
 - **Summary:** Credential failed schema or business-rule validation.
 - **Defined in:** `application_sdk/credentials/errors.py`
@@ -1441,6 +4397,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `GitSshCredential`
 
 - **Import:** `from application_sdk.credentials import GitSshCredential`
+- **Also importable from:** `application_sdk.credentials.git`
 - **Signature:** `class GitSshCredential`
 - **Summary:** SSH key credential for Git operations.
 - **Defined in:** `application_sdk/credentials/git.py`
@@ -1448,6 +4405,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `GitTokenCredential`
 
 - **Import:** `from application_sdk.credentials import GitTokenCredential`
+- **Also importable from:** `application_sdk.credentials.git`
 - **Signature:** `class GitTokenCredential`
 - **Summary:** HTTPS PAT / deploy-token credential for Git operations.
 - **Defined in:** `application_sdk/credentials/git.py`
@@ -1455,6 +4413,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `OAuthClientCredential`
 
 - **Import:** `from application_sdk.credentials import OAuthClientCredential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class OAuthClientCredential`
 - **Summary:** OAuth 2.0 client credential.
 - **Defined in:** `application_sdk/credentials/types.py`
@@ -1462,6 +4421,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `OAuthTokenError`
 
 - **Import:** `from application_sdk.credentials import OAuthTokenError`
+- **Also importable from:** `application_sdk.credentials.oauth`
 - **Signature:** `class OAuthTokenError(message: str, *, cause: Exception | None = None)`
 - **Summary:** Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH).
 - **Defined in:** `application_sdk/credentials/oauth.py`
@@ -1469,6 +4429,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `OAuthTokenService`
 
 - **Import:** `from application_sdk.credentials import OAuthTokenService`
+- **Also importable from:** `application_sdk.credentials.oauth`
 - **Signature:** `class OAuthTokenService(credential: OAuthClientCredential)`
 - **Summary:** General-purpose OAuth 2.0 client_credentials token service.
 - **Defined in:** `application_sdk/credentials/oauth.py`
@@ -1476,6 +4437,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `RawCredential`
 
 - **Import:** `from application_sdk.credentials import RawCredential`
+- **Also importable from:** `application_sdk.credentials.types`
 - **Signature:** `class RawCredential`
 - **Summary:** Wrapper for raw dict credentials (legacy / unknown types).
 - **Defined in:** `application_sdk/credentials/types.py`
@@ -1483,15 +4445,31 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `ResolvedCredentials`
 
 - **Import:** `from application_sdk.credentials import ResolvedCredentials`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `class ResolvedCredentials`
 - **Summary:** Where a run's credential comes from. At most one field is populated.
 - **Defined in:** `application_sdk/credentials/routing.py`
 
+#### `SecretStoreCheckResult`
+
+- **Import:** `from application_sdk.credentials.agent import SecretStoreCheckResult`
+- **Signature:** `class SecretStoreCheckResult(passed: bool, ...)`
+- **Summary:** Outcome of the SDR secret-store preflight probe.
+- **Defined in:** `application_sdk/credentials/agent.py`
+
 ### Functions
+
+#### `agent_schema`
+
+- **Import:** `from application_sdk.credentials.requirements import agent_schema`
+- **Signature:** `agent_schema(workflow_form: Mapping[str, Any], credential_type: str) -> Mapping[str, Any] | None`
+- **Summary:** The agent schema for *credential_type* from the workflow form's ``agent-json``.
+- **Defined in:** `application_sdk/credentials/requirements.py`
 
 #### `api_key_ref`
 
 - **Import:** `from application_sdk.credentials import api_key_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `api_key_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for an API key credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1499,6 +4477,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `atlan_api_token_ref`
 
 - **Import:** `from application_sdk.credentials import atlan_api_token_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `atlan_api_token_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for an Atlan API token credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1506,6 +4485,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `atlan_oauth_client_ref`
 
 - **Import:** `from application_sdk.credentials import atlan_oauth_client_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `atlan_oauth_client_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for an Atlan OAuth client credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1513,6 +4493,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `basic_ref`
 
 - **Import:** `from application_sdk.credentials import basic_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `basic_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for a basic (username/password) credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1520,6 +4501,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `bearer_token_ref`
 
 - **Import:** `from application_sdk.credentials import bearer_token_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `bearer_token_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for a bearer token credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1531,23 +4513,68 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Convert a camelCase key to kebab-case.
 - **Defined in:** `application_sdk/common/transforms.py`
 
+#### `canonical_credential`
+
+- **Import:** `from application_sdk.credentials.requirements import canonical_credential`
+- **Signature:** `canonical_credential(flat: Mapping[str, Any]) -> dict[str, Any]`
+- **Summary:** Nest a flat credential the way the runtime reads it.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
 #### `certificate_ref`
 
 - **Import:** `from application_sdk.credentials import certificate_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `certificate_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for a certificate credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
 
+#### `check_secret_store_access`
+
+- **Import:** `from application_sdk.credentials.agent import check_secret_store_access`
+- **Signature:** `check_secret_store_access(spec: AgentCredentialSpec, secret_store: SecretStore | None) -> SecretStoreCheckResult`
+- **Summary:** Probe the customer secret store for the SDR interactive preflight.
+- **Defined in:** `application_sdk/credentials/agent.py`
+
 #### `create_async_atlan_client`
 
 - **Import:** `from application_sdk.credentials import create_async_atlan_client`
+- **Also importable from:** `application_sdk.credentials.atlan_client`
 - **Signature:** `create_async_atlan_client(cred: Credential, *, extra_headers: dict[str, str] | None = None)`
 - **Summary:** Create a pyatlan_v9 AsyncAtlanClient from a resolved Atlan credential.
 - **Defined in:** `application_sdk/credentials/atlan_client.py`
 
+#### `credential_dir`
+
+- **Import:** `from application_sdk.credentials.utils import credential_dir`
+- **Signature:** `credential_dir(base_dir: str | None = None) -> CredentialDir`
+- **Summary:** Create a private directory for credential files and return it.
+- **Defined in:** `application_sdk/credentials/utils.py`
+
+#### `credential_form`
+
+- **Import:** `from application_sdk.credentials.requirements import credential_form`
+- **Signature:** `credential_form(generated_dir: Path, credential_type: str) -> Mapping[str, Any] | None`
+- **Summary:** The credential form ``<credential_type>.json`` from *generated_dir*, if shipped.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
+#### `credential_from_pairs`
+
+- **Import:** `from application_sdk.credentials.requirements import credential_from_pairs`
+- **Signature:** `credential_from_pairs(pairs: list[Any]) -> dict[str, Any]`
+- **Summary:** Fold v3 ``[{key, value}]`` credential pairs into a canonical credential.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
+#### `credential_slots`
+
+- **Import:** `from application_sdk.credentials.requirements import credential_slots`
+- **Signature:** `credential_slots(workflow_form: Mapping[str, Any]) -> list[CredentialSlot]`
+- **Summary:** The credential properties a workflow form declares, in form order.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
 #### `declared_agent_spec_type`
 
 - **Import:** `from application_sdk.credentials import declared_agent_spec_type`
+- **Also importable from:** `application_sdk.credentials.ingress`
 - **Signature:** `declared_agent_spec_type(model_cls: type[BaseModel])`
 - **Summary:** The spec class *model_cls* declares for its ``agent_json`` field.
 - **Defined in:** `application_sdk/credentials/ingress.py`
@@ -1562,6 +4589,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `find_prebuilt_credential_ref`
 
 - **Import:** `from application_sdk.credentials import find_prebuilt_credential_ref`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `find_prebuilt_credential_ref(source: object)`
 - **Summary:** Return the :class:`CredentialRef` an input already carries, if any.
 - **Defined in:** `application_sdk/credentials/routing.py`
@@ -1569,6 +4597,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `flatten_dotted_keys`
 
 - **Import:** `from application_sdk.credentials import flatten_dotted_keys`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `flatten_dotted_keys(nested: Mapping[str, object])`
 - **Summary:** Flatten nested dicts into dotted keys — the inverse of :func:`expand_dotted_keys`.
 - **Defined in:** `application_sdk/credentials/routing.py`
@@ -1576,6 +4605,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `get_registry`
 
 - **Import:** `from application_sdk.credentials import get_registry`
+- **Also importable from:** `application_sdk.credentials.registry`
 - **Signature:** `get_registry()`
 - **Summary:** Return the global CredentialTypeRegistry singleton.
 - **Defined in:** `application_sdk/credentials/registry.py`
@@ -1583,6 +4613,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `git_ssh_ref`
 
 - **Import:** `from application_sdk.credentials import git_ssh_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `git_ssh_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for a Git SSH credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1590,6 +4621,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `git_token_ref`
 
 - **Import:** `from application_sdk.credentials import git_token_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `git_token_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for a Git token (PAT/deploy token) credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1604,6 +4636,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `legacy_credential_ref`
 
 - **Import:** `from application_sdk.credentials import legacy_credential_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `legacy_credential_ref(guid: str, credential_type: str = 'unknown')`
 - **Summary:** Create a CredentialRef from a platform-issued credential GUID.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1611,13 +4644,29 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `lift_agent_json`
 
 - **Import:** `from application_sdk.credentials import lift_agent_json`
+- **Also importable from:** `application_sdk.credentials.ingress`
 - **Signature:** `lift_agent_json(body: dict[str, Any])`
 - **Summary:** Promote the freshest ``agent_json`` binding in *body* to a typed field.
 - **Defined in:** `application_sdk/credentials/ingress.py`
 
+#### `load_form`
+
+- **Import:** `from application_sdk.credentials.requirements import load_form`
+- **Signature:** `load_form(path: Path | None) -> Mapping[str, Any] | None`
+- **Summary:** A generated form's ``config`` object, or ``None`` when absent/unreadable.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
+#### `missing_required_fields`
+
+- **Import:** `from application_sdk.credentials.requirements import missing_required_fields`
+- **Signature:** `missing_required_fields(schema: Mapping[str, Any], credential: Mapping[str, Any]) -> list[str]`
+- **Summary:** Dotted paths of the required fields *credential* leaves blank.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
 #### `normalize_agent_json`
 
 - **Import:** `from application_sdk.credentials import normalize_agent_json`
+- **Also importable from:** `application_sdk.credentials.ingress`
 - **Signature:** `normalize_agent_json(value: Any, *, spec_type: type[SpecT] = AgentCredentialSpec)`
 - **Summary:** Canonicalise one ``agent_json`` value to a typed spec, or ``None``.
 - **Defined in:** `application_sdk/credentials/ingress.py`
@@ -1625,6 +4674,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `normalize_inline_credentials`
 
 - **Import:** `from application_sdk.credentials import normalize_inline_credentials`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `normalize_inline_credentials(raw: Sequence[Mapping[str, object]] | Mapping[str, object] | None)`
 - **Summary:** Normalize inline credentials to one flat, dotted-key dict.
 - **Defined in:** `application_sdk/credentials/routing.py`
@@ -1632,6 +4682,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `oauth_client_ref`
 
 - **Import:** `from application_sdk.credentials import oauth_client_ref`
+- **Also importable from:** `application_sdk.credentials.ref`
 - **Signature:** `oauth_client_ref(name: str, *, store_name: str = 'default')`
 - **Summary:** Create a CredentialRef for an OAuth client credential.
 - **Defined in:** `application_sdk/credentials/ref.py`
@@ -1639,6 +4690,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `parse_credentials_extra`
 
 - **Import:** `from application_sdk.credentials import parse_credentials_extra`
+- **Also importable from:** `application_sdk.credentials.extra`, `application_sdk.credentials.utils`
 - **Signature:** `parse_credentials_extra(credentials: dict[str, Any], *, strict: bool = True)`
 - **Summary:** Decode the ``extra`` field of a credential dict.
 - **Defined in:** `application_sdk/credentials/extra.py`
@@ -1646,16 +4698,46 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `register_credential_type`
 
 - **Import:** `from application_sdk.credentials import register_credential_type`
+- **Also importable from:** `application_sdk.credentials.registry`
 - **Signature:** `register_credential_type(name: str, cls: type, parser: CredentialParser)`
 - **Summary:** Register a custom credential type in the global registry.
 - **Defined in:** `application_sdk/credentials/registry.py`
 
+#### `resolve_agent_credential`
+
+- **Import:** `from application_sdk.credentials.agent import resolve_agent_credential`
+- **Signature:** `resolve_agent_credential(spec: AgentCredentialSpec, secret_store: SecretStore) -> dict[str, Any]`
+- **Summary:** Resolve a typed agent credential spec to a flat dict.
+- **Defined in:** `application_sdk/credentials/agent.py`
+
+#### `resolve_agent_json`
+
+- **Import:** `from application_sdk.credentials.agent import resolve_agent_json`
+- **Signature:** `resolve_agent_json(agent_json: str, secret_store: SecretStore) -> dict[str, Any]`
+- **Summary:** Resolve an agent-shape JSON string to a flat dict.
+- **Defined in:** `application_sdk/credentials/agent.py`
+
+#### `resolve_credential_file`
+
+- **Import:** `from application_sdk.credentials.utils import resolve_credential_file`
+- **Signature:** `resolve_credential_file(value: str | None, *, ...)`
+- **Summary:** Resolve a credential-payload file field to a local file path.
+- **Defined in:** `application_sdk/credentials/utils.py`
+
 #### `route_credentials`
 
 - **Import:** `from application_sdk.credentials import route_credentials`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `route_credentials(source: object, *, inline_field: str = 'credentials')`
 - **Summary:** Route an input's credential channels into one :class:`ResolvedCredentials`.
 - **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `selected_auth_type`
+
+- **Import:** `from application_sdk.credentials.requirements import selected_auth_type`
+- **Signature:** `selected_auth_type(credential: Mapping[str, Any], properties: Mapping[str, Any]) -> str`
+- **Summary:** The credential's auth type, else the form's declared default, else ``""``.
+- **Defined in:** `application_sdk/credentials/requirements.py`
 
 #### `transform_agent_credentials`
 
@@ -1669,30 +4751,97 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `AGENT_JSON_ALIASES`
 
 - **Import:** `from application_sdk.credentials import AGENT_JSON_ALIASES`
+- **Also importable from:** `application_sdk.credentials.ingress`
 - **Signature:** `AGENT_JSON_ALIASES: Final[tuple[str, ...]]`
 - **Summary:** Every spelling the field arrives under, in discovery order.
 - **Defined in:** `application_sdk/credentials/ingress.py`
 
+#### `AUTH_TYPE_KEY`
+
+- **Import:** `from application_sdk.credentials.requirements import AUTH_TYPE_KEY`
+- **Signature:** `AUTH_TYPE_KEY`
+- **Summary:** The credential form's auth-type selector property.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
+#### `CREDENTIAL_WIDGET`
+
+- **Import:** `from application_sdk.credentials.requirements import CREDENTIAL_WIDGET`
+- **Signature:** `CREDENTIAL_WIDGET`
+- **Summary:** ``ui.widget`` of a workflow-form property that holds a credential reference.
+- **Defined in:** `application_sdk/credentials/requirements.py`
+
 #### `CredentialMap`
 
 - **Import:** `from application_sdk.credentials import CredentialMap`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `CredentialMap`
 - **Summary:** Bounded, flat credential dict — the ``inline_credentials`` field of a ``@task`` input.
 - **Defined in:** `application_sdk/credentials/routing.py`
 
+#### `CredentialParser`
+
+- **Import:** `from application_sdk.credentials.registry import CredentialParser`
+- **Signature:** `CredentialParser`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/credentials/registry.py`
+
 #### `CredentialValue`
 
 - **Import:** `from application_sdk.credentials import CredentialValue`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `CredentialValue`
 - **Summary:** One scalar credential value — ``host``, ``port``, ``extra.client_id``, …
 - **Defined in:** `application_sdk/credentials/routing.py`
 
+#### `DECLARED_SOURCE_KEYS`
+
+- **Import:** `from application_sdk.credentials.spec import DECLARED_SOURCE_KEYS`
+- **Signature:** `DECLARED_SOURCE_KEYS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/credentials/spec.py`
+
+#### `DECLARED_SOURCES_FORMAT`
+
+- **Import:** `from application_sdk.credentials.spec import DECLARED_SOURCES_FORMAT`
+- **Signature:** `DECLARED_SOURCES_FORMAT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/credentials/spec.py`
+
+#### `GUID_ROUTED_EXTRACTION_METHODS`
+
+- **Import:** `from application_sdk.credentials.ref import GUID_ROUTED_EXTRACTION_METHODS`
+- **Signature:** `GUID_ROUTED_EXTRACTION_METHODS: frozenset[str]`
+- **Summary:** ``extraction_method`` values :meth:`CredentialRef.resolve` routes by GUID.
+- **Defined in:** `application_sdk/credentials/ref.py`
+
 #### `InlineCredentials`
 
 - **Import:** `from application_sdk.credentials import InlineCredentials`
+- **Also importable from:** `application_sdk.credentials.routing`
 - **Signature:** `InlineCredentials`
 - **Summary:** The ``credentials`` field of an entry-point input: v3 ``[{key, value}]`` pairs or a dict.
 - **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `OBJECT_STORE_PREFIX`
+
+- **Import:** `from application_sdk.credentials.utils import OBJECT_STORE_PREFIX`
+- **Signature:** `OBJECT_STORE_PREFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/credentials/utils.py`
+
+#### `RUN_CREDENTIAL_FIELD_ATTR`
+
+- **Import:** `from application_sdk.credentials.routing import RUN_CREDENTIAL_FIELD_ATTR`
+- **Signature:** `RUN_CREDENTIAL_FIELD_ATTR`
+- **Summary:** Input-class attribute naming the field that holds the run's pre-built ref.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `VALUE_SOURCES_KEY`
+
+- **Import:** `from application_sdk.credentials.spec import VALUE_SOURCES_KEY`
+- **Signature:** `VALUE_SOURCES_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/credentials/spec.py`
 
 ## `application_sdk.dev`
 
@@ -1716,6 +4865,20 @@ Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SD
 
 ### Functions
 
+#### `asset_name`
+
+- **Import:** `from application_sdk.dev.pkl import asset_name`
+- **Signature:** `asset_name() -> str`
+- **Summary:** The pkl release asset published for the current platform.
+- **Defined in:** `application_sdk/dev/pkl.py`
+
+#### `asset_url`
+
+- **Import:** `from application_sdk.dev.pkl import asset_url`
+- **Signature:** `asset_url(version: str = PKL_VERSION) -> str`
+- **Summary:** The download URL for *version* on the current platform.
+- **Defined in:** `application_sdk/dev/pkl.py`
+
 #### `embedded_dapr`
 
 - **Import:** `from application_sdk.dev import embedded_dapr`
@@ -1730,6 +4893,77 @@ Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SD
 - **Summary:** Boot an in-process workflow runtime for local development.
 - **Defined in:** `application_sdk/dev/_embedded.py`
 
+#### `ensure_pkl`
+
+- **Import:** `from application_sdk.dev.pkl import ensure_pkl`
+- **Signature:** `ensure_pkl(version: str = PKL_VERSION) -> Path`
+- **Summary:** Return the path to the pinned pkl binary, downloading it if absent.
+- **Defined in:** `application_sdk/dev/pkl.py`
+
+#### `main`
+
+- **Import:** `from application_sdk.dev.pkl import main`
+- **Signature:** `main(argv: list[str] | None = None) -> int`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/dev/pkl.py`
+
+#### `parse_version`
+
+- **Import:** `from application_sdk.dev.pkl import parse_version`
+- **Signature:** `parse_version(text: str) -> str | None`
+- **Summary:** Extract a version from a ``pkl --version`` banner, or ``None``.
+- **Defined in:** `application_sdk/dev/pkl.py`
+
+#### `platform_key`
+
+- **Import:** `from application_sdk.dev.pkl import platform_key`
+- **Signature:** `platform_key() -> tuple[str, str]`
+- **Summary:** Return ``(os, arch)`` normalised to the keys of :data:`_ASSETS`.
+- **Defined in:** `application_sdk/dev/pkl.py`
+
+#### `runtime_version`
+
+- **Import:** `from application_sdk.dev.pkl import runtime_version`
+- **Signature:** `runtime_version(binary: str | Path = 'pkl') -> str | None`
+- **Summary:** Version reported by *binary*, or ``None`` if it cannot be run or read.
+- **Defined in:** `application_sdk/dev/pkl.py`
+
+## `application_sdk.discovery`
+
+Dynamic App and Handler loading from "module.path:ClassName" strings at container startup
+
+### Classes
+
+#### `DiscoveryError`
+
+- **Import:** `from application_sdk.discovery import DiscoveryError`
+- **Signature:** `class DiscoveryError(message: str, ...)`
+- **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
+- **Defined in:** `application_sdk/discovery.py`
+
+### Functions
+
+#### `load_app_class`
+
+- **Import:** `from application_sdk.discovery import load_app_class`
+- **Signature:** `load_app_class(module_path: str) -> type[App]`
+- **Summary:** Load an App class from a module path.
+- **Defined in:** `application_sdk/discovery.py`
+
+#### `load_handler_class`
+
+- **Import:** `from application_sdk.discovery import load_handler_class`
+- **Signature:** `load_handler_class(module_path: str, *, handler_module_path: str | None = None) -> type[Handler] | None`
+- **Summary:** Load a Handler class associated with an App.
+- **Defined in:** `application_sdk/discovery.py`
+
+#### `validate_app_class`
+
+- **Import:** `from application_sdk.discovery import validate_app_class`
+- **Signature:** `validate_app_class(cls: type[App]) -> None`
+- **Summary:** Validate that an App class is properly registered.
+- **Defined in:** `application_sdk/discovery.py`
+
 ## `application_sdk.errors`
 
 Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundError, …), FailureCategory and the FailureDetails wire envelope; each class's code ClassVar is the one error vocabulary
@@ -1739,6 +4973,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `AlreadyExistsError`
 
 - **Import:** `from application_sdk.errors import AlreadyExistsError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class AlreadyExistsError(*, ...)`
 - **Summary:** Entity the caller tried to create already exists.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1746,6 +4981,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `AppError`
 
 - **Import:** `from application_sdk.errors import AppError`
+- **Also importable from:** `application_sdk.errors.base`
 - **Signature:** `class AppError(*, ...)`
 - **Summary:** Canonical SDK exception base.
 - **Defined in:** `application_sdk/errors/base.py`
@@ -1753,6 +4989,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `AppPermissionDeniedError`
 
 - **Import:** `from application_sdk.errors import AppPermissionDeniedError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class AppPermissionDeniedError(*, ...)`
 - **Summary:** Authenticated but not authorised.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1760,6 +4997,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `AppTimeoutError`
 
 - **Import:** `from application_sdk.errors import AppTimeoutError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class AppTimeoutError(*, ...)`
 - **Summary:** A bounded wait elapsed.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1767,6 +5005,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `Audience`
 
 - **Import:** `from application_sdk.errors import Audience`
+- **Also importable from:** `application_sdk.errors.base`, `application_sdk.errors.categories`, `application_sdk.errors.wire`
 - **Signature:** `class Audience`
 - **Summary:** Who needs to take action to resolve this failure.
 - **Defined in:** `application_sdk/errors/categories.py`
@@ -1774,6 +5013,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `AuthError`
 
 - **Import:** `from application_sdk.errors import AuthError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class AuthError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1781,6 +5021,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `CancelledError`
 
 - **Import:** `from application_sdk.errors import CancelledError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class CancelledError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1788,6 +5029,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `ColdStartRaceError`
 
 - **Import:** `from application_sdk.errors import ColdStartRaceError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class ColdStartRaceError`
 - **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1795,6 +5037,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `DaprSidecarUnreachableError`
 
 - **Import:** `from application_sdk.errors import DaprSidecarUnreachableError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class DaprSidecarUnreachableError(*, ...)`
 - **Summary:** Terminal form of a cold-start race: the Dapr sidecar never became
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1802,6 +5045,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class DataIntegrityError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1809,6 +5053,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `DependencyUnavailableError`
 
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
 - **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1816,6 +5061,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `DiskFullError`
 
 - **Import:** `from application_sdk.errors import DiskFullError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class DiskFullError(*, ...)`
 - **Summary:** A local write failed because the filesystem had no room for it (FND-318).
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1830,6 +5076,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `FailureCategory`
 
 - **Import:** `from application_sdk.errors import FailureCategory`
+- **Also importable from:** `application_sdk.errors.base`, `application_sdk.errors.categories`
 - **Signature:** `class FailureCategory`
 - **Summary:** Single-axis failure classification.
 - **Defined in:** `application_sdk/errors/categories.py`
@@ -1837,6 +5084,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `FailureDetails`
 
 - **Import:** `from application_sdk.errors import FailureDetails`
+- **Also importable from:** `application_sdk.errors.wire`
 - **Signature:** `class FailureDetails`
 - **Summary:** Pydantic envelope serialized into ``ApplicationError.details=[…]``.
 - **Defined in:** `application_sdk/errors/wire.py`
@@ -1844,6 +5092,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `InternalError`
 
 - **Import:** `from application_sdk.errors import InternalError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class InternalError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1851,6 +5100,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `InvalidInputError`
 
 - **Import:** `from application_sdk.errors import InvalidInputError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class InvalidInputError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1858,6 +5108,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `InvalidInputValueError`
 
 - **Import:** `from application_sdk.errors import InvalidInputValueError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class InvalidInputValueError`
 - **Summary:** :class:`InvalidInputError` that is also a :class:`ValueError`.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1865,6 +5116,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `LocalVolumeUnwritableError`
 
 - **Import:** `from application_sdk.errors import LocalVolumeUnwritableError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class LocalVolumeUnwritableError(*, ...)`
 - **Summary:** A local write failed because the volume is read-only or the path is unwritable.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1872,6 +5124,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `NotFoundError`
 
 - **Import:** `from application_sdk.errors import NotFoundError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class NotFoundError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1879,6 +5132,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `ObjectStoreDownloadError`
 
 - **Import:** `from application_sdk.errors import ObjectStoreDownloadError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class ObjectStoreDownloadError(*, ...)`
 - **Summary:** No local files found and download from object store failed.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1886,6 +5140,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `ObjectStoreReadError`
 
 - **Import:** `from application_sdk.errors import ObjectStoreReadError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class ObjectStoreReadError(*, ...)`
 - **Summary:** Object store listing returned no files matching the expected extension.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1893,6 +5148,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `PreconditionError`
 
 - **Import:** `from application_sdk.errors import PreconditionError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class PreconditionError(*, ...)`
 - **Summary:** System state forbids the operation.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1900,6 +5156,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `RateLimitedError`
 
 - **Import:** `from application_sdk.errors import RateLimitedError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class RateLimitedError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1907,6 +5164,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `ResourceExhaustedError`
 
 - **Import:** `from application_sdk.errors import ResourceExhaustedError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class ResourceExhaustedError(*, ...)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1914,6 +5172,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `SdrDiskFullError`
 
 - **Import:** `from application_sdk.errors import SdrDiskFullError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class SdrDiskFullError(*, ...)`
 - **Summary:** A ``DiskFullError`` raised on a Self-Deployed Runtime (SDR) agent.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1921,6 +5180,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `SourceUnavailableError`
 
 - **Import:** `from application_sdk.errors import SourceUnavailableError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class SourceUnavailableError(*, ...)`
 - **Summary:** Customer-controlled source system is temporarily unreachable.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1928,6 +5188,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `SourceWarmupExhaustedError`
 
 - **Import:** `from application_sdk.errors import SourceWarmupExhaustedError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class SourceWarmupExhaustedError(*, ...)`
 - **Summary:** The source answered but did not finish warming up within the gate's ceiling.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1935,6 +5196,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `TaskStalledError`
 
 - **Import:** `from application_sdk.errors import TaskStalledError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class TaskStalledError(*, ...)`
 - **Summary:** An activity attempt was failed for making no observable progress (ADR-0018).
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1942,6 +5204,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `UnimplementedError`
 
 - **Import:** `from application_sdk.errors import UnimplementedError`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `class UnimplementedError(*, ...)`
 - **Summary:** Operation not supported or capability not yet built.
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -1951,6 +5214,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `classify_http_exception`
 
 - **Import:** `from application_sdk.errors import classify_http_exception`
+- **Also importable from:** `application_sdk.errors.http`
 - **Signature:** `classify_http_exception(exc: BaseException, *, overrides: Mapping[int, type[AppError]] | None = None)`
 - **Summary:** Return the leaf class for the httpx failure behind ``exc``, or ``None``.
 - **Defined in:** `application_sdk/errors/http.py`
@@ -1958,6 +5222,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `classify_http_status`
 
 - **Import:** `from application_sdk.errors import classify_http_status`
+- **Also importable from:** `application_sdk.errors.http`
 - **Signature:** `classify_http_status(status: int, *, overrides: Mapping[int, type[AppError]] | None = None)`
 - **Summary:** Return the leaf class for an HTTP status, or ``None`` when unmapped.
 - **Defined in:** `application_sdk/errors/http.py`
@@ -1965,6 +5230,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `degraded_failure_details`
 
 - **Import:** `from application_sdk.errors import degraded_failure_details`
+- **Also importable from:** `application_sdk.errors.wire`
 - **Signature:** `degraded_failure_details(err: AppError)`
 - **Summary:** Re-serialise a verdict the wire envelope rejected, keeping its routing.
 - **Defined in:** `application_sdk/errors/wire.py`
@@ -1972,13 +5238,29 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `error_from_failure_details`
 
 - **Import:** `from application_sdk.errors import error_from_failure_details`
+- **Also importable from:** `application_sdk.errors.wire`
 - **Signature:** `error_from_failure_details(details: FailureDetails)`
 - **Summary:** Rebuild a typed error from its wire envelope.
+- **Defined in:** `application_sdk/errors/wire.py`
+
+#### `redact_and_cap`
+
+- **Import:** `from application_sdk.errors.base import redact_and_cap`
+- **Signature:** `redact_and_cap(text: str) -> str`
+- **Summary:** Redact secrets in ``text``, then cap it, keeping both ends.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `redact_evidence_value`
+
+- **Import:** `from application_sdk.errors.wire import redact_evidence_value`
+- **Signature:** `redact_evidence_value(value: object) -> object`
+- **Summary:** Redact one evidence value, including secrets under nested keys.
 - **Defined in:** `application_sdk/errors/wire.py`
 
 #### `redact_secrets`
 
 - **Import:** `from application_sdk.errors import redact_secrets`
+- **Also importable from:** `application_sdk.errors.base`
 - **Signature:** `redact_secrets(text: str)`
 - **Summary:** Redact credentials from a string bound for a log or the wire.
 - **Defined in:** `application_sdk/errors/base.py`
@@ -1986,13 +5268,22 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `redact_wire_value`
 
 - **Import:** `from application_sdk.errors import redact_wire_value`
+- **Also importable from:** `application_sdk.errors.base`
 - **Signature:** `redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0)`
 - **Summary:** Redact every string reachable inside a value bound for the wire.
 - **Defined in:** `application_sdk/errors/base.py`
 
+#### `redacted_validation_reason`
+
+- **Import:** `from application_sdk.errors.wire import redacted_validation_reason`
+- **Signature:** `redacted_validation_reason(exc: ValidationError) -> str`
+- **Summary:** Return a ``ValidationError``'s validator messages only, dropping the rejected input.
+- **Defined in:** `application_sdk/errors/wire.py`
+
 #### `register_wire_leaf`
 
 - **Import:** `from application_sdk.errors import register_wire_leaf`
+- **Also importable from:** `application_sdk.errors.wire`
 - **Signature:** `register_wire_leaf(leaf: _LeafT)`
 - **Summary:** Register ``leaf`` as the class :func:`error_from_failure_details` rebuilds for its ``code``.
 - **Defined in:** `application_sdk/errors/wire.py`
@@ -2000,6 +5291,7 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `safe_traceback`
 
 - **Import:** `from application_sdk.errors import safe_traceback`
+- **Also importable from:** `application_sdk.errors.base`
 - **Signature:** `safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)`
 - **Summary:** Return a secret-redacted, length-capped full-frame traceback.
 - **Defined in:** `application_sdk/errors/base.py`
@@ -2007,15 +5299,31 @@ Typed error hierarchy — AppError, the categorical leaves (AuthError, NotFoundE
 #### `sanitize_cause_repr`
 
 - **Import:** `from application_sdk.errors import sanitize_cause_repr`
+- **Also importable from:** `application_sdk.errors.base`
 - **Signature:** `sanitize_cause_repr(exc: BaseException)`
 - **Summary:** Return a length-capped, secret-redacted string for a cause exception.
 - **Defined in:** `application_sdk/errors/base.py`
 
+#### `secret_named_evidence_keys`
+
+- **Import:** `from application_sdk.errors.wire import secret_named_evidence_keys`
+- **Signature:** `secret_named_evidence_keys(evidence: Mapping[str, Any]) -> frozenset[str]`
+- **Summary:** Return the ``evidence`` keys :class:`FailureDetails` rejects as secret-named.
+- **Defined in:** `application_sdk/errors/wire.py`
+
 ### Constants and Enums
+
+#### `SDR_DISK_FULL_ACTION`
+
+- **Import:** `from application_sdk.errors.leaves import SDR_DISK_FULL_ACTION`
+- **Signature:** `SDR_DISK_FULL_ACTION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `WORKER_EVICTED_TYPE`
 
 - **Import:** `from application_sdk.errors import WORKER_EVICTED_TYPE`
+- **Also importable from:** `application_sdk.errors.leaves`
 - **Signature:** `WORKER_EVICTED_TYPE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
@@ -2029,6 +5337,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `ApplicationError`
 
 - **Import:** `from application_sdk.execution import ApplicationError`
+- **Also importable from:** `application_sdk.execution.errors`
 - **Signature:** `class ApplicationError`
 - **Summary:** Framework application error.
 - **Defined in:** `application_sdk/execution/errors.py`
@@ -2067,12 +5376,26 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** One completed hold, observed at the moment its token was released.
 - **Defined in:** `application_sdk/_runtime/progress.py`
 
+#### `ExecutionSettings`
+
+- **Import:** `from application_sdk.execution.settings import ExecutionSettings`
+- **Signature:** `class ExecutionSettings(host: str = 'localhost:7233', ...)`
+- **Summary:** Settings for the Temporal execution layer.
+- **Defined in:** `application_sdk/execution/settings.py`
+
 #### `HeartbeatController`
 
 - **Import:** `from application_sdk.execution.heartbeat import HeartbeatController`
 - **Signature:** `class HeartbeatController`
 - **Summary:** Protocol for heartbeat operations.
 - **Defined in:** `application_sdk/execution/heartbeat.py`
+
+#### `InterceptorSettings`
+
+- **Import:** `from application_sdk.execution.settings import InterceptorSettings`
+- **Signature:** `class InterceptorSettings(enable_event_interceptor: bool = True, ...)`
+- **Summary:** Settings for product-feature Temporal interceptors.
+- **Defined in:** `application_sdk/execution/settings.py`
 
 #### `NoopHeartbeatController`
 
@@ -2100,9 +5423,24 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `RetryPolicy`
 
 - **Import:** `from application_sdk.execution import RetryPolicy`
+- **Also importable from:** `application_sdk.execution.retry`
 - **Signature:** `class RetryPolicy(max_attempts: int = 3, ...)`
 - **Summary:** Configuration for retry behavior.
 - **Defined in:** `application_sdk/execution/retry.py`
+
+#### `RunLengthWatch`
+
+- **Import:** `from application_sdk.execution.run_length import RunLengthWatch`
+- **Signature:** `class RunLengthWatch(run_started_at_epoch: float, ...)`
+- **Summary:** One activity attempt's view of how long its *run* has been going.
+- **Defined in:** `application_sdk/execution/run_length.py`
+
+#### `SandboxConfig`
+
+- **Import:** `from application_sdk.execution.sandbox import SandboxConfig`
+- **Signature:** `class SandboxConfig(passthrough_modules: frozenset[str] = frozenset()) -> None`
+- **Summary:** Configuration for workflow sandbox behavior.
+- **Defined in:** `application_sdk/execution/sandbox.py`
 
 #### `StallObservation`
 
@@ -2210,6 +5548,20 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** SDK-internal: compose the standardized output path for the current run.
 - **Defined in:** `application_sdk/execution/_temporal/activity_utils.py`
 
+#### `build_run_length_watch`
+
+- **Import:** `from application_sdk.execution.run_length import build_run_length_watch`
+- **Signature:** `build_run_length_watch(run_started_at_epoch: float | None, ...)`
+- **Summary:** Build one attempt's watch, or ``None`` when there is nothing to watch.
+- **Defined in:** `application_sdk/execution/run_length.py`
+
+#### `closed_hold_observer`
+
+- **Import:** `from application_sdk.execution.progress_telemetry import closed_hold_observer`
+- **Signature:** `closed_hold_observer(task_name: str, *, ...)`
+- **Summary:** Build the ``on_hold_closed`` observer for one attempt's tracker.
+- **Defined in:** `application_sdk/execution/progress_telemetry.py`
+
 #### `create_data_converter`
 
 - **Import:** `from application_sdk.execution import create_data_converter`
@@ -2275,6 +5627,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Vouch for one opaque operation for as long as you would let it run.
 - **Defined in:** `application_sdk/_runtime/progress.py`
 
+#### `host_library_modules`
+
+- **Import:** `from application_sdk.execution.sandbox import host_library_modules`
+- **Signature:** `host_library_modules(sandboxed_packages: Iterable[str]) -> frozenset[str]`
+- **Summary:** Top-level packages already imported in this process, as passthrough names.
+- **Defined in:** `application_sdk/execution/sandbox.py`
+
 #### `is_cancelled`
 
 - **Import:** `from application_sdk.execution.heartbeat import is_cancelled`
@@ -2282,9 +5641,38 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Whether the work running here has been asked to stop.
 - **Defined in:** `application_sdk/_runtime/offload.py`
 
+#### `is_worker_shutting_down`
+
+- **Import:** `from application_sdk.execution.shutdown import is_worker_shutting_down`
+- **Signature:** `is_worker_shutting_down() -> bool`
+- **Summary:** Return True iff the worker has begun graceful shutdown.
+- **Defined in:** `application_sdk/execution/shutdown.py`
+
+#### `load_execution_settings`
+
+- **Import:** `from application_sdk.execution.settings import load_execution_settings`
+- **Signature:** `load_execution_settings() -> ExecutionSettings`
+- **Summary:** Load execution settings from environment variables.
+- **Defined in:** `application_sdk/execution/settings.py`
+
+#### `load_interceptor_settings`
+
+- **Import:** `from application_sdk.execution.settings import load_interceptor_settings`
+- **Signature:** `load_interceptor_settings() -> InterceptorSettings`
+- **Summary:** Load interceptor settings from environment variables.
+- **Defined in:** `application_sdk/execution/settings.py`
+
+#### `mark_worker_shutting_down`
+
+- **Import:** `from application_sdk.execution.shutdown import mark_worker_shutting_down`
+- **Signature:** `mark_worker_shutting_down() -> None`
+- **Summary:** Mark the worker as shutting down. Called from the signal handler.
+- **Defined in:** `application_sdk/execution/shutdown.py`
+
 #### `needs_lock`
 
 - **Import:** `from application_sdk.execution import needs_lock`
+- **Also importable from:** `application_sdk.execution.decorators`
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Deprecated and has no effect: ``create_worker`` registers no lock interceptor — removed in v4.0.0.
 - **Defined in:** `application_sdk/execution/decorators.py`
@@ -2296,12 +5684,34 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Raise ``CancelledError`` if :func:`is_cancelled` is true; else return.
 - **Defined in:** `application_sdk/_runtime/offload.py`
 
+#### `record_closed_hold`
+
+- **Import:** `from application_sdk.execution.progress_telemetry import record_closed_hold`
+- **Signature:** `record_closed_hold(closed: ClosedHold, *, ...)`
+- **Summary:** Record one released hold — the second warn-mode shape. Never raises.
+- **Defined in:** `application_sdk/execution/progress_telemetry.py`
+
 #### `record_no_progress_gap`
 
 - **Import:** `from application_sdk.execution.heartbeat import record_no_progress_gap`
+- **Also importable from:** `application_sdk.execution.progress_telemetry`
 - **Signature:** `record_no_progress_gap(task_name: str, stalled_for: float, last_label: str, mode: ProgressWatchdogMode)`
 - **Summary:** Record one no-progress gap. Never raises.
 - **Defined in:** `application_sdk/execution/progress_telemetry.py`
+
+#### `reset_worker_shutting_down`
+
+- **Import:** `from application_sdk.execution.shutdown import reset_worker_shutting_down`
+- **Signature:** `reset_worker_shutting_down() -> None`
+- **Summary:** Reset the flag. Test-only; not part of the public surface.
+- **Defined in:** `application_sdk/execution/shutdown.py`
+
+#### `resolve_activity_time_bounds`
+
+- **Import:** `from application_sdk.execution.retry import resolve_activity_time_bounds`
+- **Signature:** `resolve_activity_time_bounds(timeout_seconds: int, schedule_to_close_seconds: int | None) -> tuple[int, int | None]`
+- **Summary:** Resolve one task's ``(start_to_close, schedule_to_close)`` pair.
+- **Defined in:** `application_sdk/execution/retry.py`
 
 #### `resolve_max_no_progress_seconds`
 
@@ -2320,6 +5730,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `retry_product_seconds`
 
 - **Import:** `from application_sdk.execution import retry_product_seconds`
+- **Also importable from:** `application_sdk.execution.retry`
 - **Signature:** `retry_product_seconds(timeout_seconds: int, *, ...)`
 - **Summary:** The worst-case total seconds a task can consume across *every* attempt.
 - **Defined in:** `application_sdk/execution/retry.py`
@@ -2361,12 +5772,26 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 
 ### Constants and Enums
 
+#### `AGGRESSIVE_RETRY`
+
+- **Import:** `from application_sdk.execution.retry import AGGRESSIVE_RETRY`
+- **Signature:** `AGGRESSIVE_RETRY`
+- **Summary:** Aggressive retry policy for transient failures.
+- **Defined in:** `application_sdk/execution/retry.py`
+
 #### `DEFAULT_MAX_NO_PROGRESS_SECONDS`
 
 - **Import:** `from application_sdk.execution.progress import DEFAULT_MAX_NO_PROGRESS_SECONDS`
 - **Signature:** `DEFAULT_MAX_NO_PROGRESS_SECONDS`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/_runtime/progress.py`
+
+#### `DEFAULT_RETRY`
+
+- **Import:** `from application_sdk.execution.retry import DEFAULT_RETRY`
+- **Signature:** `DEFAULT_RETRY`
+- **Summary:** Default retry policy (3 attempts, exponential backoff).
+- **Defined in:** `application_sdk/execution/retry.py`
 
 #### `MAX_NO_PROGRESS_SECONDS`
 
@@ -2375,12 +5800,26 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/execution/progress.py`
 
+#### `NO_RETRY`
+
+- **Import:** `from application_sdk.execution.retry import NO_RETRY`
+- **Signature:** `NO_RETRY`
+- **Summary:** No retries - fail immediately on error.
+- **Defined in:** `application_sdk/execution/retry.py`
+
 #### `PROGRESS_WATCHDOG_MODE`
 
 - **Import:** `from application_sdk.execution.progress import PROGRESS_WATCHDOG_MODE`
 - **Signature:** `PROGRESS_WATCHDOG_MODE: ProgressWatchdogMode`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/execution/progress.py`
+
+#### `RUN_LENGTH_SLA_SECONDS`
+
+- **Import:** `from application_sdk.execution.run_length import RUN_LENGTH_SLA_SECONDS`
+- **Signature:** `RUN_LENGTH_SLA_SECONDS: float`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/execution/run_length.py`
 
 ## `application_sdk.handler`
 
@@ -2402,6 +5841,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Metadata output for BI / API connectors (apitree widget).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `AppManifest`
+
+- **Import:** `from application_sdk.handler.manifest import AppManifest`
+- **Signature:** `class AppManifest`
+- **Summary:** Manifest describing an app's execution DAG for Automation Engine.
+- **Defined in:** `application_sdk/handler/manifest.py`
+
 #### `AuthInput`
 
 - **Import:** `from application_sdk.handler import AuthInput`
@@ -2419,6 +5865,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `AuthStatus`
 
 - **Import:** `from application_sdk.handler import AuthStatus`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class AuthStatus`
 - **Summary:** Result of an authentication attempt.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -2426,6 +5873,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `BaseConnectionConfig`
 
 - **Import:** `from application_sdk.handler import BaseConnectionConfig`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class BaseConnectionConfig`
 - **Summary:** Base type for preflight and metadata connection configuration.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -2433,6 +5881,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `BaseMetadataConfig`
 
 - **Import:** `from application_sdk.handler import BaseMetadataConfig`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class BaseMetadataConfig`
 - **Summary:** Base type for form-level metadata forwarded alongside preflight credentials.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -2440,20 +5889,44 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `CheckTier`
 
 - **Import:** `from application_sdk.handler import CheckTier`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class CheckTier`
 - **Summary:** Which tier a preflight check belongs to — what it needs in order to answer.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `DagNode`
+
+- **Import:** `from application_sdk.handler.manifest import DagNode`
+- **Signature:** `class DagNode`
+- **Summary:** A single node in the Automation Engine execution DAG.
+- **Defined in:** `application_sdk/handler/manifest.py`
+
+#### `DagNodeDependency`
+
+- **Import:** `from application_sdk.handler.manifest import DagNodeDependency`
+- **Signature:** `class DagNodeDependency`
+- **Summary:** Declares that a node may only run after the given node completes.
+- **Defined in:** `application_sdk/handler/manifest.py`
+
 #### `DefaultHandler`
 
 - **Import:** `from application_sdk.handler import DefaultHandler`
+- **Also importable from:** `application_sdk.handler.base`
 - **Signature:** `class DefaultHandler`
 - **Summary:** Pass-through handler that always returns SUCCESS/READY/empty.
 - **Defined in:** `application_sdk/handler/base.py`
 
+#### `ExecuteWorkflowInputs`
+
+- **Import:** `from application_sdk.handler.manifest import ExecuteWorkflowInputs`
+- **Signature:** `class ExecuteWorkflowInputs`
+- **Summary:** Inputs for the execute_workflow activity.
+- **Defined in:** `application_sdk/handler/manifest.py`
+
 #### `Handler`
 
 - **Import:** `from application_sdk.handler import Handler`
+- **Also importable from:** `application_sdk.handler.base`
 - **Signature:** `class Handler`
 - **Summary:** Abstract base class for per-app handler implementations.
 - **Defined in:** `application_sdk/handler/base.py`
@@ -2461,6 +5934,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `HandlerContext`
 
 - **Import:** `from application_sdk.handler import HandlerContext`
+- **Also importable from:** `application_sdk.handler.context`
 - **Signature:** `class HandlerContext(app_name: str, ...)`
 - **Summary:** Execution context passed to Handlers during request processing.
 - **Defined in:** `application_sdk/handler/context.py`
@@ -2475,9 +5949,38 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `HandlerError`
 
 - **Import:** `from application_sdk.handler import HandlerError`
+- **Also importable from:** `application_sdk.handler.base`
 - **Signature:** `class HandlerError(message: str, ...)`
 - **Summary:** Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 - **Defined in:** `application_sdk/handler/base.py`
+
+#### `HostObjectStore`
+
+- **Import:** `from application_sdk.handler.object_routes import HostObjectStore`
+- **Signature:** `class HostObjectStore(store: ObjectStore, *, kind: str = 'obstore') -> None`
+- **Summary:** One bucket or container through obstore: the host's store.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `InvalidConfigIdError`
+
+- **Import:** `from application_sdk.handler.service_errors import InvalidConfigIdError`
+- **Signature:** `class InvalidConfigIdError(*, ...)`
+- **Summary:** config_id did not match the allowed character pattern.
+- **Defined in:** `application_sdk/handler/service_errors.py`
+
+#### `InvalidConfigTypeError`
+
+- **Import:** `from application_sdk.handler.service_errors import InvalidConfigTypeError`
+- **Signature:** `class InvalidConfigTypeError(*, ...)`
+- **Summary:** config_type did not match the allowed character pattern.
+- **Defined in:** `application_sdk/handler/service_errors.py`
+
+#### `LoggingPreflightObserver`
+
+- **Import:** `from application_sdk.handler.routes import LoggingPreflightObserver`
+- **Signature:** `class LoggingPreflightObserver(app_name: str) -> None`
+- **Summary:** Default observer: one structured log line per verdict or crash.
+- **Defined in:** `application_sdk/handler/routes.py`
 
 #### `ManifestInput`
 
@@ -2500,6 +6003,34 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Base output from the fetch_metadata handler operation.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `MetadataSource`
+
+- **Import:** `from application_sdk.handler.metadata_routes import MetadataSource`
+- **Signature:** `class MetadataSource(generated_dir: Callable[[], ...)`
+- **Summary:** What the metadata routes read for one app.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `NetworkProbeTimeouts`
+
+- **Import:** `from application_sdk.handler.source_probes import NetworkProbeTimeouts`
+- **Signature:** `class NetworkProbeTimeouts`
+- **Summary:** Per-probe bounds, in seconds. Each probe is cut off at its own bound.
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `ObjectRoutesSource`
+
+- **Import:** `from application_sdk.handler.object_routes import ObjectRoutesSource`
+- **Signature:** `class ObjectRoutesSource(configured: Callable[[], ...)`
+- **Summary:** The store operations the routes need, for one app.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `ObjectStoreOps`
+
+- **Import:** `from application_sdk.handler.object_routes import ObjectStoreOps`
+- **Signature:** `class ObjectStoreOps`
+- **Summary:** The three store calls :func:`host_object_source` makes.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
 #### `PreflightCheck`
 
 - **Import:** `from application_sdk.handler import PreflightCheck`
@@ -2510,6 +6041,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `PreflightGateMode`
 
 - **Import:** `from application_sdk.handler import PreflightGateMode`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class PreflightGateMode`
 - **Summary:** The gate's posture for one app: what it does with a source it cannot certify.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -2521,6 +6053,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Input for the preflight_check handler operation.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `PreflightObserver`
+
+- **Import:** `from application_sdk.handler.routes import PreflightObserver`
+- **Signature:** `class PreflightObserver`
+- **Summary:** Where the ``/check`` route reports a verdict or a crash.
+- **Defined in:** `application_sdk/handler/routes.py`
+
 #### `PreflightOutput`
 
 - **Import:** `from application_sdk.handler import PreflightOutput`
@@ -2531,9 +6070,143 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `PreflightStatus`
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class PreflightStatus`
 - **Summary:** Overall preflight verdict — decides the gate.
 - **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `RequestBodyLimitMiddleware`
+
+- **Import:** `from application_sdk.handler.object_routes import RequestBodyLimitMiddleware`
+- **Signature:** `class RequestBodyLimitMiddleware(app: ASGIApp, *, max_body_bytes: int, max_upload_bytes: int) -> None`
+- **Summary:** Answer 413 to a request whose body is larger than its cap.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `RequestContractError`
+
+- **Import:** `from application_sdk.handler.request_contract import RequestContractError`
+- **Signature:** `class RequestContractError(cause: ValidationError | None = None, *, message: str | None = None) -> None`
+- **Summary:** A request body did not fit its typed contract at ingress -> 422.
+- **Defined in:** `application_sdk/handler/request_contract.py`
+
+#### `S3Client`
+
+- **Import:** `from application_sdk.handler.object_routes import S3Client`
+- **Signature:** `class S3Client`
+- **Summary:** The boto3 S3 client calls :class:`S3ObjectStore` makes.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `S3ObjectStore`
+
+- **Import:** `from application_sdk.handler.object_routes import S3ObjectStore`
+- **Signature:** `class S3ObjectStore(bucket: str, region: str | None = None, client: S3Client | None = None)`
+- **Summary:** One S3 bucket through a boto3 client: the host's former store.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `SecretStore`
+
+- **Import:** `from application_sdk.handler.context import SecretStore`
+- **Signature:** `class SecretStore`
+- **Summary:** What :class:`HandlerContext` needs from a secret store.
+- **Defined in:** `application_sdk/handler/context.py`
+
+#### `SourceAddressDisallowedError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceAddressDisallowedError`
+- **Signature:** `class SourceAddressDisallowedError(*, ...)`
+- **Summary:** Every address the host resolved to is one the SDK will not connect to.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceConnectRefusedError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceConnectRefusedError`
+- **Signature:** `class SourceConnectRefusedError(*, ...)`
+- **Summary:** The host answered, and nothing is listening on the port.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceConnectTimeoutError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceConnectTimeoutError`
+- **Signature:** `class SourceConnectTimeoutError(*, ...)`
+- **Summary:** No answer to the connection attempt: typically a firewall dropping it.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceDnsUnavailableError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceDnsUnavailableError`
+- **Signature:** `class SourceDnsUnavailableError(*, ...)`
+- **Summary:** DNS did not answer: a resolver timeout or a server failure.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceEndpoint`
+
+- **Import:** `from application_sdk.handler.source_probes import SourceEndpoint`
+- **Signature:** `class SourceEndpoint`
+- **Summary:** One network endpoint the app will connect to, as the app declares it.
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `SourceEndpointLabelsError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceEndpointLabelsError`
+- **Signature:** `class SourceEndpointLabelsError(*, ...)`
+- **Summary:** Several endpoints were declared without distinct labels.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceHostMalformedError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceHostMalformedError`
+- **Signature:** `class SourceHostMalformedError(*, ...)`
+- **Summary:** The configured host is not a bare host name or address.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceHostNotFoundError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceHostNotFoundError`
+- **Signature:** `class SourceHostNotFoundError(*, ...)`
+- **Summary:** DNS answered authoritatively that the host name does not exist.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceProbeReport`
+
+- **Import:** `from application_sdk.handler.source_probes import SourceProbeReport`
+- **Signature:** `class SourceProbeReport`
+- **Summary:** What the probes found. Every probe is accounted for in exactly one list.
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `SourceProbeTrustStoreError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceProbeTrustStoreError`
+- **Signature:** `class SourceProbeTrustStoreError(*, ...)`
+- **Summary:** The SDK trust store handed the TLS probe a context that does not verify.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceTlsCertificateError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceTlsCertificateError`
+- **Signature:** `class SourceTlsCertificateError(*, ...)`
+- **Summary:** The source's certificate failed verification.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceTlsHandshakeError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceTlsHandshakeError`
+- **Signature:** `class SourceTlsHandshakeError(*, ...)`
+- **Summary:** The TLS handshake failed for a reason other than the certificate.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceTlsTimeoutError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceTlsTimeoutError`
+- **Signature:** `class SourceTlsTimeoutError(*, ...)`
+- **Summary:** The source accepted the connection but did not finish the handshake.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
+
+#### `SourceUnreachableError`
+
+- **Import:** `from application_sdk.handler.source_probe_errors import SourceUnreachableError`
+- **Signature:** `class SourceUnreachableError(*, ...)`
+- **Summary:** The network reported no route to the source.
+- **Defined in:** `application_sdk/handler/source_probe_errors.py`
 
 #### `SqlMetadataObject`
 
@@ -2548,6 +6221,20 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `class SqlMetadataOutput`
 - **Summary:** Metadata output for SQL connectors (sqltree widget).
 - **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `TempPathEscapeError`
+
+- **Import:** `from application_sdk.handler.service_errors import TempPathEscapeError`
+- **Signature:** `class TempPathEscapeError(*, ...)`
+- **Summary:** A path escaped the system temp directory — invariant violation.
+- **Defined in:** `application_sdk/handler/service_errors.py`
+
+#### `TlsMode`
+
+- **Import:** `from application_sdk.handler.source_probes import TlsMode`
+- **Signature:** `class TlsMode`
+- **Summary:** How the source speaks TLS on the declared port.
+- **Defined in:** `application_sdk/handler/source_probes.py`
 
 #### `WarmupInput`
 
@@ -2566,25 +6253,429 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 #### `WarmupState`
 
 - **Import:** `from application_sdk.handler import WarmupState`
+- **Also importable from:** `application_sdk.handler.contracts`
 - **Signature:** `class WarmupState`
 - **Summary:** Where a source's compute is, as one warmup probe observed it.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `WorkflowClientConfig`
+
+- **Import:** `from application_sdk.handler.service import WorkflowClientConfig`
+- **Signature:** `class WorkflowClientConfig(host: str = '', ...)`
+- **Summary:** Configuration for the Temporal client used by the /start endpoint.
+- **Defined in:** `application_sdk/handler/service.py`
+
 ### Functions
+
+#### `app_env`
+
+- **Import:** `from application_sdk.handler.asgi import app_env`
+- **Signature:** `app_env(app_name: str, key: str, default: str = '') -> str`
+- **Summary:** ``key`` for one hosted app: its ``ATLAN_APPENV__<APP>__<key>``, else
+- **Defined in:** `application_sdk/handler/asgi.py`
+
+#### `bind_handler_context`
+
+- **Import:** `from application_sdk.handler.context import bind_handler_context`
+- **Signature:** `bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]`
+- **Summary:** Bind *ctx* as the active handler context for the duration of the block.
+- **Defined in:** `application_sdk/handler/context.py`
+
+#### `bind_invocation_context`
+
+- **Import:** `from application_sdk.handler.context import bind_invocation_context`
+- **Signature:** `bind_invocation_context(app_name: str, credentials: list[Any]) -> Iterator[HandlerContext]`
+- **Summary:** Build and bind a per-invocation :class:`HandlerContext` for the block.
+- **Defined in:** `application_sdk/handler/context.py`
+
+#### `build_asgi_app`
+
+- **Import:** `from application_sdk.handler.asgi import build_asgi_app`
+- **Signature:** `build_asgi_app(handler: Handler, *, ...)`
+- **Summary:** A FastAPI app serving ``handler`` as ``app_name``.
+- **Defined in:** `application_sdk/handler/asgi.py`
+
+#### `config_key`
+
+- **Import:** `from application_sdk.handler.object_routes import config_key`
+- **Signature:** `config_key(app_name: str, config_id: str, config_type: str = 'workflows') -> str`
+- **Summary:** The object-store key of one app's config (the v2 statestore convention).
+- **Defined in:** `application_sdk/handler/object_routes.py`
 
 #### `create_app_handler_service`
 
 - **Import:** `from application_sdk.handler import create_app_handler_service`
+- **Also importable from:** `application_sdk.handler.service`
 - **Signature:** `create_app_handler_service(handler: Handler, *, ...)`
 - **Summary:** Create a FastAPI app for a single handler.
 - **Defined in:** `application_sdk/handler/service.py`
 
+#### `credential_gaps`
+
+- **Import:** `from application_sdk.handler.metadata_routes import credential_gaps`
+- **Signature:** `credential_gaps(generated_dir: Path, ...)`
+- **Summary:** Required credential fields a ``/validate`` body leaves out (FND-502).
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `decode_fe_inputs`
+
+- **Import:** `from application_sdk.handler.metadata_routes import decode_fe_inputs`
+- **Signature:** `decode_fe_inputs(raw: str | None, max_bytes: int = MAX_FE_INPUTS_BYTES) -> dict[str, Any]`
+- **Summary:** Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `default_address_policy`
+
+- **Import:** `from application_sdk.handler.source_probes import default_address_policy`
+- **Signature:** `default_address_policy(address: _IpAddress) -> str | None`
+- **Summary:** Refuse addresses a customer source never legitimately lives at.
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `default_object_store`
+
+- **Import:** `from application_sdk.handler.asgi import default_object_store`
+- **Signature:** `default_object_store() -> HostObjectStore | None`
+- **Summary:** The host's object store, built once by :meth:`HostObjectStore.from_env`.
+- **Defined in:** `application_sdk/handler/asgi.py`
+
+#### `entrypoint_form`
+
+- **Import:** `from application_sdk.handler.metadata_routes import entrypoint_form`
+- **Signature:** `entrypoint_form(generated_dir: Path, entrypoint: str) -> tuple[Path | None, list[Path]]`
+- **Summary:** The generated setup form served for *entrypoint*, and the files it was
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `flatten_credentials_to_pairs`
+
+- **Import:** `from application_sdk.handler.contracts import flatten_credentials_to_pairs`
+- **Signature:** `flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]`
+- **Summary:** Flatten a credential dict to v3 ``[{key, value}]`` pairs.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `generated_dir_of`
+
+- **Import:** `from application_sdk.handler.metadata_routes import generated_dir_of`
+- **Signature:** `generated_dir_of(package_dir: str | os.PathLike[str]) -> Path`
+- **Summary:** Where an app package built by ``gen_app_api.py`` ships its generated files.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `generated_entrypoints`
+
+- **Import:** `from application_sdk.handler.service import generated_entrypoints`
+- **Signature:** `generated_entrypoints() -> list[str]`
+- **Summary:** The entry points the generated tree serves a setup form for.
+- **Defined in:** `application_sdk/handler/service.py`
+
+#### `get_handler_context`
+
+- **Import:** `from application_sdk.handler.context import get_handler_context`
+- **Signature:** `get_handler_context() -> HandlerContext | None`
+- **Summary:** Return the HandlerContext for the current asyncio task, or None.
+- **Defined in:** `application_sdk/handler/context.py`
+
+#### `handler_compute_manifest`
+
+- **Import:** `from application_sdk.handler.metadata_routes import handler_compute_manifest`
+- **Signature:** `handler_compute_manifest(handler: Handler, *, ...)`
+- **Summary:** A ``MetadataSource.compute_manifest`` that runs ``handler.compute_manifest``.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `has_warmup`
+
+- **Import:** `from application_sdk.handler.routes import has_warmup`
+- **Signature:** `has_warmup(handler: Handler, entrypoint: str, app_package: str = 'app') -> bool`
+- **Summary:** Whether the entry point has a warmup probe of its own (its module hook,
+- **Defined in:** `application_sdk/handler/routes.py`
+
+#### `host_object_source`
+
+- **Import:** `from application_sdk.handler.object_routes import host_object_source`
+- **Signature:** `host_object_source(app_name: str, store: ObjectStoreOps | None) -> ObjectRoutesSource`
+- **Summary:** The routes' store operations for one hosted app.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `include_app_routers_on`
+
+- **Import:** `from application_sdk.handler.routes import include_app_routers_on`
+- **Signature:** `include_app_routers_on(app: FastAPI, handler: Handler, app_name: str) -> None`
+- **Summary:** Serve the routers ``handler.routers()`` returns, after the SDK's own routes.
+- **Defined in:** `application_sdk/handler/routes.py`
+
+#### `install_body_limit`
+
+- **Import:** `from application_sdk.handler.object_routes import install_body_limit`
+- **Signature:** `install_body_limit(app: FastAPI) -> None`
+- **Summary:** Cap request bodies on *app*, reading the caps from the environment.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `missing_fields_error`
+
+- **Import:** `from application_sdk.handler.metadata_routes import missing_fields_error`
+- **Signature:** `missing_fields_error(paths: list[tuple[str, ...]]) -> ValidationError`
+- **Summary:** A pydantic ``missing`` error per path: the 422 handler's own shape.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `normalize_credentials`
+
+- **Import:** `from application_sdk.handler.contracts import normalize_credentials`
+- **Signature:** `normalize_credentials(body: dict[str, *, ...)`
+- **Summary:** Normalize v2 credential formats to v3 list[{key, value}] format.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `probe_source_network`
+
+- **Import:** `from application_sdk.handler.source_probes import probe_source_network`
+- **Signature:** `probe_source_network(endpoints: Sequence[SourceEndpoint], *, ...)`
+- **Summary:** Probe each endpoint's DNS, then TCP, then (``DIRECT`` only) TLS.
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `read_json_object`
+
+- **Import:** `from application_sdk.handler.request_contract import read_json_object`
+- **Signature:** `read_json_object(request: Request) -> dict[str, Any]`
+- **Summary:** Read a request body that must be a JSON object, answering 422 if not.
+- **Defined in:** `application_sdk/handler/request_contract.py`
+
+#### `register_handler_routes`
+
+- **Import:** `from application_sdk.handler.routes import register_handler_routes`
+- **Signature:** `register_handler_routes(app: FastAPI, *, ...)`
+- **Summary:** Register the auth / check / metadata routes and the 422 contract handler on ``app``.
+- **Defined in:** `application_sdk/handler/routes.py`
+
+#### `register_metadata_routes`
+
+- **Import:** `from application_sdk.handler.metadata_routes import register_metadata_routes`
+- **Signature:** `register_metadata_routes(app: FastAPI, source: MetadataSource) -> None`
+- **Summary:** Register the configmap, manifest, input-contract and validate routes on *app*.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `register_object_routes`
+
+- **Import:** `from application_sdk.handler.object_routes import register_object_routes`
+- **Signature:** `register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None`
+- **Summary:** Register the config and file-upload routes on *app*.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
 #### `run_app_handler_service`
 
 - **Import:** `from application_sdk.handler import run_app_handler_service`
+- **Also importable from:** `application_sdk.handler.service`
 - **Signature:** `run_app_handler_service(handler: Handler, *, ...)`
 - **Summary:** Create and run the handler service with uvicorn.
 - **Defined in:** `application_sdk/handler/service.py`
+
+#### `sagev2_warmup_flag`
+
+- **Import:** `from application_sdk.handler.service import sagev2_warmup_flag`
+- **Signature:** `sagev2_warmup_flag(form: dict[str, Any]) -> bool | None`
+- **Summary:** What a generated setup form declares about the app's warmup.
+- **Defined in:** `application_sdk/handler/service.py`
+
+#### `tree_default_entrypoint`
+
+- **Import:** `from application_sdk.handler.metadata_routes import tree_default_entrypoint`
+- **Signature:** `tree_default_entrypoint(generated_dir: Path) -> str | None`
+- **Summary:** The entry point a request that names none resolves to, from disk.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `tree_entrypoints`
+
+- **Import:** `from application_sdk.handler.metadata_routes import tree_entrypoints`
+- **Signature:** `tree_entrypoints(generated_dir: Path) -> list[str]`
+- **Summary:** The entry points the generated tree has a manifest for, sorted.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `tree_input_contract`
+
+- **Import:** `from application_sdk.handler.metadata_routes import tree_input_contract`
+- **Signature:** `tree_input_contract(generated_dir: Path, app_package: str, entrypoint: str | None) -> type[BaseModel]`
+- **Summary:** The generated ``AppInputContract`` for *entrypoint*, resolved from disk.
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `unverifiable_preflight_result`
+
+- **Import:** `from application_sdk.handler.contracts import unverifiable_preflight_result`
+- **Signature:** `unverifiable_preflight_result(exc: BaseException, app_name: str, *, include_cause: bool = True) -> PreflightOutput`
+- **Summary:** The ``NOT_READY`` verdict for a source that raised instead of answering.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `valid_upload_prefix`
+
+- **Import:** `from application_sdk.handler.object_routes import valid_upload_prefix`
+- **Signature:** `valid_upload_prefix(prefix: str) -> bool`
+- **Summary:** Whether *prefix* is a safe relative object-store prefix (see above).
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `validate_request`
+
+- **Import:** `from application_sdk.handler.request_contract import validate_request`
+- **Signature:** `validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT`
+- **Summary:** Validate an already-normalised request body into its typed contract.
+- **Defined in:** `application_sdk/handler/request_contract.py`
+
+#### `validated_temp_path`
+
+- **Import:** `from application_sdk.handler.object_routes import validated_temp_path`
+- **Signature:** `validated_temp_path(path: str) -> str`
+- **Summary:** Resolve *path* and require it to lie strictly inside the system temp directory.
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `warn_on_warmup_flag_drift`
+
+- **Import:** `from application_sdk.handler.service import warn_on_warmup_flag_drift`
+- **Signature:** `warn_on_warmup_flag_drift(entrypoints: list[str], has_warmup: Callable[[str], bool]) -> list[str]`
+- **Summary:** Log a WARNING for each entry point whose setup form and handler disagree
+- **Defined in:** `application_sdk/handler/service.py`
+
+### Constants and Enums
+
+#### `AddressPolicy`
+
+- **Import:** `from application_sdk.handler.source_probes import AddressPolicy`
+- **Signature:** `AddressPolicy`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `ALL_CHECK_TIERS`
+
+- **Import:** `from application_sdk.handler.contracts import ALL_CHECK_TIERS`
+- **Signature:** `ALL_CHECK_TIERS: frozenset[CheckTier]`
+- **Summary:** Every tier — :attr:`PreflightInput.tiers`' default, for callers that do not
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `APPENV_PREFIX`
+
+- **Import:** `from application_sdk.handler.asgi import APPENV_PREFIX`
+- **Signature:** `APPENV_PREFIX`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/asgi.py`
+
+#### `AUTH_STATUS_HTTP_CODES`
+
+- **Import:** `from application_sdk.handler.contracts import AUTH_STATUS_HTTP_CODES`
+- **Signature:** `AUTH_STATUS_HTTP_CODES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `ComputeManifest`
+
+- **Import:** `from application_sdk.handler.metadata_routes import ComputeManifest`
+- **Signature:** `ComputeManifest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `CONFIG_KEY_PATTERN`
+
+- **Import:** `from application_sdk.handler.object_routes import CONFIG_KEY_PATTERN`
+- **Signature:** `CONFIG_KEY_PATTERN`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `CONTRACT_GENERATED_DIR`
+
+- **Import:** `from application_sdk.handler.service import CONTRACT_GENERATED_DIR`
+- **Signature:** `CONTRACT_GENERATED_DIR`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/service.py`
+
+#### `DEFAULT_BLOCKING_THREADS`
+
+- **Import:** `from application_sdk.handler.asgi import DEFAULT_BLOCKING_THREADS`
+- **Signature:** `DEFAULT_BLOCKING_THREADS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/asgi.py`
+
+#### `DEFAULT_MAX_BODY_BYTES`
+
+- **Import:** `from application_sdk.handler.object_routes import DEFAULT_MAX_BODY_BYTES`
+- **Signature:** `DEFAULT_MAX_BODY_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `DEFAULT_MAX_UPLOAD_BYTES`
+
+- **Import:** `from application_sdk.handler.object_routes import DEFAULT_MAX_UPLOAD_BYTES`
+- **Signature:** `DEFAULT_MAX_UPLOAD_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `HandlerFn`
+
+- **Import:** `from application_sdk.handler.service import HandlerFn`
+- **Signature:** `HandlerFn`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/service.py`
+
+#### `MAX_BODY_BYTES_ENV`
+
+- **Import:** `from application_sdk.handler.object_routes import MAX_BODY_BYTES_ENV`
+- **Signature:** `MAX_BODY_BYTES_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `MAX_FE_INPUTS_BYTES`
+
+- **Import:** `from application_sdk.handler.metadata_routes import MAX_FE_INPUTS_BYTES`
+- **Signature:** `MAX_FE_INPUTS_BYTES`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/metadata_routes.py`
+
+#### `MAX_UPLOAD_BYTES_ENV`
+
+- **Import:** `from application_sdk.handler.object_routes import MAX_UPLOAD_BYTES_ENV`
+- **Signature:** `MAX_UPLOAD_BYTES_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `SAFE_EXT_RE`
+
+- **Import:** `from application_sdk.handler.object_routes import SAFE_EXT_RE`
+- **Signature:** `SAFE_EXT_RE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
+
+#### `SAGE_V2_WIDGET`
+
+- **Import:** `from application_sdk.handler.service import SAGE_V2_WIDGET`
+- **Signature:** `SAGE_V2_WIDGET`
+- **Summary:** The ``ui.widget`` value of the setup form's preflight widget.
+- **Defined in:** `application_sdk/handler/service.py`
+
+#### `SOURCE_DNS_CHECK`
+
+- **Import:** `from application_sdk.handler.source_probes import SOURCE_DNS_CHECK`
+- **Signature:** `SOURCE_DNS_CHECK: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `SOURCE_TCP_CHECK`
+
+- **Import:** `from application_sdk.handler.source_probes import SOURCE_TCP_CHECK`
+- **Signature:** `SOURCE_TCP_CHECK: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `SOURCE_TLS_CHECK`
+
+- **Import:** `from application_sdk.handler.source_probes import SOURCE_TLS_CHECK`
+- **Signature:** `SOURCE_TLS_CHECK: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/source_probes.py`
+
+#### `UNVERIFIABLE_CHECK_NAME`
+
+- **Import:** `from application_sdk.handler.contracts import UNVERIFIABLE_CHECK_NAME`
+- **Signature:** `UNVERIFIABLE_CHECK_NAME`
+- **Summary:** Name of the one check an unverifiable source's verdict carries.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `UPLOAD_ROUTE`
+
+- **Import:** `from application_sdk.handler.object_routes import UPLOAD_ROUTE`
+- **Signature:** `UPLOAD_ROUTE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/handler/object_routes.py`
 
 ## `application_sdk.infrastructure`
 
@@ -2595,6 +6686,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `AgentSecretReadError`
 
 - **Import:** `from application_sdk.infrastructure import AgentSecretReadError`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class AgentSecretReadError(label: str, *, fields: str, retryable: bool | None = None)`
 - **Summary:** The store refused to return a *declared* agent secret.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2609,6 +6701,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `Binding`
 
 - **Import:** `from application_sdk.infrastructure import Binding`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class Binding`
 - **Summary:** Protocol for generic bindings.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2616,6 +6709,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `BindingError`
 
 - **Import:** `from application_sdk.infrastructure import BindingError`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class BindingError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.infrastructure.BindingUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2623,6 +6717,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `BindingRequest`
 
 - **Import:** `from application_sdk.infrastructure import BindingRequest`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class BindingRequest(operation: str, data: bytes | None = None, metadata: dict[str, str] = dict())`
 - **Summary:** Deprecated: request to invoke a binding — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2630,6 +6725,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `BindingResponse`
 
 - **Import:** `from application_sdk.infrastructure import BindingResponse`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class BindingResponse(data: bytes | None = None, metadata: dict[str, str] = dict())`
 - **Summary:** Response from a binding invocation.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2637,6 +6733,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `BindingUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import BindingUnavailableError`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class BindingUnavailableError(*, ...)`
 - **Summary:** A binding invocation failed: the sidecar or the bound resource did not answer.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2644,13 +6741,22 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `CapacityPool`
 
 - **Import:** `from application_sdk.infrastructure import CapacityPool`
+- **Also importable from:** `application_sdk.infrastructure.capacity`
 - **Signature:** `class CapacityPool`
 - **Summary:** Deprecated: protocol for distributed capacity management — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
 
+#### `CredentialConfigNotFoundError`
+
+- **Import:** `from application_sdk.infrastructure.credential_vault import CredentialConfigNotFoundError`
+- **Signature:** `class CredentialConfigNotFoundError(*, ...)`
+- **Summary:** The object store confirmed absence after the config re-read ladder.
+- **Defined in:** `application_sdk/infrastructure/credential_vault.py`
+
 #### `CredentialVault`
 
 - **Import:** `from application_sdk.infrastructure import CredentialVault`
+- **Also importable from:** `application_sdk.infrastructure.credential_vault`
 - **Signature:** `class CredentialVault`
 - **Summary:** Protocol for GUID-based runtime credential resolution.
 - **Defined in:** `application_sdk/infrastructure/credential_vault.py`
@@ -2658,6 +6764,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `CredentialVaultError`
 
 - **Import:** `from application_sdk.infrastructure import CredentialVaultError`
+- **Also importable from:** `application_sdk.infrastructure.credential_vault`
 - **Signature:** `class CredentialVaultError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.infrastructure.CredentialVaultUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/credential_vault.py`
@@ -2665,6 +6772,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `CredentialVaultUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import CredentialVaultUnavailableError`
+- **Also importable from:** `application_sdk.infrastructure.credential_vault`
 - **Signature:** `class CredentialVaultUnavailableError(*, ...)`
 - **Summary:** Resolving a credential by GUID failed.
 - **Defined in:** `application_sdk/infrastructure/credential_vault.py`
@@ -2707,6 +6815,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `EnvironmentSecretStore`
 
 - **Import:** `from application_sdk.infrastructure import EnvironmentSecretStore`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class EnvironmentSecretStore(prefix: str = '')`
 - **Summary:** Secret store backed by environment variables.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2714,6 +6823,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `InfrastructureContext`
 
 - **Import:** `from application_sdk.infrastructure import InfrastructureContext`
+- **Also importable from:** `application_sdk.infrastructure.context`
 - **Signature:** `class InfrastructureContext(state_store: StateStore | None = None, ...)`
 - **Summary:** Holds the current infrastructure services for a process.
 - **Defined in:** `application_sdk/infrastructure/context.py`
@@ -2721,6 +6831,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `InputBinding`
 
 - **Import:** `from application_sdk.infrastructure import InputBinding`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class InputBinding`
 - **Summary:** Deprecated: protocol for input bindings — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2728,6 +6839,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `LocalCapacityPool`
 
 - **Import:** `from application_sdk.infrastructure import LocalCapacityPool`
+- **Also importable from:** `application_sdk.infrastructure.capacity`
 - **Signature:** `class LocalCapacityPool`
 - **Summary:** Deprecated: local-only capacity pool (no coordination) — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
@@ -2735,6 +6847,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `Message`
 
 - **Import:** `from application_sdk.infrastructure import Message`
+- **Also importable from:** `application_sdk.infrastructure.pubsub`
 - **Signature:** `class Message(data: dict[str, Any], metadata: dict[str, str] = dict(), id: str | None = None, topic: str | None = None)`
 - **Summary:** A pub/sub message.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
@@ -2742,6 +6855,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `OutputBinding`
 
 - **Import:** `from application_sdk.infrastructure import OutputBinding`
+- **Also importable from:** `application_sdk.infrastructure.bindings`
 - **Signature:** `class OutputBinding`
 - **Summary:** Deprecated: protocol for output bindings — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/bindings.py`
@@ -2749,6 +6863,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `PubSub`
 
 - **Import:** `from application_sdk.infrastructure import PubSub`
+- **Also importable from:** `application_sdk.infrastructure.pubsub`
 - **Signature:** `class PubSub`
 - **Summary:** Protocol for pub/sub messaging.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
@@ -2756,6 +6871,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `PubSubError`
 
 - **Import:** `from application_sdk.infrastructure import PubSubError`
+- **Also importable from:** `application_sdk.infrastructure.pubsub`
 - **Signature:** `class PubSubError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.infrastructure.PubSubUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
@@ -2763,6 +6879,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `PubSubUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import PubSubUnavailableError`
+- **Also importable from:** `application_sdk.infrastructure.pubsub`
 - **Signature:** `class PubSubUnavailableError(*, ...)`
 - **Summary:** Publishing to a pub/sub topic failed.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
@@ -2770,6 +6887,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `SecretNotFoundError`
 
 - **Import:** `from application_sdk.infrastructure import SecretNotFoundError`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class SecretNotFoundError(secret_name: str)`
 - **Summary:** The requested secret key was not found in the secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2777,6 +6895,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `SecretStore`
 
 - **Import:** `from application_sdk.infrastructure import SecretStore`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class SecretStore`
 - **Summary:** Protocol for secrets management.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2784,13 +6903,22 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `SecretStoreError`
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreError`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class SecretStoreError(message: str, ...)`
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreNotConfiguredError`
+
+- **Import:** `from application_sdk.infrastructure.secrets import SecretStoreNotConfiguredError`
+- **Signature:** `class SecretStoreNotConfiguredError(*, ...)`
+- **Summary:** Secret store required by get_secret / resolve_credential but not configured.
+- **Defined in:** `application_sdk/_context_errors.py`
+
 #### `SecretStoreTransientError`
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreTransientError`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class SecretStoreTransientError`
 - **Summary:** The secret store answered, but with a temporary failure (throttling or a
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2798,6 +6926,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `SecretStoreUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
 - **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2805,6 +6934,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `SecretStoreUnreachableError`
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreUnreachableError`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `class SecretStoreUnreachableError(secret_name: str, ...)`
 - **Summary:** Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2812,6 +6942,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `StateStore`
 
 - **Import:** `from application_sdk.infrastructure import StateStore`
+- **Also importable from:** `application_sdk.infrastructure.state`
 - **Signature:** `class StateStore`
 - **Summary:** Protocol for state storage.
 - **Defined in:** `application_sdk/infrastructure/state.py`
@@ -2819,6 +6950,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `StateStoreError`
 
 - **Import:** `from application_sdk.infrastructure import StateStoreError`
+- **Also importable from:** `application_sdk.infrastructure.state`
 - **Signature:** `class StateStoreError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.infrastructure.StateStoreUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/state.py`
@@ -2826,6 +6958,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `StateStoreUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import StateStoreUnavailableError`
+- **Also importable from:** `application_sdk.infrastructure.state`
 - **Signature:** `class StateStoreUnavailableError(*, ...)`
 - **Summary:** A state-store read, write or delete failed.
 - **Defined in:** `application_sdk/infrastructure/state.py`
@@ -2833,6 +6966,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `Subscription`
 
 - **Import:** `from application_sdk.infrastructure import Subscription`
+- **Also importable from:** `application_sdk.infrastructure.pubsub`
 - **Signature:** `class Subscription`
 - **Summary:** Deprecated: protocol for pub/sub subscriptions — removed in v4.0.0.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
@@ -2842,13 +6976,22 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `clear_infrastructure`
 
 - **Import:** `from application_sdk.infrastructure import clear_infrastructure`
+- **Also importable from:** `application_sdk.infrastructure.context`
 - **Signature:** `clear_infrastructure()`
 - **Summary:** Clear the current infrastructure context.
+- **Defined in:** `application_sdk/infrastructure/context.py`
+
+#### `close_infrastructure`
+
+- **Import:** `from application_sdk.infrastructure.context import close_infrastructure`
+- **Signature:** `close_infrastructure() -> None`
+- **Summary:** Close the shared Dapr client held by the current infrastructure context.
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
 #### `configure_capacity_pool`
 
 - **Import:** `from application_sdk.infrastructure import configure_capacity_pool`
+- **Also importable from:** `application_sdk.infrastructure.capacity`
 - **Signature:** `configure_capacity_pool(pool: CapacityPool)`
 - **Summary:** Deprecated: configure the global capacity pool — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
@@ -2856,6 +6999,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `get_capacity_pool`
 
 - **Import:** `from application_sdk.infrastructure import get_capacity_pool`
+- **Also importable from:** `application_sdk.infrastructure.capacity`
 - **Signature:** `get_capacity_pool()`
 - **Summary:** Deprecated: get the configured capacity pool — removed in v4.0.0 (never wired by the framework).
 - **Defined in:** `application_sdk/infrastructure/capacity.py`
@@ -2863,6 +7007,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `get_deployment_secret`
 
 - **Import:** `from application_sdk.infrastructure import get_deployment_secret`
+- **Also importable from:** `application_sdk.infrastructure.secrets`
 - **Signature:** `get_deployment_secret(key: str, *, raise_on_error: bool | None = None)`
 - **Summary:** Get a specific key from deployment configuration in the deployment secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
@@ -2870,8 +7015,16 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `get_infrastructure`
 
 - **Import:** `from application_sdk.infrastructure import get_infrastructure`
+- **Also importable from:** `application_sdk.infrastructure.context`
 - **Signature:** `get_infrastructure()`
 - **Summary:** Get the current infrastructure context.
+- **Defined in:** `application_sdk/infrastructure/context.py`
+
+#### `is_single_store`
+
+- **Import:** `from application_sdk.infrastructure.context import is_single_store`
+- **Signature:** `is_single_store(storage: 'ObjectStore | None', upstream_storage: 'ObjectStore | None') -> bool`
+- **Summary:** ``True`` when these two handles are one object store.
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
 #### `retry_past_dapr_cold_start`
@@ -2884,6 +7037,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `set_infrastructure`
 
 - **Import:** `from application_sdk.infrastructure import set_infrastructure`
+- **Also importable from:** `application_sdk.infrastructure.context`
 - **Signature:** `set_infrastructure(ctx: InfrastructureContext)`
 - **Summary:** Set the current infrastructure context.
 - **Defined in:** `application_sdk/infrastructure/context.py`
@@ -2919,18 +7073,74 @@ Dev entry point — run_dev_combined() and AppConfig for local execution and con
 - **Summary:** Run worker + handler in a single process for local development.
 - **Defined in:** `application_sdk/dev/_runner.py`
 
+## `application_sdk.main_errors`
+
+Typed error leaves raised by the main entry point — app module resolution, run mode, Dapr detection
+
+### Classes
+
+#### `DaprNotDetectedError`
+
+- **Import:** `from application_sdk.main_errors import DaprNotDetectedError`
+- **Signature:** `class DaprNotDetectedError(*, ...)`
+- **Summary:** Dapr sidecar is not running (DAPR_HTTP_PORT not set).
+- **Defined in:** `application_sdk/main_errors.py`
+
+#### `MissingAppModuleError`
+
+- **Import:** `from application_sdk.main_errors import MissingAppModuleError`
+- **Signature:** `class MissingAppModuleError(*, ...)`
+- **Summary:** App module was not specified via --app or ATLAN_APP_MODULE.
+- **Defined in:** `application_sdk/main_errors.py`
+
+#### `MultiAppModuleError`
+
+- **Import:** `from application_sdk.main_errors import MultiAppModuleError`
+- **Signature:** `class MultiAppModuleError(*, ...)`
+- **Summary:** ATLAN_APP_MODULE contains a comma — multi-app pattern is not supported in v3.
+- **Defined in:** `application_sdk/main_errors.py`
+
+#### `UnknownModeError`
+
+- **Import:** `from application_sdk.main_errors import UnknownModeError`
+- **Signature:** `class UnknownModeError(*, ...)`
+- **Summary:** Unknown execution mode was specified.
+- **Defined in:** `application_sdk/main_errors.py`
+
 ## `application_sdk.observability`
 
 Logging context — ExecutionContext, CorrelationContext, request/correlation helpers
 
 ### Classes
 
+#### `ActivityShareLedger`
+
+- **Import:** `from application_sdk.observability.resource_sampler import ActivityShareLedger`
+- **Signature:** `class ActivityShareLedger() -> None`
+- **Summary:** Fair-share attribution of process CPU and memory-time to activities.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
 #### `AtlanLoggerAdapter`
 
 - **Import:** `from application_sdk.observability import AtlanLoggerAdapter`
+- **Also importable from:** `application_sdk.observability.logger_adaptor`
 - **Signature:** `class AtlanLoggerAdapter(logger_name: str)`
 - **Summary:** A custom logger adapter for Atlan that extends AtlanObservability.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `AtlanMetricsAdapter`
+
+- **Import:** `from application_sdk.observability.metrics_adaptor import AtlanMetricsAdapter`
+- **Signature:** `class AtlanMetricsAdapter()`
+- **Summary:** A metrics adapter for Atlan that extends AtlanObservability.
+- **Defined in:** `application_sdk/observability/metrics_adaptor.py`
+
+#### `AtlanObservability`
+
+- **Import:** `from application_sdk.observability.observability import AtlanObservability`
+- **Signature:** `class AtlanObservability(batch_size: int, ...)`
+- **Summary:** Base class for Atlan observability functionality.
+- **Defined in:** `application_sdk/observability/observability.py`
 
 #### `AtlanTracesAdapter`
 
@@ -2939,19 +7149,105 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Emit the spans ``@observability`` and app code record, through OpenTelemetry.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
+#### `BackgroundTask`
+
+- **Import:** `from application_sdk.observability.background_loop import BackgroundTask`
+- **Signature:** `class BackgroundTask(name: str, loop: asyncio.AbstractEventLoop, stop_order: int = 0) -> None`
+- **Summary:** Handle to a long-lived coroutine running on the observability loop.
+- **Defined in:** `application_sdk/observability/background_loop.py`
+
+#### `ConsoleWriter`
+
+- **Import:** `from application_sdk.observability.console_sink import ConsoleWriter`
+- **Signature:** `class ConsoleWriter(max_records: int = CONSOLE_QUEUE_MAX_RECORDS, ...)`
+- **Summary:** A bounded queue of pre-formatted console lines, drained by one daemon thread.
+- **Defined in:** `application_sdk/observability/console_sink.py`
+
+#### `ContainerTrace`
+
+- **Import:** `from application_sdk.observability.cgroup import ContainerTrace`
+- **Signature:** `class ContainerTrace(peak_memory_bytes: int | None = None, ...)`
+- **Summary:** What one activity consumed. ``peak_source`` is recorded because watermark
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `CoreMetricsBody`
+
+- **Import:** `from application_sdk.observability.temporal_core_metrics import CoreMetricsBody`
+- **Signature:** `class CoreMetricsBody(body: bytes) -> None`
+- **Summary:** The exposition text, at most ``max_bytes`` long.
+- **Defined in:** `application_sdk/observability/temporal_core_metrics.py`
+
+#### `CoreMetricsUnavailable`
+
+- **Import:** `from application_sdk.observability.temporal_core_metrics import CoreMetricsUnavailable`
+- **Signature:** `class CoreMetricsUnavailable(reason: str) -> None`
+- **Summary:** The endpoint answered, but there is no usable body.
+- **Defined in:** `application_sdk/observability/temporal_core_metrics.py`
+
 #### `CorrelationContext`
 
 - **Import:** `from application_sdk.observability import CorrelationContext`
+- **Also importable from:** `application_sdk.observability.correlation`
 - **Signature:** `class CorrelationContext(correlation_id: str = '')`
 - **Summary:** Holds the current correlation ID for a request or workflow run.
 - **Defined in:** `application_sdk/observability/correlation.py`
 
+#### `CpuStat`
+
+- **Import:** `from application_sdk.observability.cgroup import CpuStat`
+- **Signature:** `class CpuStat(usage_seconds: float, nr_periods: int, nr_throttled: int, throttled_seconds: float) -> None`
+- **Summary:** Point-in-time CPU accounting. ``throttled_seconds`` is the sizing signal —
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
 #### `ExecutionContext`
 
 - **Import:** `from application_sdk.observability import ExecutionContext`
+- **Also importable from:** `application_sdk.observability.context`
 - **Signature:** `class ExecutionContext(execution_type: str = 'none', ...)`
 - **Summary:** Immutable snapshot of the current Temporal execution context.
 - **Defined in:** `application_sdk/observability/context.py`
+
+#### `InputCollector`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import InputCollector`
+- **Signature:** `class InputCollector() -> None`
+- **Summary:** Accumulates bytes read during one execution. Mutated in place, not
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `InputSize`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import InputSize`
+- **Signature:** `class InputSize(bytes: int, file_count: int, basis: str, truncated: bool = False) -> None`
+- **Summary:** Bytes read, plus the ``basis`` they came from — mixing "what it read" with
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `InterceptHandler`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import InterceptHandler`
+- **Signature:** `class InterceptHandler`
+- **Summary:** Bridge Python's stdlib logging into loguru, preserving ``extra={...}``.
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `MetricRecord`
+
+- **Import:** `from application_sdk.observability.models import MetricRecord`
+- **Signature:** `class MetricRecord(timestamp: float, ...)`
+- **Summary:** A dataclass representing a metric record in the system.
+- **Defined in:** `application_sdk/observability/models.py`
+
+#### `MetricType`
+
+- **Import:** `from application_sdk.observability.models import MetricType`
+- **Signature:** `class MetricType`
+- **Summary:** Enum for metric types.
+- **Defined in:** `application_sdk/observability/models.py`
+
+#### `ObservabilityLoop`
+
+- **Import:** `from application_sdk.observability.background_loop import ObservabilityLoop`
+- **Signature:** `class ObservabilityLoop() -> None`
+- **Summary:** A single daemon thread running a single asyncio event loop.
+- **Defined in:** `application_sdk/observability/background_loop.py`
 
 #### `PushGatewayClient`
 
@@ -2959,6 +7255,69 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `class PushGatewayClient(*, ...)`
 - **Summary:** Periodic + shutdown Prometheus Pushgateway pusher.
 - **Defined in:** `application_sdk/observability/pushgateway.py`
+
+#### `PushGatewayJobRequiredError`
+
+- **Import:** `from application_sdk.observability.pushgateway_errors import PushGatewayJobRequiredError`
+- **Signature:** `class PushGatewayJobRequiredError(*, ...)`
+- **Summary:** PushGatewayClient was constructed without a job name.
+- **Defined in:** `application_sdk/observability/pushgateway_errors.py`
+
+#### `PushGatewayUrlRequiredError`
+
+- **Import:** `from application_sdk.observability.pushgateway_errors import PushGatewayUrlRequiredError`
+- **Signature:** `class PushGatewayUrlRequiredError(*, ...)`
+- **Summary:** PushGatewayClient was constructed without a url.
+- **Defined in:** `application_sdk/observability/pushgateway_errors.py`
+
+#### `ResourceSample`
+
+- **Import:** `from application_sdk.observability.resource_sampler import ResourceSample`
+- **Signature:** `class ResourceSample(cpu_time_s: float, rss_bytes: int) -> None`
+- **Summary:** A single point-in-time sample of process CPU + memory.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
+#### `SegmentBatchPayload`
+
+- **Import:** `from application_sdk.observability.segment_client import SegmentBatchPayload`
+- **Signature:** `class SegmentBatchPayload`
+- **Summary:** Pydantic model for Segment batch API payload.
+- **Defined in:** `application_sdk/observability/segment_client.py`
+
+#### `SegmentClient`
+
+- **Import:** `from application_sdk.observability.segment_client import SegmentClient`
+- **Signature:** `class SegmentClient(write_key: str = '', ...)`
+- **Summary:** Async Segment client with queue-based event processing.
+- **Defined in:** `application_sdk/observability/segment_client.py`
+
+#### `SegmentTrackEvent`
+
+- **Import:** `from application_sdk.observability.segment_client import SegmentTrackEvent`
+- **Signature:** `class SegmentTrackEvent`
+- **Summary:** Pydantic model for a single Segment track event.
+- **Defined in:** `application_sdk/observability/segment_client.py`
+
+#### `ShareMark`
+
+- **Import:** `from application_sdk.observability.resource_sampler import ShareMark`
+- **Signature:** `class ShareMark(cpu_per_slot_s: float, mem_per_slot_gib_s: float, sampled: bool) -> None`
+- **Summary:** An activity's position in the ledger's per-slot integrals at its start.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
+#### `SizingObservabilitySink`
+
+- **Import:** `from application_sdk.observability.sizing_sink import SizingObservabilitySink`
+- **Signature:** `class SizingObservabilitySink(**kwargs: Any) -> None`
+- **Summary:** Buffers observations and uploads them as gzipped NDJSON. The periodic flush
+- **Defined in:** `application_sdk/observability/sizing_sink.py`
+
+#### `SizingObservation`
+
+- **Import:** `from application_sdk.observability.sizing import SizingObservation`
+- **Signature:** `class SizingObservation(activity_type: str, ...)`
+- **Summary:** One execution's measured envelope. ``peak_source`` and ``attempt`` travel
+- **Defined in:** `application_sdk/observability/sizing.py`
 
 #### `TemporalCoreCollector`
 
@@ -2969,12 +7328,62 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 
 #### `TraceRecord`
 
-- **Import:** `from application_sdk.observability.traces_adaptor import TraceRecord`
+- **Import:** `from application_sdk.observability.models import TraceRecord`
+- **Also importable from:** `application_sdk.observability.traces_adaptor`
 - **Signature:** `class TraceRecord(timestamp: float, ...)`
 - **Summary:** A dataclass representing a trace record in the system.
 - **Defined in:** `application_sdk/observability/models.py`
 
+#### `UnsupportedLogRecordError`
+
+- **Import:** `from application_sdk.observability.logger_adaptor_errors import UnsupportedLogRecordError`
+- **Signature:** `class UnsupportedLogRecordError(*, ...)`
+- **Summary:** The log record format passed to the adaptor is not recognised.
+- **Defined in:** `application_sdk/observability/logger_adaptor_errors.py`
+
 ### Functions
+
+#### `begin_collection`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import begin_collection`
+- **Signature:** `begin_collection() -> InputCollector`
+- **Summary:** Start collecting for one activity. Called by the sizing interceptor.
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `build_otel_resource`
+
+- **Import:** `from application_sdk.observability.utils import build_otel_resource`
+- **Signature:** `build_otel_resource(extra_attrs: dict[str, str] | None = None) -> Resource`
+- **Summary:** Build an OTel Resource with standard Atlan service attributes.
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `compute_deltas`
+
+- **Import:** `from application_sdk.observability.resource_sampler import compute_deltas`
+- **Signature:** `compute_deltas(start: ResourceSample | None, end: ResourceSample | None, duration_s: float) -> tuple[float, float]`
+- **Summary:** Compute whole-process ``(cpu_seconds, mem_gb_sec)`` between two samples.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
+#### `console_log_drop_count`
+
+- **Import:** `from application_sdk.observability.console_sink import console_log_drop_count`
+- **Signature:** `console_log_drop_count() -> int`
+- **Summary:** Return how many console log records were dropped because stdout or stderr fell behind.
+- **Defined in:** `application_sdk/observability/console_sink.py`
+
+#### `cpu_quota_cores`
+
+- **Import:** `from application_sdk.observability.cgroup import cpu_quota_cores`
+- **Signature:** `cpu_quota_cores() -> float | None`
+- **Summary:** CPU limit in cores, or ``None``. The denominator for throttling.
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `cpu_stat`
+
+- **Import:** `from application_sdk.observability.cgroup import cpu_stat`
+- **Signature:** `cpu_stat() -> CpuStat | None`
+- **Summary:** CPU usage and throttling, or ``None``. v1 splits the two across files,
+- **Defined in:** `application_sdk/observability/cgroup.py`
 
 #### `create_counter`
 
@@ -3018,9 +7427,59 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/metrics.py`
 
+#### `describe_inputs`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import describe_inputs`
+- **Signature:** `describe_inputs(input_data: Any) -> InputSize | None`
+- **Summary:** Size an activity's input, or ``None``. Never raises — it runs beside a real
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `drain`
+
+- **Import:** `from application_sdk.observability.sizing_sink import drain`
+- **Signature:** `drain() -> None`
+- **Summary:** Flush the buffer on worker shutdown. These pools scale to zero, so without
+- **Defined in:** `application_sdk/observability/sizing_sink.py`
+
+#### `end_collection`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import end_collection`
+- **Signature:** `end_collection() -> None`
+- **Summary:** Stop collecting, so a finished activity cannot leak into the next one.
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `fetch_core_metrics`
+
+- **Import:** `from application_sdk.observability.temporal_core_metrics import fetch_core_metrics`
+- **Signature:** `fetch_core_metrics(url: str, *, timeout_s: float, max_bytes: int) -> CoreMetricsRead`
+- **Summary:** Fetch ``url`` without retaining more than ``max_bytes`` of body.
+- **Defined in:** `application_sdk/observability/temporal_core_metrics.py`
+
+#### `fetch_core_metrics_blocking`
+
+- **Import:** `from application_sdk.observability.temporal_core_metrics import fetch_core_metrics_blocking`
+- **Signature:** `fetch_core_metrics_blocking(url: str, *, timeout_s: float, max_bytes: int) -> CoreMetricsRead`
+- **Summary:** Blocking twin of :func:`fetch_core_metrics`, for ``Collector.collect``.
+- **Defined in:** `application_sdk/observability/temporal_core_metrics.py`
+
+#### `flush_console_logs`
+
+- **Import:** `from application_sdk.observability.console_sink import flush_console_logs`
+- **Signature:** `flush_console_logs(timeout: float = 5.0) -> bool`
+- **Summary:** Wait up to *timeout* seconds for queued console records to be written.
+- **Defined in:** `application_sdk/observability/console_sink.py`
+
+#### `flush_otlp_logs`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import flush_otlp_logs`
+- **Signature:** `flush_otlp_logs(timeout_millis: int = 5000) -> None`
+- **Summary:** Force-flush any buffered OTLP log records (CNCT-107).
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
 #### `get_correlation_context`
 
 - **Import:** `from application_sdk.observability import get_correlation_context`
+- **Also importable from:** `application_sdk.observability.correlation`
 - **Signature:** `get_correlation_context()`
 - **Summary:** Get the current correlation context.
 - **Defined in:** `application_sdk/observability/correlation.py`
@@ -3028,6 +7487,7 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `get_execution_context`
 
 - **Import:** `from application_sdk.observability import get_execution_context`
+- **Also importable from:** `application_sdk.observability.context`
 - **Signature:** `get_execution_context()`
 - **Summary:** Return the current execution context (never raises).
 - **Defined in:** `application_sdk/observability/context.py`
@@ -3035,9 +7495,52 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `get_logger`
 
 - **Import:** `from application_sdk.observability import get_logger`
+- **Also importable from:** `application_sdk.observability.logger_adaptor`
 - **Signature:** `get_logger(name: str | None = None)`
 - **Summary:** Get or create an instance of AtlanLoggerAdapter.
 - **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `get_metric_enrichment_labels`
+
+- **Import:** `from application_sdk.observability.utils import get_metric_enrichment_labels`
+- **Signature:** `get_metric_enrichment_labels() -> dict[str, str]`
+- **Summary:** Return ``METRIC_ENRICHMENT_KEYS`` resolved against the process resource,
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `get_metric_labels`
+
+- **Import:** `from application_sdk.observability.utils import get_metric_labels`
+- **Signature:** `get_metric_labels() -> dict[str, str]`
+- **Summary:** Return low-cardinality labels for Prometheus metrics.
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `get_metrics`
+
+- **Import:** `from application_sdk.observability.metrics_adaptor import get_metrics`
+- **Signature:** `get_metrics() -> AtlanMetricsAdapter`
+- **Summary:** Get or create a singleton instance of AtlanMetricsAdapter.
+- **Defined in:** `application_sdk/observability/metrics_adaptor.py`
+
+#### `get_observability_dir`
+
+- **Import:** `from application_sdk.observability.utils import get_observability_dir`
+- **Signature:** `get_observability_dir() -> str`
+- **Summary:** Build the observability path using deployment name.
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `get_sink`
+
+- **Import:** `from application_sdk.observability.sizing_sink import get_sink`
+- **Signature:** `get_sink() -> SizingObservabilitySink | None`
+- **Summary:** Process-wide sink, built on first use — a worker with collection off should
+- **Defined in:** `application_sdk/observability/sizing_sink.py`
+
+#### `get_trace_context`
+
+- **Import:** `from application_sdk.observability.trace_context import get_trace_context`
+- **Signature:** `get_trace_context() -> tuple[str, str]`
+- **Summary:** Return (trace_id, span_id) from the current OTel span context.
+- **Defined in:** `application_sdk/observability/trace_context.py`
 
 #### `get_traces`
 
@@ -3046,15 +7549,149 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Get or create a singleton instance of AtlanTracesAdapter.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
+#### `get_workflow_context`
+
+- **Import:** `from application_sdk.observability.utils import get_workflow_context`
+- **Signature:** `get_workflow_context() -> dict[str, str]`
+- **Summary:** Get the workflow context as a plain dict.
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `in_temporal_workflow`
+
+- **Import:** `from application_sdk.observability.utils import in_temporal_workflow`
+- **Signature:** `in_temporal_workflow() -> bool`
+- **Summary:** Return True when the caller is executing inside a Temporal workflow.
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `is_replaying`
+
+- **Import:** `from application_sdk.observability.context import is_replaying`
+- **Signature:** `is_replaying() -> bool`
+- **Summary:** Return True only when executing inside a replaying workflow.
+- **Defined in:** `application_sdk/observability/context.py`
+
+#### `main`
+
+- **Import:** `from application_sdk.observability.dapr_log_forwarder import main`
+- **Signature:** `main(argv: list[str] | None = None) -> int`
+- **Summary:** Run daprd as a child and forward its logs to the observability pipeline.
+- **Defined in:** `application_sdk/observability/dapr_log_forwarder.py`
+
+#### `memory_fraction`
+
+- **Import:** `from application_sdk.observability.cgroup import memory_fraction`
+- **Signature:** `memory_fraction() -> float | None`
+- **Summary:** Usage as a fraction of the limit, or ``None`` if either side is unknown.
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `memory_limit_bytes`
+
+- **Import:** `from application_sdk.observability.cgroup import memory_limit_bytes`
+- **Signature:** `memory_limit_bytes() -> int | None`
+- **Summary:** Memory limit, or ``None``. cgroup first (enforced) then the env var
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `memory_peak_bytes`
+
+- **Import:** `from application_sdk.observability.cgroup import memory_peak_bytes`
+- **Signature:** `memory_peak_bytes() -> int | None`
+- **Summary:** Kernel high-water mark. Un-reset it is pod-lifetime, so attributable to
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `memory_usage_bytes`
+
+- **Import:** `from application_sdk.observability.cgroup import memory_usage_bytes`
+- **Signature:** `memory_usage_bytes() -> int | None`
+- **Summary:** Current container memory usage — the counter the OOM killer acts on.
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
 #### `metrics`
 
 - **Import:** `from application_sdk.observability import metrics`
 - **Summary:** OTel-native metrics API for app authors.
 - **Defined in:** `application_sdk/observability/metrics.py`
 
+#### `observability`
+
+- **Import:** `from application_sdk.observability.decorators.observability_decorator import observability`
+- **Signature:** `observability(logger: AtlanLoggerAdapter | None = None, ...)`
+- **Summary:** Decorator for adding observability to functions.
+- **Defined in:** `application_sdk/observability/decorators/observability_decorator.py`
+
+#### `parse_otel_resource_attributes`
+
+- **Import:** `from application_sdk.observability.utils import parse_otel_resource_attributes`
+- **Signature:** `parse_otel_resource_attributes(env_var: str) -> dict[str, str]`
+- **Summary:** Parse 'key=val,key=val' OTEL_RESOURCE_ATTRIBUTES into a dict.
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `parse_pod_memory_limit`
+
+- **Import:** `from application_sdk.observability.resource_sampler import parse_pod_memory_limit`
+- **Signature:** `parse_pod_memory_limit(raw: str) -> int`
+- **Summary:** Parse a K8S_POD_MEMORY_LIMIT value into bytes.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
+#### `persist`
+
+- **Import:** `from application_sdk.observability.sizing_sink import persist`
+- **Signature:** `persist(observation: Any) -> None`
+- **Summary:** Buffer one observation. Never raises: called from an activity's ``finally``,
+- **Defined in:** `application_sdk/observability/sizing_sink.py`
+
+#### `prepare_memory_watermark`
+
+- **Import:** `from application_sdk.observability.cgroup import prepare_memory_watermark`
+- **Signature:** `prepare_memory_watermark(current: int | None = None) -> bool`
+- **Summary:** Whether ``memory.peak`` can later be read as this block's peak: either a
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `record_observation`
+
+- **Import:** `from application_sdk.observability.sizing import record_observation`
+- **Signature:** `record_observation(observation: SizingObservation) -> None`
+- **Summary:** Emit one observation as histograms plus a JSON log line. Never raises —
+- **Defined in:** `application_sdk/observability/sizing.py`
+
+#### `register_after_fork`
+
+- **Import:** `from application_sdk.observability.background_loop import register_after_fork`
+- **Signature:** `register_after_fork(callback: Callable[[], None], *, restarts_work: bool = False) -> None`
+- **Summary:** Run *callback* in a forked child, after the observability loop's reset.
+- **Defined in:** `application_sdk/observability/background_loop.py`
+
+#### `report_input_bytes`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import report_input_bytes`
+- **Signature:** `report_input_bytes(num_bytes: int, file_count: int = 1) -> None`
+- **Summary:** Report bytes read. A no-op unless collection is on, so it is safe to call
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `report_local_paths`
+
+- **Import:** `from application_sdk.observability.sizing_inputs import report_local_paths`
+- **Signature:** `report_local_paths(paths: list[str]) -> None`
+- **Summary:** Report the on-disk size of files this activity read. Never raises.
+- **Defined in:** `application_sdk/observability/sizing_inputs.py`
+
+#### `reset_memory_peak`
+
+- **Import:** `from application_sdk.observability.cgroup import reset_memory_peak`
+- **Signature:** `reset_memory_peak() -> bool`
+- **Summary:** Reset the high-water mark; ``True`` only if *proven* by reading it back.
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
+#### `sample`
+
+- **Import:** `from application_sdk.observability.resource_sampler import sample`
+- **Signature:** `sample() -> ResourceSample | None`
+- **Summary:** Capture current process CPU time and memory.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
 #### `set_correlation_context`
 
 - **Import:** `from application_sdk.observability import set_correlation_context`
+- **Also importable from:** `application_sdk.observability.correlation`
 - **Signature:** `set_correlation_context(ctx: CorrelationContext)`
 - **Summary:** Set the current correlation context.
 - **Defined in:** `application_sdk/observability/correlation.py`
@@ -3062,8 +7699,16 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 #### `set_execution_context`
 
 - **Import:** `from application_sdk.observability import set_execution_context`
+- **Also importable from:** `application_sdk.observability.context`
 - **Signature:** `set_execution_context(ctx: ExecutionContext)`
 - **Summary:** Set the current execution context.
+- **Defined in:** `application_sdk/observability/context.py`
+
+#### `set_replay_predicate`
+
+- **Import:** `from application_sdk.observability.context import set_replay_predicate`
+- **Signature:** `set_replay_predicate(pred: Callable[[], bool] | None) -> None`
+- **Summary:** Inject the replay-detection callable into the current async context.
 - **Defined in:** `application_sdk/observability/context.py`
 
 #### `setup_tracer_provider`
@@ -3073,7 +7718,126 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** Install the process-wide OpenTelemetry tracer provider, once.
 - **Defined in:** `application_sdk/observability/traces_adaptor.py`
 
+#### `shutdown_otlp_logs`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import shutdown_otlp_logs`
+- **Signature:** `shutdown_otlp_logs() -> None`
+- **Summary:** Flush and shut down the OTLP log provider(s). Idempotent (CNCT-107).
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `track_container_usage`
+
+- **Import:** `from application_sdk.observability.cgroup import track_container_usage`
+- **Signature:** `track_container_usage(poll_interval_seconds: float = 1.0, ...)`
+- **Summary:** Measure peak memory and CPU throttling across a block; never raises.
+- **Defined in:** `application_sdk/observability/cgroup.py`
+
 ### Constants and Enums
+
+#### `ACTIVITY_SHARES`
+
+- **Import:** `from application_sdk.observability.resource_sampler import ACTIVITY_SHARES`
+- **Signature:** `ACTIVITY_SHARES`
+- **Summary:** The worker process's ledger. One per process: the samples are process-wide.
+- **Defined in:** `application_sdk/observability/resource_sampler.py`
+
+#### `ARTIFACT_BOUNDARY_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_BOUNDARY_KEY`
+- **Signature:** `ARTIFACT_BOUNDARY_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_CLASSIFICATION_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_CLASSIFICATION_KEY`
+- **Signature:** `ARTIFACT_CLASSIFICATION_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_ENFORCEMENT_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_ENFORCEMENT_KEY`
+- **Signature:** `ARTIFACT_ENFORCEMENT_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_FAILED_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_FAILED_KEY`
+- **Signature:** `ARTIFACT_FAILED_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_FIELD_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_FIELD_KEY`
+- **Signature:** `ARTIFACT_FIELD_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_FIELDS_DECLARED_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_FIELDS_DECLARED_KEY`
+- **Signature:** `ARTIFACT_FIELDS_DECLARED_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_FORMAT_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_FORMAT_KEY`
+- **Signature:** `ARTIFACT_FORMAT_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_MODE_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_MODE_KEY`
+- **Signature:** `ARTIFACT_MODE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_PASSED_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_PASSED_KEY`
+- **Signature:** `ARTIFACT_PASSED_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_SCHEMA_SOURCE_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_SCHEMA_SOURCE_KEY`
+- **Signature:** `ARTIFACT_SCHEMA_SOURCE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_SIDE_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_SIDE_KEY`
+- **Signature:** `ARTIFACT_SIDE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_TOTAL_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_TOTAL_KEY`
+- **Signature:** `ARTIFACT_TOTAL_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_UNDECODABLE_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_UNDECODABLE_KEY`
+- **Signature:** `ARTIFACT_UNDECODABLE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ARTIFACT_UNIT_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_UNIT_KEY`
+- **Signature:** `ARTIFACT_UNIT_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `ARTIFACT_VALIDATION_EVENT`
 
@@ -3081,6 +7845,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `ARTIFACT_VALIDATION_EVENT: Final`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
+
+#### `ARTIFACT_VALIDATION_MATRIX_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ARTIFACT_VALIDATION_MATRIX_KEY`
+- **Signature:** `ARTIFACT_VALIDATION_MATRIX_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `ARTIFACT_VALIDATION_POSTURE_EVENT`
 
@@ -3096,12 +7867,167 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
+#### `ASSET_VALIDATION_MATRIX_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ASSET_VALIDATION_MATRIX_KEY`
+- **Signature:** `ASSET_VALIDATION_MATRIX_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ASSET_VALIDATION_ON_UPLOAD_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ASSET_VALIDATION_ON_UPLOAD_KEY`
+- **Signature:** `ASSET_VALIDATION_ON_UPLOAD_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `ASSET_VALIDATION_SUMMARY_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import ASSET_VALIDATION_SUMMARY_KEY`
+- **Signature:** `ASSET_VALIDATION_SUMMARY_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `CENSUS`
+
+- **Import:** `from application_sdk.observability.sizing_census import CENSUS`
+- **Signature:** `CENSUS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/sizing_census.py`
+
+#### `CHECK_MATRIX_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import CHECK_MATRIX_KEY`
+- **Signature:** `CHECK_MATRIX_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `CONSOLE_QUEUE_MAX_RECORDS`
+
+- **Import:** `from application_sdk.observability.console_sink import CONSOLE_QUEUE_MAX_RECORDS`
+- **Signature:** `CONSOLE_QUEUE_MAX_RECORDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/console_sink.py`
+
+#### `console_writer`
+
+- **Import:** `from application_sdk.observability.console_sink import console_writer`
+- **Signature:** `console_writer`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/console_sink.py`
+
+#### `CoreMetricsRead`
+
+- **Import:** `from application_sdk.observability.temporal_core_metrics import CoreMetricsRead`
+- **Signature:** `CoreMetricsRead`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/temporal_core_metrics.py`
+
 #### `correlation_context`
 
 - **Import:** `from application_sdk.observability import correlation_context`
+- **Also importable from:** `application_sdk.observability.context`
 - **Signature:** `correlation_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
+
+#### `default_logger`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import default_logger`
+- **Signature:** `default_logger`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `DEPENDENCY_LOGGERS`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import DEPENDENCY_LOGGERS`
+- **Signature:** `DEPENDENCY_LOGGERS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `DROP_WARNING_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.observability.console_sink import DROP_WARNING_INTERVAL_SECONDS`
+- **Signature:** `DROP_WARNING_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/console_sink.py`
+
+#### `FUNCTION_CALLS_METRIC`
+
+- **Import:** `from application_sdk.observability.decorators.observability_decorator import FUNCTION_CALLS_METRIC`
+- **Signature:** `FUNCTION_CALLS_METRIC`
+- **Summary:** Counter every ``@observability`` function records once per call.
+- **Defined in:** `application_sdk/observability/decorators/observability_decorator.py`
+
+#### `GATE_ATTEMPTS_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import GATE_ATTEMPTS_KEY`
+- **Signature:** `GATE_ATTEMPTS_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `GATE_CLASSIFICATION_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import GATE_CLASSIFICATION_KEY`
+- **Signature:** `GATE_CLASSIFICATION_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `GATE_DURATION_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import GATE_DURATION_KEY`
+- **Signature:** `GATE_DURATION_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `GATE_MODE_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import GATE_MODE_KEY`
+- **Signature:** `GATE_MODE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `GATE_TIER_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import GATE_TIER_KEY`
+- **Signature:** `GATE_TIER_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `GATE_TIMEOUT_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import GATE_TIMEOUT_KEY`
+- **Signature:** `GATE_TIMEOUT_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `LOCAL_OBS_SUBDIR_MAP`
+
+- **Import:** `from application_sdk.observability.observability import LOCAL_OBS_SUBDIR_MAP`
+- **Signature:** `LOCAL_OBS_SUBDIR_MAP`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/observability.py`
+
+#### `METRIC_ENRICHMENT_KEYS`
+
+- **Import:** `from application_sdk.observability.utils import METRIC_ENRICHMENT_KEYS`
+- **Signature:** `METRIC_ENRICHMENT_KEYS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `observability_loop`
+
+- **Import:** `from application_sdk.observability.background_loop import observability_loop`
+- **Signature:** `observability_loop`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/background_loop.py`
+
+#### `OBSERVABILITY_S3_PREFIX_MAP`
+
+- **Import:** `from application_sdk.observability.observability import OBSERVABILITY_S3_PREFIX_MAP`
+- **Signature:** `OBSERVABILITY_S3_PREFIX_MAP`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/observability.py`
 
 #### `OUTCOME_EVENT_NAMES`
 
@@ -3109,6 +8035,13 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Signature:** `OUTCOME_EVENT_NAMES: Final[frozenset[str]]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
+
+#### `OVERSIZE_REASON`
+
+- **Import:** `from application_sdk.observability.temporal_core_metrics import OVERSIZE_REASON`
+- **Signature:** `OVERSIZE_REASON`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/temporal_core_metrics.py`
 
 #### `PREFLIGHT_CHECK_EVENT`
 
@@ -3131,12 +8064,76 @@ Logging context — ExecutionContext, CorrelationContext, request/correlation he
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/events.py`
 
+#### `PREFLIGHT_SURFACE_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import PREFLIGHT_SURFACE_KEY`
+- **Signature:** `PREFLIGHT_SURFACE_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
 #### `request_context`
 
 - **Import:** `from application_sdk.observability import request_context`
+- **Also importable from:** `application_sdk.observability.context`
 - **Signature:** `request_context: ContextVar[dict[str, Any] | None]`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/observability/context.py`
+
+#### `SELF_FAILURE_LOG_INTERVAL_SECONDS`
+
+- **Import:** `from application_sdk.observability.utils import SELF_FAILURE_LOG_INTERVAL_SECONDS`
+- **Signature:** `SELF_FAILURE_LOG_INTERVAL_SECONDS`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `self_failure_logger`
+
+- **Import:** `from application_sdk.observability.utils import self_failure_logger`
+- **Signature:** `self_failure_logger`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/utils.py`
+
+#### `SEVERITY_MAPPING`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import SEVERITY_MAPPING`
+- **Signature:** `SEVERITY_MAPPING`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `SIZING_SCHEMA_VERSION`
+
+- **Import:** `from application_sdk.observability.sizing import SIZING_SCHEMA_VERSION`
+- **Signature:** `SIZING_SCHEMA_VERSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/sizing.py`
+
+#### `THREAD_NAME`
+
+- **Import:** `from application_sdk.observability.background_loop import THREAD_NAME`
+- **Signature:** `THREAD_NAME`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/background_loop.py`
+
+#### `WARMUP_DURATION_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import WARMUP_DURATION_KEY`
+- **Signature:** `WARMUP_DURATION_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `WARMUP_OUTCOME_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import WARMUP_OUTCOME_KEY`
+- **Signature:** `WARMUP_OUTCOME_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
+
+#### `WARMUP_TRANSITIONS_KEY`
+
+- **Import:** `from application_sdk.observability.logger_adaptor import WARMUP_TRANSITIONS_KEY`
+- **Signature:** `WARMUP_TRANSITIONS_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 ## `application_sdk.outputs`
 
@@ -3147,6 +8144,7 @@ Output collectors and record models for Automation Engine
 #### `Artifact`
 
 - **Import:** `from application_sdk.outputs import Artifact`
+- **Also importable from:** `application_sdk.outputs.models`
 - **Signature:** `class Artifact`
 - **Summary:** A reference to a downloadable file artifact.
 - **Defined in:** `application_sdk/outputs/models.py`
@@ -3154,6 +8152,7 @@ Output collectors and record models for Automation Engine
 #### `BlankIdentity`
 
 - **Import:** `from application_sdk.outputs import BlankIdentity`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `class BlankIdentity`
 - **Summary:** A field the record's qualifiedName is built from is blank. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
@@ -3161,20 +8160,44 @@ Output collectors and record models for Automation Engine
 #### `FetchFailureReason`
 
 - **Import:** `from application_sdk.outputs import FetchFailureReason`
+- **Also importable from:** `application_sdk.outputs.fetch_failures`
 - **Signature:** `class FetchFailureReason`
 - **Summary:** Why an item could not be fetched. A closed set, so failures aggregate across the fleet.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FetchFailureSink`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FetchFailureSink`
+- **Signature:** `class FetchFailureSink(_seen: int = 0, ...)`
+- **Summary:** One activity's fetch failures, held in memory until the activity returns.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FetchFailureSnapshot`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FetchFailureSnapshot`
+- **Signature:** `class FetchFailureSnapshot(seen: int, by_reason: dict[FetchFailureReason, int], lines: tuple[bytes, ...]) -> None`
+- **Summary:** What one activity recorded, taken once when its sink is closed.
 - **Defined in:** `application_sdk/outputs/fetch_failures.py`
 
 #### `MalformedRecord`
 
 - **Import:** `from application_sdk.outputs import MalformedRecord`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `class MalformedRecord`
 - **Summary:** The source record cannot be parsed or has the wrong shape. See :class:`RecordSkipped`.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `MergeResult`
+
+- **Import:** `from application_sdk.outputs.skipped import MergeResult`
+- **Signature:** `class MergeResult(key: str | None, kept: int) -> None`
+- **Summary:** What :func:`merge_run_skips` (or the fetch-failure merge) produced.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 #### `Metric`
 
 - **Import:** `from application_sdk.outputs import Metric`
+- **Also importable from:** `application_sdk.outputs.models`
 - **Signature:** `class Metric`
 - **Summary:** A single metric to expose in workflow output.
 - **Defined in:** `application_sdk/outputs/models.py`
@@ -3182,6 +8205,7 @@ Output collectors and record models for Automation Engine
 #### `MissingRequiredField`
 
 - **Import:** `from application_sdk.outputs import MissingRequiredField`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `class MissingRequiredField`
 - **Summary:** A required field other than an identity input is absent. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
@@ -3189,6 +8213,7 @@ Output collectors and record models for Automation Engine
 #### `OutputCollector`
 
 - **Import:** `from application_sdk.outputs import OutputCollector`
+- **Also importable from:** `application_sdk.outputs.collector`
 - **Signature:** `class OutputCollector()`
 - **Summary:** Collects metrics and artifacts during workflow or activity execution.
 - **Defined in:** `application_sdk/outputs/collector.py`
@@ -3196,13 +8221,29 @@ Output collectors and record models for Automation Engine
 #### `RecordSkipped`
 
 - **Import:** `from application_sdk.outputs import RecordSkipped`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `class RecordSkipped(record: SkippableRecord, *, record_id: str, entity_type: str, detail: str | None = None)`
 - **Summary:** A synchronous mapper's way to hand a skipped record up to its ``@task`` loop.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `RunLogLayout`
+
+- **Import:** `from application_sdk.outputs.skipped import RunLogLayout`
+- **Signature:** `class RunLogLayout(parts_dir: str, file_name: str, artifact: str, display_name: str) -> None`
+- **Summary:** Where one per-run NDJSON log lives and how it is surfaced.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SkippedRecordSink`
+
+- **Import:** `from application_sdk.outputs.skipped import SkippedRecordSink`
+- **Signature:** `class SkippedRecordSink(path: Path, ...)`
+- **Summary:** One activity's skipped records, buffered and written to a local NDJSON file.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 #### `SkipReason`
 
 - **Import:** `from application_sdk.outputs import SkipReason`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `class SkipReason`
 - **Summary:** Why a record was skipped. A closed set, so skips aggregate across the fleet.
 - **Defined in:** `application_sdk/outputs/skipped.py`
@@ -3210,11 +8251,19 @@ Output collectors and record models for Automation Engine
 #### `UnsupportedType`
 
 - **Import:** `from application_sdk.outputs import UnsupportedType`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `class UnsupportedType`
 - **Summary:** The source record is of a type the app does not map. See :class:`RecordSkipped`.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 ### Functions
+
+#### `activity_part_stem`
+
+- **Import:** `from application_sdk.outputs.skipped import activity_part_stem`
+- **Signature:** `activity_part_stem(activity_id: str) -> str`
+- **Summary:** An object-name-safe stem for one activity's part, unique per activity ID.
+- **Defined in:** `application_sdk/outputs/skipped.py`
 
 #### `get_outputs`
 
@@ -3223,9 +8272,53 @@ Output collectors and record models for Automation Engine
 - **Summary:** Get the output collector for the current execution context.
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
+#### `merge_run_log`
+
+- **Import:** `from application_sdk.outputs.skipped import merge_run_log`
+- **Signature:** `merge_run_log(run_prefix: str, scratch_dir: str, layout: RunLogLayout) -> MergeResult`
+- **Summary:** Concatenate one run log's parts into one capped file and register the artifact.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `merge_run_skips`
+
+- **Import:** `from application_sdk.outputs.skipped import merge_run_skips`
+- **Signature:** `merge_run_skips(run_prefix: str, scratch_dir: str) -> MergeResult`
+- **Summary:** Concatenate the run's skipped-record parts into one capped file and register the artifact.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `new_activity_sink`
+
+- **Import:** `from application_sdk.outputs.skipped import new_activity_sink`
+- **Signature:** `new_activity_sink() -> SkippedRecordSink | None`
+- **Summary:** A sink for the current activity, or ``None`` when its path is unavailable.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `persist_activity_fetch_failures`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import persist_activity_fetch_failures`
+- **Signature:** `persist_activity_fetch_failures(sink: FetchFailureSink) -> None`
+- **Summary:** Close the activity's sink: add its metrics and upload its part. Fails open.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `persist_activity_skips`
+
+- **Import:** `from application_sdk.outputs.skipped import persist_activity_skips`
+- **Signature:** `persist_activity_skips(sink: SkippedRecordSink) -> None`
+- **Summary:** Upload one activity's file as a part under the run prefix. Fails open.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `reason_metric_name`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import reason_metric_name`
+- **Also importable from:** `application_sdk.outputs.skipped`
+- **Signature:** `reason_metric_name(reason: FetchFailureReason) -> str`
+- **Summary:** The per-reason metric name, e.g. ``fetch-failures-not-found``.
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
 #### `record_fetch_failure`
 
 - **Import:** `from application_sdk.outputs import record_fetch_failure`
+- **Also importable from:** `application_sdk.outputs.fetch_failures`
 - **Signature:** `record_fetch_failure(reason: FetchFailureReason, *, ...)`
 - **Summary:** Record that one item could not be fetched, keeping its id for review after the run.
 - **Defined in:** `application_sdk/outputs/fetch_failures.py`
@@ -3233,11 +8326,19 @@ Output collectors and record models for Automation Engine
 #### `skip_record`
 
 - **Import:** `from application_sdk.outputs import skip_record`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `skip_record(record: SkippableRecord, reason: SkipReason, *, record_id: str, entity_type: str, detail: str | None = None)`
 - **Summary:** Skip a record on purpose, keeping it for review after the run.
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
 ### Constants and Enums
+
+#### `current_fetch_failures`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import current_fetch_failures`
+- **Signature:** `current_fetch_failures: contextvars.ContextVar[FetchFailureSink | None]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
 
 #### `current_outputs`
 
@@ -3246,10 +8347,123 @@ Output collectors and record models for Automation Engine
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/outputs/__init__.py`
 
+#### `current_skipped_records`
+
+- **Import:** `from application_sdk.outputs.skipped import current_skipped_records`
+- **Signature:** `current_skipped_records: contextvars.ContextVar[SkippedRecordSink | None]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `FETCH_FAILURES_ARTIFACT`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_ARTIFACT`
+- **Signature:** `FETCH_FAILURES_ARTIFACT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FETCH_FAILURES_FILE`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_FILE`
+- **Signature:** `FETCH_FAILURES_FILE: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FETCH_FAILURES_LAYOUT`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_LAYOUT`
+- **Signature:** `FETCH_FAILURES_LAYOUT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FETCH_FAILURES_METRIC`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_METRIC`
+- **Signature:** `FETCH_FAILURES_METRIC: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FETCH_FAILURES_PARTS_DIR`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_PARTS_DIR`
+- **Signature:** `FETCH_FAILURES_PARTS_DIR: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FETCH_FAILURES_TRUNCATED_METRIC`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_TRUNCATED_METRIC`
+- **Signature:** `FETCH_FAILURES_TRUNCATED_METRIC: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
+#### `FETCH_FAILURES_UNPERSISTED_METRIC`
+
+- **Import:** `from application_sdk.outputs.fetch_failures import FETCH_FAILURES_UNPERSISTED_METRIC`
+- **Signature:** `FETCH_FAILURES_UNPERSISTED_METRIC: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/fetch_failures.py`
+
 #### `MAX_SKIPPED_RECORDS`
 
 - **Import:** `from application_sdk.outputs import MAX_SKIPPED_RECORDS`
+- **Also importable from:** `application_sdk.outputs.skipped`
 - **Signature:** `MAX_SKIPPED_RECORDS: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SkippableRecord`
+
+- **Import:** `from application_sdk.outputs.skipped import SkippableRecord`
+- **Signature:** `SkippableRecord`
+- **Summary:** A record :func:`skip_record` accepts: a mapping (a source row) or a pydantic model.
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_ARTIFACT`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_ARTIFACT`
+- **Signature:** `SKIPPED_RECORDS_ARTIFACT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_FILE`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_FILE`
+- **Signature:** `SKIPPED_RECORDS_FILE: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_LAYOUT`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_LAYOUT`
+- **Signature:** `SKIPPED_RECORDS_LAYOUT: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_METRIC`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_METRIC`
+- **Signature:** `SKIPPED_RECORDS_METRIC: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_PARTS_DIR`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_PARTS_DIR`
+- **Signature:** `SKIPPED_RECORDS_PARTS_DIR: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_TRUNCATED_METRIC`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_TRUNCATED_METRIC`
+- **Signature:** `SKIPPED_RECORDS_TRUNCATED_METRIC: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/outputs/skipped.py`
+
+#### `SKIPPED_RECORDS_UNPERSISTED_METRIC`
+
+- **Import:** `from application_sdk.outputs.skipped import SKIPPED_RECORDS_UNPERSISTED_METRIC`
+- **Signature:** `SKIPPED_RECORDS_UNPERSISTED_METRIC: Final`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/outputs/skipped.py`
 
@@ -3272,9 +8486,59 @@ FastAPI server, MCP integration, middleware, health endpoint
 
 ### Classes
 
+#### `ConfigMapResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import ConfigMapResponse`
+- **Signature:** `class ConfigMapResponse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `EventWorkflowRequest`
+
+- **Import:** `from application_sdk.server.fastapi.models import EventWorkflowRequest`
+- **Signature:** `class EventWorkflowRequest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `EventWorkflowResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import EventWorkflowResponse`
+- **Signature:** `class EventWorkflowResponse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `FetchMetadataRequest`
+
+- **Import:** `from application_sdk.server.fastapi.models import FetchMetadataRequest`
+- **Signature:** `class FetchMetadataRequest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `FetchMetadataResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import FetchMetadataResponse`
+- **Signature:** `class FetchMetadataResponse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `FileUploadResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import FileUploadResponse`
+- **Signature:** `class FileUploadResponse`
+- **Summary:** Response model for file upload endpoint matching heracles format.
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `HealthStatus`
+
+- **Import:** `from application_sdk.server.health import HealthStatus`
+- **Signature:** `class HealthStatus(healthy: bool, ...)`
+- **Summary:** Health check status response.
+- **Defined in:** `application_sdk/server/health.py`
+
 #### `LogMiddleware`
 
 - **Import:** `from application_sdk.server.middleware import LogMiddleware`
+- **Also importable from:** `application_sdk.server.middleware.log`
 - **Signature:** `class LogMiddleware(app: ASGIApp)`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/server/middleware/log.py`
@@ -3282,6 +8546,7 @@ FastAPI server, MCP integration, middleware, health endpoint
 #### `MCPMetadata`
 
 - **Import:** `from application_sdk.server.mcp import MCPMetadata`
+- **Also importable from:** `application_sdk.server.mcp.models`
 - **Signature:** `class MCPMetadata`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/server/mcp/models.py`
@@ -3289,9 +8554,138 @@ FastAPI server, MCP integration, middleware, health endpoint
 #### `MCPServer`
 
 - **Import:** `from application_sdk.server.mcp import MCPServer`
+- **Also importable from:** `application_sdk.server.mcp.server`
 - **Signature:** `class MCPServer(application_name: str, instructions: Optional[str] = None)`
 - **Summary:** MCP Server using FastMCP with FastAPI mounting capability.
 - **Defined in:** `application_sdk/server/mcp/server.py`
+
+#### `MetadataType`
+
+- **Import:** `from application_sdk.server.fastapi.models import MetadataType`
+- **Signature:** `class MetadataType`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `PreflightCheckRequest`
+
+- **Import:** `from application_sdk.server.fastapi.models import PreflightCheckRequest`
+- **Signature:** `class PreflightCheckRequest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `PreflightCheckResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import PreflightCheckResponse`
+- **Signature:** `class PreflightCheckResponse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `Subscription`
+
+- **Import:** `from application_sdk.server.fastapi.models import Subscription`
+- **Signature:** `class Subscription`
+- **Summary:** Subscription configuration for Dapr messaging.
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `TemporalClientProtocol`
+
+- **Import:** `from application_sdk.server.health import TemporalClientProtocol`
+- **Signature:** `class TemporalClientProtocol`
+- **Summary:** Protocol for Temporal client health checks.
+- **Defined in:** `application_sdk/server/health.py`
+
+#### `TestAuthRequest`
+
+- **Import:** `from application_sdk.server.fastapi.models import TestAuthRequest`
+- **Signature:** `class TestAuthRequest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `TestAuthResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import TestAuthResponse`
+- **Signature:** `class TestAuthResponse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `WorkerHealthServer`
+
+- **Import:** `from application_sdk.server.health import WorkerHealthServer`
+- **Signature:** `class WorkerHealthServer(*, ...)`
+- **Summary:** Lightweight health check HTTP server for workers.
+- **Defined in:** `application_sdk/server/health.py`
+
+#### `WorkflowConfigRequest`
+
+- **Import:** `from application_sdk.server.fastapi.models import WorkflowConfigRequest`
+- **Signature:** `class WorkflowConfigRequest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `WorkflowConfigResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import WorkflowConfigResponse`
+- **Signature:** `class WorkflowConfigResponse`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `WorkflowData`
+
+- **Import:** `from application_sdk.server.fastapi.models import WorkflowData`
+- **Signature:** `class WorkflowData`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `WorkflowRequest`
+
+- **Import:** `from application_sdk.server.fastapi.models import WorkflowRequest`
+- **Signature:** `class WorkflowRequest`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+#### `WorkflowResponse`
+
+- **Import:** `from application_sdk.server.fastapi.models import WorkflowResponse`
+- **Signature:** `class WorkflowResponse`
+- **Summary:** Response of the v2 server's workflow-start route.
+- **Defined in:** `application_sdk/server/fastapi/models.py`
+
+### Functions
+
+#### `build_worker_health_server`
+
+- **Import:** `from application_sdk.server.health import build_worker_health_server`
+- **Signature:** `build_worker_health_server(*, port: int, client: TemporalClientProtocol) -> WorkerHealthServer`
+- **Summary:** Build a ``WorkerHealthServer`` wired for the worker liveness window.
+- **Defined in:** `application_sdk/server/health.py`
+
+#### `internal_server_error_handler`
+
+- **Import:** `from application_sdk.server.fastapi.utils import internal_server_error_handler`
+- **Signature:** `internal_server_error_handler(_, exc: Exception) -> JSONResponse`
+- **Summary:** Handle internal server errors in FastAPI applications.
+- **Defined in:** `application_sdk/server/fastapi/utils.py`
+
+#### `mcp_tool`
+
+- **Import:** `from application_sdk.server.mcp.decorators import mcp_tool`
+- **Signature:** `mcp_tool(name: str | None = None, description: str | None = None, visible: bool = True, *args, **kwargs)`
+- **Summary:** Decorator to mark functions as MCP tools.
+- **Defined in:** `application_sdk/server/mcp/decorators.py`
+
+#### `run_health_server`
+
+- **Import:** `from application_sdk.server.health import run_health_server`
+- **Signature:** `run_health_server(*, *, ...)`
+- **Summary:** Create and start a health server.
+- **Defined in:** `application_sdk/server/health.py`
+
+#### `upload_file_to_object_store`
+
+- **Import:** `from application_sdk.server.fastapi.utils import upload_file_to_object_store`
+- **Signature:** `upload_file_to_object_store(file: UploadFile, ...)`
+- **Summary:** Upload file to object store and return metadata.
+- **Defined in:** `application_sdk/server/fastapi/utils.py`
 
 ### Constants and Enums
 
@@ -3308,9 +8702,24 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 ### Classes
 
+#### `AbstractFormatReaderError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import AbstractFormatReaderError`
+- **Signature:** `class AbstractFormatReaderError(*, ...)`
+- **Summary:** A Reader abstract method was called without a concrete implementation.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `AnyOfPolicy`
+
+- **Import:** `from application_sdk.storage.rolling import AnyOfPolicy`
+- **Signature:** `class AnyOfPolicy(*policies: RolloverPolicy) -> None`
+- **Summary:** Composite — roll when *any* of the constituent policies trigger.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
 #### `BindingSecretRefs`
 
 - **Import:** `from application_sdk.storage import BindingSecretRefs`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `class BindingSecretRefs(secret_store: str | None = None, refs: list[tuple[str, str]] = list())`
 - **Summary:** Which secrets a Dapr component needs, and which store holds them.
 - **Defined in:** `application_sdk/storage/binding.py`
@@ -3318,41 +8727,250 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `BoundStore`
 
 - **Import:** `from application_sdk.storage import BoundStore`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `class BoundStore(store: ObjectStore, put_attributes: dict[str, str] | None = None)`
 - **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `BufferState`
+
+- **Import:** `from application_sdk.storage.rolling import BufferState`
+- **Signature:** `class BufferState(chunk_start_monotonic: float, ...)`
+- **Summary:** Snapshot of the writer's buffer at the moment a rollover decision is made.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
 #### `CloudStore`
 
 - **Import:** `from application_sdk.storage import CloudStore`
+- **Also importable from:** `application_sdk.storage.cloud`
 - **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown', put_attributes: dict[str, str] | None = None)`
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `CountPolicy`
+
+- **Import:** `from application_sdk.storage.rolling import CountPolicy`
+- **Signature:** `class CountPolicy(max_records: int) -> None`
+- **Summary:** Roll when buffered record count reaches ``max_records``.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
 #### `DataObject`
 
 - **Import:** `from application_sdk.storage import DataObject`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `class DataObject(key: str, size: int, etag: str | None, has_sidecar: bool)`
 - **Summary:** One data object from a listing, with everything a transfer needs.
 - **Defined in:** `application_sdk/storage/batch.py`
 
+#### `DeploymentObjectStoreMissingError`
+
+- **Import:** `from application_sdk.storage.errors import DeploymentObjectStoreMissingError`
+- **Signature:** `class DeploymentObjectStoreMissingError(message: str, ...)`
+- **Summary:** The deployment object-store Dapr component is absent at startup.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `FormatCloseError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import FormatCloseError`
+- **Signature:** `class FormatCloseError(*, ...)`
+- **Summary:** An unexpected error occurred while closing a format writer.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `FormatPathRequiredError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import FormatPathRequiredError`
+- **Signature:** `class FormatPathRequiredError(*, ...)`
+- **Summary:** A required path argument was not provided to a format reader or writer.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `FormatReadError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import FormatReadError`
+- **Signature:** `class FormatReadError(*, ...)`
+- **Summary:** An unexpected error occurred while reading from a format reader.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `FormatStatisticsWriteError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import FormatStatisticsWriteError`
+- **Signature:** `class FormatStatisticsWriteError(*, ...)`
+- **Summary:** An unexpected error occurred while writing format statistics.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `FormatWriteError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import FormatWriteError`
+- **Signature:** `class FormatWriteError(*, ...)`
+- **Summary:** An unexpected error occurred while writing via a format writer.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `InternalError`
+
+- **Import:** `from application_sdk.storage.transfer import InternalError`
+- **Signature:** `class InternalError`
+- **Summary:** Deprecated inert subclass kept only so the name stays importable until v4.0.
+- **Defined in:** `application_sdk/storage/transfer.py`
+
+#### `InvalidRollingFileWriterError`
+
+- **Import:** `from application_sdk.storage.rolling_errors import InvalidRollingFileWriterError`
+- **Signature:** `class InvalidRollingFileWriterError(*, ...)`
+- **Summary:** A RollingFileWriter constructor parameter is invalid.
+- **Defined in:** `application_sdk/storage/rolling_errors.py`
+
+#### `InvalidRolloverPolicyError`
+
+- **Import:** `from application_sdk.storage.rolling_errors import InvalidRolloverPolicyError`
+- **Signature:** `class InvalidRolloverPolicyError(*, ...)`
+- **Summary:** A rollover policy parameter value is invalid.
+- **Defined in:** `application_sdk/storage/rolling_errors.py`
+
+#### `JsonFileReader`
+
+- **Import:** `from application_sdk.storage.formats.json import JsonFileReader`
+- **Signature:** `class JsonFileReader(path: str, ...)`
+- **Summary:** JSON File Reader class to read data from JSON files using orjson.
+- **Defined in:** `application_sdk/storage/formats/json.py`
+
+#### `JsonFileWriter`
+
+- **Import:** `from application_sdk.storage.formats.json import JsonFileWriter`
+- **Signature:** `class JsonFileWriter(path: str, ...)`
+- **Summary:** Output handler for writing data to JSON files.
+- **Defined in:** `application_sdk/storage/formats/json.py`
+
+#### `MissingStatisticsError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import MissingStatisticsError`
+- **Signature:** `class MissingStatisticsError(*, ...)`
+- **Summary:** Writer statistics were expected but unavailable at close time.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `NamedFileRef`
+
+- **Import:** `from application_sdk.storage.file_ref_sync import NamedFileRef`
+- **Signature:** `class NamedFileRef(ref: FileReference, field: str = '', owner: type | None = None) -> None`
+- **Summary:** One ``FileReference`` found in a contract tree, with where it was found.
+- **Defined in:** `application_sdk/storage/file_ref_sync.py`
+
 #### `ObjectStoreCheckResult`
 
 - **Import:** `from application_sdk.storage import ObjectStoreCheckResult`
+- **Also importable from:** `application_sdk.storage.preflight`
 - **Signature:** `class ObjectStoreCheckResult(label: str, ...)`
 - **Summary:** Structured outcome of a single object-store access probe.
 - **Defined in:** `application_sdk/storage/preflight.py`
 
+#### `ObjectStoreDownloadError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import ObjectStoreDownloadError`
+- **Signature:** `class ObjectStoreDownloadError(*, ...)`
+- **Summary:** No local files found and download from object store failed.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ObjectStoreNotProvidedError`
+
+- **Import:** `from application_sdk.storage.errors import ObjectStoreNotProvidedError`
+- **Signature:** `class ObjectStoreNotProvidedError(*, ...)`
+- **Summary:** No object store is available — must pass store= or configure infrastructure.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `ObjectStorePreflightError`
 
 - **Import:** `from application_sdk.storage import ObjectStorePreflightError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class ObjectStorePreflightError(message: str, ...)`
 - **Summary:** One or more object stores failed the SDR boot-time access preflight.
 - **Defined in:** `application_sdk/storage/errors.py`
 
+#### `ObjectStoreReadError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import ObjectStoreReadError`
+- **Signature:** `class ObjectStoreReadError(*, ...)`
+- **Summary:** Object store listing returned no files matching the expected extension.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ParquetFileReader`
+
+- **Import:** `from application_sdk.storage.formats.parquet import ParquetFileReader`
+- **Signature:** `class ParquetFileReader(path: str, ...)`
+- **Summary:** Parquet File Reader class to read data from Parquet files using pyarrow and pandas.
+- **Defined in:** `application_sdk/storage/formats/parquet.py`
+
+#### `ParquetFileWriter`
+
+- **Import:** `from application_sdk.storage.formats.parquet import ParquetFileWriter`
+- **Signature:** `class ParquetFileWriter(path: str, ...)`
+- **Summary:** Output handler for writing data to Parquet files.
+- **Defined in:** `application_sdk/storage/formats/parquet.py`
+
+#### `Reader`
+
+- **Import:** `from application_sdk.storage.formats import Reader`
+- **Signature:** `class Reader() -> None`
+- **Summary:** Abstract base class for reader data sources.
+- **Defined in:** `application_sdk/storage/formats/__init__.py`
+
+#### `ReaderClosedError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import ReaderClosedError`
+- **Signature:** `class ReaderClosedError(*, ...)`
+- **Summary:** Read was attempted on a closed reader.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `ReplacePrefixEmptyError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import ReplacePrefixEmptyError`
+- **Signature:** `class ReplacePrefixEmptyError(*, ...)`
+- **Summary:** replace_prefix=True was requested but the object-store prefix is empty.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `RollingFileWriter`
+
+- **Import:** `from application_sdk.storage.rolling import RollingFileWriter`
+- **Signature:** `class RollingFileWriter(base_path: str, ...)`
+- **Summary:** Roll over to a new chunk file when any configured policy fires.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
+#### `RollingWriterClosedError`
+
+- **Import:** `from application_sdk.storage.rolling_errors import RollingWriterClosedError`
+- **Signature:** `class RollingWriterClosedError(*, ...)`
+- **Summary:** An append was attempted on a closed RollingFileWriter.
+- **Defined in:** `application_sdk/storage/rolling_errors.py`
+
+#### `RolloverPolicy`
+
+- **Import:** `from application_sdk.storage.rolling import RolloverPolicy`
+- **Signature:** `class RolloverPolicy`
+- **Summary:** Decides when ``RollingFileWriter`` should flush the current buffer.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
+#### `SdrStorageDiskFullError`
+
+- **Import:** `from application_sdk.storage.errors import SdrStorageDiskFullError`
+- **Signature:** `class SdrStorageDiskFullError(message: str, ...)`
+- **Summary:** A ``StorageDiskFullError`` raised on a Self-Deployed Runtime agent.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `SingleFilePathWithFileNamesError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import SingleFilePathWithFileNamesError`
+- **Signature:** `class SingleFilePathWithFileNamesError(*, ...)`
+- **Summary:** A single file path and file_names filter were both specified, which is invalid.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `SizePolicy`
+
+- **Import:** `from application_sdk.storage.rolling import SizePolicy`
+- **Signature:** `class SizePolicy(max_bytes: int) -> None`
+- **Summary:** Roll when the buffered byte estimate reaches ``max_bytes``.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
 #### `StorageAuthError`
 
 - **Import:** `from application_sdk.storage import StorageAuthError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageAuthError(message: str, ...)`
 - **Summary:** The store rejected the credential itself (HTTP 401).
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3360,6 +8978,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageBindingBrokenError`
 
 - **Import:** `from application_sdk.storage import StorageBindingBrokenError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageBindingBrokenError(message: str, ...)`
 - **Summary:** Dapr component YAML exists but has unresolvable configuration.
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3367,6 +8986,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageBindingNotFoundError`
 
 - **Import:** `from application_sdk.storage import StorageBindingNotFoundError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageBindingNotFoundError(message: str, ...)`
 - **Summary:** No Dapr component with the given name exists in the components directory.
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3374,6 +8994,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageBucketRelocationError`
 
 - **Import:** `from application_sdk.storage import StorageBucketRelocationError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageBucketRelocationError(message: str, ...)`
 - **Summary:** A write was rejected because the bucket is being relocated.
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3381,6 +9002,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageConfigError`
 
 - **Import:** `from application_sdk.storage import StorageConfigError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageConfigError(message: str, ...)`
 - **Summary:** Storage configuration is invalid (e.g., missing bucket name).
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3388,13 +9010,22 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageDiskFullError`
 
 - **Import:** `from application_sdk.storage import StorageDiskFullError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageDiskFullError(message: str, ...)`
 - **Summary:** A download could not be written because the local volume is full.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageEmptyUploadError`
+
+- **Import:** `from application_sdk.storage.errors import StorageEmptyUploadError`
+- **Signature:** `class StorageEmptyUploadError(message: str, ...)`
+- **Summary:** Directory upload found zero files when raise_on_empty=True.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageError`
 
 - **Import:** `from application_sdk.storage import StorageError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageError(message: str, ...)`
 - **Summary:** Generic storage-subsystem failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3402,6 +9033,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageGatewayAuthUnavailableError`
 
 - **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
 - **Summary:** A request was rejected by the object-store gateway's own auth backend.
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3409,13 +9041,22 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageGatewayNoRouteError`
 
 - **Import:** `from application_sdk.storage import StorageGatewayNoRouteError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageGatewayNoRouteError(message: str, ...)`
 - **Summary:** The object-store gateway answered 404 because its route table is not loaded yet.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageHandoffIncompleteError`
+
+- **Import:** `from application_sdk.storage.errors import StorageHandoffIncompleteError`
+- **Signature:** `class StorageHandoffIncompleteError(message: str, ...)`
+- **Summary:** A producer's declared outputs are not all present in the store (FND-1790).
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`
 
 - **Import:** `from application_sdk.storage import StorageIntegrityError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageIntegrityError(message: str, ...)`
 - **Summary:** Transferred bytes do not match the digest recorded for them (FND-306).
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3423,6 +9064,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StorageNotFoundError`
 
 - **Import:** `from application_sdk.storage import StorageNotFoundError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StorageNotFoundError(message: str, ...)`
 - **Summary:** Object or key not found in the store.
 - **Defined in:** `application_sdk/storage/errors.py`
@@ -3430,15 +9072,101 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `StoragePermissionError`
 
 - **Import:** `from application_sdk.storage import StoragePermissionError`
+- **Also importable from:** `application_sdk.storage.errors`
 - **Signature:** `class StoragePermissionError(message: str, ...)`
 - **Summary:** Bucket or object access denied.
 - **Defined in:** `application_sdk/storage/errors.py`
 
+#### `TempFolderPathMissingError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import TempFolderPathMissingError`
+- **Signature:** `class TempFolderPathMissingError(*, ...)`
+- **Summary:** A write to a temp folder was attempted before the folder was initialised.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `TimePolicy`
+
+- **Import:** `from application_sdk.storage.rolling import TimePolicy`
+- **Signature:** `class TimePolicy(interval_seconds: float) -> None`
+- **Summary:** Roll when wall clock has advanced ``interval_seconds`` since chunk start.
+- **Defined in:** `application_sdk/storage/rolling.py`
+
+#### `UnplaceableDeclaredFileError`
+
+- **Import:** `from application_sdk.storage.errors import UnplaceableDeclaredFileError`
+- **Signature:** `class UnplaceableDeclaredFileError(message: str, ...)`
+- **Summary:** ``upload_refs`` cannot work out where a declared file belongs (FND-1790).
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `UnsafeUploadPathError`
+
+- **Import:** `from application_sdk.storage.errors import UnsafeUploadPathError`
+- **Signature:** `class UnsafeUploadPathError(*, ...)`
+- **Summary:** Upload path is blocked — sensitive path, traversal, or user-defined block list.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `UnsupportedDataframeTypeError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import UnsupportedDataframeTypeError`
+- **Signature:** `class UnsupportedDataframeTypeError(*, ...)`
+- **Summary:** The requested dataframe type is not supported by this writer/reader.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `UnsupportedDataTypeError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import UnsupportedDataTypeError`
+- **Signature:** `class UnsupportedDataTypeError(*, ...)`
+- **Summary:** Input data is not a supported type for conversion to a DataFrame.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `UnsupportedFileExtensionError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import UnsupportedFileExtensionError`
+- **Signature:** `class UnsupportedFileExtensionError(*, ...)`
+- **Summary:** The file extension is not supported by this format utility.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `WriteMode`
+
+- **Import:** `from application_sdk.storage.formats import WriteMode`
+- **Signature:** `class WriteMode`
+- **Summary:** Enumeration of write modes for output operations.
+- **Defined in:** `application_sdk/storage/formats/__init__.py`
+
+#### `Writer`
+
+- **Import:** `from application_sdk.storage.formats import Writer`
+- **Signature:** `class Writer`
+- **Summary:** Abstract base class for writer handlers.
+- **Defined in:** `application_sdk/storage/formats/__init__.py`
+
+#### `WriterClosedError`
+
+- **Import:** `from application_sdk.storage.formats.format_errors import WriterClosedError`
+- **Signature:** `class WriterClosedError(*, ...)`
+- **Summary:** Write was attempted on a closed writer.
+- **Defined in:** `application_sdk/storage/formats/format_errors.py`
+
+#### `WriterResult`
+
+- **Import:** `from application_sdk.storage.formats import WriterResult`
+- **Signature:** `class WriterResult(total_record_count: int = 0, ...)`
+- **Summary:** Outcome of a Writer.close() call.
+- **Defined in:** `application_sdk/storage/formats/__init__.py`
+
 ### Functions
+
+#### `check_local_file_stable`
+
+- **Import:** `from application_sdk.storage.integrity import check_local_file_stable`
+- **Signature:** `check_local_file_stable(key: str, local_path: str | Path, *, declared_size: int, bytes_read: int) -> None`
+- **Summary:** Assert the local file did not shrink while it was being uploaded.
+- **Defined in:** `application_sdk/storage/integrity.py`
 
 #### `check_object_store_access`
 
 - **Import:** `from application_sdk.storage import check_object_store_access`
+- **Also importable from:** `application_sdk.storage.preflight`
 - **Signature:** `check_object_store_access(infra: InfrastructureContext | None)`
 - **Summary:** Non-raising object-store access probe for the interactive SDR preflight.
 - **Defined in:** `application_sdk/storage/preflight.py`
@@ -3446,13 +9174,36 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `check_run_storage_access`
 
 - **Import:** `from application_sdk.storage import check_run_storage_access`
+- **Also importable from:** `application_sdk.storage.preflight`
 - **Signature:** `check_run_storage_access(infra: InfrastructureContext | None, *, timeout_seconds: float | None = None)`
 - **Summary:** Non-raising probe of every store a workflow run will upload artifacts to.
 - **Defined in:** `application_sdk/storage/preflight.py`
 
+#### `check_transfer_digest`
+
+- **Import:** `from application_sdk.storage.integrity import check_transfer_digest`
+- **Signature:** `check_transfer_digest(op: str, key: str, *, expected: str, actual: str, local_path: str | Path | None = None) -> None`
+- **Summary:** Assert transferred content hashes to the digest its producer recorded.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
+#### `check_transfer_size`
+
+- **Import:** `from application_sdk.storage.integrity import check_transfer_size`
+- **Signature:** `check_transfer_size(op: str, key: str, *, expected: int, actual: int, local_path: str | Path | None = None) -> None`
+- **Summary:** Assert a transfer moved exactly *expected* bytes.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
+#### `convert_datetime_to_epoch`
+
+- **Import:** `from application_sdk.storage.formats.utils import convert_datetime_to_epoch`
+- **Signature:** `convert_datetime_to_epoch(data: Any) -> Any`
+- **Summary:** Convert datetime objects to epoch timestamps in milliseconds.
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
 #### `create_local_store`
 
 - **Import:** `from application_sdk.storage import create_local_store`
+- **Also importable from:** `application_sdk.storage.factory`
 - **Signature:** `create_local_store(root_path: str | Path)`
 - **Summary:** Create a ``LocalStore`` rooted at *root_path*.
 - **Defined in:** `application_sdk/storage/factory.py`
@@ -3460,6 +9211,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `create_memory_store`
 
 - **Import:** `from application_sdk.storage import create_memory_store`
+- **Also importable from:** `application_sdk.storage.factory`
 - **Signature:** `create_memory_store()`
 - **Summary:** Create an in-memory store suitable for unit tests.
 - **Defined in:** `application_sdk/storage/factory.py`
@@ -3467,6 +9219,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `create_store_from_binding`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `create_store_from_binding(name: str, *, secrets: SecretMap | None = None, ...)`
 - **Summary:** Create an obstore store from a Dapr component binding YAML file.
 - **Defined in:** `application_sdk/storage/binding.py`
@@ -3474,6 +9227,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `create_store_from_binding_optional`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding_optional`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `create_store_from_binding_optional(name: str, *, secrets: SecretMap | None = None, ...)`
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
@@ -3481,6 +9235,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `create_store_from_binding_with_put_attrs`
 
 - **Import:** `from application_sdk.storage import create_store_from_binding_with_put_attrs`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, secrets: SecretMap | None = None, ...)`
 - **Summary:** Create an obstore store and any associated put attributes from a Dapr binding.
 - **Defined in:** `application_sdk/storage/binding.py`
@@ -3488,6 +9243,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `delete`
 
 - **Import:** `from application_sdk.storage import delete`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `delete(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Delete the object at *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
@@ -3495,13 +9251,22 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `delete_prefix`
 
 - **Import:** `from application_sdk.storage import delete_prefix`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `delete_prefix(prefix: str, store: ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Delete all objects whose key starts with *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
 
+#### `download`
+
+- **Import:** `from application_sdk.storage.transfer import download`
+- **Signature:** `download(storage_path: str, *, ...)`
+- **Summary:** Download a key or prefix from the object store to a local path.
+- **Defined in:** `application_sdk/storage/transfer.py`
+
 #### `download_file`
 
 - **Import:** `from application_sdk.storage import download_file`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `download_file(key: str, *, ...)`
 - **Summary:** Stream-download *key* from the store to a local file.
 - **Defined in:** `application_sdk/storage/ops.py`
@@ -3509,6 +9274,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `download_file_chunked`
 
 - **Import:** `from application_sdk.storage import download_file_chunked`
+- **Also importable from:** `application_sdk.storage.chunked`, `application_sdk.storage.ops`
 - **Signature:** `download_file_chunked(key: str, *, ...)`
 - **Summary:** Download *key* using parallel range GETs, writing chunks at fixed offsets.
 - **Defined in:** `application_sdk/storage/chunked.py`
@@ -3516,27 +9282,94 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `download_prefix`
 
 - **Import:** `from application_sdk.storage import download_prefix`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `download_prefix(prefix: str, *, ...)`
 - **Summary:** Download all objects under *prefix* to a local directory.
 - **Defined in:** `application_sdk/storage/batch.py`
 
+#### `estimate_dataframe_record_size`
+
+- **Import:** `from application_sdk.storage.formats.utils import estimate_dataframe_record_size`
+- **Signature:** `estimate_dataframe_record_size(dataframe: pd.DataFrame, file_extension: str) -> int`
+- **Summary:** Estimate File size of a DataFrame by sampling a few records.
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
 #### `exists`
 
 - **Import:** `from application_sdk.storage import exists`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `exists(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `fetch`
+
+- **Import:** `from application_sdk.storage.reference import fetch`
+- **Signature:** `fetch(ref: FileReference, store: ObjectStore | None = None) -> FileReference`
+- **Summary:** Materialize a single durable ``FileReference`` on demand.
+- **Defined in:** `application_sdk/storage/reference.py`
+
+#### `find_local_files_by_extension`
+
+- **Import:** `from application_sdk.storage.formats.utils import find_local_files_by_extension`
+- **Signature:** `find_local_files_by_extension(path: str, extension: str, file_names: list[str] | None = None) -> list[str]`
+- **Summary:** Find local files at the specified local path, optionally filtering by file names.
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
 #### `get_file_meta`
 
 - **Import:** `from application_sdk.storage import get_file_meta`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `get_file_meta(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `get_file_size`
+
+- **Import:** `from application_sdk.storage.ops import get_file_size`
+- **Signature:** `get_file_size(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True) -> int | None`
+- **Summary:** Return the byte size of *key* via a HEAD request, or ``None`` if not found.
+- **Defined in:** `application_sdk/storage/ops.py`
+
+#### `has_refs_to_materialize`
+
+- **Import:** `from application_sdk.storage.file_ref_sync import has_refs_to_materialize`
+- **Signature:** `has_refs_to_materialize(data: object) -> bool`
+- **Summary:** Return True if *data* may contain durable FileReferences to download.
+- **Defined in:** `application_sdk/storage/file_ref_sync.py`
+
+#### `has_refs_to_persist`
+
+- **Import:** `from application_sdk.storage.file_ref_sync import has_refs_to_persist`
+- **Signature:** `has_refs_to_persist(data: object) -> bool`
+- **Summary:** Return True if *data* contains ephemeral FileReferences (local but not durable).
+- **Defined in:** `application_sdk/storage/file_ref_sync.py`
+
+#### `is_binding_configured`
+
+- **Import:** `from application_sdk.storage.binding import is_binding_configured`
+- **Signature:** `is_binding_configured(name: str, *, secrets: SecretMap | None = None) -> bool, ...)`
+- **Summary:** Return True if a usable Dapr component named *name* exists.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `is_empty_dataframe`
+
+- **Import:** `from application_sdk.storage.formats.utils import is_empty_dataframe`
+- **Signature:** `is_empty_dataframe(dataframe: pd.DataFrame) -> bool`
+- **Summary:** Check if a DataFrame is empty.
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
+#### `iter_named_file_refs`
+
+- **Import:** `from application_sdk.storage.file_ref_sync import iter_named_file_refs`
+- **Signature:** `iter_named_file_refs(data: object, *, field: str = '', owner: type | None = None) -> Iterator[NamedFileRef]`
+- **Summary:** Walk a contract tree yielding every ``FileReference`` with its field name.
+- **Defined in:** `application_sdk/storage/file_ref_sync.py`
+
 #### `list_data_keys`
 
 - **Import:** `from application_sdk.storage import list_data_keys`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `list_data_keys(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** List data object keys under *prefix*, excluding SHA-256 sidecars.
 - **Defined in:** `application_sdk/storage/batch.py`
@@ -3544,6 +9377,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `list_data_keys_with_meta`
 
 - **Import:** `from application_sdk.storage import list_data_keys_with_meta`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `list_data_keys_with_meta(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Like :func:`list_data_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 - **Defined in:** `application_sdk/storage/batch.py`
@@ -3551,6 +9385,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `list_data_objects`
 
 - **Import:** `from application_sdk.storage import list_data_objects`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `list_data_objects(prefix: str = '', store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** List data objects under *prefix*, pairing each with its sidecar flag.
 - **Defined in:** `application_sdk/storage/batch.py`
@@ -3558,6 +9393,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `list_keys(prefix: str = '', *, ...)`
 - **Summary:** List all object keys under *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
@@ -3565,20 +9401,65 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `list_keys_with_meta`
 
 - **Import:** `from application_sdk.storage import list_keys_with_meta`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `list_keys_with_meta(prefix: str = '', *, ...)`
 - **Summary:** Like :func:`list_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 - **Defined in:** `application_sdk/storage/batch.py`
 
+#### `materialize_file_reference`
+
+- **Import:** `from application_sdk.storage.reference import materialize_file_reference`
+- **Signature:** `materialize_file_reference(store: ObjectStore, ref: FileReference, *, local_dir: str | None = None) -> FileReference`
+- **Summary:** Download the file or directory referenced by *ref* from *store* locally.
+- **Defined in:** `application_sdk/storage/reference.py`
+
+#### `materialize_file_refs`
+
+- **Import:** `from application_sdk.storage.file_ref_sync import materialize_file_refs`
+- **Signature:** `materialize_file_refs(store: ObjectStore, data: object, *, upstream_store: ObjectStore | None = None) -> object`
+- **Summary:** Download all durable FileReferences in *data* to local temp files.
+- **Defined in:** `application_sdk/storage/file_ref_sync.py`
+
 #### `normalize_key`
 
 - **Import:** `from application_sdk.storage import normalize_key`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `normalize_key(key: str)`
 - **Summary:** Normalise a local or object-store path into a clean object-store key.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `path_gen`
+
+- **Import:** `from application_sdk.storage.formats.utils import path_gen`
+- **Signature:** `path_gen(chunk_count: int | None = None, ...)`
+- **Summary:** Generate a file path for a chunk.
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
+#### `persist_file_reference`
+
+- **Import:** `from application_sdk.storage.reference import persist_file_reference`
+- **Signature:** `persist_file_reference(store: ObjectStore, *, ...)`
+- **Summary:** Upload the local file or directory referenced by *ref* to *store*.
+- **Defined in:** `application_sdk/storage/reference.py`
+
+#### `persist_file_refs`
+
+- **Import:** `from application_sdk.storage.file_ref_sync import persist_file_refs`
+- **Signature:** `persist_file_refs(store: ObjectStore, data: object, output_path: str | None = None) -> object`
+- **Summary:** Upload all ephemeral FileReferences in *data* to the store.
+- **Defined in:** `application_sdk/storage/file_ref_sync.py`
+
+#### `process_null_fields`
+
+- **Import:** `from application_sdk.storage.formats.utils import process_null_fields`
+- **Signature:** `process_null_fields(obj: Any, ...)`
+- **Summary:** By default the method removes null values from dictionaries and lists.
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
 #### `put_json`
 
 - **Import:** `from application_sdk.storage import put_json`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `put_json(key: str, obj: JsonValue, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Serialise *obj* to JSON and write to *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
@@ -3586,20 +9467,51 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `read_binding_secret_refs`
 
 - **Import:** `from application_sdk.storage import read_binding_secret_refs`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `read_binding_secret_refs(name: str, *, components_dir: Path | str = Path('./components'))`
 - **Summary:** Report the ``secretKeyRef`` entries of the component named *name*.
 - **Defined in:** `application_sdk/storage/binding.py`
 
+#### `read_expected_digest`
+
+- **Import:** `from application_sdk.storage.integrity import read_expected_digest`
+- **Signature:** `read_expected_digest(store: BoundStore | ObjectStore | None, *, ...)`
+- **Summary:** Return the digest recorded in ``{key}.sha256``, or ``None`` if absent.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
 #### `set_fetched_binding_secrets`
 
 - **Import:** `from application_sdk.storage import set_fetched_binding_secrets`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `set_fetched_binding_secrets(name: str, secrets: SecretMap)`
 - **Summary:** Publish the secrets startup fetched for *name* to later sync callers.
 - **Defined in:** `application_sdk/storage/binding.py`
 
+#### `sha256_file`
+
+- **Import:** `from application_sdk.storage.integrity import sha256_file`
+- **Signature:** `sha256_file(path: Path) -> str`
+- **Summary:** Hash a local file in a worker thread.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
+#### `sidecar_writes_enabled`
+
+- **Import:** `from application_sdk.storage.integrity import sidecar_writes_enabled`
+- **Signature:** `sidecar_writes_enabled(write_sidecar: bool | None) -> bool`
+- **Summary:** Resolve a per-call ``write_sidecar`` flag against the kill-switch.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
+#### `upload`
+
+- **Import:** `from application_sdk.storage.transfer import upload`
+- **Signature:** `upload(local_path: str, *, ...)`
+- **Summary:** Upload a local file or directory to the object store.
+- **Defined in:** `application_sdk/storage/transfer.py`
+
 #### `upload_bytes`
 
 - **Import:** `from application_sdk.storage import upload_bytes`
+- **Also importable from:** `application_sdk.storage.ops`
 - **Signature:** `upload_bytes(key: str, *, ...)`
 - **Summary:** Write *data* to *key* — the SDK's one byte-put primitive.
 - **Defined in:** `application_sdk/storage/ops.py`
@@ -3607,6 +9519,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `upload_file`
 
 - **Import:** `from application_sdk.storage import upload_file`
+- **Also importable from:** `application_sdk.storage.batch`, `application_sdk.storage.ops`
 - **Signature:** `upload_file(key: str, *, ...)`
 - **Summary:** Stream-upload a local file to *key* in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
@@ -3614,6 +9527,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `upload_file_from_bytes`
 
 - **Import:** `from application_sdk.storage import upload_file_from_bytes`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `upload_file_from_bytes(key: str, content: bytes, store: ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Upload bytes directly to *key* in the store.
 - **Defined in:** `application_sdk/storage/batch.py`
@@ -3621,39 +9535,121 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `upload_prefix`
 
 - **Import:** `from application_sdk.storage import upload_prefix`
+- **Also importable from:** `application_sdk.storage.batch`
 - **Signature:** `upload_prefix(local_dir: str | Path, *, ...)`
 - **Summary:** Upload all files under *local_dir* to the store under *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
 
+#### `verification_enabled`
+
+- **Import:** `from application_sdk.storage.integrity import verification_enabled`
+- **Signature:** `verification_enabled(verify: bool | None) -> bool`
+- **Summary:** Resolve a per-call ``verify`` flag against the deployment kill-switch.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
 #### `verify_object_store_access`
 
 - **Import:** `from application_sdk.storage import verify_object_store_access`
+- **Also importable from:** `application_sdk.storage.preflight`
 - **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
 - **Summary:** In SDR mode, verify read+write access to every configured object store.
 - **Defined in:** `application_sdk/storage/preflight.py`
 
+#### `write_digest_sidecar`
+
+- **Import:** `from application_sdk.storage.integrity import write_digest_sidecar`
+- **Signature:** `write_digest_sidecar(store: BoundStore | ObjectStore | None, key: str, digest: str) -> None`
+- **Summary:** Write ``{key}.sha256`` so a downstream reader can verify *key*.
+- **Defined in:** `application_sdk/storage/integrity.py`
+
 ### Constants and Enums
+
+#### `BINDING_TYPE_MAP`
+
+- **Import:** `from application_sdk.storage.binding import BINDING_TYPE_MAP`
+- **Signature:** `BINDING_TYPE_MAP: dict[str, str]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `ChunkCompleteFn`
+
+- **Import:** `from application_sdk.storage.rolling import ChunkCompleteFn`
+- **Signature:** `ChunkCompleteFn`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/rolling.py`
+
+#### `FlushFn`
+
+- **Import:** `from application_sdk.storage.rolling import FlushFn`
+- **Signature:** `FlushFn`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/rolling.py`
+
+#### `GATEWAY_INVALID_CLIENT_CODE`
+
+- **Import:** `from application_sdk.storage.ops import GATEWAY_INVALID_CLIENT_CODE`
+- **Signature:** `GATEWAY_INVALID_CLIENT_CODE`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/ops.py`
+
+#### `GCS_SERVICE_ACCOUNT_FIELDS`
+
+- **Import:** `from application_sdk.storage.binding import GCS_SERVICE_ACCOUNT_FIELDS`
+- **Signature:** `GCS_SERVICE_ACCOUNT_FIELDS: tuple[str, ...]`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/binding.py`
 
 #### `is_sidecar_key`
 
 - **Import:** `from application_sdk.storage import is_sidecar_key`
+- **Also importable from:** `application_sdk.storage.integrity`
 - **Signature:** `is_sidecar_key`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/storage/integrity.py`
 
+#### `JSON_FILE_EXTENSION`
+
+- **Import:** `from application_sdk.storage.formats.utils import JSON_FILE_EXTENSION`
+- **Signature:** `JSON_FILE_EXTENSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
+#### `PARQUET_FILE_EXTENSION`
+
+- **Import:** `from application_sdk.storage.formats.utils import PARQUET_FILE_EXTENSION`
+- **Signature:** `PARQUET_FILE_EXTENSION`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/formats/utils.py`
+
 #### `SecretMap`
 
 - **Import:** `from application_sdk.storage import SecretMap`
+- **Also importable from:** `application_sdk.storage.binding`
 - **Signature:** `SecretMap`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/storage/binding.py`
 
+#### `sidecar_key`
+
+- **Import:** `from application_sdk.storage.integrity import sidecar_key`
+- **Signature:** `sidecar_key`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/integrity.py`
+
 #### `SIDECAR_SUFFIX`
 
 - **Import:** `from application_sdk.storage import SIDECAR_SUFFIX`
+- **Also importable from:** `application_sdk.storage.integrity`
 - **Signature:** `SIDECAR_SUFFIX`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/storage/integrity.py`
+
+#### `SizeEstimatorFn`
+
+- **Import:** `from application_sdk.storage.rolling import SizeEstimatorFn`
+- **Signature:** `SizeEstimatorFn`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/storage/rolling.py`
 
 ## `application_sdk.templates`
 
@@ -3664,6 +9660,7 @@ SQL metadata extractor templates and their contracts
 #### `BaseMetadataExtractor`
 
 - **Import:** `from application_sdk.templates import BaseMetadataExtractor`
+- **Also importable from:** `application_sdk.templates.base_metadata_extractor`
 - **Signature:** `class BaseMetadataExtractor`
 - **Summary:** Base App for all metadata extraction connectors.
 - **Defined in:** `application_sdk/templates/base_metadata_extractor.py`
@@ -3686,30 +9683,90 @@ SQL metadata extractor templates and their contracts
 #### `IncrementalSqlMetadataExtractor`
 
 - **Import:** `from application_sdk.templates import IncrementalSqlMetadataExtractor`
+- **Also importable from:** `application_sdk.templates.incremental_sql_metadata_extractor`
 - **Signature:** `class IncrementalSqlMetadataExtractor`
 - **Summary:** Base class for incremental SQL metadata extraction apps.
 - **Defined in:** `application_sdk/templates/incremental_sql_metadata_extractor.py`
 
+#### `MapColumnUnimplementedError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import MapColumnUnimplementedError`
+- **Signature:** `class MapColumnUnimplementedError(*, ...)`
+- **Summary:** map_column() not overridden in SqlApp subclass.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
+#### `MapDatabaseUnimplementedError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import MapDatabaseUnimplementedError`
+- **Signature:** `class MapDatabaseUnimplementedError(*, ...)`
+- **Summary:** map_database() not overridden in SqlApp subclass.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
+#### `MapProcedureUnimplementedError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import MapProcedureUnimplementedError`
+- **Signature:** `class MapProcedureUnimplementedError(*, ...)`
+- **Summary:** map_procedure() not overridden in SqlApp subclass.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
+#### `MapSchemaUnimplementedError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import MapSchemaUnimplementedError`
+- **Signature:** `class MapSchemaUnimplementedError(*, ...)`
+- **Summary:** map_schema() not overridden in SqlApp subclass.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
+#### `MapTableUnimplementedError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import MapTableUnimplementedError`
+- **Signature:** `class MapTableUnimplementedError(*, ...)`
+- **Summary:** map_table() not overridden in SqlApp subclass.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
 #### `SqlApp`
 
 - **Import:** `from application_sdk.templates import SqlApp`
+- **Also importable from:** `application_sdk.templates.sql_app`
 - **Signature:** `class SqlApp`
 - **Summary:** Consolidated SQL metadata extraction App.
 - **Defined in:** `application_sdk/templates/sql_app.py`
 
+#### `SqlClientClassNotSetError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import SqlClientClassNotSetError`
+- **Signature:** `class SqlClientClassNotSetError(*, ...)`
+- **Summary:** sql_client_class not set on SqlApp subclass.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
 #### `SqlMetadataExtractor`
 
 - **Import:** `from application_sdk.templates import SqlMetadataExtractor`
+- **Also importable from:** `application_sdk.templates.sql_metadata_extractor`
 - **Signature:** `class SqlMetadataExtractor`
 - **Summary:** Base class for SQL metadata extraction apps.
 - **Defined in:** `application_sdk/templates/sql_metadata_extractor.py`
 
+#### `SqlProbeTimeoutError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import SqlProbeTimeoutError`
+- **Signature:** `class SqlProbeTimeoutError(*, ...)`
+- **Summary:** The SQL auth-cache prime probe ran out of time waiting on the source.
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
+
 #### `SqlQueryExtractor`
 
 - **Import:** `from application_sdk.templates import SqlQueryExtractor`
+- **Also importable from:** `application_sdk.templates.sql_query_extractor`
 - **Signature:** `class SqlQueryExtractor`
 - **Summary:** Abstract base class for SQL query extraction apps.
 - **Defined in:** `application_sdk/templates/sql_query_extractor.py`
+
+#### `TransformedFileMissingError`
+
+- **Import:** `from application_sdk.templates.sql_app_errors import TransformedFileMissingError`
+- **Signature:** `class TransformedFileMissingError(*, ...)`
+- **Summary:** A transform reported records but declared no output file (FND-1790).
+- **Defined in:** `application_sdk/templates/sql_app_errors.py`
 
 ### Functions
 
@@ -3732,9 +9789,17 @@ SQL metadata extractor templates and their contracts
 #### `FilterMap`
 
 - **Import:** `from application_sdk.templates.contracts import FilterMap`
+- **Also importable from:** `application_sdk.templates.contracts.sql_metadata`
 - **Signature:** `FilterMap`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `MAX_CONCURRENT_COLUMN_BATCHES`
+
+- **Import:** `from application_sdk.templates.incremental_sql_metadata_extractor import MAX_CONCURRENT_COLUMN_BATCHES`
+- **Signature:** `MAX_CONCURRENT_COLUMN_BATCHES: int`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/templates/incremental_sql_metadata_extractor.py`
 
 ## `application_sdk.testing`
 
@@ -3774,7 +9839,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `AEWorkflowClient`
 
 - **Import:** `from application_sdk.testing.full_dag import AEWorkflowClient`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.base`
 - **Signature:** `class AEWorkflowClient(tenant_url: str, ...)`
 - **Summary:** Thin sync wrapper over the harness's AE and Atlas readers.
 - **Defined in:** `application_sdk/testing/e2e/client.py`
@@ -3814,13 +9879,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class AppExecutor(backend: TemporalExecutorBackend, ...)`
 - **Summary:** Thin shim over :class:`TemporalExecutorBackend` for integration suites.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
-
-#### `AppIdentity`
-
-- **Import:** `from application_sdk.testing.setup_routes import AppIdentity`
-- **Signature:** `class AppIdentity(name: str, display_name: str = '')`
-- **Summary:** The committed names a marketplace card may be listed under.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `AppNotReadyError`
 
@@ -4006,13 +10064,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The outbound call shapes a run makes, as profile keys.
 - **Defined in:** `application_sdk/testing/harness/budgets.py`
 
-#### `Card`
-
-- **Import:** `from application_sdk.testing.setup_routes import Card`
-- **Signature:** `class Card(id: str = '', name: str = '', entrypoint: str = '')`
-- **Summary:** One marketplace card, trimmed to the fields the check reads.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `CategoryResult`
 
 - **Import:** `from application_sdk.testing.parity import CategoryResult`
@@ -4033,14 +10084,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class ClusterReadFailedError(*, ...)`
 - **Summary:** A cluster read reached the API server and did not come back with data.
 - **Defined in:** `application_sdk/testing/harness/cluster/_errors.py`
-
-#### `ConfigLoader`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ConfigLoader`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`, `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `class ConfigLoader(config_path: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `ConnectionDeletePlan`
 
@@ -4076,14 +10119,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class CoreReads`
 - **Summary:** The read verbs this backend uses from ``CoreV1Api``.
 - **Defined in:** `application_sdk/testing/harness/cluster/kube.py`
-
-#### `CsvFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import CsvFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`
-- **Signature:** `class CsvFormatHandler(output_dir: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/csv_handler.py`
 
 #### `CursorPage`
 
@@ -4124,7 +10159,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGNodeResult`
 
 - **Import:** `from application_sdk.testing.e2e.client import DAGNodeResult`
-- **Also importable from:** `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeResult(name: str, ...)`
 - **Summary:** One row of the per-node breakdown returned by ``native-status``.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -4132,7 +10167,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGNodeStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGNodeStatus`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGNodeStatus`
 - **Summary:** Status values returned by ``native-status`` per DAG node.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -4147,7 +10182,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunResult`
 
 - **Import:** `from application_sdk.testing.e2e.client import DAGRunResult`
-- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunResult(run_id: str, ...)`
 - **Summary:** Full result of one ``native-status`` read.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -4155,7 +10190,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `DAGRunStatus`
 
 - **Import:** `from application_sdk.testing.full_dag import DAGRunStatus`
-- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
+- **Also importable from:** `application_sdk.testing.e2e.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.wire`
 - **Signature:** `class DAGRunStatus`
 - **Summary:** Top-level status of an AE workflow run.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/wire.py`
@@ -4182,14 +10217,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The integration source's credential fields, read uniformly from env.
 - **Defined in:** `application_sdk/testing/integration/source.py`
 
-#### `DataGenerator`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import DataGenerator`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `class DataGenerator(config_loader: ConfigLoader)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/data_generator.py`
-
 #### `DeleteType`
 
 - **Import:** `from application_sdk.testing.harness.teardown import DeleteType`
@@ -4212,13 +10239,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** How strictly a typename's diff is gated.
 - **Defined in:** `application_sdk/testing/golden.py`
 
-#### `DriverArgs`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import DriverArgs`
-- **Signature:** `class DriverArgs(config_path: str, output_format: str, output_dir: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
-
 #### `DuplicateKeyPolicy`
 
 - **Import:** `from application_sdk.testing import DuplicateKeyPolicy`
@@ -4226,13 +10246,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class DuplicateKeyPolicy`
 - **Summary:** What a non-unique join key on either side does to the comparison.
 - **Defined in:** `application_sdk/testing/golden.py`
-
-#### `Entrypoint`
-
-- **Import:** `from application_sdk.testing.setup_routes import Entrypoint`
-- **Signature:** `class Entrypoint(name: str, ...)`
-- **Summary:** One entry point, as the committed artifacts describe it.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `EvidenceBundle`
 
@@ -4337,13 +10350,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class FixtureNotConfiguredError(*, ...)`
 - **Summary:** A composer requested a harness fixture without declaring what it needs.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
-
-#### `FormStep`
-
-- **Import:** `from application_sdk.testing.setup_routes import FormStep`
-- **Signature:** `class FormStep(id: str, properties: frozenset[str] = frozenset())`
-- **Summary:** One panel of the setup wizard, as the served schema describes it.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `FullDAGOutcome`
 
@@ -4488,21 +10494,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class IntegrationTestClient(host: str, version: str = 'v1', workflow_endpoint: str = '/start', timeout: int = 30)`
 - **Summary:** Client for integration testing of the Core 3 APIs.
 - **Defined in:** `application_sdk/testing/integration/client.py`
-
-#### `InvalidInputError`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import InvalidInputError`
-- **Signature:** `class InvalidInputError(*, ...)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/errors/leaves.py`
-
-#### `JsonFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import JsonFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.json_handler`
-- **Signature:** `class JsonFormatHandler`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/json_handler.py`
 
 #### `KitOptions`
 
@@ -4684,22 +10675,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** No worker started any DAG node while the AE run was live.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/_errors.py`
 
-#### `OutputFormat`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import OutputFormat`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.data_generator`
-- **Signature:** `class OutputFormat`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
-
-#### `OutputFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.output_handler.base import OutputFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.csv_handler`, `application_sdk.testing.scale_data_generator.output_handler.json_handler`, `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
-- **Signature:** `class OutputFormatHandler(output_dir: str)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/base.py`
-
 #### `OutputSchema`
 
 - **Import:** `from application_sdk.testing.integration.output_schema import OutputSchema`
@@ -4720,14 +10695,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class OutputViolation(rule: RuleKind, field: str, message: str, file: str = '', line: int = 0) -> None`
 - **Summary:** One example of a broken rule.
 - **Defined in:** `application_sdk/testing/integration/output_schema.py`
-
-#### `ParquetFormatHandler`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.data_generator import ParquetFormatHandler`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.output_handler.parquet_handler`
-- **Signature:** `class ParquetFormatHandler`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/output_handler/parquet_handler.py`
 
 #### `PodPhase`
 
@@ -4875,20 +10842,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Identifies a custom-resource kind by its API coordinates.
 - **Defined in:** `application_sdk/testing/harness/cluster/_states.py`
 
-#### `RouteCheckSkipped`
-
-- **Import:** `from application_sdk.testing.setup_routes import RouteCheckSkipped`
-- **Signature:** `class RouteCheckSkipped`
-- **Summary:** There is no setup route to check, and that is not a failure.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `RouteReader`
-
-- **Import:** `from application_sdk.testing.setup_routes import RouteReader`
-- **Signature:** `class RouteReader`
-- **Summary:** The two reads :func:`verify` needs from a tenant.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `RunLookup`
 
 - **Import:** `from application_sdk.testing.e2e.client import RunLookup`
@@ -4904,13 +10857,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class RunMode`
 - **Summary:** Whether the connector runs in tenant or in caller-controlled CI.
 - **Defined in:** `application_sdk/testing/e2e/payload.py`
-
-#### `ScaleDataConfigError`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.config_loader import ScaleDataConfigError`
-- **Signature:** `class ScaleDataConfigError(*, ...)`
-- **Summary:** Scale-data generator YAML config is missing or malformed.
-- **Defined in:** `application_sdk/testing/_scale_data_generator/config_loader.py`
 
 #### `Scenario`
 
@@ -5017,13 +10963,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Reads back how many assets a seed actually landed under its connection.
 - **Defined in:** `application_sdk/testing/harness/seed/__init__.py`
 
-#### `ServedForm`
-
-- **Import:** `from application_sdk.testing.setup_routes import ServedForm`
-- **Signature:** `class ServedForm(properties: frozenset[str] = frozenset(), steps: tuple[FormStep, ...] = ())`
-- **Summary:** The setup form a tenant serves, in the two parts the UI renders from.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `ServiceTarget`
 
 - **Import:** `from application_sdk.testing.harness.cluster import ServiceTarget`
@@ -5038,13 +10977,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Settled(*, label: str, attempts: int, elapsed: timedelta, value: T)`
 - **Summary:** The probe reached the settled state inside its budget.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
-
-#### `SetupRouteError`
-
-- **Import:** `from application_sdk.testing.setup_routes import SetupRouteError`
-- **Signature:** `class SetupRouteError`
-- **Summary:** A setup route is broken, or the tenant could not be asked.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `SQLAppE2EFullTest`
 
@@ -5209,20 +11141,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantPool`
 - **Summary:** A pool of e2e tenants.
 - **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
-
-#### `TenantRoutes`
-
-- **Import:** `from application_sdk.testing.setup_routes import TenantRoutes`
-- **Signature:** `class TenantRoutes(base_url: str, bearer: str)`
-- **Summary:** Reads the two routes the setup page walks, with one bearer credential.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `TenantUnreachable`
-
-- **Import:** `from application_sdk.testing.setup_routes import TenantUnreachable`
-- **Signature:** `class TenantUnreachable`
-- **Summary:** One GET got no answer at all — no status line, no body (FND-2057).
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `TypenameDiff`
 
@@ -5595,7 +11513,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `cold_start_submit_kwargs`
 
 - **Import:** `from application_sdk.testing.e2e.client import cold_start_submit_kwargs`
-- **Also importable from:** `application_sdk.testing.full_dag.base`, `application_sdk.testing.full_dag.client`, `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
+- **Also importable from:** `application_sdk.testing.harness.automation_engine`, `application_sdk.testing.harness.automation_engine.retry`
 - **Signature:** `cold_start_submit_kwargs(timeout_seconds: int, poll_interval_seconds: int)`
 - **Summary:** Re-size the AE submit's retry to a cold start.
 - **Defined in:** `application_sdk/testing/harness/automation_engine/retry.py`
@@ -5713,13 +11631,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Create a custom assertion from a user-provided function.
 - **Defined in:** `application_sdk/testing/integration/assertions.py`
 
-#### `declared_inputs`
-
-- **Import:** `from application_sdk.testing.setup_routes import declared_inputs`
-- **Signature:** `declared_inputs(workflow_config: dict[str, Any])`
-- **Summary:** Return the input names a generated workflow config declares.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `delete_connection`
 
 - **Import:** `from application_sdk.testing.harness.teardown import delete_connection`
@@ -5741,13 +11652,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `discover_categories(baseline_dir: Path, candidate_dir: Path)`
 - **Summary:** Find all category subdirectories across both dirs.
 - **Defined in:** `application_sdk/testing/parity/comparator.py`
-
-#### `driver`
-
-- **Import:** `from application_sdk.testing.scale_data_generator.driver import driver`
-- **Signature:** `driver(args: DriverArgs)`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_scale_data_generator/driver.py`
 
 #### `embedded_temporal`
 
@@ -5833,20 +11737,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** The first outcome row, or ``None`` — for paths asserting no row was emitted.
 - **Defined in:** `application_sdk/testing/preflight.py`
 
-#### `foreign_form`
-
-- **Import:** `from application_sdk.testing.setup_routes import foreign_form`
-- **Signature:** `foreign_form(entrypoint: Entrypoint, siblings: Sequence[Entrypoint], served_name: object)`
-- **Summary:** Whether the tenant served a DIFFERENT entry point's form, or ``None``.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `form_shortfall`
-
-- **Import:** `from application_sdk.testing.setup_routes import form_shortfall`
-- **Signature:** `form_shortfall(entrypoint: Entrypoint, served: ServedForm)`
-- **Summary:** Why this entry point's setup form will not render, or ``None``.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `format_validation_report`
 
 - **Import:** `from application_sdk.testing.integration import format_validation_report`
@@ -5882,14 +11772,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `generate_test_methods(test_class: type[BaseIntegrationTest])`
 - **Summary:** Generate individual test methods for each scenario.
 - **Defined in:** `application_sdk/testing/integration/runner.py`
-
-#### `get_logger`
-
-- **Import:** `from application_sdk.testing.full_dag.base import get_logger`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `get_logger(name: str | None = None)`
-- **Summary:** Get or create an instance of AtlanLoggerAdapter.
-- **Defined in:** `application_sdk/observability/logger_adaptor.py`
 
 #### `get_normalised_dataframe`
 
@@ -6266,13 +12148,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Read a directory of pandera YAML schemas into :class:`OutputSchema` values.
 - **Defined in:** `application_sdk/testing/integration/output_schema.py`
 
-#### `locate_cards`
-
-- **Import:** `from application_sdk.testing.setup_routes import locate_cards`
-- **Signature:** `locate_cards(identity: AppIdentity, entrypoints: Sequence[Entrypoint], payloads: list[dict[str, Any]])`
-- **Summary:** Pick this app's cards out of the whole catalog, keyed by entry point.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `matches`
 
 - **Import:** `from application_sdk.testing.integration import matches`
@@ -6444,33 +12319,12 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Delete every asset under *connection_qualified_name*, then the connection.
 - **Defined in:** `application_sdk/testing/harness/teardown/_purge.py`
 
-#### `read_app_identity`
-
-- **Import:** `from application_sdk.testing.setup_routes import read_app_identity`
-- **Signature:** `read_app_identity(repo_root: Path)`
-- **Summary:** Return the names ``atlan.yaml`` commits, as cards may report them.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `read_asset_attributes`
 
 - **Import:** `from application_sdk.testing.harness.atlas import read_asset_attributes`
 - **Signature:** `read_asset_attributes(client: AsyncAtlanClient, ...)`
 - **Summary:** Read named attributes off individually addressed assets.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
-
-#### `read_entrypoint_names`
-
-- **Import:** `from application_sdk.testing.setup_routes import read_entrypoint_names`
-- **Signature:** `read_entrypoint_names(repo_root: Path)`
-- **Summary:** Return the ``entrypoints[].name`` values that should have a setup page.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `read_entrypoints`
-
-- **Import:** `from application_sdk.testing.setup_routes import read_entrypoints`
-- **Signature:** `read_entrypoints(repo_root: Path, generated_dir: str = 'app/generated')`
-- **Summary:** Read every entry point's committed workflow config.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `read_records`
 
@@ -6522,13 +12376,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `restore_logger_init_flags()`
 - **Summary:** Stop a test that reset the logger's init state from leaking it forward.
 - **Defined in:** `application_sdk/testing/fixtures.py`
-
-#### `route_mismatch`
-
-- **Import:** `from application_sdk.testing.setup_routes import route_mismatch`
-- **Signature:** `route_mismatch(entrypoint: Entrypoint, card: Card)`
-- **Summary:** Why this entry point's setup page will 404, or ``None`` if it resolves.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `run_comparison`
 
@@ -6615,13 +12462,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `seed_prefix_root(*, app_name: str, qualified_name: str)`
 - **Summary:** Compose the object-store root for one seeded connection.
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
-
-#### `served_form`
-
-- **Import:** `from application_sdk.testing.setup_routes import served_form`
-- **Signature:** `served_form(body: dict[str, Any])`
-- **Summary:** Unwrap a ConfigMap response into the form the tenant serves.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `single_outcome`
 
@@ -6735,13 +12575,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Validate extracted output against pandera YAML schemas.
 - **Defined in:** `application_sdk/testing/integration/validation.py`
 
-#### `verify`
-
-- **Import:** `from application_sdk.testing.setup_routes import verify`
-- **Signature:** `verify(repo_root: Path, *, ...)`
-- **Summary:** Check every entry point's setup route. Returns the lines to report.
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `wait_for_workflow`
 
 - **Import:** `from application_sdk.testing.e2e import wait_for_workflow`
@@ -6830,20 +12663,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Env var gating ``App.on_complete()``'s file and object-store cleanup.
 - **Defined in:** `application_sdk/testing/integration/fixtures.py`
 
-#### `CONFIGMAP_PATH`
-
-- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_PATH`
-- **Signature:** `CONFIGMAP_PATH`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `CONFIGMAP_SOURCE_APP_QUERY`
-
-- **Import:** `from application_sdk.testing.setup_routes import CONFIGMAP_SOURCE_APP_QUERY`
-- **Signature:** `CONFIGMAP_SOURCE_APP_QUERY`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
 #### `CONNECTION_DELETE_APP_NAME`
 
 - **Import:** `from application_sdk.testing.harness.teardown import CONNECTION_DELETE_APP_NAME`
@@ -6879,20 +12698,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `CountRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
-
-#### `DEFAULT_CATALOG_WAIT_SECONDS`
-
-- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_CATALOG_WAIT_SECONDS`
-- **Signature:** `DEFAULT_CATALOG_WAIT_SECONDS`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
-
-#### `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
-
-- **Import:** `from application_sdk.testing.setup_routes import DEFAULT_POD_RECONCILE_WAIT_SECONDS`
-- **Signature:** `DEFAULT_POD_RECONCILE_WAIT_SECONDS`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `DEFAULT_TYPE_NAMES`
 
@@ -6954,21 +12759,6 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `LineageEdgeRead: TypeAlias`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
-
-#### `logger`
-
-- **Import:** `from application_sdk.testing.full_dag.base import logger`
-- **Also importable from:** `application_sdk.testing.scale_data_generator.driver`
-- **Signature:** `logger: AtlanLoggerAdapter`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/full_dag/base.py`
-
-#### `MARKETPLACE_APPS_PATH`
-
-- **Import:** `from application_sdk.testing.setup_routes import MARKETPLACE_APPS_PATH`
-- **Signature:** `MARKETPLACE_APPS_PATH`
-- **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/testing/_setup_routes.py`
 
 #### `NO_TYPENAME`
 
@@ -7117,6 +12907,216 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** One entry in a :class:`WarmingSource` script.
 - **Defined in:** `application_sdk/testing/warming.py`
 
+## `application_sdk.tools`
+
+Developer command-line tools — provision-credentials for local development
+
+### Functions
+
+#### `main`
+
+- **Import:** `from application_sdk.tools.provision_credentials import main`
+- **Signature:** `main() -> None`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/tools/provision_credentials.py`
+
+## `application_sdk.transformers`
+
+Legacy daft+YAML transformer stack (back-compat only — migrate to pyatlan record mappers; see upgrade-guide-v3.md).
+
+### Classes
+
+#### `AtlasTransformer`
+
+- **Import:** `from application_sdk.transformers.atlas import AtlasTransformer`
+- **Signature:** `class AtlasTransformer(connector_name: str, tenant_id: str, **kwargs: Any)`
+- **Summary:** Transformer for converting metadata into Atlas entities.
+- **Defined in:** `application_sdk/transformers/atlas/__init__.py`
+
+#### `BuildStructLevelRequiredError`
+
+- **Import:** `from application_sdk.transformers.query.errors import BuildStructLevelRequiredError`
+- **Signature:** `class BuildStructLevelRequiredError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/query/errors.py`
+
+#### `BuildStructPrefixRequiredError`
+
+- **Import:** `from application_sdk.transformers.query.errors import BuildStructPrefixRequiredError`
+- **Signature:** `class BuildStructPrefixRequiredError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/query/errors.py`
+
+#### `Column`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import Column`
+- **Signature:** `class Column`
+- **Summary:** Column entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `Database`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import Database`
+- **Signature:** `class Database`
+- **Summary:** Database entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `Function`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import Function`
+- **Signature:** `class Function`
+- **Summary:** Function entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `IncompatibleDefaultTypeError`
+
+- **Import:** `from application_sdk.transformers.query.errors import IncompatibleDefaultTypeError`
+- **Signature:** `class IncompatibleDefaultTypeError(*, ...)`
+- **Summary:** An app-config collision: a template default cannot be represented in
+- **Defined in:** `application_sdk/transformers/query/errors.py`
+
+#### `Procedure`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import Procedure`
+- **Signature:** `class Procedure`
+- **Summary:** Procedure entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `QueryBasedTransformer`
+
+- **Import:** `from application_sdk.transformers.query import QueryBasedTransformer`
+- **Signature:** `class QueryBasedTransformer(connector_name: str, tenant_id: str, **kwargs: Any)`
+- **Summary:** Query based transformer that uses YAML files for SQL queries and DuckDB for execution.
+- **Defined in:** `application_sdk/transformers/query/__init__.py`
+
+#### `Schema`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import Schema`
+- **Signature:** `class Schema`
+- **Summary:** Schema entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `SqlTransformNotRegisteredError`
+
+- **Import:** `from application_sdk.transformers.query.errors import SqlTransformNotRegisteredError`
+- **Signature:** `class SqlTransformNotRegisteredError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/query/errors.py`
+
+#### `Table`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import Table`
+- **Signature:** `class Table`
+- **Summary:** Table entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `TagAttachment`
+
+- **Import:** `from application_sdk.transformers.atlas.sql import TagAttachment`
+- **Signature:** `class TagAttachment`
+- **Summary:** Tag attachment entity transformer for Atlas.
+- **Defined in:** `application_sdk/transformers/atlas/sql.py`
+
+#### `TransformColumnError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformColumnError`
+- **Signature:** `class TransformColumnError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+#### `TransformDatabaseError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformDatabaseError`
+- **Signature:** `class TransformDatabaseError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+#### `TransformerInterface`
+
+- **Import:** `from application_sdk.transformers import TransformerInterface`
+- **Signature:** `class TransformerInterface`
+- **Summary:** Abstract base class for metadata transformers.
+- **Defined in:** `application_sdk/transformers/__init__.py`
+
+#### `TransformerNotImplementedError`
+
+- **Import:** `from application_sdk.transformers.errors import TransformerNotImplementedError`
+- **Signature:** `class TransformerNotImplementedError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/errors.py`
+
+#### `TransformFunctionError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformFunctionError`
+- **Signature:** `class TransformFunctionError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+#### `TransformProcedureError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformProcedureError`
+- **Signature:** `class TransformProcedureError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+#### `TransformSchemaError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformSchemaError`
+- **Signature:** `class TransformSchemaError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+#### `TransformTableError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformTableError`
+- **Signature:** `class TransformTableError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+#### `TransformTagAttachmentError`
+
+- **Import:** `from application_sdk.transformers.atlas.errors import TransformTagAttachmentError`
+- **Signature:** `class TransformTagAttachmentError(*, ...)`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/transformers/atlas/errors.py`
+
+### Functions
+
+#### `build_atlas_qualified_name`
+
+- **Import:** `from application_sdk.transformers.common.utils import build_atlas_qualified_name`
+- **Signature:** `build_atlas_qualified_name(connection_qualified_name: str, *args: str) -> str`
+- **Summary:** Build the qualified name for an Atlas entity.
+- **Defined in:** `application_sdk/transformers/common/utils.py`
+
+#### `build_phoenix_uri`
+
+- **Import:** `from application_sdk.transformers.common.utils import build_phoenix_uri`
+- **Signature:** `build_phoenix_uri(connector_name: str, connector_type: str, *args: str) -> str`
+- **Summary:** Build the URI for a Phoenix entity.
+- **Defined in:** `application_sdk/transformers/common/utils.py`
+
+#### `flatten_yaml_columns`
+
+- **Import:** `from application_sdk.transformers.common.utils import flatten_yaml_columns`
+- **Signature:** `flatten_yaml_columns(nested: dict, parent_key: str = '', sep: str = '.') -> list[dict]`
+- **Summary:** Flatten a nested ``columns:`` mapping into a list of dotted-name columns.
+- **Defined in:** `application_sdk/transformers/common/utils.py`
+
+#### `get_yaml_query_template_path_mappings`
+
+- **Import:** `from application_sdk.transformers.common.utils import get_yaml_query_template_path_mappings`
+- **Signature:** `get_yaml_query_template_path_mappings(custom_templates_path: Optional[str] = None, ...)`
+- **Summary:** Map each data asset (TABLE, COLUMN, …) to its YAML query template path.
+- **Defined in:** `application_sdk/transformers/common/utils.py`
+
+#### `process_text`
+
+- **Import:** `from application_sdk.transformers.common.utils import process_text`
+- **Signature:** `process_text(text: str, max_length: int = 100000) -> str`
+- **Summary:** Process and sanitize text for storage.
+- **Defined in:** `application_sdk/transformers/common/utils.py`
+
 ## `application_sdk.validation`
 
 Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call
@@ -7158,6 +13158,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `AssetArtifactReport`
 
 - **Import:** `from application_sdk.validation import AssetArtifactReport`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `class AssetArtifactReport(artifact_format: str = '', ...)`
 - **Summary:** The NDJSON x ``ModelSource`` cell's report: the shared shape plus asset detail.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7165,6 +13166,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `AssetBatchScope`
 
 - **Import:** `from application_sdk.validation import AssetBatchScope`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `class AssetBatchScope(upload_kind: typing.Literal['upload', 'upload_refs'], parts_validated: int, parts_not_local: int)`
 - **Summary:** How one validated hand-off was assembled — context the report cannot know.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7172,6 +13174,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `AssetCreationRules`
 
 - **Import:** `from application_sdk.validation import AssetCreationRules`
+- **Also importable from:** `application_sdk.validation.asset_rules`
 - **Signature:** `class AssetCreationRules`
 - **Summary:** Named sets of extra create-time checks, each off unless an app asks for it.
 - **Defined in:** `application_sdk/validation/asset_rules.py`
@@ -7179,6 +13182,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `class AssetValidationFailure(file: str, ...)`
 - **Summary:** A single asset that failed per-asset (``.validate()``) checks.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7186,6 +13190,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `AssetValidationOutcome`
 
 - **Import:** `from application_sdk.validation import AssetValidationOutcome`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `class AssetValidationOutcome(event_fields: dict[str, ...)`
 - **Summary:** What an isolated upload-validation scan sends back to the worker: bounded.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7193,6 +13198,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `AssetValidationReport`
 
 - **Import:** `from application_sdk.validation import AssetValidationReport`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `class AssetValidationReport(total: int = 0, ...)`
 - **Summary:** Aggregate outcome of validating a batch of transformed assets.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7264,6 +13270,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.validation import ReferentialFailure`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `class ReferentialFailure(missing_type_name: str, ...)`
 - **Summary:** A relationship reference whose target asset is absent from the batch.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7329,6 +13336,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `asset_validation_event_fields`
 
 - **Import:** `from application_sdk.validation import asset_validation_event_fields`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `asset_validation_event_fields(report: AssetValidationReport, *, ...)`
 - **Summary:** Build ``ASSET_VALIDATION_EVENT``'s attribute map from an asset report.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7336,6 +13344,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `asset_validation_matrix_json`
 
 - **Import:** `from application_sdk.validation import asset_validation_matrix_json`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `asset_validation_matrix_json(report: AssetValidationReport, *, max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS)`
 - **Summary:** Compact per-failure matrix for the outcome event, as one JSON string.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7343,6 +13352,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `asset_validation_summary_json`
 
 - **Import:** `from application_sdk.validation import asset_validation_summary_json`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `asset_validation_summary_json(report: AssetValidationReport, *, max_rows: int = ASSET_VALIDATION_SUMMARY_MAX_ROWS)`
 - **Summary:** Complete per-(kind, type, detail) failure counts for the outcome event.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7362,6 +13372,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Signature:** `builtin_format_validators()`
 - **Summary:** The format validators that ship with the SDK.
 - **Defined in:** `application_sdk/validation/wrapper.py`
+
+#### `creation_rule_errors`
+
+- **Import:** `from application_sdk.validation.asset_rules import creation_rule_errors`
+- **Signature:** `creation_rule_errors(asset: Asset, rules: frozenset[AssetCreationRules]) -> list[str]`
+- **Summary:** Messages for every field ``rules`` require on ``asset`` that it lacks.
+- **Defined in:** `application_sdk/validation/asset_rules.py`
 
 #### `declared_artifact_fields`
 
@@ -7420,6 +13437,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `summarize_asset_validation`
 
 - **Import:** `from application_sdk.validation import summarize_asset_validation`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `summarize_asset_validation(scan: Callable[..., ...)`
 - **Summary:** Run ``scan(*args, **kwargs)`` and reduce its report to the bounded outcome.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7427,6 +13445,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `supports_asset_model`
 
 - **Import:** `from application_sdk.validation import supports_asset_model`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `supports_asset_model(model: object)`
 - **Summary:** True when ``model`` is a class this cell can decode NDJSON records into.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7450,6 +13469,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_asset`
 
 - **Import:** `from application_sdk.validation import validate_asset`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7457,6 +13477,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_assets_as_artifact`
 
 - **Import:** `from application_sdk.validation import validate_assets_as_artifact`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `validate_assets_as_artifact(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7464,6 +13485,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.validation import validate_transformed_dir`
+- **Also importable from:** `application_sdk.validation.assets`
 - **Signature:** `validate_transformed_dir(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
@@ -7640,6 +13662,27 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Every artifact hand-off emits exactly one of these — the negatives included.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `ASSET_VALIDATION_MATRIX_ERROR_MAXLEN`
+
+- **Import:** `from application_sdk.validation.assets import ASSET_VALIDATION_MATRIX_ERROR_MAXLEN`
+- **Signature:** `ASSET_VALIDATION_MATRIX_ERROR_MAXLEN: Final`
+- **Summary:** Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `ASSET_VALIDATION_REPORT_LINE_MAXLEN`
+
+- **Import:** `from application_sdk.validation.assets import ASSET_VALIDATION_REPORT_LINE_MAXLEN`
+- **Signature:** `ASSET_VALIDATION_REPORT_LINE_MAXLEN: Final`
+- **Summary:** Per-line cap (chars) on the report text the isolated scan returns. A line of
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `ASSET_VALIDATION_SUMMARY_MAX_ROWS`
+
+- **Import:** `from application_sdk.validation.assets import ASSET_VALIDATION_SUMMARY_MAX_ROWS`
+- **Signature:** `ASSET_VALIDATION_SUMMARY_MAX_ROWS: Final`
+- **Summary:** Row cap for the ``asset_validation_summary`` attribute. Rows are distinct
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `CLASSIFICATION_ARTIFACT_UNVERIFIABLE`
 
 - **Import:** `from application_sdk.validation import CLASSIFICATION_ARTIFACT_UNVERIFIABLE`
@@ -7777,6 +13820,34 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** A declaration exists but this (format x source) cell cannot check it — e.g.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
+#### `REFERENTIAL_CHECK_NOT_REQUESTED`
+
+- **Import:** `from application_sdk.validation.assets import REFERENTIAL_CHECK_NOT_REQUESTED`
+- **Signature:** `REFERENTIAL_CHECK_NOT_REQUESTED: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `REFERENTIAL_CHECK_RAN`
+
+- **Import:** `from application_sdk.validation.assets import REFERENTIAL_CHECK_RAN`
+- **Signature:** `REFERENTIAL_CHECK_RAN: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE`
+
+- **Import:** `from application_sdk.validation.assets import REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE`
+- **Signature:** `REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `REFERENTIAL_CHECK_UNKNOWN`
+
+- **Import:** `from application_sdk.validation.assets import REFERENTIAL_CHECK_UNKNOWN`
+- **Signature:** `REFERENTIAL_CHECK_UNKNOWN: Final`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `UNIT_COLUMN`
 
 - **Import:** `from application_sdk.validation.artifacts import UNIT_COLUMN`
@@ -7912,7 +13983,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `path: str` `= ''`
   - `tag: str` `= ''`
   - `commit: str` `= ''`
-  - `credential: CredentialRef | None`
+  - `credential: _CredentialRef | None`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `HeartbeatDetails`
@@ -8102,7 +14173,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `agent_json: _AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `credentials: list[HandlerCredential]` `= []` — Credentials to authenticate with.
   - `connection_id: str` `= ''` — Optional connection ID for context.
   - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
@@ -8220,7 +14291,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `agent_json: _AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
   - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets (e.g.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
@@ -8260,7 +14331,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `agent_json: _AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
   - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
@@ -8323,7 +14394,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `agent_json: _AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
   - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).

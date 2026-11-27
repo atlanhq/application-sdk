@@ -10,6 +10,12 @@ from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import DependencyUnavailableError
 
+__all__ = [
+    "StateStore",
+    "StateStoreError",
+    "StateStoreUnavailableError",
+]
+
 
 @dataclass(kw_only=True)
 class StateStoreError(_LegacyErrorCodeMixin, DependencyUnavailableError):

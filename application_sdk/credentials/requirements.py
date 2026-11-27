@@ -35,6 +35,21 @@ import orjson
 
 from application_sdk._logging import get_logger
 
+__all__ = [
+    "agent_schema",
+    "AUTH_TYPE_KEY",
+    "canonical_credential",
+    "credential_form",
+    "credential_from_pairs",
+    "credential_slots",
+    "CREDENTIAL_WIDGET",
+    "CredentialSlot",
+    "load_form",
+    "missing_required_fields",
+    "selected_auth_type",
+]
+
+
 logger = get_logger(__name__)
 
 AUTH_TYPE_KEY = "auth-type"

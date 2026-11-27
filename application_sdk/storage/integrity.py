@@ -93,6 +93,21 @@ if TYPE_CHECKING:
 
     from application_sdk.storage.ops import BoundStore
 
+__all__ = [
+    "check_local_file_stable",
+    "check_transfer_digest",
+    "check_transfer_size",
+    "is_sidecar_key",
+    "read_expected_digest",
+    "sha256_file",
+    "sidecar_key",
+    "SIDECAR_SUFFIX",
+    "sidecar_writes_enabled",
+    "verification_enabled",
+    "write_digest_sidecar",
+]
+
+
 logger = get_logger(__name__)
 
 # The sidecar key convention is defined once, in the obstore-free module the

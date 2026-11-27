@@ -21,6 +21,11 @@ from application_sdk.common.incremental.storage.duckdb_utils import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "get_backfill_tables",
+]
+
+
 logger = get_logger(__name__)
 
 

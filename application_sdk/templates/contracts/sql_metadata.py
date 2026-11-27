@@ -34,6 +34,31 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.wire import FailureDetails
 
+__all__ = [
+    "ExtractionInput",
+    "ExtractionOutput",
+    "ExtractionTaskInput",
+    "ExtractionTaskOutput",
+    "FetchColumnsInput",
+    "FetchColumnsOutput",
+    "FetchDatabasesInput",
+    "FetchDatabasesOutput",
+    "FetchProceduresInput",
+    "FetchProceduresOutput",
+    "FetchSchemasInput",
+    "FetchSchemasOutput",
+    "FetchTablesInput",
+    "FetchTablesOutput",
+    "FetchViewsInput",
+    "FetchViewsOutput",
+    "FilterMap",
+    "PrimeAuthOutput",
+    "TransformInput",
+    "TransformOutput",
+    "TreeSelectionExtractionInput",
+]
+
+
 _logger = get_logger(__name__)
 
 # Type alias for SQL filter maps: database-regex → list of schema-regexes.

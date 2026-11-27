@@ -24,6 +24,21 @@ from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import _LegacyErrorCodeMixin
 from application_sdk.errors.leaves import InvalidInputError
 
+__all__ = [
+    "AppAlreadyRegisteredError",
+    "AppMetadata",
+    "AppNotFoundError",
+    "AppNotRegisteredError",
+    "AppRegistry",
+    "AppVersionAlreadyRegisteredError",
+    "get_activity_name",
+    "resolve_pool_queue",
+    "TaskNotFoundError",
+    "TaskNotRegisteredError",
+    "TaskRegistry",
+]
+
+
 #: SDK-internal: the registered name of the App whose task the current activity
 #: runs. Set by the task wrapper (``create_activity_from_task``) and scoped to
 #: the activity by ``OutputActivityInboundInterceptor``, so every run-scoped

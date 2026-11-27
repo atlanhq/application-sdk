@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from obstore.store import LocalStore, MemoryStore
 
+__all__ = [
+    "create_local_store",
+    "create_memory_store",
+]
+
 
 def create_local_store(root_path: str | Path) -> "LocalStore":
     """Create a ``LocalStore`` rooted at *root_path*.

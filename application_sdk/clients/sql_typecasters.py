@@ -75,6 +75,13 @@ from typing import Any
 
 from application_sdk._logging import get_logger
 
+__all__ = [
+    "attach_tolerant_text_decoder",
+    "install_tolerant_connection_decoder",
+    "install_tolerant_text_decoder_hook",
+]
+
+
 logger = get_logger(__name__)
 
 # Name of the private codec registered by ``_ensure_tolerant_codec``. It is an

@@ -7,13 +7,20 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.models import MetricType
 from application_sdk.observability.traces_adaptor import get_traces
 
 if TYPE_CHECKING:
     from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
     from application_sdk.observability.metrics_adaptor import AtlanMetricsAdapter
     from application_sdk.observability.traces_adaptor import AtlanTracesAdapter
+
+__all__ = [
+    "FUNCTION_CALLS_METRIC",
+    "observability",
+]
+
 
 T = TypeVar("T")
 

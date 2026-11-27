@@ -9,6 +9,17 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
 
+__all__ = [
+    "correlation_context",
+    "ExecutionContext",
+    "get_execution_context",
+    "is_replaying",
+    "request_context",
+    "set_execution_context",
+    "set_replay_predicate",
+]
+
+
 # ---------------------------------------------------------------------------
 # Replay-predicate ContextVar
 # ---------------------------------------------------------------------------

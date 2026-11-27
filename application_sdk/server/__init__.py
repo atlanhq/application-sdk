@@ -13,3 +13,5 @@ of this package while it was missing (FND-439). The previous ``__init__.py`` was
 deleted wholesale with the v2 shim layer (b5ed0e49) because it held the
 deprecated ``ServerInterface``; only the deprecated content was meant to go.
 """
+
+__all__: list[str] = []

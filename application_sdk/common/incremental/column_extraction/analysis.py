@@ -14,6 +14,13 @@ from application_sdk.common.incremental.models import EntityType, TableState
 from application_sdk.constants import TRANSFORMED_SUBDIR
 from application_sdk.observability.logger_adaptor import get_logger
 
+__all__ = [
+    "ColumnExtractionAnalysis",
+    "get_tables_needing_column_extraction",
+    "get_transformed_dir",
+]
+
+
 logger = get_logger(__name__)
 
 # SQL literals for the states the analysis filters on. Built from the enum so

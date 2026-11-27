@@ -84,6 +84,19 @@ from typing import Any
 
 from application_sdk._logging import get_logger
 
+__all__ = [
+    "APP_NAME_TOKEN",
+    "application_name_from_env",
+    "deployment_name_from_env",
+    "DEPLOYMENT_NAME_TOKEN",
+    "derive_task_queue",
+    "ManifestTokenResolution",
+    "QUEUE_PREFIX",
+    "resolve_manifest_tokens",
+    "task_queue_from_env",
+]
+
+
 logger = get_logger(__name__)
 
 #: Prefix the platform expects on a fully-qualified app queue. Callers pass the

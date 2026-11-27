@@ -14,6 +14,13 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics import create_histogram
 from application_sdk.observability.sizing_inputs import InputSize
 
+__all__ = [
+    "record_observation",
+    "SIZING_SCHEMA_VERSION",
+    "SizingObservation",
+]
+
+
 _logger = get_logger(__name__)
 
 _INSTRUMENTS: dict[str, Any] = {}

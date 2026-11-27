@@ -42,6 +42,12 @@ if TYPE_CHECKING:
 
     from application_sdk.handler.context import HandlerContext
 
+__all__ = [
+    "DefaultHandler",
+    "Handler",
+    "HandlerError",
+]
+
 
 @dataclass(kw_only=True)
 class HandlerError(_LegacyErrorCodeMixin, AppError):

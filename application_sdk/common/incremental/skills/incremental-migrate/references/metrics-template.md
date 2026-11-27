@@ -13,7 +13,8 @@ decorators, or broadcasters needed. All metrics flow through the existing
 observability pipeline to Segment and Mixpanel.
 
 ```python
-from application_sdk.observability.metrics_adaptor import get_metrics, MetricType
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.models import MetricType
 
 CONNECTOR = "my_connector"  # Replace with actual connector name
 

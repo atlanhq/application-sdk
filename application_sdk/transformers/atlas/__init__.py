@@ -29,6 +29,11 @@ from application_sdk.transformers.common.utils import (
     _process_text as process_text,
 )
 
+__all__ = [
+    "AtlasTransformer",
+]
+
+
 warnings.warn(
     "application_sdk.transformers.atlas is deprecated; use the connector-side "
     "asset-mapper pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead "
