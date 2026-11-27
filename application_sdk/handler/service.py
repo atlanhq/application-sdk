@@ -64,6 +64,10 @@ from application_sdk.common.build_identity import (  # noqa: F401 — re-exporte
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
 )
+from application_sdk.common.dispatch import (  # noqa: F401 — re-exported (served here before workflow_routes)
+    canonical_workflow_type,
+    resolve_dispatch_workflow_id,
+)
 from application_sdk.common.task_queue import (  # noqa: F401 — resolve_manifest_tokens re-exported (served here before metadata_routes)
     resolve_manifest_tokens,
     task_queue_from_env,
