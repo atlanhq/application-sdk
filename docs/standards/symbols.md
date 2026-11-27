@@ -224,6 +224,49 @@ literals. A hand-written `warnings.warn(..., DeprecationWarning)` is still grade
 including a message held in a local variable or built from a module-level string
 constant, but the helper cannot get the format wrong.
 
+#### Deleting a deprecated parameter at its horizon
+
+The Symbol Removal Check lets you delete a parameter that the base release
+deprecated this way. It reads the deprecation from the base release's source.
+A parameter counts as deprecated only when one notice
+(`warn_deprecated(...)` or `warnings.warn(..., DeprecationWarning)`) meets
+both conditions:
+
+1. **It runs only when the caller passed the parameter.** The notice sits under
+   an `if` whose whole test is `<param> is not None`, `<param> is not
+   <sentinel>`, or a bare `<param>`.
+2. **It names the parameter as a whole word.** For `warn_deprecated`, that is
+   the first argument (`name`). For `warnings.warn`, it is the message. The
+   replacement and the note do not count, because they name what to use
+   instead.
+
+```python
+if state_store is not None:
+    _deprecation.warn_deprecated(
+        "create_app_handler_service(state_store=...)",
+        "DaprCredentialVault",
+        "4.0.0",
+        note="the parameter is ignored",
+    )
+```
+
+Anything else gets no excuse:
+
+- A notice under `if <param> is None:` deprecates *leaving the parameter out*
+  (the `raise_on_error` example above). Callers were told to start passing the
+  parameter, so it stays.
+- A notice under `if <param> is not None and <more>:` deprecates one form of
+  the value. The parameter stays.
+
+Only deleting the parameter is excused. Making a deprecated parameter
+keyword-only or positional-only, or removing its default, still blocks: until
+the parameter is gone, existing calls must keep working. Each deleted
+parameter is excused only on the symbols that carried the notice in the base
+release, including the package re-exports of those symbols.
+
+A docstring `.. deprecated::` on the parameter adds nothing here. The gate and
+the manifest read the notice in the code, not the docstring.
+
 ---
 
 ## Every notice names a replacement and a removal version
@@ -392,7 +435,9 @@ consumer's upgrade. Prefer the alias.
    name, the `check-docs-deprecated-imports` pre-commit hook fails every
    Markdown code example that still uses it (`docs/standards/documentation.md`).
 7. When the removal version arrives, delete the alias and its manifest entry in
-   one PR.
+   one PR. For a parameter, delete the parameter and its notice together (see
+   [Deleting a deprecated parameter at its
+   horizon](#deleting-a-deprecated-parameter-at-its-horizon)).
 
 ## Checklist when the gate fails your PR
 

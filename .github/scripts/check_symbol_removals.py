@@ -31,6 +31,12 @@ alias entry, both keep the name in the snapshot.  When the deprecation horizon
 finally arrives, the name is deleted from a base that already marked it
 deprecated, and the gate stays quiet.
 
+A **parameter** follows the same rule one level down (FND-5542). It cannot
+carry ``@deprecated``; ``docs/standards/symbols.md`` deprecates it with a
+``DeprecationWarning`` (``_deprecation.warn_deprecated``) raised when a caller
+passes it. A parameter the base release warned about that way may be deleted:
+see :func:`_deprecated_params` for exactly what counts.
+
 Two severities, and why the split is where it is
 ------------------------------------------------
 
@@ -100,6 +106,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import subprocess
 import sys
 import tarfile
@@ -193,6 +200,11 @@ class Symbol:
     """The subset of *params* with no default — narrowing these is a break."""
     param_kinds: tuple[str, ...] = ()
     """How each of *params* may be passed, positionally aligned with it."""
+    deprecated_params: tuple[str, ...] = ()
+    """The subset of *params* the body warns about when a caller passes them.
+
+    Deleting one of these is the removal the deprecation bought, so it is not
+    narrowing. See :func:`_deprecated_params`."""
 
     @property
     def key(self) -> str:
@@ -254,6 +266,7 @@ class Snapshot:
                 params=tuple(rec.get("params", ())),
                 required_params=tuple(rec.get("required_params", ())),
                 param_kinds=tuple(rec.get("param_kinds", ())),
+                deprecated_params=tuple(rec.get("deprecated_params", ())),
             )
             for key, rec in raw["symbols"].items()
         }
@@ -371,6 +384,137 @@ def _signature(
         names.append(f"**{args.kwarg.arg}")
         kinds.append(VAR_KEYWORD)
     return tuple(names), tuple(required), tuple(kinds)
+
+
+def _call_name(node: ast.Call) -> str | None:
+    """``f`` for ``f(...)`` and ``mod.f(...)``; ``None`` for anything else."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _is_deprecation_category(node: ast.expr) -> bool:
+    """``DeprecationWarning`` or ``builtins.DeprecationWarning``."""
+    return (isinstance(node, ast.Name) and node.id == "DeprecationWarning") or (
+        isinstance(node, ast.Attribute) and node.attr == "DeprecationWarning"
+    )
+
+
+def _deprecation_notice(node: ast.Call) -> ast.expr | None:
+    """The argument of *node* that names what is deprecated, if *node* is a notice.
+
+    * ``warnings.warn(msg, DeprecationWarning)`` (category positional or as
+      ``category=``) → ``msg``.
+    * ``warn_deprecated(name, replacement, remove_in)`` → ``name``. Only
+      ``name``: the replacement and note routinely name *other* parameters
+      ("use raise_on_error=True"), which are not the deprecated ones.
+    """
+
+    def arg(position: int, keyword: str) -> ast.expr | None:
+        if len(node.args) > position:
+            return node.args[position]
+        return next((k.value for k in node.keywords if k.arg == keyword), None)
+
+    name = _call_name(node)
+    if name == "warn_deprecated":
+        return arg(0, "name")
+    if name == "warn":
+        category = arg(1, "category")
+        if category is not None and _is_deprecation_category(category):
+            return arg(0, "message")
+    return None
+
+
+def _presence_checks(test: ast.expr) -> set[str]:
+    """The parameter *test* checks was passed, when that is all it checks.
+
+    ``p is not None`` / ``p is not _SENTINEL`` or a bare ``p``. The check must
+    be the whole test. ``p is None`` deprecates *omitting* ``p`` (a default),
+    and ``p is not None and not isinstance(p, X)`` deprecates one *form* of
+    the value (``resolve_credential_file(dest_dir=<str>)``); in both, ``p``
+    itself stays.
+    """
+    if isinstance(test, ast.Name):
+        return {test.id}
+    if (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.IsNot)
+    ):
+        return {test.left.id}
+    return set()
+
+
+def _deprecated_params(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...]:
+    """The parameters *node*'s body deprecates, in declaration order.
+
+    A parameter counts only when **both** hold for one notice
+    (``warnings.warn(..., DeprecationWarning)`` or ``warn_deprecated(...)``):
+
+    1. the notice sits under an ``if`` that is true only when the caller
+       passed the parameter (:func:`_presence_checks`), and
+    2. the notice names the parameter as a whole word (the message, or
+       ``warn_deprecated``'s ``name``).
+
+    Both, because either alone over-matches. A notice under ``if p is None:``
+    names ``p`` but deprecates leaving it out; a notice under ``if p:`` that
+    names only ``q`` says nothing about ``p``. Nested defs and classes are not
+    entered: their notices belong to them.
+    """
+    args = node.args
+    params = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)} - {
+        "self",
+        "cls",
+    }
+    found: set[str] = set()
+
+    def notices(stmt: ast.stmt) -> Iterator[ast.expr]:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Call):
+                notice = _deprecation_notice(sub)
+                if notice is not None:
+                    yield notice
+
+    def visit(body: Sequence[ast.stmt], guarded: frozenset[str]) -> None:
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(stmt, ast.If):
+                visit(stmt.body, guarded | (_presence_checks(stmt.test) & params))
+                visit(stmt.orelse, guarded)
+                continue
+            children = [
+                getattr(stmt, attr)
+                for attr in ("body", "orelse", "finalbody")
+                if isinstance(getattr(stmt, attr, None), list)
+            ]
+            children += [h.body for h in getattr(stmt, "handlers", ())]
+            children += [c.body for c in getattr(stmt, "cases", ())]
+            if children:
+                for child in children:
+                    visit(child, guarded)
+                continue
+            if not guarded:
+                continue
+            for notice in notices(stmt):
+                text = " ".join(
+                    n.value
+                    for n in ast.walk(notice)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                )
+                found.update(
+                    p
+                    for p in guarded
+                    if re.search(rf"(?<![\w]){re.escape(p)}(?![\w])", text)
+                )
+
+    visit(node.body, frozenset())
+    ordered = [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+    return tuple(p for p in ordered if p in found)
 
 
 def _module_getattr(tree: ast.Module) -> ast.AST | None:
@@ -737,6 +881,7 @@ def extract_module(
         *,
         deprecated: bool = False,
         sig=((), (), ()),
+        deprecated_params: tuple[str, ...] = (),
     ) -> None:
         if qualname in _PLUMBING:
             return
@@ -749,6 +894,7 @@ def extract_module(
                 params=sig[0],
                 required_params=sig[1],
                 param_kinds=sig[2],
+                deprecated_params=deprecated_params,
             )
         )
 
@@ -761,6 +907,7 @@ def extract_module(
                     _is_deprecated_decorator(d) for d in node.decorator_list
                 ),
                 sig=_signature(node),
+                deprecated_params=_deprecated_params(node),
             )
         elif isinstance(node, ast.ClassDef):
             cls_deprecated = any(
@@ -778,6 +925,7 @@ def extract_module(
                     deprecated=cls_deprecated
                     or any(_is_deprecated_decorator(d) for d in child.decorator_list),
                     sig=_signature(child),
+                    deprecated_params=_deprecated_params(child),
                 )
         elif isinstance(node, ast.Assign):
             for target in node.targets:
@@ -1123,7 +1271,9 @@ def _narrowing(base: Symbol, head: Symbol) -> str | None:
 
     Narrowing is any change an existing correct call site can trip over:
 
-    * a parameter disappears or is renamed;
+    * a parameter disappears or is renamed — unless *base* deprecated it
+      (:attr:`Symbol.deprecated_params`): that deletion is the one the
+      deprecation bought, exactly as for a ``@deprecated`` def;
     * one stops accepting a call style it used to accept — making it
       positional-only breaks ``f(x=1)``, keyword-only breaks ``f(1)``. Both
       are ordinary API-hardening refactors, and both break every caller using
@@ -1137,7 +1287,11 @@ def _narrowing(base: Symbol, head: Symbol) -> str | None:
         SymbolKind.METHOD,
     ):
         return None
-    dropped = [p for p in base.params if p not in head.params]
+    dropped = [
+        p
+        for p in base.params
+        if p not in head.params and p not in base.deprecated_params
+    ]
     if dropped:
         return f"parameter(s) {', '.join(dropped)} removed from {base.qualname}()"
 
