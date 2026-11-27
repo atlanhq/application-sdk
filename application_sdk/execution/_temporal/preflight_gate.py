@@ -70,7 +70,10 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ingress import normalize_agent_json
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
-    from application_sdk.credentials.routing import find_prebuilt_credential_ref
+    from application_sdk.credentials.routing import (
+        _connection_credential_fallback_guid,
+        find_prebuilt_credential_ref,
+    )
     from application_sdk.credentials.spec import AgentCredentialSpec
     from application_sdk.errors.base import (
         AppError,
@@ -769,6 +772,13 @@ class PreflightGateInput(BaseModel):
         ``model_dump`` snapshot so the gate activity can derive form config in the
         activity frame. If a field does not fit (an oddly-shaped custom input),
         degrades to a minimal input — the gate must fail open *before* dispatch.
+
+        When the input names no credential at all (no ``credential_guid``,
+        ``credential_ref``, ``agent_json`` or declared named refs) and is not in
+        agent mode, the GUID is taken from the connection's
+        ``defaultCredentialGuid``. An explicit credential always wins, and an
+        agent run is never sent to the vault on the connection's GUID. Only the
+        gate envelope changes; the input the entrypoint body sees does not.
         """
         snapshot: dict[str, Any] = {}
         if hasattr(input_data, "model_dump"):
@@ -797,17 +807,25 @@ class PreflightGateInput(BaseModel):
                 "single-credential resolution — declare it as ClassVar[dict[str, str]]",
                 input_type=input_type.__name__,
             )
+        extraction_method = getattr(input_data, "extraction_method", "") or ""
+        credential_guid = getattr(input_data, "credential_guid", "") or ""
+        # Normalised, not passed through: a custom input may still carry the
+        # raw wire value (a JSON string, or the marketplace-package
+        # placeholder that fails typed validation). Before this, such a value
+        # failed the construction below and cost the gate its
+        # extraction_method and credential_guid too — degrading credential
+        # resolution silently instead of just having no agent reference.
+        agent_json = normalize_agent_json(getattr(input_data, "agent_json", None))
+        credential_ref = _prebuilt_credential_ref(input_data)
+        if not credential_guid:
+            # The rule is shared with SqlApp.resolve_credential_ref, so the gate
+            # checks the credential the tasks will use.
+            credential_guid = _connection_credential_fallback_guid(input_data, snapshot)
         base_kw: dict[str, Any] = dict(
-            extraction_method=getattr(input_data, "extraction_method", "") or "",
-            credential_guid=getattr(input_data, "credential_guid", "") or "",
-            # Normalised, not passed through: a custom input may still carry the
-            # raw wire value (a JSON string, or the marketplace-package
-            # placeholder that fails typed validation). Before this, such a value
-            # failed the construction below and cost the gate its
-            # extraction_method and credential_guid too — degrading credential
-            # resolution silently instead of just having no agent reference.
-            agent_json=normalize_agent_json(getattr(input_data, "agent_json", None)),
-            credential_ref=_prebuilt_credential_ref(input_data),
+            extraction_method=extraction_method,
+            credential_guid=credential_guid,
+            agent_json=agent_json,
+            credential_ref=credential_ref,
             entrypoint=entrypoint,
             workflow_slug=getattr(input_data, "workflow_slug", "") or "",
             credential_ref_fields=credential_ref_fields,

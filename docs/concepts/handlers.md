@@ -84,7 +84,21 @@ class PreflightOutput(BaseModel):
 
 #### Multi-credential preflight
 
-Most apps use one credential and read `input.credentials`. Apps that need
+Most apps use one credential and read `input.credentials`. The gate runs
+before the entrypoint body, so it takes that credential from the extraction
+input as AE sent it: `credential_ref`, then `agent_json` in agent mode, then
+`credential_guid`. When the input names none of them and is not in agent mode,
+the gate uses the connection's `defaultCredentialGuid`
+(`connection.attributes.defaultCredentialGuid`). That is where a query-extraction
+(miner) input that reuses a crawler's connection carries its credential.
+`SqlApp.resolve_credential_ref` applies the same fallback, so a `SqlApp` needs no
+validator to copy the GUID onto `credential_guid`. An app that resolves its
+credential some other way in the entrypoint body (for example by calling
+`CredentialRef.resolve(input)` directly) still has to read the connection's
+GUID itself. An explicit credential always wins, and the input the entrypoint
+body receives is unchanged.
+
+Apps that need
 several credentials of different auth types (for example an API key plus an
 object-store credential) declare a **class-level** `preflight_credential_refs`
 map on their extraction-input contract — ref name to the top-level guid field

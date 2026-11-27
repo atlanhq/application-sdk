@@ -275,6 +275,123 @@ def _declared_run_credential_field(source: object) -> str | None:
     return declared if isinstance(declared, str) and declared else None
 
 
+_CONNECTION_CREDENTIAL_GUID_KEYS = ("defaultCredentialGuid", "default_credential_guid")
+"""Where a Connection carries its default credential GUID: the AE wire name
+first, then the snake_case form a Python-built input may use."""
+
+
+def _connection_default_credential_guid(source: object) -> str:
+    """The input's ``connection.attributes.defaultCredentialGuid``, or ``""``.
+
+    Query-extraction (miner) inputs reuse the crawler's connection: AE puts the
+    whole Connection on ``connection``, and the credential GUID arrives only on
+    its attributes, never on the top-level ``credential_guid``. The preflight
+    gate runs before the entrypoint body, so it cannot wait for app code to
+    copy the GUID across; it and :meth:`SqlApp.resolve_credential_ref` both
+    fall back to this when the input names no credential of its own.
+
+    ``ConnectionAttributes`` does not declare the field; it survives as an
+    ``extra="allow"`` value under its wire name. A dict-shaped connection (a
+    custom input that never typed it) is read the same way. Never raises: a
+    connection this cannot read means no fallback.
+    """
+    connection = getattr(source, "connection", None)
+    if connection is None:
+        return ""
+    attributes = (
+        connection.get("attributes")
+        if isinstance(connection, dict)
+        else getattr(connection, "attributes", None)
+    )
+    if attributes is None:
+        return ""
+    for key in _CONNECTION_CREDENTIAL_GUID_KEYS:
+        value = (
+            attributes.get(key)
+            if isinstance(attributes, dict)
+            else getattr(attributes, key, None)
+        )
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+_AGENT_NAME_HINT_KEYS = ("agent_name", "agent-name")
+"""Top-level input keys that name a Secure Agent without an ``agent_json`` spec.
+
+The preflight outcome row reads these as an agent signal too. ``agent_json``
+itself is judged by :func:`normalize_agent_json` instead of by presence: AE
+replays a marketplace placeholder blob onto direct runs, and treating that as
+an agent would switch the fallback off for exactly the runs that need it."""
+
+
+def _connection_credential_fallback_guid(
+    source: object, snapshot: Mapping[str, object] | None = None
+) -> str:
+    """The connection's default credential GUID, when *source* may fall back to it.
+
+    The one eligibility rule the preflight gate and
+    :meth:`SqlApp.resolve_credential_ref` share, so both resolve the same
+    credential. Returns ``""`` unless the input names no credential at all:
+
+    * no ``credential_guid`` and no pre-built ``CredentialRef`` field;
+    * no named refs declared in a class-level ``preflight_credential_refs``;
+    * no sign of agent mode — ``extraction_method="agent"``, an ``agent_json``
+      that parses to a spec, or an ``agent_name`` / ``agent-name`` key.
+
+    Only then is ``connection.attributes.defaultCredentialGuid`` returned (see
+    :func:`_connection_default_credential_guid`). Never raises: an input this
+    cannot read gets no fallback.
+
+    Args:
+        source: The extraction input.
+        snapshot: Its ``model_dump(mode="json")``, when the caller already has
+            one; computed here otherwise.
+    """
+    from application_sdk.credentials.errors import (  # noqa: PLC0415
+        CredentialRoutingError,
+    )
+    from application_sdk.credentials.ingress import (  # noqa: PLC0415
+        normalize_agent_json,
+    )
+
+    guid = getattr(source, "credential_guid", "")
+    if guid.strip() if isinstance(guid, str) else guid:
+        return ""
+    try:
+        if find_prebuilt_credential_ref(source) is not None:
+            return ""
+    except CredentialRoutingError:
+        return ""  # several pre-built refs: the input names its credentials
+    if getattr(type(source), "preflight_credential_refs", None):
+        return ""
+    method = getattr(source, "extraction_method", "")
+    if isinstance(method, str) and method.strip().lower() == "agent":
+        return ""
+    if normalize_agent_json(getattr(source, "agent_json", None)) is not None:
+        return ""
+    if snapshot is None:
+        snapshot = _safe_snapshot(source)
+    if any(snapshot.get(key) for key in _AGENT_NAME_HINT_KEYS):
+        return ""
+    return _connection_default_credential_guid(source)
+
+
+def _safe_snapshot(source: object) -> Mapping[str, object]:
+    dump = getattr(source, "model_dump", None)
+    if dump is None:
+        return {}
+    try:
+        result = dump(mode="json")
+    except Exception:  # an unreadable input gets no agent hints, not a crash
+        logger.warning(
+            "Could not snapshot the input; reading no agent hints from it",
+            exc_info=True,
+        )
+        return {}
+    return result if isinstance(result, Mapping) else {}
+
+
 def find_prebuilt_credential_ref(source: object) -> CredentialRef | None:
     """Return the :class:`CredentialRef` an input already carries, if any.
 

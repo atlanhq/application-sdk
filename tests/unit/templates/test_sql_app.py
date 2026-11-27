@@ -3745,3 +3745,105 @@ class TestPerEntityEngineRename:
         with pytest.warns(DeprecationWarning, match="SqlApp.resolve_output_path"):
             assert SqlApp._resolve_output_path(task_input) == "/tmp/explicit"
         assert SqlApp.resolve_output_path(task_input) == "/tmp/explicit"
+
+
+class TestResolveCredentialRefConnectionFallback:
+    """The task path falls back to the connection's GUID exactly as the gate does."""
+
+    @staticmethod
+    def _input(**fields: Any) -> Any:
+        from application_sdk.templates.contracts.sql_query import (  # noqa: PLC0415
+            QueryExtractionInput,
+        )
+
+        payload: dict[str, Any] = {
+            "connection": {
+                "typeName": "Connection",
+                "attributes": {
+                    "qualifiedName": "default/postgres/1",
+                    "name": "example",
+                    "defaultCredentialGuid": "conn-guid",
+                },
+            },
+        }
+        payload.update(fields)
+        return QueryExtractionInput.model_validate(payload)
+
+    def test_connection_guid_used_when_input_names_no_credential(self) -> None:
+        ref = SqlApp().resolve_credential_ref(self._input())
+        assert ref is not None
+        assert ref.credential_guid == "conn-guid"
+
+    def test_explicit_credential_guid_wins(self) -> None:
+        ref = SqlApp().resolve_credential_ref(self._input(credential_guid="explicit"))
+        assert ref is not None
+        assert ref.credential_guid == "explicit"
+
+    def test_agent_mode_is_not_sent_to_the_vault(self) -> None:
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        agent_mode = SimpleNamespace(
+            extraction_method="agent",
+            credential_guid="",
+            agent_json=None,
+            credential_ref=None,
+            connection=self._input().connection,
+        )
+        assert SqlApp().resolve_credential_ref(agent_mode) is None  # type: ignore[arg-type]
+
+    def test_agent_spec_without_agent_method_is_not_sent_to_the_vault(self) -> None:
+        # A populated agent spec with no extraction_method: the gate skips the
+        # fallback, so the task path must too.
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        from application_sdk.credentials.ingress import (  # noqa: PLC0415
+            normalize_agent_json,
+        )
+
+        inp = SimpleNamespace(
+            extraction_method="",
+            credential_guid="",
+            agent_json=normalize_agent_json(
+                {"agent-name": "acme", "secret-path": "arn:x"}
+            ),
+            credential_ref=None,
+            connection=self._input().connection,
+        )
+        assert SqlApp().resolve_credential_ref(inp) is None  # type: ignore[arg-type]
+
+    def test_declared_named_refs_skip_the_fallback(self) -> None:
+        from application_sdk.templates.contracts.sql_query import (  # noqa: PLC0415
+            QueryExtractionInput,
+        )
+
+        class _MultiInput(QueryExtractionInput):
+            preflight_credential_refs: ClassVar[dict[str, str]] = {
+                "api": "api_credential_guid"
+            }
+
+        inp = _MultiInput.model_validate(
+            {
+                "connection": {
+                    "typeName": "Connection",
+                    "attributes": {"defaultCredentialGuid": "conn-guid"},
+                }
+            }
+        )
+        assert SqlApp().resolve_credential_ref(inp) is None
+
+    def test_no_connection_guid_resolves_nothing(self) -> None:
+        inp = self._input(connection={"typeName": "Connection", "attributes": {}})
+        assert SqlApp().resolve_credential_ref(inp) is None
+
+    def test_gate_and_task_path_agree(self) -> None:
+        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415
+            PreflightGateInput,
+        )
+
+        inp = self._input()
+        gate_ref = CredentialRef.resolve_or_none(
+            PreflightGateInput.from_extraction_input(inp, "mine")
+        )
+        task_ref = SqlApp().resolve_credential_ref(inp)
+        assert gate_ref is not None and task_ref is not None
+        assert gate_ref.credential_guid == task_ref.credential_guid == "conn-guid"
