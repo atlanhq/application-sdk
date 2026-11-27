@@ -1576,24 +1576,6 @@
       "symbol": "RedisLockOutboundInterceptor"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "APPLICATION_VERSION is deprecated; use application_sdk.constants.APPLICATION_VERSION \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
-      "migration_target": true,
-      "module": "application_sdk.execution._temporal.interceptors.log",
-      "removal_version": "3.41.0",
-      "symbol": "APPLICATION_VERSION"
-    },
-    {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "COMMIT_SHA is deprecated; use application_sdk.constants.COMMIT_SHA \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
-      "migration_target": true,
-      "module": "application_sdk.execution._temporal.interceptors.log",
-      "removal_version": "3.41.0",
-      "symbol": "COMMIT_SHA"
-    },
-    {
       "kind": "function",
       "marker_via": "decorator",
       "message": "application_sdk.execution._temporal.lock_activities.acquire_distributed_lock has no effect: create_worker never registers it, so it never runs in v3. Will be removed in v4.0.0.",

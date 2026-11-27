@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -264,33 +263,16 @@ class TestWorkflowClientConfig:
         assert cfg.is_configured() is True
 
 
-class TestStateStoreDeprecation:
-    """state_store= parameter is deprecated and ignored — verify warning."""
+class TestStateStoreRemoved:
+    """The ``state_store=`` parameter passed its v3.2.0 horizon and is gone."""
 
-    def test_state_store_emits_deprecation_warning(self) -> None:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            create_app_handler_service(
+    def test_state_store_is_rejected(self) -> None:
+        with pytest.raises(TypeError, match="state_store"):
+            create_app_handler_service(  # type: ignore[call-arg]
                 _TestHandler(),
-                app_name="dep-test",
+                app_name="removed-test",
                 state_store="some-state-store",
             )
-        assert any(
-            issubclass(w.category, DeprecationWarning)
-            and "state_store" in str(w.message)
-            for w in caught
-        )
-
-    def test_no_state_store_no_deprecation_warning(self) -> None:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            create_app_handler_service(_TestHandler(), app_name="no-dep")
-        # No state_store warning should be emitted
-        assert not any(
-            issubclass(w.category, DeprecationWarning)
-            and "state_store" in str(w.message)
-            for w in caught
-        )
 
 
 # ---------------------------------------------------------------------------

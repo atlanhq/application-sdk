@@ -2080,10 +2080,6 @@ def create_app_handler_service(
     prometheus_bind_address: str = "",
     workflow_max_timeout_hours: int | None = None,
     worker_health: WorkerHealthServer | None = None,
-    # Deprecated: state_store is no longer used. Credential resolution now
-    # goes through DaprCredentialVault exclusively. Passing this parameter
-    # emits a DeprecationWarning. Will be removed in v3.2.0.
-    state_store: object = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
 
@@ -2132,16 +2128,6 @@ def create_app_handler_service(
         Configured FastAPI application.
     """
     global _workflow_config, _secret_store, _storage
-
-    if state_store is not None:
-        warnings.warn(
-            "state_store parameter is deprecated and ignored. "
-            "Use DaprCredentialVault, now the exclusive credential-resolution "
-            "path; stop passing state_store. "
-            "Will be removed in v3.2.0.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     _secret_store = secret_store
     _storage = storage

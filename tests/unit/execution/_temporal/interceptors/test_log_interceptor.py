@@ -1949,50 +1949,23 @@ class TestLifecycleMessageBodies:
         assert "FAILED (blank):" not in suffix  # no empty ": " tail
 
 
-class TestDeprecatedConstantReexports:
-    """#3872 made these importable from this module; removing them is a break.
+class TestRemovedConstantReexports:
+    """The v3.41.0 horizon passed: the build constants left this module.
 
-    They were never meant as surface here — their home is
-    ``application_sdk.constants`` — but v3.37.0 and v3.38.0 shipped them
-    importable from the interceptor, and the surface gate treats a public name
-    in a private module as binding because the fleet has imported SDK privates
-    before (FND-2388).
+    v3.37.0 and v3.38.0 shipped ``APPLICATION_VERSION`` and ``COMMIT_SHA``
+    importable from the interceptor by accident; a deprecation alias then
+    pointed callers at their real home, ``application_sdk.constants``.
     """
 
-    def test_the_names_still_resolve_to_the_real_constants(self) -> None:
-        from application_sdk import constants
-        from application_sdk.execution._temporal.interceptors import log as log_mod
-
-        with pytest.warns(DeprecationWarning):
-            assert log_mod.APPLICATION_VERSION == constants.APPLICATION_VERSION
-        with pytest.warns(DeprecationWarning):
-            assert log_mod.COMMIT_SHA == constants.COMMIT_SHA
-
-    def test_each_access_names_its_replacement_and_a_removal_version(self) -> None:
-        # B002 flags a notice missing either; B003 flags one whose stated
-        # version has already passed. Both are enforced, so both are asserted.
-        from application_sdk.execution._temporal.interceptors import log as log_mod
-
-        for name in ("APPLICATION_VERSION", "COMMIT_SHA"):
-            with pytest.warns(DeprecationWarning) as caught:
-                getattr(log_mod, name)
-            notice = str(caught[0].message)
-            assert f"application_sdk.constants.{name}" in notice, name
-            assert "removed in v3.41.0" in notice, name
-
-    def test_the_alias_is_not_a_module_level_rebinding(self) -> None:
-        # A real module global would resolve before __getattr__ ever ran,
-        # handing the name back silently and leaving the caller with no
-        # migration signal — which is the whole point of the shim.
-        from application_sdk.execution._temporal.interceptors import log as log_mod
-
-        assert "APPLICATION_VERSION" not in vars(log_mod)
-        assert "COMMIT_SHA" not in vars(log_mod)
-
-    def test_an_unknown_name_still_raises_attribute_error(self) -> None:
-        # __getattr__ must not turn every typo on this module into a warning
-        # and a None.
+    @pytest.mark.parametrize("name", ["APPLICATION_VERSION", "COMMIT_SHA"])
+    def test_the_name_no_longer_resolves_here(self, name: str) -> None:
         from application_sdk.execution._temporal.interceptors import log as log_mod
 
         with pytest.raises(AttributeError):
-            log_mod.NO_SUCH_CONSTANT
+            getattr(log_mod, name)
+
+    @pytest.mark.parametrize("name", ["APPLICATION_VERSION", "COMMIT_SHA"])
+    def test_the_replacement_still_resolves(self, name: str) -> None:
+        from application_sdk import constants
+
+        assert hasattr(constants, name)
