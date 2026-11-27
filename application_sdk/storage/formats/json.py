@@ -23,6 +23,13 @@ if TYPE_CHECKING:
     import pandas as pd
 
 from application_sdk.storage.formats import Reader, Writer
+from application_sdk.storage.formats.format_errors import (
+    FormatPathRequiredError,
+    FormatReadError,
+    ReaderClosedError,
+    SingleFilePathWithFileNamesError,
+    UnsupportedDataframeTypeError,
+)
 
 __all__ = [
     "JsonFileReader",
@@ -116,10 +123,6 @@ class JsonFileReader(Reader):
 
         # Validate that single file path and file_names are not both specified
         if path.endswith(self.extension) and file_names:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                SingleFilePathWithFileNamesError,
-            )
-
             raise SingleFilePathWithFileNamesError(path=path)
 
         # Initialise the Reader base class so `_is_closed` and
@@ -153,19 +156,11 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                ReaderClosedError,
-            )
-
             raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return await self._get_dataframe()
         else:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                UnsupportedDataframeTypeError,
-            )
-
             raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     def read_batches(
@@ -184,19 +179,11 @@ class JsonFileReader(Reader):
             ValueError: If the reader has been closed or dataframe_type is unsupported.
         """
         if self._is_closed:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                ReaderClosedError,
-            )
-
             raise ReaderClosedError()
 
         if self.dataframe_type == DataframeType.pandas:
             return self._get_batched_dataframe()
         else:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                UnsupportedDataframeTypeError,
-            )
-
             raise UnsupportedDataframeTypeError(observed_type=str(self.dataframe_type))
 
     async def _get_batched_dataframe(
@@ -259,10 +246,6 @@ class JsonFileReader(Reader):
             raise
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatReadError,
-            )
-
             raise FormatReadError(cause=e) from e
 
     async def _get_dataframe(self) -> "pd.DataFrame":
@@ -301,10 +284,6 @@ class JsonFileReader(Reader):
             raise
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatReadError,
-            )
-
             raise FormatReadError(cause=e) from e
 
 
@@ -410,10 +389,6 @@ class JsonFileWriter(Writer):
         self._statistics = None
 
         if not self.path:
-            from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
-                FormatPathRequiredError,
-            )
-
             raise FormatPathRequiredError()
 
         if dataframe_type == DataframeType.daft:

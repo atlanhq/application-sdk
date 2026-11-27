@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from application_sdk.constants import (
+    _HTTP_POOL_TIMEOUT_SECONDS,
     SEGMENT_API_URL,
     SEGMENT_BATCH_SIZE,
     SEGMENT_BATCH_TIMEOUT_SECONDS,
@@ -243,9 +244,6 @@ class SegmentClient:
             if observability_loop.closed:
                 # The observability loop has shut down: nothing can send.
                 return
-            from application_sdk.constants import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-                _HTTP_POOL_TIMEOUT_SECONDS,
-            )
 
             queue: asyncio.Queue[MetricRecord] = asyncio.Queue(
                 maxsize=self._max_queue_size

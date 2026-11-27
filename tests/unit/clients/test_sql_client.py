@@ -732,15 +732,20 @@ async def test_close_is_idempotent_when_engine_none(sql_client: BaseSQLClient):
 # ---------- IAM token paths ----------
 
 
+# 6543 is not generate_aws_rds_token_with_iam_user's default, so a hardcoded
+# port in get_iam_user_token fails this test.
+@pytest.mark.parametrize("port", [5432, 6543])
 @patch("application_sdk.clients.sql.generate_aws_rds_token_with_iam_user")
-def test_get_iam_user_token_happy_path(mock_gen: MagicMock, sql_client: BaseSQLClient):
+def test_get_iam_user_token_happy_path(
+    mock_gen: MagicMock, sql_client: BaseSQLClient, port: int
+):
     """get_iam_user_token threads creds through to generate_aws_rds_token_with_iam_user."""
     mock_gen.return_value = "iam-user-token"
     sql_client.credentials = {
         "username": "AKIA",
         "password": "secret",
         "host": "rds.local",
-        "port": 5432,
+        "port": port,
         "region": "us-east-1",
         "extra": {"username": "db_user", "database": "db1"},
     }
@@ -751,7 +756,7 @@ def test_get_iam_user_token_happy_path(mock_gen: MagicMock, sql_client: BaseSQLC
         aws_secret_access_key="secret",
         host="rds.local",
         user="db_user",
-        port=5432,
+        port=port,
         region="us-east-1",
     )
 

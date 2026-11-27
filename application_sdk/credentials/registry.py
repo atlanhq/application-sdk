@@ -5,6 +5,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from application_sdk.credentials.atlan import (
+    AtlanApiToken,
+    AtlanOAuthClient,
+    _parse_atlan_api_token,
+    _parse_atlan_oauth_client,
+)
+from application_sdk.credentials.errors import CredentialParseError
+from application_sdk.credentials.git import (
+    GitSshCredential,
+    GitTokenCredential,
+    _parse_git_ssh,
+    _parse_git_token,
+)
 from application_sdk.credentials.types import Credential
 
 __all__ = [
@@ -43,18 +56,6 @@ class CredentialTypeRegistry:
         self._register_builtins()
 
     def _register_builtins(self) -> None:
-        from application_sdk.credentials.atlan import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            AtlanApiToken,
-            AtlanOAuthClient,
-            _parse_atlan_api_token,
-            _parse_atlan_oauth_client,
-        )
-        from application_sdk.credentials.git import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            GitSshCredential,
-            GitTokenCredential,
-            _parse_git_ssh,
-            _parse_git_token,
-        )
         from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             ApiKeyCredential,
             BasicCredential,
@@ -112,9 +113,6 @@ class CredentialTypeRegistry:
             CredentialParseError: If ``type_name`` is not registered or parsing fails.
         """
         self._ensure_initialized()
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialParseError,
-        )
 
         entry = self._registry.get(type_name)
         if entry is None:

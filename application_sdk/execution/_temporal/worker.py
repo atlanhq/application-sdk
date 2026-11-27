@@ -36,9 +36,35 @@ from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
     PREFLIGHT_GATE_MODE_ENV,
+    PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
+    PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
+    PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
+    PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+    PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START,
+    PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS,
+    PROMETHEUS_PUSHGATEWAY_URL,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
+    TEMPORAL_PROMETHEUS_BIND_ADDRESS,
+)
+from application_sdk.contracts.events import (
+    ApplicationEventNames,
+    Event,
+    EventTypes,
+    WorkerStartEventData,
+)
+from application_sdk.execution._temporal._activity_errors import (
+    WorkerActivityNameCollisionError,
+    WorkerInterceptorDuplicateError,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
+from application_sdk.execution._temporal.interceptors import (
+    LogInterceptor,
+    MetricsInterceptor,
+    TraceInterceptor,
+)
+from application_sdk.execution._temporal.interceptors.events import EventInterceptor
+from application_sdk.execution._temporal.interceptors.outputs import OutputInterceptor
+from application_sdk.execution._temporal.run_flags import RunFlagsInterceptor
 from application_sdk.execution._temporal.workflows import get_all_app_workflows
 from application_sdk.execution.sandbox import SandboxConfig, host_library_modules
 from application_sdk.execution.settings import (
@@ -48,8 +74,16 @@ from application_sdk.execution.settings import (
     load_execution_settings,
     load_interceptor_settings,
 )
+from application_sdk.infrastructure.bindings import BindingUnavailableError
 from application_sdk.observability.cgroup import memory_limit_bytes
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._observability_sink import (
+    install_observability_store_sink,
+)
+from application_sdk.validation.interceptor import (
+    log_artifact_validation_posture,
+    resolve_artifact_enforcement,
+)
 
 if TYPE_CHECKING:
     # Imported lazily inside _start_metrics_push (cold path) — type-only here.
@@ -356,16 +390,6 @@ class AppWorker:
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
             return
-        from application_sdk.constants import (  # noqa: PLC0415 — cold path: pushgateway env config only when worker mode enabled
-            PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN,
-            PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
-            PROMETHEUS_PUSHGATEWAY_INTERVAL_SECONDS,
-            PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
-            PROMETHEUS_PUSHGATEWAY_SWEEP_STALE_ON_START,
-            PROMETHEUS_PUSHGATEWAY_SWEEP_STALENESS_SECONDS,
-            PROMETHEUS_PUSHGATEWAY_URL,
-            TEMPORAL_PROMETHEUS_BIND_ADDRESS,
-        )
 
         if not PROMETHEUS_PUSHGATEWAY_URL:
             logger.warning(
@@ -522,21 +546,12 @@ async def _emit_worker_start_event(
         SECRET_STORE_NAME,
         UPSTREAM_OBJECT_STORE_NAME,
     )
-    from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
-        ApplicationEventNames,
-        Event,
-        EventTypes,
-        WorkerStartEventData,
-    )
     from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         WORKER_START_DIRECT_PUBLISH_TIMEOUT_SECONDS,
         _publish_event_via_binding,
     )
     from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
         get_dapr_component_types,
-    )
-    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-        BindingUnavailableError,
     )
 
     deployment_name = _deployment_name()
@@ -676,14 +691,6 @@ def build_interceptors(
     # The three observability interceptors are unconditional and run first so
     # ContextVars (ExecutionContext, CorrelationContext) and tracing spans are
     # set before product-feature interceptors or user code observe them.
-    from application_sdk.execution._temporal.interceptors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-        LogInterceptor,
-        MetricsInterceptor,
-        TraceInterceptor,
-    )
-    from application_sdk.execution._temporal.run_flags import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-        RunFlagsInterceptor,
-    )
 
     # Guard against double-registration: callers migrating from v2 may pass
     # one of these explicitly via ``interceptors=...``. Running them twice
@@ -694,10 +701,6 @@ def build_interceptors(
         type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
     ]
     if _duplicates:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            WorkerInterceptorDuplicateError,
-        )
-
         raise WorkerInterceptorDuplicateError(
             message=f"Duplicate interceptor types: {_duplicates}. The SDK adds "
             "LogInterceptor / MetricsInterceptor / TraceInterceptor automatically. "
@@ -759,15 +762,7 @@ def build_interceptors(
     all_interceptors.extend(interceptors or [])
 
     if interceptor_settings.enable_output_interceptor:
-        from application_sdk.execution._temporal.interceptors.outputs import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            OutputInterceptor,
-        )
-
         all_interceptors.append(OutputInterceptor())
-
-    from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-        EventInterceptor,
-    )
 
     all_interceptors.append(
         EventInterceptor(activity_events=interceptor_settings.enable_event_interceptor)
@@ -880,6 +875,7 @@ def create_worker(
         worker = create_worker(client)
         await worker.run()
     """
+    install_observability_store_sink()
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
 
@@ -944,10 +940,6 @@ def create_worker(
     }
     gate_collisions = sorted(set(gate_activity_names) & task_activity_names)
     if gate_collisions:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            WorkerActivityNameCollisionError,
-        )
-
         raise WorkerActivityNameCollisionError(
             message=(
                 f"App task(s) register activity name(s) {gate_collisions}, which the SDK "
@@ -965,10 +957,6 @@ def create_worker(
     # pyatlan_v9 in via `assets`, and only a worker process ever needs it.
     from application_sdk.constants import (  # noqa: PLC0415 — read here, not at module scope, so a test can flip the kill switch and see the posture row follow it
         VALIDATE_ARTIFACTS,
-    )
-    from application_sdk.validation.interceptor import (  # noqa: PLC0415 — see above
-        log_artifact_validation_posture,
-        resolve_artifact_enforcement,
     )
 
     gate_activities = []
@@ -1116,10 +1104,6 @@ def create_worker(
     )
 
     if STORE_ASSERT_ACTIVITY_NAME in task_activity_names:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            WorkerActivityNameCollisionError,
-        )
-
         raise WorkerActivityNameCollisionError(
             message=(
                 f"An app task registers activity name '{STORE_ASSERT_ACTIVITY_NAME}', "

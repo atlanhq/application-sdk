@@ -76,6 +76,7 @@ from typing import Final
 import orjson
 
 from application_sdk._logging import get_logger
+from application_sdk.outputs.collector import get_outputs
 from application_sdk.outputs.models import Metric
 from application_sdk.outputs.skipped import (
     MAX_SKIPPED_RECORDS,
@@ -332,8 +333,6 @@ async def persist_activity_fetch_failures(sink: FetchFailureSink) -> None:
     always land as metrics; a write or upload failure is logged and recorded
     as ``fetch-failures-unpersisted`` (the lines that part held).
     """
-    from application_sdk.outputs import get_outputs  # noqa: PLC0415 — circular
-
     snapshot = sink.close()
     if snapshot.seen == 0:
         return

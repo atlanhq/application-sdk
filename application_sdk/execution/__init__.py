@@ -1,6 +1,8 @@
 """Execution layer for running Apps on Temporal."""
 
 # Re-export the temporalio Client as TemporalClient for app-side type annotations.
+from typing import TYPE_CHECKING
+
 from temporalio.client import Client as TemporalClient
 from temporalio.client import WorkflowFailureError as TemporalWorkflowFailureError
 
@@ -23,33 +25,82 @@ from temporalio.exceptions import ChildWorkflowError as TemporalChildWorkflowErr
 from temporalio.exceptions import TerminatedError as TemporalTerminatedError
 from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
-# Imported for its side effect of binding `application_sdk.execution.progress` as an
-# attribute of this package. Before FND-316, `heartbeat` imported that submodule, so
-# `import application_sdk.execution` was enough to make `execution.progress.<name>`
-# resolve; `heartbeat` now reaches `_runtime.progress` instead, which would have made
-# that attribute access an AttributeError. Explicit here so the access keeps working
-# without depending on another module's imports to arrange it.
-from application_sdk.execution import progress as progress  # re-export
-from application_sdk.execution._temporal.activity_utils import (
-    build_output_path,
-    get_object_store_prefix,
-)
-from application_sdk.execution._temporal.auth import (
-    TemporalAuthConfig,
-    TemporalAuthManager,
-)
-from application_sdk.execution._temporal.backend import (
-    TemporalExecutorBackend,
-    create_temporal_client,
-)
-from application_sdk.execution._temporal.converter import (
-    create_data_converter,
-    create_data_converter_for_app,
-)
-from application_sdk.execution._temporal.worker import AppWorker, create_worker
-from application_sdk.execution.decorators import needs_lock
+from application_sdk._install import lazy_getattr
+
+# Eager: leaves with no SDK imports, which ``application_sdk.app`` imports
+# (``RetryPolicy``) while it initialises.
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.execution.retry import RetryPolicy, retry_product_seconds
+
+if TYPE_CHECKING:
+    from application_sdk.execution import progress as progress
+    from application_sdk.execution._temporal.activity_utils import (
+        build_output_path,
+        get_object_store_prefix,
+    )
+    from application_sdk.execution._temporal.auth import (
+        TemporalAuthConfig,
+        TemporalAuthManager,
+    )
+    from application_sdk.execution._temporal.backend import (
+        TemporalExecutorBackend,
+        create_temporal_client,
+    )
+    from application_sdk.execution._temporal.converter import (
+        create_data_converter,
+        create_data_converter_for_app,
+    )
+    from application_sdk.execution._temporal.worker import AppWorker, create_worker
+    from application_sdk.execution.decorators import needs_lock
+
+# Lazy (FND-4260): the Temporal runtime imports ``application_sdk.app``, and
+# ``application_sdk.app`` imports ``execution.retry``, which runs this
+# ``__init__`` first. Importing the runtime eagerly here made the two packages
+# one import cycle, so every module either side had to defer its imports into
+# function bodies. The runtime now loads on first access.
+#: Names served on first access: ``name -> (module, attribute)``.
+_LAZY: dict[str, tuple[str, str]] = {
+    "build_output_path": (
+        "application_sdk.execution._temporal.activity_utils",
+        "build_output_path",
+    ),
+    "get_object_store_prefix": (
+        "application_sdk.execution._temporal.activity_utils",
+        "get_object_store_prefix",
+    ),
+    "TemporalAuthConfig": (
+        "application_sdk.execution._temporal.auth",
+        "TemporalAuthConfig",
+    ),
+    "TemporalAuthManager": (
+        "application_sdk.execution._temporal.auth",
+        "TemporalAuthManager",
+    ),
+    "TemporalExecutorBackend": (
+        "application_sdk.execution._temporal.backend",
+        "TemporalExecutorBackend",
+    ),
+    "create_temporal_client": (
+        "application_sdk.execution._temporal.backend",
+        "create_temporal_client",
+    ),
+    "create_data_converter": (
+        "application_sdk.execution._temporal.converter",
+        "create_data_converter",
+    ),
+    "create_data_converter_for_app": (
+        "application_sdk.execution._temporal.converter",
+        "create_data_converter_for_app",
+    ),
+    "AppWorker": ("application_sdk.execution._temporal.worker", "AppWorker"),
+    "create_worker": ("application_sdk.execution._temporal.worker", "create_worker"),
+    "needs_lock": ("application_sdk.execution.decorators", "needs_lock"),
+}
+
+#: Submodules this package imported eagerly before it went lazy: still
+#: attributes of the package on first access (``execution.progress``,
+#: ``execution._temporal``).
+_EAGER_SUBMODULES = frozenset({"_temporal", "decorators", "progress"})
 
 __all__ = [
     "AppWorker",
@@ -75,3 +126,11 @@ __all__ = [
     "needs_lock",
     "retry_product_seconds",
 ]
+
+
+def __getattr__(name: str) -> object:
+    return lazy_getattr(__name__, name, _LAZY, globals(), _EAGER_SUBMODULES)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY) | _EAGER_SUBMODULES)

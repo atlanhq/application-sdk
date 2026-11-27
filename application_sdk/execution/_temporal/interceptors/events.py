@@ -47,7 +47,10 @@ from application_sdk.contracts.events import (
     EventTypes,
     WorkflowStates,
 )
+from application_sdk.credentials.oauth import OAuthTokenError
+from application_sdk.execution._temporal._activity_errors import EventPublishError
 from application_sdk.execution._temporal.run_flags import current_run_flags
+from application_sdk.infrastructure.bindings import BindingUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -247,10 +250,6 @@ async def _get_event_auth_headers() -> dict[str, str]:
     :data:`_EVENT_TOKEN_SERVICE_RETRY_SECONDS`. A transient exchange failure
     keeps the service, and the next publish retries the exchange.
     """
-    from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-        OAuthTokenError,
-    )
-
     try:
         token_service = await _get_event_token_service()
         if token_service is None:
@@ -505,10 +504,6 @@ async def _publish_event_via_binding(
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
     binding_metadata.update(await _get_event_auth_headers())
-
-    from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-        BindingUnavailableError,
-    )
 
     binding_error: BindingUnavailableError | None = None
     try:
@@ -817,10 +812,6 @@ async def publish_event(event_data: dict) -> None:
         logger.info("Published event: %s", event_data.get("event_name", ""))
     # conformance: ignore[E004] re-raises as typed EventPublishError; exception is propagated to caller
     except Exception as e:
-        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            EventPublishError,
-        )
-
         raise EventPublishError(cause=e) from e
 
 

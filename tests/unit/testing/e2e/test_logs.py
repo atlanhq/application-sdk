@@ -195,15 +195,24 @@ async def test_collect_events_writes_events_file(output_dir: Path):
 
 async def test_collect_never_raises_on_subprocess_error(output_dir: Path):
     """LogCollector is best-effort — subprocess failures must not propagate."""
-    with patch.object(
-        _local_asyncio(),
-        "create_subprocess_exec",
-        side_effect=OSError("kubectl not found"),
+    with (
+        patch.object(
+            _local_asyncio(),
+            "create_subprocess_exec",
+            side_effect=OSError("kubectl not found"),
+        ) as create_subprocess_exec,
+        patch.object(logs_mod, "logger") as logger,
     ):
         collector = LogCollector("test-ns", output_dir, reader=_FakeReader([]))
         # Should not raise
         await collector.collect()
         await collector.collect_events()
+
+    # No pods: one ``get pods -o wide`` from collect, one ``get events``.
+    assert create_subprocess_exec.call_count == 2
+    assert [c.args[0] for c in logger.warning.call_args_list] == [
+        "Log collection command failed (%s) error_type=%s"
+    ] * 2
 
 
 async def test_an_unreadable_pod_listing_still_collects_the_namespace_artefacts(

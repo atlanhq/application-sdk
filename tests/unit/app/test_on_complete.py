@@ -183,13 +183,18 @@ class TestOnComplete:
 
         app = _App()
 
-        with mock.patch("application_sdk.app.base._safe_log"):
+        with mock.patch("application_sdk.app.base._safe_log") as safe_log:
             with mock.patch.object(
                 app, "cleanup_files", new_callable=mock.AsyncMock
             ) as m:
                 m.side_effect = RuntimeError("cleanup boom")
                 # Should not raise — on_complete() swallows cleanup errors
                 await app.on_complete()
+
+        m.assert_awaited_once()
+        safe_log.assert_any_call(
+            "warning", "cleanup_files task failed during on_complete", exc_info=True
+        )
 
     async def test_subclass_override_adds_custom_logic(self) -> None:
         custom_called: list[bool] = []

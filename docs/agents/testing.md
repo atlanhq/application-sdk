@@ -93,6 +93,24 @@ and one matrix leg goes red at random (FND-4233). Assert the property instead:
 `tests/unit/test_no_wall_clock_asserts.py` fails on any new ordered assertion
 over a clock delta or a value named `elapsed`/`lag`/`ticks`/`gap(s)`/`took`.
 
+## A "Must Not Raise" Test Asserts the Failure Was Reached
+
+A test that sets `side_effect=SomeError(...)` and only checks that nothing
+raised cannot tell "the call failed and was swallowed" from "the call never
+ran": a flipped gate, an early return or a renamed patch target leaves it green.
+After the call under test:
+
+- assert the fault-injected mock ran: `assert_called_once()` /
+  `assert_awaited_once()`;
+- when the contract is "logged and swallowed", assert the log line too (patch
+  the module's `logger`; `caplog` cannot see SDK loggers);
+- when the failure only proves a call is *not* made
+  (`side_effect=AssertionError("listed")`), assert `assert_not_called()`, which
+  also fails if a broad `except` swallowed the `AssertionError`.
+
+`tests/unit/test_no_unasserted_fault_injection.py` fails on a test function that
+sets an exception `side_effect` and contains no assertion.
+
 ## Asserting a Preflight Gate Verdict
 
 The gate emits one `Preflight gate outcome` row per invocation and picks the log

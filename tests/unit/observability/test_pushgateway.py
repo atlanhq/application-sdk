@@ -328,8 +328,16 @@ class TestPushGatewayClientStop:
         mock_delete.assert_not_called()
 
     async def test_stop_swallows_push_failure(self, client, mock_run_in_thread):
-        with patch(_PUSH_TARGET, side_effect=ConnectionError("gateway down")):
+        with (
+            patch(_PUSH_TARGET, side_effect=ConnectionError("gateway down")) as push,
+            patch("application_sdk.observability.pushgateway.logger") as logger,
+        ):
             await client.stop()  # must not raise
+
+        push.assert_called_once()
+        logger.warning.assert_called_once_with(
+            "Final Pushgateway push failed", exc_info=True
+        )
 
 
 class TestPushGatewayClientLifecycle:

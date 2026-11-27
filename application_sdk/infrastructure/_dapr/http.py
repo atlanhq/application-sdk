@@ -34,6 +34,7 @@ from application_sdk.errors.leaves import (
     ColdStartRaceError,
     DaprSidecarUnreachableError,
 )
+from application_sdk.infrastructure._dapr._dapr_errors import DaprBinaryPayloadError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -712,10 +713,6 @@ class AsyncDaprClient:
         try:
             return data.decode("utf-8")
         except UnicodeDecodeError as exc:
-            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415 — circular: _dapr_errors imports the error base which imports this module's package
-                DaprBinaryPayloadError,
-            )
-
             raise DaprBinaryPayloadError(binding_name=binding_name) from exc
 
     async def invoke_binding(

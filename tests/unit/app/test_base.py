@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence as _Seq
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any as _Any
 from unittest import mock
 from uuid import UUID
@@ -358,6 +358,11 @@ class _BLDXInput(Input, allow_unbounded_fields=True):
     """Pydantic-only (no @dataclass): keeps `_BLDXInput()` callable with defaults."""
 
     value: str = ""
+
+
+class _SummaryInput(_BLDXInput, allow_unbounded_fields=True):
+    def summary(self) -> str | None:
+        return f"summary:{self.value}"
 
 
 class _BLDXOutput(Output, allow_unbounded_fields=True):
@@ -991,6 +996,35 @@ class TestCreateTaskActivityWrapper:
         assert call_args.args[0] == "my-app:my-task"
         # Result type is forwarded for proper deserialization
         assert call_args.kwargs["result_type"] is _BLDXOutput
+
+    async def test_wrapper_dispatches_heartbeat_timeout_and_summary(self) -> None:
+        """A declared heartbeat timeout reaches the activity dispatch (FND-5480).
+
+        Without it Temporal only notices a dead or hung worker after the full
+        start-to-close timeout instead of within the heartbeat window.
+        """
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=3600,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_BLDXOutput,
+            context_data={},
+            heartbeat_timeout_seconds=60,
+            auto_heartbeat_seconds=None,
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_act:
+            await wrapper(_SummaryInput(value="tbl"))
+        kwargs = exec_act.call_args.kwargs
+        assert kwargs["heartbeat_timeout"] == timedelta(seconds=60)
+        assert kwargs["start_to_close_timeout"] == timedelta(seconds=3600)
+        # The input's summary is what the Temporal UI shows beside the activity.
+        assert kwargs["summary"] == "summary:tbl"
 
     async def test_wrapper_disables_heartbeat_when_none(self) -> None:
         wrapper = _create_task_activity_wrapper(

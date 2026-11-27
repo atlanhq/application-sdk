@@ -16,6 +16,7 @@ from enum import Enum
 from typing_extensions import deprecated
 
 from application_sdk import _deprecation
+from application_sdk.common.errors import FileConverterNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -131,10 +132,6 @@ async def convert_data_files(
         raise ValueError(f"{key!r} is not a valid ConvertFile")
     converter_func = _file_converter_registry.registry.get(convert_file)
     if converter_func is None:
-        from application_sdk.common.errors import (  # noqa: PLC0415
-            FileConverterNotFoundError,
-        )
-
         # The caller was already warned that this function is deprecated; do
         # not warn a second time for the (equally deprecated) error it raises.
         with warnings.catch_warnings():

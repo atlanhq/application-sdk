@@ -20,6 +20,7 @@ from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreach
     DaprSidecarUnreachableError,
 )
 from application_sdk.infrastructure._dapr.client import (
+    DaprBinding,
     classify_secret_fetch_error,
     dapr_error_detail,
     is_dapr_transport_unavailable,
@@ -33,7 +34,12 @@ from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.bindings import (
     BindingError,  # noqa: F401 — deprecated name kept importable from this module (shipped surface); removed with the class in v4.0
+    BindingResponse,
     BindingUnavailableError,
+)
+from application_sdk.infrastructure.credential_vault import (
+    CredentialConfigNotFoundError,
+    CredentialVaultUnavailableError,
 )
 from application_sdk.infrastructure.secrets import (  # noqa: F401 — the two outage types are re-exports kept for importers of this module (shipped surface)
     SecretNotFoundError,
@@ -129,9 +135,6 @@ class DaprCredentialVault:
             SECRET_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
         )
-        from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            DaprBinding,
-        )
 
         self._client = client
         if upstream_binding_name is not None:
@@ -172,11 +175,6 @@ class DaprCredentialVault:
         Raises:
             CredentialVaultUnavailableError: If any step fails.
         """
-        # Deferred import: circular dependency
-        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            CredentialVaultUnavailableError,
-        )
-
         try:
             credential_config = await self._fetch_credential_config(credential_guid)
 
@@ -269,13 +267,6 @@ class DaprCredentialVault:
             APPLICATION_NAME,
             STATE_STORE_PATH_TEMPLATE,
             TEMPORARY_PATH,
-        )
-        from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            BindingResponse,
-        )
-        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            CredentialConfigNotFoundError,
-            CredentialVaultUnavailableError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
             normalize_key,

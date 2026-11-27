@@ -53,6 +53,8 @@ never needs to import the underlying orchestrator directly::
             return PauseOutput(message=f"paused: {input.reason}")
 """
 
+from typing import TYPE_CHECKING
+
 from temporalio.workflow import HandlerUnfinishedPolicy as _HandlerUnfinishedPolicy
 from temporalio.workflow import now as _now
 from temporalio.workflow import query as _query
@@ -62,20 +64,64 @@ from temporalio.workflow import update as _update
 from temporalio.workflow import uuid4 as _uuid4
 from temporalio.workflow import wait_condition as _wait_condition
 
-from application_sdk.app.base import App, AppError, NonRetryableError, RetryableError
-from application_sdk.app.context import AppContext
+from application_sdk._install import lazy_getattr
+
+# Eager, unlike the rest: these names are also submodules of this package, and
+# importing ``app.task`` or ``app.entrypoint`` (which much of the SDK does)
+# binds the submodule as the package attribute. Served lazily, ``from
+# application_sdk.app import task`` would then return the module, not the
+# decorator. Binding them here, after the submodules load, keeps the functions.
 from application_sdk.app.entrypoint import (
     EntryPointMetadata,
     canonical_workflow_type,
     entrypoint,
     entrypoint_module_segment,
 )
-from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata, task
-from application_sdk.contracts.base import Input, Output, OutputStatus
-from application_sdk.credentials.atlan_client import AtlanClientMixin
-from application_sdk.execution.retry import RetryPolicy
-from application_sdk.server.mcp.decorators import mcp_tool
+
+if TYPE_CHECKING:
+    from application_sdk.app.base import (
+        App,
+        AppError,
+        NonRetryableError,
+        RetryableError,
+    )
+    from application_sdk.app.context import AppContext
+    from application_sdk.app.registry import AppRegistry, TaskRegistry
+    from application_sdk.contracts.base import Input, Output, OutputStatus
+    from application_sdk.credentials.atlan_client import AtlanClientMixin
+    from application_sdk.execution.retry import RetryPolicy
+    from application_sdk.server.mcp.decorators import mcp_tool
+
+# Lazy (FND-4260): ``app.base`` imports most of the SDK, so loading it here
+# made every module that imports a leaf of this package (``app.registry``,
+# ``app.context``) import all of ``app.base`` first, and closed an import cycle
+# through each of them. The names load on first access.
+#: Names served on first access: ``name -> (module, attribute)``.
+_LAZY: dict[str, tuple[str, str]] = {
+    "App": ("application_sdk.app.base", "App"),
+    "AppError": ("application_sdk.app.base", "AppError"),
+    "NonRetryableError": ("application_sdk.app.base", "NonRetryableError"),
+    "RetryableError": ("application_sdk.app.base", "RetryableError"),
+    "AppContext": ("application_sdk.app.context", "AppContext"),
+    "AppRegistry": ("application_sdk.app.registry", "AppRegistry"),
+    "TaskRegistry": ("application_sdk.app.registry", "TaskRegistry"),
+    "Input": ("application_sdk.contracts.base", "Input"),
+    "Output": ("application_sdk.contracts.base", "Output"),
+    "OutputStatus": ("application_sdk.contracts.base", "OutputStatus"),
+    "AtlanClientMixin": (
+        "application_sdk.credentials.atlan_client",
+        "AtlanClientMixin",
+    ),
+    "mcp_tool": ("application_sdk.server.mcp.decorators", "mcp_tool"),
+    # Lazy too: ``execution`` is worker code, which the handler (an importer of
+    # ``app.registry`` and ``app.entrypoint``) must not load (FND-3280).
+    "RetryPolicy": ("application_sdk.execution.retry", "RetryPolicy"),
+}
+
+#: Submodules this package imported eagerly before it went lazy: still
+#: attributes of the package on first access (``app.base``).
+_EAGER_SUBMODULES = frozenset({"base", "context", "registry"})
 
 # ---------------------------------------------------------------------------
 # Runtime interaction decorators — re-exported with SDK-context docstrings.
@@ -281,3 +327,11 @@ __all__ = [
     "uuid4",
     "wait_condition",
 ]
+
+
+def __getattr__(name: str) -> object:
+    return lazy_getattr(__name__, name, _LAZY, globals(), _EAGER_SUBMODULES)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY) | _EAGER_SUBMODULES)

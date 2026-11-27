@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+from application_sdk.common.incremental.incremental_errors import TableScopeLoadError
 from application_sdk.common.incremental.models import EntityType, TableScope, TableState
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnection,
@@ -221,9 +222,6 @@ def get_current_table_scope(
     # conformance: ignore[E004] cleanup-and-rethrow handler; exception preserved in TableScopeLoadError cause chain
     except Exception as e:
         close_scope(scope)
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            TableScopeLoadError,
-        )
 
         raise TableScopeLoadError(cause=e) from e
 

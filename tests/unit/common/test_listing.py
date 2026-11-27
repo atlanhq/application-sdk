@@ -214,9 +214,17 @@ class TestFlushDirectoryMetadataSwallow:
         """Best-effort barrier: an OSError from os.fsync must not
         propagate — the os.scandir recursion is the actual correctness
         layer below."""
-        with patch.object(local_os, "fsync", side_effect=OSError("ro fs")):
+        with (
+            # Darwin returns after F_FULLFSYNC; fail it so fsync runs on
+            # every POSIX platform, not just Linux.
+            private_stdlib(_listing, "fcntl") as local_fcntl,
+            patch.object(local_fcntl, "fcntl", side_effect=OSError("unsupported")),
+            patch.object(local_os, "fsync", side_effect=OSError("ro fs")) as fsync,
+        ):
             # Must not raise
             _flush_directory_metadata(tmp_path)
+
+        fsync.assert_called_once()
 
     def test_swallows_oserror_from_open(
         self, tmp_path: Path, local_os: ModuleType
@@ -224,9 +232,15 @@ class TestFlushDirectoryMetadataSwallow:
         """If we cannot even open the directory FD, the function
         returns silently — the subsequent scandir call will produce
         a more informative error in the caller."""
-        with patch.object(local_os, "open", side_effect=OSError("eacces")):
+        with (
+            patch.object(local_os, "open", side_effect=OSError("eacces")) as open_,
+            patch.object(local_os, "fsync") as fsync,
+        ):
             # Must not raise
             _flush_directory_metadata(tmp_path)
+
+        open_.assert_called_once()
+        fsync.assert_not_called()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="windows-specific")

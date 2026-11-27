@@ -341,7 +341,7 @@ jobs:
       # conformance package is a workspace member of that one lock (FND-4671),
       # so this also covers a conformance or SDK change that conformance's
       # `test` extra would see.
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.13.9"
 
@@ -448,6 +448,31 @@ jobs:
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.api_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_sdk == 'true' || needs.changes.outputs.force_all == 'true')
     uses: ./.github/workflows/api-suite-tests-reusable.yaml
 
+  # Every application_sdk module imported in its own fresh interpreter
+  # (FND-4260). tests/unit/test_import_cycles.py proves the import graph has no
+  # cycle; this catches what a graph cannot see: a module that imports only
+  # because another one happened to load first. About 20s of wall-clock.
+  import-isolation:
+    name: Import Isolation
+    needs: changes
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_sdk == 'true' || needs.changes.outputs.force_all == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.9"
+
+      - name: Import every module of application_sdk in a fresh interpreter
+        run: |
+          set -euo pipefail
+          uv sync --locked --all-extras
+          uv run --locked --all-extras python .github/scripts/import_smoke.py --python .venv/bin/python --package application_sdk --jobs 4
+
   # The MkDocs site, built with --strict (FND-4271). Runs on any docs input
   # change, and on force_all (release/* and v* tags) so a release never ships
   # with a site that no longer builds. Like api-suite-tests, it checks
@@ -471,7 +496,7 @@ jobs:
     # ANDed with success(needs.changes), so if detection fails every area
     # skips — and skipped→pass would make this gate falsely green while
     # NOTHING ran. Fail closed on a non-success `changes` result.
-    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests, docs]
+    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests, docs, import-isolation]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -497,6 +522,7 @@ jobs:
           CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
           API_PKG_RESULT: ${{ needs.api-suite-tests.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
+          IMPORT_ISOLATION_RESULT: ${{ needs.import-isolation.result }}
         run: |
           set -euo pipefail
           # Detection has no `if:`, so it always runs — anything other than
@@ -521,6 +547,7 @@ jobs:
           check "Conformance Suite Tests" "$CONFORMANCE_PKG_RESULT"
           check "API Suite Tests"         "$API_PKG_RESULT"
           check "Docs"                    "$DOCS_RESULT"
+          check "Import Isolation"        "$IMPORT_ISOLATION_RESULT"
           if [[ "$ok" != "true" ]]; then
             echo "::error::SDK gate FAILED — one or more areas did not pass."
             exit 1

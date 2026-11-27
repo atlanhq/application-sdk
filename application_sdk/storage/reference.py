@@ -76,8 +76,20 @@ if TYPE_CHECKING:
     from application_sdk.storage.batch import DataObject
     from application_sdk.storage.ops import BoundStore
 
+from application_sdk.contracts.types import StorageTier
+from application_sdk.errors._legacy_codes import STORAGE_HANDOFF_INCOMPLETE
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage import integrity
+from application_sdk.storage.chunked import _discard_transfer_state
+from application_sdk.storage.errors import (
+    ObjectStoreNotProvidedError,
+    StorageConfigError,
+    StorageError,
+    StorageIntegrityError,
+    StorageNotFoundError,
+    UnsafeUploadPathError,
+)
+from application_sdk.storage.transfer import _upload_from_store
 
 __all__ = [
     "fetch",
@@ -224,10 +236,6 @@ def _validate_upload_path(path: Path) -> None:
     The files a directory upload walks are checked too, by
     :func:`_list_upload_files`.
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        UnsafeUploadPathError,
-    )
-
     if ".." in path.parts:
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
@@ -310,13 +318,6 @@ def _require_run_scoped_pin(
     Raises:
         StorageConfigError: If the pin escapes ``{output_path}/``.
     """
-    from application_sdk.contracts.types import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
-        StorageTier,
-    )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageConfigError,
-    )
-
     if ref.tier is StorageTier.PERSISTENT or not output_path:
         return
     run_prefix = output_path.strip("/") + "/"
@@ -423,10 +424,6 @@ def _validate_upload_tree(root: Path, files: list[Path]) -> None:
     silently dropping it from the hand-off. Symlinks never reach here —
     ``safe_list_directory`` does not follow them.
     """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        UnsafeUploadPathError,
-    )
-
     user_blocked = _parse_blocked_paths()
     resolved_root = root.resolve()
     for fp in files:
@@ -518,9 +515,6 @@ async def _list_target_objects(
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         list_data_objects,
     )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
-    )
 
     try:
         objects = await list_data_objects(prefix, store, normalize=False)
@@ -572,9 +566,6 @@ async def _persist_directory(
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _put,
-    )
-    from application_sdk.storage.transfer import (  # noqa: PLC0415 — circular: transfer imports this module's engine lazily too
-        _upload_from_store,
     )
 
     base = prefix.rstrip("/") + "/" if prefix.strip("/") else ""
@@ -699,9 +690,6 @@ async def persist_file_reference(
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         MAX_CONCURRENT_STORAGE_TRANSFERS,
-    )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
     )
 
     if ref.is_durable:
@@ -1142,13 +1130,6 @@ def _handoff_not_visible(ref: FileReference, *, found: int) -> Exception:
     empty) as a lost upload, and the next attempt sees the store afresh. A
     hand-off that is really short keeps failing until retries run out.
     """
-    from application_sdk.errors._legacy_codes import (  # noqa: PLC0415 — circular: errors imports storage evidence helpers
-        STORAGE_HANDOFF_INCOMPLETE,
-    )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
-    )
-
     err = StorageError(
         f"Directory FileReference '{ref.storage_path}' declares "
         f"{ref.file_count} file(s) but {found} are visible under the prefix. "
@@ -1174,9 +1155,6 @@ async def _fetch_manifest(
         ValidationError,
     )
 
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageIntegrityError,
-    )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _get_bytes,
     )
@@ -1202,10 +1180,6 @@ async def _read_manifest_items(
     """Fetch *ref*'s manifest and turn it into the exact objects to download."""
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         DataObject,
-    )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
-        StorageIntegrityError,
     )
 
     assert ref.manifest_path is not None and ref.storage_path is not None
@@ -1280,9 +1254,6 @@ async def _materialize_single_file(
         FILE_REF_CHUNK_CONCURRENCY,
         FILE_REF_CHUNK_SIZE_BYTES,
         FILE_REF_CHUNKED_THRESHOLD_BYTES,
-    )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageNotFoundError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _get_file_meta_confirmed,
@@ -1471,10 +1442,6 @@ async def _materialize_single_file(
             # A fresh-named temp can never be resumed — don't strand the
             # partial file or its checkpoint sidecar (best-effort).
             try:
-                from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                    _discard_transfer_state,
-                )
-
                 Path(out_path).unlink(missing_ok=True)
                 # The writer's own cleanup, so this site cannot drift from the
                 # staging layout; it leaves the destination alone, which is why
@@ -1765,10 +1732,6 @@ async def fetch(
 
         infra = get_infrastructure()
         if infra is None or infra.storage is None:
-            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                ObjectStoreNotProvidedError,
-            )
-
             raise ObjectStoreNotProvidedError()
         from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: file_ref_sync imports this module
             _resolve_ref_store,

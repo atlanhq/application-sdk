@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from application_sdk.credentials.atlan import AtlanApiToken, AtlanOAuthClient
+from application_sdk.credentials.errors import AtlanCredentialTypeError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.version import __version__ as _SDK_VERSION
 
@@ -137,11 +139,6 @@ def create_async_atlan_client(
         AsyncAtlanClient,
     )
 
-    from application_sdk.credentials.atlan import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-        AtlanApiToken,
-        AtlanOAuthClient,
-    )
-
     logger.debug(
         "creating AsyncAtlanClient credential_type=%s base_url=%s",
         type(cred).__name__,
@@ -160,10 +157,6 @@ def create_async_atlan_client(
             oauth_client_secret=cred.client_secret,
         )
     else:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415
-            AtlanCredentialTypeError,
-        )
-
         raise AtlanCredentialTypeError()
 
     if extra_headers:

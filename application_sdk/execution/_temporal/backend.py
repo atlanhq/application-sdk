@@ -33,6 +33,13 @@ from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
 )
+from application_sdk.execution._temporal._backend_errors import (
+    EntryPointRequiredError,
+    MtlsConfigError,
+    TemporalConnectError,
+    TlsCertFileNotFoundError,
+    UnknownEntryPointError,
+)
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.correlation import CorrelationContext
 from application_sdk.observability.logger_adaptor import get_logger
@@ -192,19 +199,11 @@ def _resolve_workflow_name(app_cls: Any, entry_point: str | None) -> tuple[str, 
     if entry_point is not None:
         ep_meta = app_cls._app_metadata.entry_points.get(entry_point)
         if ep_meta is None:
-            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-                UnknownEntryPointError,
-            )
-
             raise UnknownEntryPointError(resource_identifier=entry_point)
         return canonical_workflow_type(app_cls._app_name, ep_meta), ep_meta
 
     entry_points = getattr(app_cls._app_metadata, "entry_points", None) or {}
     if entry_points and not any(ep.implicit for ep in entry_points.values()):
-        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-            EntryPointRequiredError,
-        )
-
         raise EntryPointRequiredError(
             message=(
                 f"{app_cls._app_name} declares only explicit @entrypoint methods "
@@ -349,10 +348,6 @@ def _build_tls_config(
     if server_root_ca_cert_path:
         path = Path(server_root_ca_cert_path)
         if not path.exists():
-            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-                TlsCertFileNotFoundError,
-            )
-
             raise TlsCertFileNotFoundError(field="server_root_ca_cert")
         server_root_ca_cert = path.read_bytes()
         logger.info("Loaded TLS root CA cert: %s", server_root_ca_cert_path)
@@ -360,29 +355,17 @@ def _build_tls_config(
     has_cert = bool(client_cert_path)
     has_key = bool(client_private_key_path)
     if has_cert != has_key:
-        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-            MtlsConfigError,
-        )
-
         raise MtlsConfigError()
 
     if client_cert_path:
         path = Path(client_cert_path)
         if not path.exists():
-            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-                TlsCertFileNotFoundError,
-            )
-
             raise TlsCertFileNotFoundError(field="client_cert")
         client_cert = path.read_bytes()
 
     if client_private_key_path:
         path = Path(client_private_key_path)
         if not path.exists():
-            from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-                TlsCertFileNotFoundError,
-            )
-
             raise TlsCertFileNotFoundError(field="client_private_key")
         client_private_key = path.read_bytes()
 
@@ -775,9 +758,6 @@ async def create_temporal_client(
             "Temporal connection failed after %d attempts",
             exhausted.attempts,
             exc_info=exhausted.error,
-        )
-        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-            TemporalConnectError,
         )
 
         return TemporalConnectError(target=host, cause=exhausted.error)

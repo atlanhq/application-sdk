@@ -47,6 +47,7 @@ from application_sdk.storage._classify import (  # noqa: F401 — re-exported
 from application_sdk.storage._classify import (
     classify_access_error as _classify_access_error,
 )
+from application_sdk.storage.errors import ObjectStorePreflightError
 
 if TYPE_CHECKING:
     from application_sdk.infrastructure.context import InfrastructureContext
@@ -395,9 +396,6 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
         DEPLOYMENT_OBJECT_STORE_NAME,
         ENABLE_ATLAN_UPLOAD,
         UPSTREAM_OBJECT_STORE_NAME,
-    )
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: avoids a module-level circular import
-        ObjectStorePreflightError,
     )
 
     if not ENABLE_ATLAN_UPLOAD:

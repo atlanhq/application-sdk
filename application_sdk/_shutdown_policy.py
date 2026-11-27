@@ -27,6 +27,14 @@ from application_sdk._loop_stall_watchdog import (
 )
 from application_sdk.app.registry import TaskRegistry
 from application_sdk.common._env import env_int as _env_int
+from application_sdk.constants import (
+    PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
+    PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
+    SHUTDOWN_DRAIN_DELAY_SECONDS,
+    SHUTDOWN_GRACE_SECONDS_ENV,
+    load_shutdown_budget,
+    load_worker_loop_stall_timeout_override,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -50,10 +58,6 @@ _POST_DRAIN_EXIT_CODE = 3
 
 def _post_drain_exit_timeout_seconds() -> int:
     """Explicit env override, else the grace-derived bound, else 120 s."""
-    from application_sdk.constants import (  # noqa: PLC0415 — cold path: shutdown only
-        load_shutdown_budget,
-    )
-
     budget = load_shutdown_budget()
     default = (
         budget.post_drain_seconds
@@ -118,13 +122,6 @@ def _log_shutdown_budget(loop_stall: _LoopStallBound | None = None) -> None:
     """
     from application_sdk.app.task import (  # noqa: PLC0415 — cold path: worker startup only
         HEARTBEAT_TIMEOUT_ENV,
-    )
-    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
-        PROMETHEUS_PUSHGATEWAY_HTTP_TIMEOUT_SECONDS,
-        PROMETHEUS_PUSHGATEWAY_SHUTDOWN_DELETE_DELAY_SECONDS,
-        SHUTDOWN_DRAIN_DELAY_SECONDS,
-        SHUTDOWN_GRACE_SECONDS_ENV,
-        load_shutdown_budget,
     )
     from application_sdk.execution.settings import (  # noqa: PLC0415 — cold path: worker startup only
         load_execution_settings,
@@ -290,9 +287,6 @@ def _loop_stall_order_advice(loop_stall: _LoopStallBound) -> str:
         _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
         HEARTBEAT_TIMEOUT_ENV,
     )
-    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
-        SHUTDOWN_GRACE_SECONDS_ENV,
-    )
 
     if loop_stall.overridden:
         return f"Unset {LOOP_STALL_TIMEOUT_ENV} to derive it"
@@ -379,11 +373,6 @@ def _loop_stall_bound() -> _LoopStallBound:
     ``ATLAN_WORKER_LOOP_STALL_TIMEOUT_SECONDS`` replaces it, and ``0`` turns
     the watchdog off.
     """
-    from application_sdk.constants import (  # noqa: PLC0415 — cold path: worker startup only
-        load_shutdown_budget,
-        load_worker_loop_stall_timeout_override,
-    )
-
     budget = load_shutdown_budget()
     heartbeat, heartbeat_task = _longest_heartbeat_timeout()
     limit = (

@@ -320,10 +320,13 @@ class TestMaterializeWithManifest:
 
         with patch.object(
             batch, "list_data_objects", side_effect=AssertionError("listed")
-        ):
+        ) as list_data_objects:
             await materialize_file_reference(
                 store, _cross_pod(durable, tmp_path / "consumer")
             )
+
+        # Also fails if a broad ``except`` swallowed the AssertionError.
+        list_data_objects.assert_not_called()
 
     async def test_zombie_overwrite_of_a_manifest_key_fails_the_hash_check(
         self, store, tmp_path
@@ -392,8 +395,11 @@ class TestMaterializeWithManifest:
 
         with patch.object(
             ops, "download_file_chunked", side_effect=AssertionError("fetched")
-        ):
+        ) as download_file_chunked:
             await materialize_file_reference(store, durable)
+
+        # Also fails if a broad ``except`` swallowed the AssertionError.
+        download_file_chunked.assert_not_called()
 
     async def test_missing_manifest_fails_retryably_without_listing(
         self, store, tmp_path

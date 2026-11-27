@@ -48,6 +48,7 @@ import orjson
 from typing_extensions import deprecated
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import ValidationInputError
 
 logger = get_logger(__name__)
 
@@ -95,9 +96,6 @@ def _ensure_pandera_check_methods_registered() -> None:
         """
         if df.shape[0] >= expected_record_count:
             return True
-        from application_sdk.testing.integration._errors import (  # noqa: PLC0415
-            ValidationInputError,
-        )
 
         raise ValidationInputError(
             message=f"Expected record count >= {expected_record_count}, got: {df.shape[0]}",

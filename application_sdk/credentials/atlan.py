@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import ConfigDict
 from typing_extensions import deprecated
 
+from application_sdk.credentials.errors import CredentialValidationError
 from application_sdk.credentials.types import (
     BearerTokenCredential,
     OAuthClientCredential,
@@ -35,10 +36,6 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
         return "atlan_api_token"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialValidationError,
-        )
-
         if not self.token:
             raise CredentialValidationError(
                 "AtlanApiToken.token must not be empty",
@@ -171,10 +168,6 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         )
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialValidationError,
-        )
-
         if not self.client_id:
             raise CredentialValidationError(
                 "AtlanOAuthClient.client_id must not be empty",

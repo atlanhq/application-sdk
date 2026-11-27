@@ -66,7 +66,8 @@ from pydantic import BaseModel
 
 from application_sdk._logging import get_logger
 from application_sdk.errors.leaves import InternalError
-from application_sdk.outputs.models import Metric
+from application_sdk.outputs.collector import get_outputs
+from application_sdk.outputs.models import Artifact, Metric
 
 __all__ = [
     "activity_part_stem",
@@ -439,10 +440,6 @@ class SkippedRecordSink:
 
 
 def _count_unpersisted(n: int) -> None:
-    from application_sdk.outputs import (  # noqa: PLC0415 — circular: the package re-exports this module
-        get_outputs,
-    )
-
     get_outputs().add_metric(Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=n))
 
 
@@ -567,9 +564,6 @@ async def skip_record(
             f"reason must be a SkipReason, got {type(reason).__name__}; "
             "free-string reasons cannot be aggregated across the fleet"
         )
-    from application_sdk.outputs import (  # noqa: PLC0415 — circular: the package re-exports this module
-        get_outputs,
-    )
 
     sink = current_skipped_records.get()
     if sink is None:
@@ -609,8 +603,6 @@ async def persist_activity_skips(sink: SkippedRecordSink) -> None:
     logged and recorded as ``skipped-records-unpersisted`` (the lines that
     part held) — the counts and the run status still land.
     """
-    from application_sdk.outputs import get_outputs  # noqa: PLC0415 — circular
-
     # Fails open itself; a failed write moves its lines out of ``kept``.
     await sink.flush()
     if sink.kept == 0:
@@ -711,8 +703,6 @@ async def merge_run_log(
     from application_sdk._runtime.offload import (  # noqa: PLC0415 — keep the workflow sandbox import set small
         run_in_thread,
     )
-    from application_sdk.outputs import get_outputs  # noqa: PLC0415 — circular
-    from application_sdk.outputs.models import Artifact  # noqa: PLC0415
     from application_sdk.storage import (  # noqa: PLC0415 — lazy: heavy
         download_file,
         list_data_keys,

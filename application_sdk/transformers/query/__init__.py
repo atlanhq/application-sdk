@@ -762,7 +762,7 @@ class QueryBasedTransformer(TransformerInterface):
         )
 
         # run the SQL on the table via DuckDB
-        from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415
+        from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415 — optional dep: duckdb_utils imports duckdb (the sql extra) at module load
             DuckDBConnectionManager,
         )
 

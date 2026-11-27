@@ -37,8 +37,14 @@ from typing import Annotated, NamedTuple, cast
 from pydantic import BaseModel, BeforeValidator
 
 from application_sdk.contracts.types import MaxItems
+from application_sdk.credentials.errors import (
+    CredentialParseError,
+    CredentialRoutingError,
+)
+from application_sdk.credentials.ingress import normalize_agent_json
 from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.observability.logger_adaptor import get_logger
 
 __all__ = [
@@ -190,13 +196,6 @@ def normalize_inline_credentials(
             pairs or paths name the same key, or a key is the dotted parent of
             another.
     """
-    from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
-        CredentialParseError,
-    )
-    from application_sdk.credentials.utils import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
-        parse_credentials_extra,
-    )
-
     if not raw:
         return {}
 
@@ -256,10 +255,6 @@ same choice. The same convention as ``preflight_credential_refs``.
 
 def _declared_run_credential_field(source: object) -> str | None:
     """The ``run_credential_field`` the input's class declares, if any."""
-    from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
-        CredentialRoutingError,
-    )
-
     source_type = type(source)
     if RUN_CREDENTIAL_FIELD_ATTR in getattr(source_type, "model_fields", {}):
         # A pydantic field, not a ClassVar: it would travel with every payload,
@@ -348,13 +343,6 @@ def _connection_credential_fallback_guid(
         snapshot: Its ``model_dump(mode="json")``, when the caller already has
             one; computed here otherwise.
     """
-    from application_sdk.credentials.errors import (  # noqa: PLC0415
-        CredentialRoutingError,
-    )
-    from application_sdk.credentials.ingress import (  # noqa: PLC0415
-        normalize_agent_json,
-    )
-
     guid = getattr(source, "credential_guid", "")
     if guid.strip() if isinstance(guid, str) else guid:
         return ""
@@ -423,10 +411,6 @@ def find_prebuilt_credential_ref(source: object) -> CredentialRef | None:
         if isinstance(getattr(source, name, None), CredentialRef)
     ]
     if len(populated) > 1:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
-            CredentialRoutingError,
-        )
-
         raise CredentialRoutingError(
             message=(
                 f"Input carries several credential refs ({', '.join(sorted(populated))}); "

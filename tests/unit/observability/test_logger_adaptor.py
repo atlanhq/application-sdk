@@ -2311,12 +2311,24 @@ class TestOtlpSinkErrorPath:
 
 class TestSendToOtelSwallowsErrors:
     def test_send_to_otel_swallows_exceptions(self, logger_adapter: AtlanLoggerAdapter):
-        # Force `_create_log_record` to raise; method must swallow.
-        with mock.patch.object(
-            logger_adapter, "_create_log_record", side_effect=RuntimeError("x")
+        # Force `_create_log_record` to raise; method must swallow. A provider
+        # is needed: without one `_send_to_otel` returns before the call.
+        with (
+            mock.patch.object(logger_adapter, "logger_provider", mock.MagicMock()),
+            mock.patch.object(
+                logger_adapter, "_create_log_record", side_effect=RuntimeError("x")
+            ) as create_log_record,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.self_failure_logger"
+            ) as self_failure_logger,
         ):
             # Must not raise.
             logger_adapter._send_to_otel({"any": "record"})
+
+        create_log_record.assert_called_once_with({"any": "record"})
+        self_failure_logger.warning.assert_called_once_with(
+            "Error sending log to OpenTelemetry", exc_info=True
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3500,6 +3512,8 @@ class TestOtlpShutdownFlush:
             la.flush_otlp_logs()  # must not raise
         finally:
             adapter.logger_provider = None
+
+        provider.force_flush.assert_called_once_with(timeout_millis=5000)
 
     def test_shutdown_survives_provider_errors(self):
         from application_sdk.observability import logger_adaptor as la

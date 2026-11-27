@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import ConfigDict
 
+from application_sdk.credentials.errors import CredentialValidationError
 from application_sdk.credentials.types import (
     BearerTokenCredential,
     CertificateCredential,
@@ -32,10 +33,6 @@ class GitSshCredential(CertificateCredential, frozen=True):
         return "git_ssh"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialValidationError,
-        )
-
         if not self.key_data:
             raise CredentialValidationError(
                 "GitSshCredential.key_data (SSH private key) must not be empty",
@@ -56,10 +53,6 @@ class GitTokenCredential(BearerTokenCredential, frozen=True):
         return "git_token"
 
     async def validate(self) -> None:
-        from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            CredentialValidationError,
-        )
-
         if not self.token:
             raise CredentialValidationError(
                 "GitTokenCredential.token must not be empty",

@@ -22,18 +22,40 @@ from temporalio.exceptions import FailureError
 from typing_extensions import deprecated
 
 from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
+from application_sdk.app.base import _app_state, _app_state_lock
+from application_sdk.app.context import AppContext, TaskExecutionContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry, _running_app_name
 from application_sdk.app.task import TaskMetadata
+from application_sdk.common.atomic import classify_unwritable_oserror
 from application_sdk.common.build_identity import build_identity
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+from application_sdk.errors.base import AppError as _AppError
+from application_sdk.errors.base import redact_and_cap
+from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
+from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.execution.progress import (
     ProgressWatchdogMode,
     resolve_max_no_progress_seconds,
     resolve_watchdog_mode,
 )
+from application_sdk.execution.retry import (
+    RetryPolicy,
+    _to_temporal_retry_policy,
+    resolve_activity_time_bounds,
+)
+from application_sdk.execution.run_length import build_run_length_watch
+from application_sdk.execution.shutdown import is_worker_shutting_down
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.validation.interceptor import (
+    ARTIFACT_SIDE_HANDOFF,
+    ARTIFACT_SIDE_INGEST,
+    artifact_validation_enforced,
+    boundary_contract_types,
+    entrypoint_index,
+    validate_artifacts,
+)
 
 if TYPE_CHECKING:
     from application_sdk.errors.base import AppError
@@ -122,9 +144,6 @@ def _redacted_cause_chain(exc: BaseException) -> BaseException:
     Returns:
         The head of the mirrored chain, to pass to ``raise ... from``.
     """
-    from application_sdk.errors.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
-        redact_and_cap,
-    )
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         ApplicationError,
     )
@@ -192,9 +211,6 @@ def _to_application_error(e: AppError) -> ApplicationError:
         not ``from <caught>``: the message is redacted here, and the cause
         chain must be too, because Temporal serialises every link of it.
     """
-    from application_sdk.errors.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
-        redact_and_cap,
-    )
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         ApplicationError,
     )
@@ -400,10 +416,6 @@ def _track_file_refs(run: tuple[str, str], *refs: FileReference) -> None:
     """
     if not refs:
         return
-    from application_sdk.app.base import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-        _app_state,
-        _app_state_lock,
-    )
 
     with _app_state_lock:
         state = _app_state.setdefault(run, {})
@@ -439,14 +451,6 @@ def create_activity_from_task(
     # running activity because an env var was edited mid-run, and the posture row
     # the worker emitted at boot has to describe the posture its activities
     # actually run.
-    from application_sdk.validation.interceptor import (  # noqa: PLC0415 — deferred to worker build: importing any `validation` submodule loads the package __init__, which pulls pyatlan_v9 in via `assets`. A module-scope import here would put that on the import path of every process that touches `execution` — the handler and server processes included, neither of which ever runs an activity.
-        ARTIFACT_SIDE_HANDOFF,
-        ARTIFACT_SIDE_INGEST,
-        artifact_validation_enforced,
-        boundary_contract_types,
-        entrypoint_index,
-        validate_artifacts,
-    )
 
     boundary_contracts = boundary_contract_types(task_metadata.app_name)
     entrypoint_by_workflow_type = entrypoint_index(task_metadata.app_name)
@@ -454,11 +458,6 @@ def create_activity_from_task(
 
     async def activity_fn(context: TaskContext, input_data: Input) -> Output:
         """Execute the task as a Temporal activity."""
-        from application_sdk.app.context import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            AppContext,
-            TaskExecutionContext,
-        )
-
         # Resolved per call through the `heartbeat` module rather than bound at
         # module scope, and deliberately so: `application_sdk.execution.heartbeat.
         # auto_heartbeat_loop` is a patch target consumers rely on to neutralise the
@@ -475,9 +474,6 @@ def create_activity_from_task(
         )
         from application_sdk.execution.progress_telemetry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             closed_hold_observer,
-        )
-        from application_sdk.execution.run_length import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            build_run_length_watch,
         )
 
         app_registry = AppRegistry.get_instance()
@@ -829,14 +825,7 @@ def create_activity_from_task(
                         )
                     ) from _redacted_cause_chain(e)
 
-                from application_sdk.execution.shutdown import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                    is_worker_shutting_down,
-                )
-
                 if is_worker_shutting_down():
-                    from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + errors imports observability transitively
-                        WORKER_EVICTED_TYPE,
-                    )
                     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                         ApplicationError,
                     )
@@ -858,10 +847,6 @@ def create_activity_from_task(
 
             # conformance: ignore[E004] exception translator: both branches re-raise; nothing is swallowed
             except Exception as e:
-                from application_sdk.errors.base import (  # noqa: PLC0415 — circular
-                    AppError as _AppError,
-                )
-
                 if isinstance(e, _AppError):
                     raise _to_application_error(e) from _redacted_cause_chain(e)
                 from application_sdk.outputs.skipped import (  # noqa: PLC0415 — circular
@@ -872,9 +857,6 @@ def create_activity_from_task(
                     # A mapper skipped a record and the @task never caught it:
                     # an app bug, and deterministic, so retrying cannot help.
                     # str(e) names ids and reason only, never the record.
-                    from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular
-                        InternalError as _InternalError,
-                    )
 
                     raise _to_application_error(
                         _InternalError(
@@ -891,9 +873,6 @@ def create_activity_from_task(
                 # artifact-filesystem pattern family) otherwise re-raises here
                 # untyped and re-files as a fresh unclassifiable pattern. Type it
                 # once, at this boundary — atomic.py's disk-full guard stays narrow.
-                from application_sdk.common.atomic import (  # noqa: PLC0415 — circular
-                    classify_unwritable_oserror,
-                )
 
                 _typed = classify_unwritable_oserror(e)
                 if _typed is not None:
@@ -966,12 +945,6 @@ def get_activity_options(task_metadata: TaskMetadata) -> dict[str, Any]:
         ``schedule_to_close_timeout`` only when the task declares a ceiling on
         its retry product — omitted, as before, when it does not.
     """
-    from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + retry imports errors transitively
-        RetryPolicy,
-        _to_temporal_retry_policy,
-        resolve_activity_time_bounds,
-    )
-
     retry_policy = _to_temporal_retry_policy(
         task_metadata.retry_policy
         if task_metadata.retry_policy is not None
