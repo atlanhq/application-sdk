@@ -63,9 +63,23 @@ class TestAWSUtils:
             role_arn="arn:aws:iam::123456789012:role/test-role",
             host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
             user="test_user",
+            port=6543,
         )
 
         assert result == "test_token"
+        rds_call = mock_client.call_args_list[1]
+        assert rds_call.args == ("rds",)
+        assert rds_call.kwargs == {
+            "aws_access_key_id": "test_key",
+            "aws_secret_access_key": "test_secret",
+            "aws_session_token": "test_token",
+            "region_name": "us-east-1",
+        }
+        mock_rds.generate_db_auth_token.assert_called_once_with(
+            DBHostname="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            Port=6543,
+            DBUsername="test_user",
+        )
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_user_success(self, mock_client):
@@ -79,9 +93,23 @@ class TestAWSUtils:
             aws_secret_access_key="test_secret",
             host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
             user="test_user",
+            port=6543,
         )
 
         assert result == "test_token"
+        # The IAM user's keys must reach the RDS client; without them boto3
+        # falls back to the default chain and signs as the pod's role.
+        mock_client.assert_called_once_with(
+            "rds",
+            aws_access_key_id="test_key",
+            aws_secret_access_key="test_secret",
+            region_name="us-east-1",
+        )
+        mock_rds.generate_db_auth_token.assert_called_once_with(
+            DBHostname="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            Port=6543,
+            DBUsername="test_user",
+        )
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_with_explicit_region(
@@ -109,6 +137,17 @@ class TestAWSUtils:
         )
 
         assert result == "test_token"
+        rds_call = mock_client.call_args_list[1]
+        assert rds_call.args == ("rds",)
+        assert rds_call.kwargs == {
+            "aws_access_key_id": "test_key",
+            "aws_secret_access_key": "test_secret",
+            "aws_session_token": "test_token",
+            "region_name": "us-west-2",
+        }
+        mock_rds.generate_db_auth_token.assert_called_once_with(
+            DBHostname="test.host.com", Port=5432, DBUsername="test_user"
+        )
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_user_with_explicit_region(
@@ -128,6 +167,15 @@ class TestAWSUtils:
         )
 
         assert result == "test_token"
+        mock_client.assert_called_once_with(
+            "rds",
+            aws_access_key_id="test_key",
+            aws_secret_access_key="test_secret",
+            region_name="us-west-2",
+        )
+        mock_rds.generate_db_auth_token.assert_called_once_with(
+            DBHostname="test.host.com", Port=5432, DBUsername="test_user"
+        )
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_omits_external_id_when_blank(
