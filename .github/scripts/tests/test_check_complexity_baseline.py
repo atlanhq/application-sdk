@@ -266,74 +266,114 @@ class TestParseBaseline:
 # ── the base revision ───────────────────────────────────────────────────────
 
 
-def _defines(tree: dict[str, list[str]]) -> ccb.Defines:
-    """A head tree in which each file defines the listed qualified names."""
-    return lambda file, name: name in tree.get(file, [])
+def _src(files: dict[str, str]) -> ccb.SourceOf:
+    """One revision's files, as the check reads them."""
+    return files.get
 
 
-_NOTHING = _defines({})
+#: An over-limit-sized stand-in: only the AST matters to the move check.
+_RUN = "class A:\n    def run(self):\n        return 1\n"
+#: The same function reformatted and commented: still the same AST.
+_RUN_REFORMATTED = "class A:\n    # moved\n    def run(self):\n\n        return (1)\n"
+#: A different function under the same name.
+_RUN_OTHER = "class A:\n    def run(self):\n        return 2\n"
+_EMPTY = _src({})
 
 
 class TestRaisedSinceBase:
     def test_unchanged_and_lowered_pass(self) -> None:
         base = {"a.py": {"C901": ["f", "g"]}}
-        assert ccb.raised_since_base(base, base, _NOTHING) == []
-        assert ccb.raised_since_base(base, {"a.py": {"C901": ["f"]}}, _NOTHING) == []
+        assert ccb.raised_since_base(base, base, _EMPTY, _EMPTY) == []
+        lowered = {"a.py": {"C901": ["f"]}}
+        assert ccb.raised_since_base(base, lowered, _EMPTY, _EMPTY) == []
 
     def test_new_function_fails(self) -> None:
-        assert ccb.raised_since_base({}, {"b.py": {"PLR0915": ["h"]}}, _NOTHING) == [
-            "b.py PLR0915 h"
-        ]
+        head = {"b.py": {"PLR0915": ["h"]}}
+        assert ccb.raised_since_base({}, head, _EMPTY, _EMPTY) == ["b.py PLR0915 h"]
 
     def test_a_module_split_carries_the_function(self) -> None:
-        # big.py no longer defines A.run: it moved.
         base = {"big.py": {"C901": ["A.run"], "PLR0915": ["A.run"]}}
         head = {"big/_runner.py": {"C901": ["A.run"], "PLR0915": ["A.run"]}}
-        defines = _defines({"big/_runner.py": ["A.run"]})
-        assert ccb.raised_since_base(base, head, defines) == []
+        before = _src({"big.py": _RUN})
+        after = _src({"big.py": "", "big/_runner.py": _RUN_REFORMATTED})
+        assert ccb.raised_since_base(base, head, before, after) == []
 
     def test_paid_down_in_place_does_not_carry_to_a_new_function(self) -> None:
         # F-54b3eb: old.py still defines A.run (now under the limit), so the
         # over-limit A.run in new.py is a different function, not a move.
         base = {"old.py": {"C901": ["A.run"]}}
         head = {"new.py": {"C901": ["A.run"]}}
-        defines = _defines({"old.py": ["A.run"], "new.py": ["A.run"]})
-        assert ccb.raised_since_base(base, head, defines) == ["new.py C901 A.run"]
+        before = _src({"old.py": _RUN})
+        after = _src({"old.py": _RUN_OTHER, "new.py": _RUN})
+        assert ccb.raised_since_base(base, head, before, after) == ["new.py C901 A.run"]
+
+    @pytest.mark.parametrize("old_file", ["", None], ids=["emptied", "deleted"])
+    def test_same_named_replacement_does_not_inherit(
+        self, old_file: str | None
+    ) -> None:
+        # F-47389d: A.run is gone from old.py, but new.py's A.run is not it.
+        base = {"old.py": {"C901": ["A.run"]}}
+        head = {"new.py": {"C901": ["A.run"]}}
+        before = _src({"old.py": _RUN})
+        after_files = {"new.py": _RUN_OTHER}
+        if old_file is not None:
+            after_files["old.py"] = old_file
+        assert ccb.raised_since_base(base, head, before, _src(after_files)) == [
+            "new.py C901 A.run"
+        ]
+
+    def test_unparsable_old_file_does_not_release_its_entry(self) -> None:
+        base = {"old.py": {"C901": ["A.run"]}}
+        head = {"new.py": {"C901": ["A.run"]}}
+        before = _src({"old.py": _RUN})
+        after = _src({"old.py": "def (:\n", "new.py": _RUN})
+        assert ccb.raised_since_base(base, head, before, after) == ["new.py C901 A.run"]
 
     def test_same_file_matches_before_a_move(self) -> None:
-        base = {"a.py": {"C901": ["run"]}, "b.py": {"C901": ["run"]}}
-        head = {"b.py": {"C901": ["run"]}, "c.py": {"C901": ["run"]}}
-        # a.py's run moved to c.py; b.py's stayed.
-        defines = _defines({"b.py": ["run"], "c.py": ["run"]})
-        assert ccb.raised_since_base(base, head, defines) == []
-        # a.py still has its run: c.py's is new.
-        defines = _defines({"a.py": ["run"], "b.py": ["run"], "c.py": ["run"]})
-        assert ccb.raised_since_base(base, head, defines) == ["c.py C901 run"]
+        base = {"a.py": {"C901": ["A.run"]}, "b.py": {"C901": ["A.run"]}}
+        head = {"b.py": {"C901": ["A.run"]}, "c.py": {"C901": ["A.run"]}}
+        before = _src({"a.py": _RUN, "b.py": _RUN_OTHER})
+        # a.py's A.run moved to c.py; b.py's stayed.
+        after = _src({"a.py": "", "b.py": _RUN_OTHER, "c.py": _RUN})
+        assert ccb.raised_since_base(base, head, before, after) == []
+        # a.py still has its A.run: c.py's is new.
+        after = _src({"a.py": _RUN, "b.py": _RUN_OTHER, "c.py": _RUN})
+        assert ccb.raised_since_base(base, head, before, after) == ["c.py C901 A.run"]
 
     def test_one_base_entry_carries_only_one_head_entry(self) -> None:
-        base = {"a.py": {"C901": ["run"]}}
-        head = {"a.py": {"C901": ["run"]}, "b.py": {"C901": ["run"]}}
-        assert ccb.raised_since_base(base, head, _NOTHING) == ["b.py C901 run"]
+        base = {"a.py": {"C901": ["A.run"]}}
+        head = {"b.py": {"C901": ["A.run"]}, "c.py": {"C901": ["A.run"]}}
+        before = _src({"a.py": _RUN})
+        after = _src({"b.py": _RUN, "c.py": _RUN})
+        assert ccb.raised_since_base(base, head, before, after) == ["c.py C901 A.run"]
 
     def test_renamed_function_fails(self) -> None:
         assert ccb.raised_since_base(
-            {"a.py": {"C901": ["f"]}}, {"a.py": {"C901": ["g"]}}, _NOTHING
+            {"a.py": {"C901": ["f"]}}, {"a.py": {"C901": ["g"]}}, _EMPTY, _EMPTY
         ) == ["a.py C901 g"]
 
 
-class TestHeadDefines:
-    def test_reads_qualnames_from_the_tree(self, tmp_path: Path) -> None:
-        _tree(tmp_path, "class A:\n    def run(self):\n        pass\n")
-        defines = ccb.head_defines(tmp_path)
-        assert defines(_M, "A.run")
-        assert not defines(_M, "run")
+class TestSources:
+    def test_fingerprint_ignores_formatting_not_code(self) -> None:
+        run = ccb.fingerprints(_RUN)
+        assert run == ccb.fingerprints(_RUN_REFORMATTED)
+        assert run != ccb.fingerprints(_RUN_OTHER)
 
-    def test_a_deleted_file_defines_nothing(self, tmp_path: Path) -> None:
-        assert not ccb.head_defines(tmp_path)(_M, "f")
+    def test_absent_or_broken_source_has_no_fingerprint(self) -> None:
+        assert ccb.fingerprints(None) is None
+        assert ccb.fingerprints("def (:\n") is None
 
-    def test_an_unparsable_file_defines_everything(self, tmp_path: Path) -> None:
-        _tree(tmp_path, "def (:\n")
-        assert ccb.head_defines(tmp_path)(_M, "anything")
+    def test_tree_source_reads_the_tree(self, tmp_path: Path) -> None:
+        _tree(tmp_path, _RUN)
+        assert ccb.tree_source(tmp_path)(_M) == _RUN
+        assert ccb.tree_source(tmp_path)("gone.py") is None
+
+    def test_git_source_reads_the_base(self) -> None:
+        git = _Git({"show": _git_result(stdout=_RUN)})
+        assert ccb.git_source("abc", git)("old.py") == _RUN
+        assert ["show", "abc:old.py"] in git.calls
+        missing = _Git({"show": _git_result(returncode=128)})
+        assert ccb.git_source("abc", missing)("old.py") is None
 
 
 class TestReadBaseBaseline:

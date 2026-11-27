@@ -335,10 +335,12 @@ and `.github/scripts/check_complexity_baseline.py` holds the tree to it:
   given `--allow-increase`, and the base check below still catches that.
 - **A baseline entry the base revision lacks fails.** The `CI script tests` job
   passes `--base-sha`. An entry matches the base's in the same file. A module
-  split that moves an over-limit function passes: a base entry carries to
-  another file when its own file no longer defines a function of that name. A
-  function paid down in place still does, so it cannot hand its entry to a new
-  function of the same name elsewhere. Renaming a function counts as a new one.
+  split that moves an over-limit function unchanged passes: a base entry
+  carries to another file only when its own file no longer defines a function
+  of that name and the function's AST (formatting and comments aside) is
+  identical at base and in the new file. A same-named replacement, a function
+  edited while it moves, or a renamed one counts as new: move it unchanged and
+  change it in a later PR.
   A base with no baseline file is measured on its own tree.
 
 ```bash

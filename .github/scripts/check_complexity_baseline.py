@@ -29,10 +29,12 @@ Comparing against the PR's own baseline is not enough: a PR could add a long
 function and add it to the baseline in the same change. So, given
 ``--base-sha``, every entry in the PR's baseline must also be in the base
 revision's, in the same file. A module split that moves an over-limit function
-to a new file passes: a base entry carries to another file when its own file
-no longer defines a function of that name. One paid down in place still does,
-so its entry cannot be handed to a new function of the same name elsewhere.
-Renaming a function counts as a new one. A base revision with no baseline (the PR that introduces it) is
+to a new file unchanged passes: a base entry carries to another file only when
+its own file no longer defines a function of that name AND the function's AST
+(formatting and comments aside) is identical in the base and the new file. A
+same-named replacement, or a function edited while it moves, counts as new;
+move it unchanged and change it in a later PR. Renaming a function counts as a
+new one. A base revision with no baseline (the PR that introduces it) is
 measured instead: ruff runs on the base tree in a temporary ``git worktree``.
 
 A run in which ruff reports nothing is accepted only if ruff still flags a
@@ -92,8 +94,9 @@ Baseline = dict[str, dict[str, list[str]]]
 #: (file, line, rule, qualified name, ruff message) for one finding.
 Violation = tuple[str, int, str, str, str]
 Measure = Callable[[Path], tuple[Baseline, list[Violation]]]
-#: (repo-relative file, qualified name) -> whether the head tree defines it.
-Defines = Callable[[str, str], bool]
+#: Repo-relative file -> its source in one revision, or None when it is absent
+#: or unreadable there.
+SourceOf = Callable[[str], "str | None"]
 Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
 
 
@@ -140,14 +143,14 @@ def measure(tree: Path = REPO_ROOT) -> tuple[Baseline, list[Violation]]:
     return parse_report(proc.stdout, tree)
 
 
-def qualnames(source: str) -> dict[int, str]:
-    """``{def line: dotted qualified name}`` for every function in ``source``."""
-    names: dict[int, str] = {}
+def _functions(source: str) -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    """(dotted qualified name, node) for every function in ``source``."""
+    found: list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = []
 
     def visit(node: ast.AST, prefix: str) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                names[child.lineno] = prefix + child.name
+                found.append((prefix + child.name, child))
                 visit(child, f"{prefix}{child.name}.")
             elif isinstance(child, ast.ClassDef):
                 visit(child, f"{prefix}{child.name}.")
@@ -155,7 +158,30 @@ def qualnames(source: str) -> dict[int, str]:
                 visit(child, prefix)
 
     visit(ast.parse(source), "")
-    return names
+    return found
+
+
+def qualnames(source: str) -> dict[int, str]:
+    """``{def line: dotted qualified name}`` for every function in ``source``."""
+    return {node.lineno: name for name, node in _functions(source)}
+
+
+def fingerprints(source: str | None) -> dict[str, set[str]] | None:
+    """``{qualified name: AST dumps}`` for ``source``; None if it is absent or broken.
+
+    The dump leaves out positions, so formatting and comments do not count:
+    a function moved unchanged has the same fingerprint in its new file.
+    """
+    if source is None:
+        return None
+    try:
+        functions = _functions(source)
+    except (SyntaxError, ValueError):
+        return None
+    out: dict[str, set[str]] = {}
+    for name, node in functions:
+        out.setdefault(name, set()).add(ast.dump(node, include_attributes=False))
+    return out
 
 
 def parse_report(stdout: str, tree: Path) -> tuple[Baseline, list[Violation]]:
@@ -255,27 +281,26 @@ def compare(baseline: Baseline, actual: Baseline) -> tuple[list[str], list[str]]
     return sorted((got - want).elements()), sorted((want - got).elements())
 
 
-def head_defines(tree: Path = REPO_ROOT) -> Defines:
-    """Whether ``tree/file`` defines a function with qualified name ``name``.
+def tree_source(tree: Path = REPO_ROOT) -> SourceOf:
+    """Read a file from a working tree."""
 
-    A file that is gone defines nothing. One that does not parse is taken to
-    define everything, so it cannot release an entry (fail closed).
-    """
-    cache: dict[str, set[str] | None] = {}
+    def source(file: str) -> str | None:
+        try:
+            return (tree / file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
 
-    def defines(file: str, name: str) -> bool:
-        if file not in cache:
-            path = tree / file
-            try:
-                cache[file] = set(qualnames(path.read_text(encoding="utf-8")).values())
-            except FileNotFoundError:
-                cache[file] = set()
-            except (OSError, SyntaxError, UnicodeDecodeError):
-                cache[file] = None
-        names = cache[file]
-        return names is None or name in names
+    return source
 
-    return defines
+
+def git_source(base_sha: str, git: Runner = _git) -> SourceOf:
+    """Read a file at ``base_sha``."""
+
+    def source(file: str) -> str | None:
+        show = git(["show", f"{base_sha}:{file}"])
+        return show.stdout if show.returncode == 0 else None
+
+    return source
 
 
 def _triples(baseline: Baseline) -> list[tuple[str, str, str]]:
@@ -287,14 +312,17 @@ def _triples(baseline: Baseline) -> list[tuple[str, str, str]]:
     ]
 
 
-def raised_since_base(base: Baseline, head: Baseline, defines: Defines) -> list[str]:
+def raised_since_base(
+    base: Baseline, head: Baseline, base_source: SourceOf, head_source: SourceOf
+) -> list[str]:
     """Entries of ``head`` that no entry of ``base`` accounts for.
 
-    An entry is accounted for by the same (file, rule, name) in ``base``, or,
-    for a function moved by a module split, by the same (rule, name) in another
-    file that ``defines`` says no longer has a function of that name. A
-    function paid down in place keeps its name in its file, so its entry
-    cannot be handed to a new function of the same name elsewhere.
+    An entry is accounted for by the same (file, rule, name) in ``base``. A
+    leftover base entry accounts for one in another file only when the function
+    provably moved there unchanged: its old file no longer defines that name
+    (``head_source``), and its AST at base (``base_source``) is identical to the
+    one in the new file. Anything else, a same-named replacement or a function
+    edited on the way, is a new function. Unreadable sources never carry.
     """
     left = Counter(_triples(base))
     unmatched: list[tuple[str, str, str]] = []
@@ -303,18 +331,43 @@ def raised_since_base(base: Baseline, head: Baseline, defines: Defines) -> list[
             left[entry] -= 1
         else:
             unmatched.append(entry)
-    moved = Counter(
-        (rule, name)
-        for (file, rule, name), n in left.items()
-        for _ in range(n)
-        if not defines(file, name)
-    )
+
+    cache: dict[tuple[str, str], dict[str, set[str]] | None] = {}
+
+    def prints(side: str, file: str) -> dict[str, set[str]] | None:
+        if (side, file) not in cache:
+            read = base_source if side == "base" else head_source
+            cache[(side, file)] = fingerprints(read(file))
+        return cache[(side, file)]
+
+    def moved_here(old: str, new: str, name: str) -> bool:
+        old_head, old_base, new_head = (
+            prints("head", old),
+            prints("base", old),
+            prints("head", new),
+        )
+        if old_head is None and head_source(old) is not None:
+            return False  # the old file is there but unreadable: fail closed
+        if old_head is not None and name in old_head:
+            return False  # still defined where it was: paid down, not moved
+        if old_base is None or new_head is None:
+            return False
+        return bool(old_base.get(name, set()) & new_head.get(name, set()))
+
     raised: list[str] = []
     for file, rule, name in unmatched:
-        if moved[(rule, name)] > 0:
-            moved[(rule, name)] -= 1
-        else:
+        source = next(
+            (
+                key
+                for key, n in left.items()
+                if n > 0 and key[1:] == (rule, name) and moved_here(key[0], file, name)
+            ),
+            None,
+        )
+        if source is None:
             raised.append(f"{file} {rule} {name}")
+        else:
+            left[source] -= 1
     return raised
 
 
@@ -373,7 +426,7 @@ def check_base(
     head: Baseline,
     git: Runner = _git,
     measure_tree: Measure = measure,
-    defines: Defines | None = None,
+    head_source: SourceOf | None = None,
 ) -> bool:
     """Print and return whether the PR's baseline adds a function the base lacks."""
     try:
@@ -389,7 +442,9 @@ def check_base(
     except (BaseRevisionError, RuffRunError) as exc:
         print(f"::error::{exc}")
         return True
-    raised = raised_since_base(base, head, defines or head_defines())
+    raised = raised_since_base(
+        base, head, git_source(base_sha, git), head_source or tree_source()
+    )
     if raised:
         print(
             f"::error::{len(raised)} baseline entries are not in {source}. "
