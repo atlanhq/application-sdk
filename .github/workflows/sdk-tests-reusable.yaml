@@ -197,7 +197,8 @@ jobs:
   # extras, for the first Python above the cap on the container platform and
   # lists the ones that cannot install in the job summary, so the day the cap
   # can be raised is visible. A report, not a gate: the script exits 0 when
-  # something blocks and non-zero only if the probe itself cannot run. Raising
+  # something blocks or uv stalls (its uv timeouts sum to under this job's
+  # five minutes), and non-zero only if uv cannot run at all. Raising
   # the cap moves the probe to the next Python with no edit here.
   # test_python_support_window.py keeps the window, classifiers, this file's
   # unit matrix and the Renovate Python cap in step.

@@ -28,16 +28,18 @@ the cap is one deliberate change across all of them.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+
+from _gha import append_summary
 
 # ">=3.11,<3.15" (uv writes ">=3.11, <3.15" in the lock). Anything else is a
 # shape this script does not understand, and it fails rather than guessing.
@@ -46,9 +48,18 @@ _WINDOW_RE = re.compile(r"^\s*>=\s*3\.(\d+)\s*,\s*<\s*3\.(\d+)\s*$")
 # The runtime container's platform: the probe answers "would the image build".
 PROBE_PLATFORM = "x86_64-manylinux_2_28"
 
-_SELF = "atlan-application-sdk"
+# Each uv call does index I/O. One call may take UV_TIMEOUT_S; the whole probe
+# stops starting calls after PROBE_BUDGET_S. Together they stay inside the
+# five-minute timeout of the job that runs this, so a stalled index ends the
+# probe with an "incomplete" report instead of the runner killing the job.
+UV_TIMEOUT_S = 60.0
+PROBE_BUDGET_S = 180.0
 
-Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
+Runner = Callable[[Sequence[str], float], "subprocess.CompletedProcess[str]"]
+
+
+class ProbeIncomplete(Exception):
+    """The probe ran out of time before it could name every blocker."""
 
 
 def _repo_root() -> Path:
@@ -109,24 +120,93 @@ def classifiers(project: Project) -> list[str]:
     return _str_list(project.get("classifiers", []), "classifiers")
 
 
-def declared_requirements(project: Project) -> list[str]:
-    """Core dependencies plus every extra's, deduplicated, in declared order.
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
-    Self-references such as ``atlan-application-sdk[sql]`` are dropped: the
-    probe resolves what the SDK pulls in, not the SDK itself, whose
-    requires-python cap would refuse the target Python outright.
-    """
-    seen: dict[str, None] = {}
-    groups = [_str_list(project.get("dependencies", []), "dependencies")]
+
+def _requirement_name(requirement: str) -> str:
+    return _normalize(re.split(r"[\s\[<>=!~;(@]", requirement.strip(), maxsplit=1)[0])
+
+
+def _all_requirements(project: Project) -> list[str]:
+    """Core dependencies plus every extra's, in declared order."""
+    requirements = list(_str_list(project.get("dependencies", []), "dependencies"))
     extras = project.get("optional-dependencies", {})
     if not isinstance(extras, dict):
         raise ValueError("optional-dependencies is not a table")
     for extra, group in cast("dict[str, object]", extras).items():
-        groups.append(_str_list(group, f"optional-dependencies.{extra}"))
-    for group in groups:
-        for requirement in group:
-            name = re.split(r"[\s\[<>=!~;(]", requirement, maxsplit=1)[0]
-            if name.lower().replace("_", "-") == _SELF:
+        requirements += _str_list(group, f"optional-dependencies.{extra}")
+    return requirements
+
+
+def _table(value: object, what: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{what} is not a table")
+    return cast("dict[str, object]", value)
+
+
+def local_packages(pyproject: Path) -> dict[str, Path]:
+    """Packages this repo builds itself: name -> its pyproject.toml.
+
+    Read from ``[tool.uv.sources]``: a ``path`` source names its directory, a
+    ``workspace`` source is found among ``[tool.uv.workspace] members``. These
+    release in lockstep with the SDK and carry the same requires-python cap,
+    so the probe must look through them to their third-party dependencies
+    rather than resolve them (their cap would refuse the target Python).
+    """
+    root = pyproject.parent
+    tool = _table(
+        tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool", {}), "[tool]"
+    )
+    uv = _table(tool.get("uv", {}), "[tool.uv]")
+    sources = _table(uv.get("sources", {}), "[tool.uv.sources]")
+    members: list[Path] = []
+    for pattern in _str_list(
+        _table(uv.get("workspace", {}), "[tool.uv.workspace]").get("members", []),
+        "workspace members",
+    ):
+        members += [m for m in root.glob(pattern) if (m / "pyproject.toml").is_file()]
+    by_name = {
+        _normalize(str(load_project(m / "pyproject.toml")["name"])): m
+        / "pyproject.toml"
+        for m in members
+    }
+    found: dict[str, Path] = {}
+    for name, raw in sources.items():
+        source = _table(raw, f"[tool.uv.sources] {name}")
+        path = source.get("path")
+        if isinstance(path, str) and (root / path / "pyproject.toml").is_file():
+            found[_normalize(name)] = root / path / "pyproject.toml"
+        elif source.get("workspace") is True and _normalize(name) in by_name:
+            found[_normalize(name)] = by_name[_normalize(name)]
+    return found
+
+
+def declared_requirements(pyproject: Path) -> list[str]:
+    """Every third-party requirement the SDK declares, deduplicated, in order.
+
+    Core dependencies and every extra, of the SDK and, transitively, of each
+    package this repo builds itself (``local_packages``), which are replaced
+    by their own requirements. Self-references such as
+    ``atlan-application-sdk[sql]`` are dropped likewise: the probe resolves
+    what the SDK pulls in, not the SDK, whose cap would refuse the target
+    Python outright.
+    """
+    local = local_packages(pyproject)
+    root = load_project(pyproject)
+    local[_normalize(str(root["name"]))] = pyproject
+    seen: dict[str, None] = {}
+    visited: set[Path] = set()
+    queue = [pyproject]
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+        for requirement in _all_requirements(load_project(current)):
+            name = _requirement_name(requirement)
+            if name in local:
+                queue.append(local[name])
                 continue
             seen.setdefault(requirement.strip(), None)
     return list(seen)
@@ -156,8 +236,15 @@ def _reason(stderr: str) -> str:
 
 
 def _compile(
-    requirements: Sequence[str], python: str, runner: Runner, workdir: Path
+    requirements: Sequence[str],
+    python: str,
+    runner: Runner,
+    workdir: Path,
+    deadline: float,
 ) -> subprocess.CompletedProcess[str]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ProbeIncomplete(f"the {PROBE_BUDGET_S:.0f}s probe budget ran out")
     req_file = workdir / "requirements.in"
     req_file.write_text("\n".join(requirements) + "\n", encoding="utf-8")
     return runner(
@@ -172,35 +259,46 @@ def _compile(
             "--python-platform",
             PROBE_PLATFORM,
             str(req_file),
-        ]
+        ],
+        min(UV_TIMEOUT_S, remaining),
     )
 
 
-def _run(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(args), capture_output=True, text=True, check=False)
+def _run(args: Sequence[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            list(args), capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ProbeIncomplete(f"uv did not finish within {timeout:.0f}s") from exc
 
 
 def probe(
-    requirements: Sequence[str], python: str, runner: Runner = _run
+    requirements: Sequence[str],
+    python: str,
+    runner: Runner = _run,
+    budget_s: float = PROBE_BUDGET_S,
 ) -> list[Blocker]:
     """Requirements that cannot be resolved for ``python``; empty means all can.
 
     The whole set is resolved first. Only when that fails is each requirement
     resolved on its own, so the report names the packages that block rather
-    than one combined conflict.
+    than one combined conflict. Raises ``ProbeIncomplete`` when a uv call
+    times out or ``budget_s`` runs out.
     """
+    deadline = time.monotonic() + budget_s
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
-        if _compile(requirements, python, runner, workdir).returncode == 0:
+        if _compile(requirements, python, runner, workdir, deadline).returncode == 0:
             return []
         blockers: list[Blocker] = []
         for requirement in requirements:
-            result = _compile([requirement], python, runner, workdir)
+            result = _compile([requirement], python, runner, workdir, deadline)
             if result.returncode != 0:
                 blockers.append(Blocker(requirement, _reason(result.stderr)))
         if not blockers:
             # Each resolves alone but not together: report the set's conflict.
-            combined = _compile(requirements, python, runner, workdir)
+            combined = _compile(requirements, python, runner, workdir, deadline)
             blockers.append(Blocker("(combined set)", _reason(combined.stderr)))
         return blockers
 
@@ -236,21 +334,22 @@ def _cmd_print_window(pyproject: Path) -> int:
     return 0
 
 
-def _cmd_probe_next(pyproject: Path, runner: Runner = _run) -> int:
-    project = load_project(pyproject)
-    window = parse_window(requires_python(project))
+def _cmd_probe_next(
+    pyproject: Path, runner: Runner = _run, budget_s: float = PROBE_BUDGET_S
+) -> int:
+    window = parse_window(requires_python(load_project(pyproject)))
     python = next_version(window)
     try:
-        blockers = probe(declared_requirements(project), python, runner)
+        blockers = probe(declared_requirements(pyproject), python, runner, budget_s)
     except OSError as exc:
         print(f"::error::could not run uv for the Python {python} probe: {exc}")
         return 2
-    report = render_report(window, python, blockers)
-    print(report)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(report)
+    except ProbeIncomplete as exc:
+        # Still a report, not a gate: an index outage must not fail the PR.
+        append_summary(f"## Python {python} install probe\n\nIncomplete: {exc}.\n")
+        print(f"::warning::Python {python} install probe incomplete: {exc}")
+        return 0
+    append_summary(render_report(window, python, blockers))
     if blockers:
         names = ", ".join(b.requirement for b in blockers)
         print(f"::warning::SDK cannot install on Python {python}; blocked by: {names}")

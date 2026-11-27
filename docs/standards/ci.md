@@ -955,9 +955,12 @@ with it.
 `packages/conformance` pyprojects. Without the upper bound, Python 3.15 users
 saw an unsatisfiable-resolution error naming `rocksdict` (a core dependency
 with no cp315 wheel and no sdist) instead of a clear "this Python is not
-supported". With the cap, `pip install` and `uv sync` on 3.15 say the SDK
-requires a different Python. `uv pip install` ignores requires-python upper
-bounds, so it still reports the `rocksdict` failure. An app whose own
+supported". With the cap, `uv sync` in this repo and `pip install` of this
+release or a later one (pinned, or as a wheel) on 3.15 say the SDK requires a
+different Python. An unpinned `pip install atlan-application-sdk` on 3.15
+does not: pip skips the capped releases, falls back to the newest release from
+before the cap, and fails on `rocksdict` there. `uv pip install` ignores
+requires-python upper bounds, so it also reports the `rocksdict` failure. An app whose own
 `requires-python` has no upper bound still locks: uv ignores a dependency's
 upper bound when resolving.
 
@@ -965,7 +968,12 @@ The `Next Python install probe (report only)` job in `sdk-tests-reusable.yaml`
 runs `.github/scripts/python_support_window.py probe-next`. It resolves every
 declared dependency, core and extras, for the first Python above the cap on
 `x86_64-manylinux_2_28` and lists the ones that cannot install in the job
-summary. It exits 0 when a dependency blocks, so it never fails a PR.
+summary. It looks through the packages this repo builds itself
+(`packages/api`, `packages/conformance`), which share the cap, to their
+third-party requirements. It exits 0 when a dependency blocks, and also when
+uv stalls: each uv call has a 60 s timeout and the probe a 180 s budget, inside
+the job's five minutes, and an unfinished probe reports "incomplete" rather
+than failing the PR.
 
 To support the next Python, change all of these together.
 `test_python_support_window.py` fails until they agree:
