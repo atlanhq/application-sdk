@@ -508,6 +508,35 @@ class TestMain:
         assert len(calls) == 2
         assert "cryptography=P0D" in calls[1]
 
+    def test_no_upgrade_floor_retry_still_omits_upgrade(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        """FND-5472: on a range-bump branch the floor retry must keep --upgrade
+        off too, or it would move every unrelated locked package."""
+        project = self._project(
+            tmp_path,
+            lock(cryptography="46.0.5"),
+            "[project]\nname = 'app'\n\n[tool.uv]\n"
+            'constraint-dependencies = ["cryptography>=46.0.5"]\n',
+        )
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(
+                    command, 1, "", "error: No solution found ... cryptography>=46.0.5"
+                )
+            (Path(cwd) / "uv.lock").write_text(lock(cryptography="46.0.5"))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P7D", "--project-dir", str(project), "--no-upgrade"]
+        assert bounded.main(argv) == 0
+        assert len(calls) == 2
+        assert "cryptography=P0D" in calls[1]
+        assert all("--upgrade" not in command for command in calls), calls
+
     def test_failure_with_no_floor_named_does_not_retry_and_refuses(
         self, monkeypatch, tmp_path
     ):
