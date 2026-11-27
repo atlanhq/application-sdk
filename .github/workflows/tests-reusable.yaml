@@ -432,6 +432,21 @@ on:
           dataforge-datasource. The default stays "true" because the majority
           of callers are containerizable and must not be reddened by a
           dataforge/VPN outage; opting out is the control for the rest.
+      dataforge-lineage-targets:
+        required: false
+        type: boolean
+        default: false
+        description: |
+          Register every tenant of this run's e2e pool as a lineage target of the
+          pinned DataForge source, after it is woken (FND-5375). For a lineage
+          connector whose e2e drives a real emitting source (openlineage on a
+          DataForge Airflow): the source sends its OpenLineage events to each
+          registered tenant, with the same API key the harness already uses for
+          that tenant from the tenant-matrix secret. DataForge merges by tenant
+          and prunes entries not refreshed in a week, so concurrent runs and
+          rotated tenants need no hand edits. Needs dataforge-lifecycle (it rides
+          the wake job's VPN tunnel and resource:lifecycle token) and a source
+          whose module supports lineage targets. OFF by default.
       dataforge-lifecycle:
         required: false
         type: boolean
@@ -1441,6 +1456,19 @@ jobs:
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/dataforge_source_lifecycle.py --mode wake
+
+      # FND-5375: point the woken source's lineage at this run's tenants. After
+      # the wake so the resource is PROVISIONED; same tunnel and token scope.
+      # Fails this (continue-on-error) job loudly rather than the run: a suite
+      # that needs the events then fails on its own with a clear cause.
+      - name: Register this run's tenants as lineage targets of the source
+        if: inputs.dataforge-lineage-targets && env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        env:
+          E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+          E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
+        run: |
+          set -euo pipefail
+          python3 application-sdk-scripts/.github/scripts/dataforge_lineage_targets.py
 
   # ── E2E tier (e2e-tests-reusable.yaml) ───────────────────────────────────
   # The image build, the SDK-head recheck, the tenant lease and install, the

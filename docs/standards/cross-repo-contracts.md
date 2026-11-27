@@ -634,3 +634,17 @@ marker rather than dispatching it: an older file would publish an e2e-only run
 under the required `tests / …` checks and override the PR's real results
 (FND-3839). Renaming a context or the dispatch inputs needs the old name
 accepted until every repo has resynced.
+
+## DataForge lineage targets (`PUT /api/v1/resources/{id}/lineage-targets`)
+
+| | |
+|---|---|
+| **Produced by** | `.github/scripts/dataforge_lineage_targets.py`, run by `tests-reusable.yaml`'s wake job when a caller sets `dataforge-lineage-targets: true` |
+| **Served at** | DataForge API (`atlanhq/dataforge`), `PUT /api/v1/resources/{id}/lineage-targets` with body `{"url": "https://<tenant>", "api_key": "<key>"}` and a `resource:lifecycle` SERVICE token from the run's OIDC exchange |
+| **Key** | One call per cloud of the run's tenant-matrix secret (system matrix when shared, else connector), with `url` = `https://<tenant>` (the same derivation as `resolve_e2e_tenant.py`'s `ATLAN_BASE_URL`) and that entry's `api_key` |
+| **Read by** | DataForge, which merges the entry by tenant into the source's OpenLineage config and prunes CI entries not refreshed for a week |
+| **Pinned by** | `.github/scripts/tests/test_dataforge_lineage_targets.py` |
+
+The SDK is the caller here. A change to the path, body or required scope on the
+DataForge side reds the wake job of every connector that opted in, so it must
+keep the old shape accepted until those callers move.
