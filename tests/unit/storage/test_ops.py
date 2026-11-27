@@ -14,6 +14,7 @@ import orjson
 import pytest
 
 from application_sdk import constants
+from application_sdk.storage import _ops_seam
 from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
@@ -426,7 +427,7 @@ class TestUploadBytes:
         The old temp-file path got these from upload_file; a bare put_async
         would skip all three.
         """
-        from application_sdk.storage import ops as ops_module
+        from application_sdk.storage import _ops_stream
         from application_sdk.storage._budget import transfer_budget
 
         part = 1024 * 1024
@@ -435,7 +436,7 @@ class TestUploadBytes:
         marks: list[str] = []
         tracker = MagicMock()
         tracker.mark_progress.side_effect = marks.append
-        monkeypatch.setattr(ops_module, "current_progress_tracker", lambda: tracker)
+        monkeypatch.setattr(_ops_stream, "current_progress_tracker", lambda: tracker)
         real_open = obstore.open_writer_async
         buffer_sizes: list[int] = []
 
@@ -454,14 +455,14 @@ class TestUploadBytes:
         assert transfer_budget().peak > 0
 
     async def test_upload_failure_emits_storage_telemetry(self, store) -> None:
-        from application_sdk.storage import ops as ops_module
+        from application_sdk.storage import _ops_stream
 
         def _boom(*_a, **_k):
             raise RuntimeError("store unavailable")
 
         with (
             patch.object(obstore, "open_writer_async", _boom),
-            patch.object(ops_module, "_log_storage_event") as event,
+            patch.object(_ops_stream, "_log_storage_event") as event,
             pytest.raises(StorageError),
         ):
             await upload_bytes("k.bin", b"v", store)
@@ -2217,7 +2218,7 @@ class TestIsAzureContainerNotFound:
     """_is_azure_container_not_found must recognise container-absent errors."""
 
     def test_container_not_found_code(self) -> None:
-        from application_sdk.storage.ops import _is_azure_container_not_found
+        from application_sdk.storage._ops_errors import _is_azure_container_not_found
 
         assert (
             _is_azure_container_not_found(
@@ -2230,7 +2231,7 @@ class TestIsAzureContainerNotFound:
         )
 
     def test_prose_message(self) -> None:
-        from application_sdk.storage.ops import _is_azure_container_not_found
+        from application_sdk.storage._ops_errors import _is_azure_container_not_found
 
         assert (
             _is_azure_container_not_found(
@@ -2240,7 +2241,7 @@ class TestIsAzureContainerNotFound:
         )
 
     def test_unrelated_error_returns_false(self) -> None:
-        from application_sdk.storage.ops import _is_azure_container_not_found
+        from application_sdk.storage._ops_errors import _is_azure_container_not_found
 
         assert _is_azure_container_not_found(RuntimeError("BlobNotFound")) is False
         assert _is_azure_container_not_found(RuntimeError("permission denied")) is False
@@ -2750,7 +2751,6 @@ class TestConfirmedHeadMiss:
     async def test_failed_listing_raises_retryable_error_not_absent(
         self, store
     ) -> None:
-        from application_sdk.storage import ops
         from application_sdk.storage.errors import StorageGatewayNoRouteError
 
         async def listing(_store, *, prefix):
@@ -2760,7 +2760,7 @@ class TestConfirmedHeadMiss:
         with (
             _bodiless_head_404(),
             patch("application_sdk.storage.ops.obstore.list", side_effect=listing),
-            patch.object(ops, "_retry_sleep", AsyncMock()),
+            patch.object(_ops_seam, "_retry_sleep", AsyncMock()),
             pytest.raises(StorageGatewayNoRouteError) as exc,
         ):
             await _get_file_meta_confirmed("a/data.json", store, normalize=False)

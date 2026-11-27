@@ -2192,7 +2192,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 - **Import:** `from application_sdk.common import normalize_filters`
 - **Also importable from:** `application_sdk.common.sql_filters`
-- **Signature:** `normalize_filters(filter_dict: dict[str, FilterValue], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: Mapping[str, FilterValue], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -11326,7 +11326,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.e2e import DAGSpec`
 - **Signature:** `class DAGSpec(entrypoint: str | None = None, ...)`
 - **Summary:** One entrypoint DAG run, as a suite *declares* it.
-- **Defined in:** `application_sdk/testing/e2e/base.py`
+- **Defined in:** `application_sdk/testing/e2e/_base_types.py`
 
 #### `DataForgeSource`
 
@@ -11908,7 +11908,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Import:** `from application_sdk.testing.e2e import ResolvedDAG`
 - **Signature:** `class ResolvedDAG(label: str, ...)`
 - **Summary:** A :class:`DAGSpec` with every field settled against the class attributes.
-- **Defined in:** `application_sdk/testing/e2e/base.py`
+- **Defined in:** `application_sdk/testing/e2e/_base_types.py`
 
 #### `ResolvedSeedSpec`
 
@@ -12560,7 +12560,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Also importable from:** `application_sdk.testing.full_dag.base`
 - **Signature:** `class FullDAGOutcome(ae_result: DAGRunResult, ...)`
 - **Summary:** Combined result of a single full-DAG run.
-- **Defined in:** `application_sdk/testing/e2e/base.py`
+- **Defined in:** `application_sdk/testing/e2e/_base_types.py`
 
 #### `GapReport` (deprecated)
 

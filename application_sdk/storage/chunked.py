@@ -48,6 +48,12 @@ from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.atomic import ensure_free_space
 from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._locks import PathLockRegistry
+from application_sdk.storage._ops_errors import (
+    _exc_class_name,
+    _is_not_found,
+    _is_precondition,
+)
+from application_sdk.storage._ops_seam import _log_storage_event, _past_gateway_no_route
 from application_sdk.storage._telemetry import _log_transfer_progress
 
 if TYPE_CHECKING:
@@ -393,10 +399,6 @@ async def _fetch_chunk(
             otherwise leave a hole of NUL bytes that reads back as a
             plausible-looking file of exactly the right length.
     """
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked from this module
-        _past_gateway_no_route,
-    )
-
     length = min(chunk_size_bytes, size - offset)
     # *sem* caps this file's range GETs; the shared budget caps the bytes all
     # transfers in the process hold, which is what the container's memory
@@ -488,11 +490,6 @@ def _handle_chunk_failure(
     * Anything else: with resume enabled the partial + sidecar stay on disk
       for the next attempt; legacy (no-resume) deletes the partial.
     """
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked from this module
-        _is_not_found,
-        _is_precondition,
-    )
-
     if _is_precondition(exc):
         # Object rewritten mid-download: the partial file mixes
         # generations — discard it and restart fresh ONCE against
@@ -718,10 +715,6 @@ async def _download_chunked_locked(
         integrity,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked for back-compat
-        _exc_class_name,
-        _is_not_found,
-        _log_storage_event,
-        _past_gateway_no_route,
         download_file,
     )
 

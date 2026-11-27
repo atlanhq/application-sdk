@@ -208,15 +208,28 @@ def _harness(
         "application_sdk.testing.e2e.base.harness_seed.seed_assets", _record_seed
     )
     monkeypatch.setattr(
-        "application_sdk.testing.e2e.base.delete_connection", _record_delete_connection
+        "application_sdk.testing.e2e._base_teardown.delete_connection",
+        _record_delete_connection,
     )
     monkeypatch.setattr(
-        "application_sdk.testing.e2e.base.purge_connection", _record_purge
+        "application_sdk.testing.e2e._base_teardown.purge_connection", _record_purge
     )
-    monkeypatch.setattr(
-        "application_sdk.testing.e2e.base.logger",
-        SimpleNamespace(info=_ignore, warning=_record_warning, error=_record_warning),
-    )
+    # BaseE2ETest's methods log from the mixin layer each one lives in (FND-4267).
+    for layer in (
+        "base",
+        "_base_assets",
+        "_base_dag",
+        "_base_poll",
+        "_base_seed",
+        "_base_teardown",
+        "_base_tenant",
+    ):
+        monkeypatch.setattr(
+            f"application_sdk.testing.e2e.{layer}.logger",
+            SimpleNamespace(
+                info=_ignore, warning=_record_warning, error=_record_warning
+            ),
+        )
     monkeypatch.setattr(
         _SeedingE2ETest, "_atlas_client", lambda self: _null_atlas_client()
     )
@@ -801,7 +814,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
             messages.append(message % args if args else message)
 
         monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.logger",
+            "application_sdk.testing.e2e._base_teardown.logger",
             SimpleNamespace(info=_record, warning=_record, error=_record),
         )
         harness.teardown_method(method=None)

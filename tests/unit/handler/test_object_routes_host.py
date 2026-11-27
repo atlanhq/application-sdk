@@ -775,10 +775,10 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def _sleep(delay: float) -> None:
         slept.append(delay)
 
-    from application_sdk.storage import ops
+    from application_sdk.storage import _ops_seam
 
     # The host's requests go through the worker's store seam, and its retry.
-    monkeypatch.setattr(ops, "_retry_sleep", _sleep)
+    monkeypatch.setattr(_ops_seam, "_retry_sleep", _sleep)
     return slept
 
 
@@ -1011,7 +1011,7 @@ def test_on_the_host_a_failed_upload_event_carries_no_driver_text(
     error class, as the host's own failure log does."""
     from unittest.mock import MagicMock
 
-    from application_sdk.storage import ops
+    from application_sdk.storage import _ops_seam
 
     signed = "https://b.example.invalid/k?X-Goog-Signature=deadbeef"
 
@@ -1019,8 +1019,8 @@ def test_on_the_host_a_failed_upload_event_carries_no_driver_text(
         raise RuntimeError(f"Server returned non-2xx status code: 403 {signed}")
 
     log = MagicMock()
-    monkeypatch.setattr(ops, "logger", log)
-    monkeypatch.setattr(ops, "api_only_install", lambda: True)
+    monkeypatch.setattr(_ops_seam, "logger", log)
+    monkeypatch.setattr(_ops_seam, "api_only_install", lambda: True)
     monkeypatch.setattr(obstore, "open_writer_async", _failing_writer(_put))
     response = host.post("/workflows/v1/file", files={"file": ("a.csv", b"x")})
     assert response.status_code == 503

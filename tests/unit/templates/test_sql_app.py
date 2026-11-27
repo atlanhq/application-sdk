@@ -204,11 +204,11 @@ class TestInitSqlClientGuidRoute:
         infra = MagicMock()
         with (
             patch(
-                "application_sdk.templates.sql_app.get_infrastructure",
+                "application_sdk.templates._sql_app_entity.get_infrastructure",
                 return_value=infra,
             ),
             patch(
-                "application_sdk.templates.sql_app.CredentialResolver",
+                "application_sdk.templates._sql_app_entity.CredentialResolver",
                 return_value=resolver,
             ),
             warnings.catch_warnings(),
@@ -1895,7 +1895,9 @@ class TestRunOutputPrefixes:
 
         input_ = ExtractionInput(output_path="")
 
-        mock_bop_patch = patch("application_sdk.templates.sql_app.build_output_path")
+        mock_bop_patch = patch(
+            "application_sdk.templates._sql_app_entity.build_output_path"
+        )
         wf_info_patch = patch(
             "application_sdk.templates.sql_app._temporal_workflow.info",
             return_value=mock_wf_info,
@@ -2075,7 +2077,7 @@ class TestPrimeSqlAuth:
         fake = _LeakyClient()
         with (
             patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)),
-            patch("application_sdk.templates.sql_app.logger") as mock_logger,
+            patch("application_sdk.templates._sql_app_prime.logger") as mock_logger,
         ):
             result = await app.prime_sql_auth(self._build_input())
 
@@ -3532,7 +3534,7 @@ class TestTransformStampsLastSync:
         )
 
         with patch(
-            "application_sdk.templates.sql_app.resolve_last_sync_details",
+            "application_sdk.templates._sql_app_entity.resolve_last_sync_details",
             wraps=resolve_last_sync_details,
         ) as resolver:
             await app.transform_tables(_make_task_input(output_path=str(tmp_path)))

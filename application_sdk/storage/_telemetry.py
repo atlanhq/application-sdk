@@ -2,9 +2,10 @@
 
 Split out of ``storage/ops.py`` so the telemetry surface (what gets counted,
 labelled, and logged about a transfer) evolves independently of the I/O
-primitives that emit it. ``_log_storage_event`` stays in ``ops`` — it is the
-per-attempt event emitter the I/O functions call — and mirrors terminal
-transfer events into :func:`_record_transfer_metric` here. (BLDX-1513)
+primitives that emit it. ``_log_storage_event`` lives with the request seam in
+``storage._ops_seam`` — it is the per-attempt event emitter the I/O functions
+call — and mirrors terminal transfer events into
+:func:`_record_transfer_metric` here. (BLDX-1513)
 """
 
 from __future__ import annotations

@@ -144,9 +144,10 @@ or container) still falls through. It is retryable, and its `suggested_action` s
 retry rather than to look for a missing key.
 
 Every store request retries this answer itself (5, 10 and 20s, each scaled by a jitter factor in
-0.5–1.5), at one seam in `storage/ops.py`. That covers the upload, its post-upload readback HEAD,
-the `{key}.sha256` sidecar PUT, `download_file` and the chunked range GETs, `exists`,
-`get_file_meta`, `_get_bytes`, `delete` and listings. The typed error is raised only once those
+0.5–1.5), at one seam (`storage/_ops_seam.py`) that every `storage/ops.py` request goes
+through. That covers the upload, its post-upload readback HEAD, the `{key}.sha256` sidecar PUT,
+`download_file` and the chunked range GETs, `exists`, `get_file_meta`, `_get_bytes`, `delete`
+and listings. The typed error is raised only once those
 retries are spent. No path treats this 404 as a missing key: it raises the typed error, which is
 retryable, instead of returning "absent" or raising the non-retryable `StorageNotFoundError`.
 

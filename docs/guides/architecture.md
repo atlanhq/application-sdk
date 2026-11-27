@@ -329,6 +329,10 @@ application_sdk/
 │   ├── file_ref_sync.py    # FileReference synchronisation helpers
 │   ├── formats/            # Serialisation helpers (Parquet, JSON lines, etc.)
 │   ├── ops.py              # upload_file, download_file, delete, exists
+│   ├── _ops_errors.py      # ops: driver failure → typed StorageError leaf
+│   ├── _ops_seam.py        # ops: gateway no-route retry + per-attempt storage event
+│   ├── _ops_listing.py     # ops: listing, directory-marker filter, HEAD-miss confirm
+│   ├── _ops_stream.py      # ops: multipart upload and staged download loops
 │   ├── reference.py        # FileReference tracker
 │   └── transfer.py         # High-level transfer orchestration
 │
@@ -356,6 +360,10 @@ application_sdk/
 │   └── middleware/         # Logging and metrics middleware
 │
 ├── templates/              # High-level connector templates
+│   ├── sql_app.py          # SqlApp: the SQL metadata extraction template
+│   ├── _sql_app_entity.py  # SqlApp mixin: extract_entity / transform_entity I/O
+│   ├── _sql_app_prime.py   # SqlApp mixin: prime_sql_auth and its failure classifier
+│   ├── _sql_app_finalize.py  # SqlApp mixin: finalize_extraction and declaration helpers
 │   ├── base_metadata_extractor.py
 │   ├── incremental_sql_metadata_extractor.py
 │   ├── sql_metadata_extractor.py
@@ -379,6 +387,7 @@ application_sdk/
 │   └── parsers/            # Contract schema parsers
 │
 ├── testing/                # In-memory mocks and pytest fixtures
+│   ├── e2e/                # Tenant e2e harness: BaseE2ETest (base.py) over private _base_*.py mixin layers
 │   ├── fixtures.py         # pytest fixtures (clean_app_registry, etc.)
 │   └── mocks.py            # MockStateStore, MockSecretStore, MockPubSub, MockBinding, etc.
 │

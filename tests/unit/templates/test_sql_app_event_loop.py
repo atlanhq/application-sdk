@@ -26,7 +26,7 @@ import orjson
 import pytest
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.templates import sql_app as sql_app_module
+from application_sdk.templates import _sql_app_entity as sql_app_entity
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionTaskInput,
     TransformInput,
@@ -156,7 +156,9 @@ async def test_extract_entity_does_not_block_the_loop(
             app.probe.block()
         return real_dumps(*args, **kwargs)
 
-    monkeypatch.setattr("application_sdk.templates.sql_app.orjson.dumps", _slow_dumps)
+    monkeypatch.setattr(
+        "application_sdk.templates._sql_app_entity.orjson.dumps", _slow_dumps
+    )
 
     result = await app.probe.run(
         lambda: app.extract_entity(
@@ -185,14 +187,14 @@ async def test_extract_entity_never_hands_the_file_handle_to_a_thread(
     file object, and the bytes still land on disk.
     """
     offloaded_args: list[Any] = []
-    real_run_in_thread = sql_app_module.run_in_thread
+    real_run_in_thread = sql_app_entity.run_in_thread
 
     async def _recording_run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
         offloaded_args.extend(args)
         offloaded_args.extend(kwargs.values())
         return await real_run_in_thread(func, *args, **kwargs)
 
-    monkeypatch.setattr(sql_app_module, "run_in_thread", _recording_run_in_thread)
+    monkeypatch.setattr(sql_app_entity, "run_in_thread", _recording_run_in_thread)
 
     result = await app.extract_entity(
         entity_type="database",

@@ -54,7 +54,8 @@ def _record_lookup(
         return store
 
     monkeypatch.setattr(
-        "application_sdk.testing.e2e.base.create_store_from_binding_optional", _resolve
+        "application_sdk.testing.e2e._base_seed.create_store_from_binding_optional",
+        _resolve,
     )
     return calls
 

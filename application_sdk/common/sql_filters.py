@@ -10,6 +10,7 @@ import json
 import os
 import re
 import warnings
+from collections.abc import Mapping
 from typing import Any, TypeAlias
 
 import orjson
@@ -812,7 +813,7 @@ def prepare_filters(
 
 
 def normalize_filters(
-    filter_dict: dict[str, FilterValue], is_include: bool
+    filter_dict: Mapping[str, FilterValue], is_include: bool
 ) -> list[str]:
     """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 

@@ -14,8 +14,8 @@ reserves the bytes it will hold in memory before it holds them:
   written to disk;
 * a streaming GET in ``ops.download_file``, for its stream buffer, while it
   streams;
-* a multipart upload in ``ops._upload_once``, for its part buffers, while its
-  writer is open.
+* a multipart upload in ``_ops_stream._upload_once``, for its part buffers,
+  while its writer is open.
 
 ``ops.upload_bytes`` streams through ``_upload_once`` too, so it reserves like
 a file upload. Whole-object reads and small writes do not reserve —

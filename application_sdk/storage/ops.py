@@ -39,24 +39,18 @@ to target a specific store instead.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import hashlib
 import logging
-import math
 import os
-import tempfile
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, TypedDict, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import obstore
 import orjson
 
 # obstore's typed exceptions, under the names this module has always bound
 # them to. The ``obstore>=0.12`` pin guarantees both classes exist.
-from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
 from obstore.exceptions import (  # noqa: F401 — importable from here in past releases
     PreconditionError as _ObstorePreconditionError,
 )
@@ -71,12 +65,18 @@ if TYPE_CHECKING:
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 from application_sdk import _env, _storage_classify
-from application_sdk._install import api_only_install, worker_only_missing
+from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
-from application_sdk._runtime.offload import run_in_thread
-from application_sdk._runtime.progress import current_progress_tracker
-from application_sdk.common._listing import PARTIAL_DIRNAME
-from application_sdk.common.atomic import disk_full_guard, ensure_free_space
+
+# Unused here since the streaming loops moved to ``_ops_stream`` (FND-4267),
+# but importable from this module in past releases (docs/standards/symbols.md).
+from application_sdk._runtime.offload import run_in_thread  # noqa: F401
+from application_sdk._runtime.progress import current_progress_tracker  # noqa: F401
+from application_sdk.common._listing import PARTIAL_DIRNAME  # noqa: F401
+from application_sdk.common.atomic import (  # noqa: F401
+    disk_full_guard,
+    ensure_free_space,
+)
 
 # Unused here since the gateway retry moved to ``_storage_classify``, but
 # importable from this module in past releases (docs/standards/symbols.md).
@@ -89,17 +89,32 @@ from application_sdk.common.backoff import (  # noqa: F401
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
 # storage-sibling imports — it reaches back into ``ops`` lazily — so this
 # top-level import is acyclic regardless of module load order.
-from application_sdk.storage import _settings, integrity
-from application_sdk.storage._budget import transfer_budget
-from application_sdk.storage._classify import (
-    RELOCATION_BUCKET,
-    classify_access_error,
-    is_precondition,
+from application_sdk.storage import integrity
+from application_sdk.storage._budget import transfer_budget  # noqa: F401
+
+# The error mapping, the request seam, listing and the streaming loops live in
+# private sibling modules (FND-4267). The names other storage modules import
+# from here (``_list_items``, ``_is_not_found``, ``_drop_directory_markers``,
+# ``_is_local_dir_collision``) stay importable from ``ops``.
+from application_sdk.storage._ops_errors import (  # noqa: F401 — re-exported for sibling modules
+    _exc_class_name,
+    _is_local_dir_collision,
+    _is_not_found,
+    _storage_error_for,
 )
-from application_sdk.storage._telemetry import (
-    _log_transfer_progress,
-    _record_transfer_metric,
-    _throughput_mbps,
+from application_sdk.storage._ops_listing import (  # noqa: F401 — re-exported for sibling modules
+    _confirm_head_miss,
+    _drop_directory_markers,
+    _list_items,
+)
+from application_sdk.storage._ops_seam import (
+    _log_storage_event,
+    _past_gateway_no_route,
+)
+from application_sdk.storage._ops_stream import (
+    _open_download,
+    _stream_upload,
+    _write_download,
 )
 
 # Back-compat re-export: the chunked/resumable download path lives in
@@ -323,647 +338,11 @@ def _resolve_put_attributes(
     return None
 
 
-def _is_azure_container_not_found(exc: BaseException) -> bool:
-    """Return True when *exc* indicates an Azure container does not exist.
-
-    Azure Blob Storage returns HTTP 404 with error code ``ContainerNotFound``
-    when a write targets a container that has never been created.  This is
-    distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
-    actionable error message so operators know to pre-create the container.
-    The rule is the shared table's
-    (:func:`application_sdk._storage_classify.is_azure_container_missing`), so
-    the API host reads the same failure the same way.
-    """
-    return _storage_classify.is_azure_container_missing(exc)
-
-
-def _azure_container_not_found_message(key: str) -> str:
-    """Return the standard user-facing message for a missing Azure container."""
-    return (
-        "Azure container does not exist — v3 does not auto-create "
-        "containers (v2 Dapr did); pre-create the container before "
-        f"running (failed key: '{key}')"
-    )
-
-
-def _is_not_found(exc: BaseException) -> bool:
-    """Return True if the exception indicates a missing key.
-
-    The shared table's rule
-    (:func:`application_sdk._storage_classify.is_not_found`), which the API
-    host uses too: the built-in :class:`FileNotFoundError` (current obstore),
-    ``obstore.exceptions.NotFoundError`` (older obstore), and a substring
-    fallback for a generic error that carries only the status in its text.
-    Class-based detection runs first.
-
-    The gateway's transient ``404 "no Route matched"`` is excluded before the
-    substring fallback: the key is not missing, the gateway instance has not
-    loaded its routes, so callers fall through to ``_storage_error_for`` and
-    raise the retryable ``StorageGatewayNoRouteError`` instead of reporting
-    the key absent.
-    """
-    return _storage_classify.is_not_found(exc)
-
-
-def _is_local_dir_collision(exc: BaseException, store: ObjectStore, key: str) -> bool:
-    """Return True when *key* names a directory in a local store, not an object.
-
-    A :class:`~obstore.store.LocalStore` maps an object key onto a filesystem
-    path, so a probe of a key that names a directory (e.g. the bare root marker
-    ``"t"`` when ``t/`` holds children) does not surface as "not found": on
-    Windows the stat raises ``GenericError("… Unable to open file …: Access is
-    denied. (os error 5)")``, and a failed open can surface as "… Is a
-    directory".  A key that resolves to a directory can never also exist as an
-    object, so this is a directory collision — not a permission or I/O failure
-    — and the caller contract here ("skip when the object is not there") is
-    served by treating it as missing.
-
-    Deliberately not a message match on its own; message text alone would
-    reclassify a genuine failure that happens to be worded the same way (a
-    non-local backend, or a local *file* that is unreadable).  Three gates, in
-    order of authority:
-
-    1. Not a ``LocalStore`` → never a directory collision.  Cloud backends have
-       no directories; a 403 wording similar to Windows' stays fatal.
-    2. A ``LocalStore`` with a prefix (what :func:`storage.factory.create_local_store`
-       builds) → resolve the key and ask the filesystem.  ``is_dir()`` is the
-       authoritative answer and needs no message parsing: it is ``False`` for an
-       unreadable *file*, so a real permission failure still raises.
-    3. A rootless ``LocalStore`` (keys are not resolvable to a path here) → fall
-       back to the conjunctive message shape: an "unable to open file" prefix
-       *and* a directory-stat suffix.  A plain ``ERROR_ACCESS_DENIED`` or a
-       cloud 403 containing "access is denied" does not match.
-
-    Permission failures must stay fatal in every case — see the ``StorageError``
-    contract on :func:`delete` / :func:`exists`, and ``StoragePermissionError``
-    in ``storage.preflight``.
-    """
-    from obstore.store import LocalStore  # noqa: PLC0415 — defensive: keep inline
-
-    if not isinstance(store, LocalStore):
-        return False
-
-    root = store.prefix
-    if root is not None:
-        # PurePosixPath: obstore keys are always '/'-separated, whatever the OS.
-        return Path(root, *PurePosixPath(key).parts).is_dir()
-
-    msg = str(exc).lower()
-    return "unable to open file" in msg and (
-        "access is denied" in msg or "is a directory" in msg
-    )
-
-
-def _exc_class_name(exc: BaseException) -> str:
-    """Return a stable short class name for structured-log error_class fields."""
-    return type(exc).__name__
-
-
-def _is_precondition(exc: BaseException) -> bool:
-    """True when *exc* is an etag precondition failure (HTTP 412 / if_match miss).
-
-    The rule is :func:`application_sdk.storage._classify.is_precondition`.
-    """
-    return is_precondition(exc)
-
-
-# ``object_store`` formats every backend HTTP failure as
-#   "Generic {store} error: Error performing {METHOD} {url} in {elapsed} -
-#    Server returned non-2xx status code: {status} {reason}: {body}"
-# and GCS, S3 and Azure Blob all put an XML
-# ``<Error><Code>...</Code><Message>...</Message></Error>`` in ``{body}``.
-# Parsing the two routing-relevant tokens out is what lets a consumer branch on
-# a field: before FND-957 the status existed only inside the free-text cause,
-# which the envelope's length cap usually truncated away before it arrived.
-# Cap for the logged copy of a driver error. Larger than the wire envelope's
-# cap on purpose — the point of the log copy is to outlive the truncation — but
-# still bounded, because ``error_message`` promotes to an indexed OTLP
-# attribute. Matches ``safe_traceback``'s ceiling.
-_LOG_CAUSE_MAX_LEN = 8000
-
 #: The blobstorage proxy's "I could not look your signing key up in Keycloak"
 #: verdict. See :class:`~application_sdk.storage.errors.
 #: StorageGatewayAuthUnavailableError` for why this is a gateway-availability
 #: signal rather than a credential one. Defined in the shared table.
 GATEWAY_INVALID_CLIENT_CODE = _storage_classify.GATEWAY_INVALID_CLIENT_CODE
-
-
-class _StorageEvidence(TypedDict):
-    """The kwargs every branch of :func:`_storage_error_for` splats into a leaf.
-
-    Typed rather than ``dict[str, Any]`` so pyright checks the splat against
-    each ``__init__`` it reaches. Under ``Any`` that check is silently skipped,
-    and the failure mode is the one this module exists to prevent: add a field
-    here, miss one leaf's ``__init__``, and the ``TypeError`` surfaces at raise
-    time — on the error path, under load, replacing the failure it was meant to
-    describe.
-    """
-
-    key: str
-    cause: Exception
-    http_status: int | None
-    provider_code: str | None
-    target: str | None
-
-
-def _obstore_http_evidence(exc: BaseException) -> tuple[int | None, str | None]:
-    """Return ``(http_status, provider_code)`` parsed from *exc*, best-effort.
-
-    The shared table's parser
-    (:func:`application_sdk._storage_classify.http_evidence`). Both are
-    ``None`` when *exc* is not a backend HTTP failure. Never raises.
-    """
-    return _storage_classify.http_evidence(exc)
-
-
-# Scheme per obstore store class, for the ``target`` evidence field.
-_STORE_SCHEMES: dict[str, str] = {
-    "GCSStore": "gs",
-    "S3Store": "s3",
-    "AzureStore": "abfs",
-    "LocalStore": "file",
-}
-# Identity keys that are safe to read off a store's ``config``. That dict also
-# carries live credentials -- an ``S3Store`` exposes ``secret_access_key`` and
-# an ``AzureStore`` exposes ``account_key``, both in plaintext -- so this is an
-# allowlist and must stay one. Never put ``store.config`` itself on an error.
-_STORE_IDENTITY_KEYS: tuple[str, ...] = ("bucket", "container_name")
-
-
-def _store_target(store: ObjectStore, key: str) -> str | None:
-    """Return a ``scheme://container/path`` identity for the failing request.
-
-    This is the ``target`` evidence field -- "what were we talking to". It is
-    assembled from the store's class and one allowlisted identity key, never
-    from the request URL and never from ``store.config`` wholesale: a signed
-    URL carries ``X-Goog-Signature``, which ``redact_secrets`` does not strip,
-    and the config dict holds credentials outright.
-
-    Best-effort by design. Returns ``None`` rather than raising, because this
-    only decorates a failure and must never be able to replace it. (FND-957)
-    """
-    try:
-        scheme = _STORE_SCHEMES.get(type(store).__name__, "objectstore")
-        container: str | None = None
-        config = getattr(store, "config", None)
-        if config is not None and hasattr(config, "get"):
-            for candidate in _STORE_IDENTITY_KEYS:
-                value = config.get(candidate)
-                if isinstance(value, str) and value:
-                    container = value
-                    break
-        prefix = getattr(store, "prefix", None)
-        path = f"{prefix}/{key}" if isinstance(prefix, str) and prefix else key
-        return f"{scheme}://{container}/{path}" if container else f"{scheme}:///{path}"
-    # conformance: ignore[E004] the identity is decoration on an error message; the error itself is still raised
-    except Exception:  # noqa: BLE001 — identity is decoration on an error message that is still raised
-        return None
-
-
-def _storage_error_for(
-    exc: Exception,
-    key: str,
-    message: str,
-    store: ObjectStore | None = None,
-) -> Exception:
-    """Build the typed storage error for a failed write.
-
-    Only four conditions reclassify: a missing Azure container, a blobstorage
-    gateway that could not reach its identity provider, a gateway instance whose
-    routes have not synced, and a bucket mid-relocation. Everything else — including a bare ``PreconditionFailed``
-    — is a retryable ``StorageError``. The parsed ``http_status`` and
-    ``provider_code`` are otherwise *evidence, not routing*: they ride on the
-    envelope so a consumer holding context the SDK lacks can branch on them,
-    and so a future case can argue for its own leaf from data rather than
-    inference. The gateway branch is the first case to have made that argument,
-    and it routes on the ``(401, 1005)`` pair specifically — not on either
-    field alone.
-
-    Order is load-bearing, but not for the retry verdict — every reclassifying
-    branch is retryable. It decides which ``code`` and which
-    ``suggested_action`` an operator sees, and those are wrong if a broader
-    rule matches first. Do not reorder without re-reading the notes at each
-    branch.
-
-    Every branch carries the same evidence, so a consumer reads ``http_status``,
-    ``provider_code`` and ``target`` off the envelope regardless of which leaf
-    was chosen. (FND-957)
-    """
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageBucketRelocationError,
-        StorageConfigError,
-        StorageError,
-        StorageGatewayAuthUnavailableError,
-        StorageGatewayNoRouteError,
-    )
-
-    # The shared table names the failure; the API host routes the same verdict
-    # onto an HTTP answer (handler/object_routes.py), so the two stacks cannot
-    # drift on what a gateway or container failure is.
-    failure = _storage_classify.classify_storage_failure(exc)
-    kind = failure.kind
-    http_status, provider_code = failure.http_status, failure.provider_code
-    evidence: _StorageEvidence = {
-        "key": key,
-        "cause": exc,
-        "http_status": http_status,
-        "provider_code": provider_code,
-        "target": _store_target(store, key) if store is not None else None,
-    }
-
-    # Checked before the status routing because its remediation is a config
-    # change rather than a retry, and Azure reports it as a plain 404 that
-    # would otherwise be indistinguishable from a missing blob. It carries the
-    # same evidence as every other branch: the container name is in ``target``
-    # and the 404/ContainerNotFound pair is what tells an operator the
-    # container, not the object, is what is absent.
-    if kind is _storage_classify.StorageFailureKind.AZURE_CONTAINER_MISSING:
-        return StorageConfigError(_azure_container_not_found_message(key), **evidence)
-
-    # Checked before the relocation branch and the generic fallthrough for the
-    # same reason the Azure branch is: the pair it matches on is exact, so a
-    # broader rule reaching it first can only lose information. Matching on
-    # BOTH the 401 and the gateway's own ``1005`` is what keeps a real
-    # credential rejection — any other 401 from any other store — out of this
-    # leaf; ``1005`` is emitted by exactly one hop in the fleet.
-    #
-    # The retry verdict does not change here (StorageError is already
-    # retryable). What changes is what an operator is told: without this leaf
-    # the envelope says "lacked valid authentication credentials", which points
-    # at the connector's static Keycloak client id/secret — credentials the SDR
-    # preflight already proved good against this same store at startup. The
-    # actual condition is the proxy's Keycloak lookup failing, and no
-    # credential change fixes it. (FND-2076)
-    if kind is _storage_classify.StorageFailureKind.GATEWAY_AUTH_UNAVAILABLE:
-        return StorageGatewayAuthUnavailableError(
-            f"{message}: the object-store gateway could not verify the request "
-            "signature because its own identity-provider lookup failed — this "
-            "is the gateway being unavailable, not a rejected credential",
-            suggested_action=(
-                "Do not rotate or re-issue the store's credentials: they are a "
-                "static Keycloak client id/secret that the SDR preflight probe "
-                "already exercised against this store at startup. Retry the "
-                "run; if the condition persists beyond a few minutes, the "
-                "tenant's blobstorage gateway cannot reach Keycloak and the "
-                "fix is platform-side."
-            ),
-            **evidence,
-        )
-
-    # Checked before the relocation branch and the generic fallthrough for the
-    # same reason as the gateway-auth branch: the match is exact (a 404 AND the
-    # gateway's own "no Route matched" text), so a broader rule reaching it first
-    # can only lose information. A plain 404 never matches, which keeps a real
-    # missing bucket or container out of this leaf. Retryable either way; what
-    # changes is the code and the hint, so an operator is not sent looking for a
-    # missing key or bucket when the gateway merely has not loaded its routes.
-    if kind is _storage_classify.StorageFailureKind.GATEWAY_NO_ROUTE:
-        return StorageGatewayNoRouteError(
-            f"{message}: the object-store gateway answered 404 because the "
-            "serving instance has not loaded its routes yet — the object and "
-            "bucket are not missing",
-            suggested_action=(
-                "Wait and retry: a gateway instance that just joined the load "
-                "balancer loads its routes within seconds. Nothing in the app "
-                "or its credentials needs to change; if it persists beyond a "
-                "few minutes, the gateway's route sync is failing and the fix "
-                "is platform-side."
-            ),
-            **evidence,
-        )
-
-    # Relocation is checked BEFORE the generic fallthrough below, and the order
-    # is load-bearing rather than stylistic — though not for the reason it might
-    # look. Both outcomes are retryable, so nothing here changes a retry
-    # decision. What the order buys is the *specific* code
-    # (DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION, which the preflight gate
-    # stamps for the same condition) and the remediation hint telling an
-    # operator to wait the move out. Fall through to the generic StorageError
-    # first and both are silently lost: the failure still retries, but nobody
-    # can tell a relocation from any other storage blip.
-    #
-    # The detection is deliberately the preflight gate's, not a second one: its
-    # rule requires BOTH the "precondition" and "relocation" tokens, so a plain
-    # etag/if-match 412 can never be misread as a relocation and pick up a
-    # "wait for the move to finish" hint for a move that is not happening.
-    bucket, hint = classify_access_error(exc)
-    if bucket == RELOCATION_BUCKET:
-        return StorageBucketRelocationError(
-            f"{message}: the destination bucket is being relocated",
-            suggested_action=hint,
-            **evidence,
-        )
-    # Nothing else reclassifies. A 403 or 404 is genuinely ambiguous here:
-    # ``upload_file`` accepts an explicit store, so the same status arrives both
-    # from the deployment's own artifact store (audience APP_OWNER) and from a
-    # caller-supplied store pointing at a customer bucket (audience USER).
-    # Routing audience off the status would put customer-facing attribution on
-    # our own infrastructure half the time.
-    #
-    # A bare ``PreconditionFailed`` that is *not* a relocation deliberately
-    # stays a retryable ``StorageError`` too. The one real instance we have of
-    # that status turned out to be a relocation — temporary and self-healing —
-    # so the prior on "unclassified precondition means permanent" is weak, and
-    # a wrongly-permanent verdict fails a run that would have recovered. The
-    # status and provider code still reach ``evidence``, which is what a future
-    # non-relocation case would need to make the argument for its own leaf.
-    return StorageError(message, **evidence)
-
-
-# A Kong gateway instance that joins the load balancer before its route table
-# has synced answers every request with ``404 {"message":"no Route matched with
-# those values"}`` for a few seconds. The rule and the backoff are the shared
-# table's (:mod:`application_sdk._storage_classify`), so the API host rides the
-# same answer out the same way.
-_GATEWAY_NO_ROUTE_RETRY_DELAYS = _storage_classify.GATEWAY_NO_ROUTE_RETRY_DELAYS
-# Indirection so tests can record the backoff without sleeping through it.
-_retry_sleep = asyncio.sleep
-
-
-async def _past_gateway_no_route(
-    op: str, key: str, call: Callable[[], Awaitable[_T]]
-) -> _T:
-    """Run one store request, retrying the gateway's "no Route matched" 404.
-
-    The store seam: every request this module sends goes through here (the
-    upload attempt, HEAD, GET, PUT, DELETE and listing), so the post-upload
-    readback, the integrity sidecar write, downloads and listings all ride
-    out a gateway instance that has not synced its routes, not only the
-    upload. Wrap the *request*, not a stream consumer: a retried ``call``
-    must start over cleanly. Every other failure propagates on the first
-    attempt, unchanged.
-    """
-    return await _storage_classify.past_gateway_no_route(
-        op, key, call, sleep=_retry_sleep
-    )
-
-
-def _is_gateway_no_route(exc: BaseException) -> bool:
-    """True for the gateway's transient "no Route matched" 404, and only that."""
-    return _storage_classify.is_gateway_no_route(exc)
-
-
-def _log_storage_event(
-    level: int,
-    op: str,
-    store_path: str,
-    *,
-    outcome: str,
-    elapsed_ms: float | None = None,
-    size_bytes: int | None = None,
-    error_class: str | None = None,
-    error_message: str | None = None,
-) -> None:
-    """Emit a single structured per-attempt storage event.
-
-    Fields are placed on ``extra`` so structured-log backends and pytest's
-    caplog see them as record attributes; the human-readable message stays
-    short for unstructured tail / grep workflows.
-    """
-    extra: dict[str, object] = {
-        "storage_op": op,
-        "store_path": store_path,
-        "outcome": outcome,
-    }
-    tput: float | None = None
-    if elapsed_ms is not None:
-        extra["elapsed_ms"] = round(elapsed_ms, 3)
-    if size_bytes is not None:
-        extra["size_bytes"] = size_bytes
-        if elapsed_ms is not None:
-            tput = _throughput_mbps(size_bytes, elapsed_ms)
-            if tput is not None:
-                extra["throughput_mibps"] = tput
-    if error_class is not None:
-        extra["error_class"] = error_class
-    if error_message is not None and not api_only_install():
-        # Not on the API host: its failure logs carry only the classified
-        # evidence (handler/object_routes.py), and it has no OTLP pipeline for
-        # this copy to outlive the envelope's truncation in.
-        #
-        # The wire envelope length-caps ``cause_repr``, so without this the
-        # provider's own explanation had nowhere to live: this event previously
-        # recorded only ``error_class`` ("GenericError"), with no ``str(exc)``,
-        # no ``exc_info`` and no ``safe_traceback``. A copy here gives a
-        # truncated envelope a higher-fidelity counterpart in the logs.
-        # ``error_message`` is already in ``_KNOWN_EXTRA_KEYS``, so it promotes
-        # to an indexed OTLP attribute — hence the cap, for the same reason
-        # ``safe_traceback`` has one. Callers pass secret-redacted text.
-        # (FND-957)
-        extra["error_message"] = error_message[:_LOG_CAUSE_MAX_LEN]
-    msg = f"storage.{op} {outcome} path={store_path}"
-    # The SDK logger spreads ``extra`` into loguru's record["extra"], and
-    # _build_extra_dict in logger_adaptor promotes the keys to OTLP indexed
-    # attributes (all are in _KNOWN_EXTRA_KEYS). On the API host it is a
-    # stdlib logger, which sets them as record attributes.
-    logger.log(level, msg, extra=extra)
-
-    # Mirror the terminal event to metrics so throughput / failure rate are
-    # dashboardable + alertable across the fleet (only for actual transfers).
-    if op in ("download", "upload"):
-        _record_transfer_metric(
-            op,
-            outcome=outcome,
-            elapsed_ms=elapsed_ms,
-            size_bytes=size_bytes,
-            throughput_mibps=tput,
-            error_class=error_class,
-        )
-
-
-async def _list_items(
-    store: ObjectStore,
-    prefix: str | None,
-    *,
-    include_markers: bool = False,
-    suffixes: Iterable[str] = (),
-) -> list[tuple[str, int, str | None]]:
-    """Collect listing results under *prefix*, optionally filtering GCS directory markers.
-
-    Makes a single listing operation (``obstore.list`` returns a native async
-    ``ListStream`` that pages internally — no thread wrapping needed).  When *include_markers* is
-    ``False``, two additional in-memory passes are applied: one to build the set of
-    ancestor path segments, and one to filter out zero-byte objects whose path is one
-    of those ancestors (the structural signature of a GCS-console "folder" marker).
-
-    A zero-byte object is excluded when its path is a strict path-prefix of at least
-    one other listed key — i.e. it acts as a parent directory for real files.
-    Before that filter, each zero-byte object is probed with a HEAD; one that is
-    not found and lists under its own path is an S3 ``folder/`` marker listed
-    without its trailing slash and is dropped, so it is neither returned nor
-    counted as a parent.
-
-    Args:
-        store: An obstore-compatible store instance.
-        prefix: Key prefix, or ``None`` to list everything.
-        include_markers: When ``True``, skip the directory-marker filter and return
-            every object including zero-byte markers.  Use this when the caller must
-            operate on *all* objects (e.g. ``delete_prefix``) so that no orphan
-            objects are left behind on any store backend.
-        suffixes: Case-insensitive key suffixes the caller keeps. When given,
-            only zero-byte objects ending in one of them are probed.
-
-    Returns:
-        ``(path, size, e_tag)`` tuples in listing order (``e_tag`` may be
-        ``None`` on stores that don't provide one).  Directory markers are
-        excluded unless *include_markers* is ``True``.
-    """
-
-    async def _collect() -> list[tuple[str, int, str | None]]:
-        # A retry restarts the listing from the first page, so a partial
-        # result never leaks into the next attempt.
-        items: list[tuple[str, int, str | None]] = []
-        async for batch in obstore.list(
-            store, prefix=prefix
-        ):  # native async ListStream
-            for item in batch:
-                items.append((str(item["path"]), int(item["size"]), item.get("e_tag")))
-        return items
-
-    all_items = await _past_gateway_no_route("list", prefix or "", _collect)
-
-    if include_markers:
-        return all_items
-    # Offloaded: two passes over the whole listing with no await in between,
-    # which at 100k keys holds the event loop (and the activity heartbeat).
-    phantoms = await _childless_marker_paths(store, all_items, suffixes)
-    return await run_in_thread(_drop_markers, all_items, phantoms)
-
-
-def _drop_markers(
-    all_items: list[tuple[str, int, str | None]],
-    phantoms: set[str],
-) -> list[tuple[str, int, str | None]]:
-    """Drop *phantoms*, then the directory markers among the remaining items."""
-    if phantoms:
-        all_items = [item for item in all_items if item[0] not in phantoms]
-    return _drop_directory_markers(all_items)
-
-
-async def _childless_marker_paths(
-    store: ObjectStore,
-    items: list[tuple[str, int, str | None]],
-    suffixes: Iterable[str],
-) -> set[str]:
-    """Return zero-byte listed paths that are S3 ``folder/`` markers.
-
-    An S3 ``folder/`` marker lists without its trailing slash, so a HEAD of its
-    listed path finds nothing. A real zero-byte key deleted after the listing
-    finds nothing too, so a not-found HEAD is confirmed by listing under the
-    path: the marker lists there as itself, the vanished key lists nothing and
-    is kept, so its download reports it. Only the error class decides
-    not-found: obstore error text carries the key, so a substring match would
-    misread a key like ``dt=20240404/_SUCCESS`` on a 403 or 503.
-
-    A fixed pool of workers drains the candidates, so a listing with 100k
-    zero-byte keys holds only that many tasks, not one per key.
-    """
-    candidates = await run_in_thread(
-        _zero_byte_paths, items, tuple(suffix.lower() for suffix in suffixes)
-    )
-    if not candidates:
-        return set()
-    from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
-
-    max_concurrent_transfers = _settings.max_concurrent_storage_transfers()
-
-    markers: set[str] = set()
-    pending = iter(candidates)
-
-    async def _worker() -> None:
-        # One shared iterator: each worker takes the next path when it is free.
-        for path in pending:
-            if await _head_not_found(store, path) and await _lists_under_itself(
-                store, path
-            ):
-                markers.add(path)
-
-    workers = min(max(max_concurrent_transfers, 1), len(candidates))
-    await _run_bounded([_worker() for _ in range(workers)], None)
-    return markers
-
-
-async def _head_not_found(store: ObjectStore, path: str) -> bool:
-    """True only when a HEAD of *path* fails with a not-found error class."""
-    try:
-        # Through the seam: obstore raises its not-found class for the
-        # gateway's no-route 404 too, which would read a real key as absent.
-        await _past_gateway_no_route(
-            "head", path, lambda: obstore.head_async(store, path)
-        )
-    except FileNotFoundError as exc:
-        # An exhausted gateway retry re-raises the no-route 404, which obstore
-        # also types as not-found: that is the gateway, not the key.
-        return not _is_gateway_no_route(exc)
-    except Exception as exc:  # noqa: BLE001 — probe only; any other error keeps the key and the download reports it
-        if _is_gateway_no_route(exc):
-            return False
-        return isinstance(exc, _ObstoreNotFoundError)
-    return False
-
-
-async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
-    """True when listing under *path* returns anything.
-
-    obstore lists *path* as the prefix ``path/``, which holds an S3
-    ``path/`` marker (listed as *path*) but never a plain key named *path*.
-    """
-
-    async def _probe() -> bool:
-        async for batch in obstore.list(store, prefix=path, chunk_size=1):
-            if batch:
-                return True
-        return False
-
-    try:
-        # Through the seam, like the HEAD probe: a stale gateway instance here
-        # would otherwise leave an S3 ``path/`` marker in the listing.
-        return await _past_gateway_no_route("list", path, _probe)
-    except Exception:  # noqa: BLE001 — probe only; any error keeps the key and the download reports it
-        return False
-
-
-def _zero_byte_paths(
-    items: list[tuple[str, int, str | None]],
-    lsuffixes: tuple[str, ...],
-) -> list[str]:
-    """Zero-byte listed paths, limited to *lsuffixes* (lowercase) when given."""
-    return [
-        path
-        for path, size, _ in items
-        if size == 0 and (not lsuffixes or path.lower().endswith(lsuffixes))
-    ]
-
-
-def _drop_directory_markers(
-    all_items: list[tuple[str, int, str | None]],
-) -> list[tuple[str, int, str | None]]:
-    """Drop zero-byte objects whose path is an ancestor of another listed key."""
-    parent_dirs: set[str] = set()
-    for path, _, _ in all_items:
-        parts = path.split("/")
-        for i in range(1, len(parts)):
-            parent_dirs.add("/".join(parts[:i]))
-
-    return [
-        (path, size, etag)
-        for path, size, etag in all_items
-        if not (size == 0 and path in parent_dirs)
-    ]
-
-
-def _compute_part_size(file_size: int, chunk_size: int) -> int:
-    """Compute effective upload part size to stay under S3's 10,000-part limit.
-
-    Args:
-        file_size: Total file size in bytes.
-        chunk_size: Desired chunk size in bytes.
-
-    Returns:
-        Effective part size — at least *chunk_size* but never so small that
-        more than 9,900 parts would be needed (safety margin below 10,000).
-    """
-    return max(chunk_size, math.ceil(file_size / 9900))
 
 
 async def _finalize_upload_integrity(
@@ -1043,198 +422,6 @@ async def _finalize_upload_integrity(
 
     if digest is not None and integrity.sidecar_writes_enabled(write_sidecar):
         await integrity.write_digest_sidecar(store, key, digest)
-
-
-@contextlib.contextmanager
-def _open_chunks(
-    source: Path | bytes, size: int
-) -> Iterator[Iterator[bytes | memoryview]]:
-    """Yield an iterator over *source* in *size*-byte chunks.
-
-    A file is read a chunk at a time; an in-memory payload is sliced through a
-    ``memoryview``, so no chunk is copied.
-    """
-    if isinstance(source, Path):
-        with source.open("rb") as fh:
-            yield iter(lambda: fh.read(size), b"")
-    else:
-        view = memoryview(source)
-        yield (view[i : i + size] for i in range(0, len(view), size))
-
-
-async def _upload_once(
-    resolved: ObjectStore,
-    key: str,
-    source: Path | bytes,
-    *,
-    effective_chunk: int,
-    put_attributes: dict[str, str] | None,
-    compute_hash: bool,
-    started: float,
-    file_size: int,
-) -> tuple[hashlib._Hash | None, int]:
-    """Run one upload attempt; return ``(hasher, bytes_sent)``.
-
-    *source* (a file, or bytes held in memory) is read from the start every
-    call, so the hash and byte count belong to this attempt alone.
-    """
-    h = hashlib.sha256() if compute_hash else None
-    _progress_interval = _settings.progress_log_interval_seconds()
-    upload_max_concurrency = _settings.upload_max_concurrency()
-
-    last_progress = started
-    bytes_sent = 0
-    # The writer's parts upload inside obstore, where their completion is not
-    # observable, so the reservation covers the writer's whole life: up to
-    # max_concurrency parts in flight, the part being filled, and the chunk
-    # read here — or twice the file, when it fits in one buffer (FND-4082).
-    buffered_bytes = min(2 * file_size, effective_chunk * (upload_max_concurrency + 2))
-    async with transfer_budget().reserve(buffered_bytes):
-        async with obstore.open_writer_async(
-            resolved,
-            key,
-            buffer_size=effective_chunk,
-            max_concurrency=upload_max_concurrency,
-            attributes=put_attributes,
-        ) as writer:
-            with _open_chunks(source, effective_chunk) as chunks:
-                for chunk in chunks:
-                    if h is not None:
-                        h.update(chunk)
-                    await writer.write(chunk)
-                    bytes_sent += len(chunk)
-                    # One multipart part on its way to the store is one
-                    # observable unit (ADR-0018). Marking per part rather than
-                    # per file is what keeps a single multi-GB upload — the
-                    # common shape for a large connector's parquet output —
-                    # from looking like one long quiet window to the stall
-                    # watchdog. Unconditional, unlike the progress *log* below:
-                    # a mark is two stores under an uncontended lock, so it
-                    # needs no interval gate.
-                    current_progress_tracker().mark_progress("storage.upload_part")
-                    if _progress_interval > 0:
-                        now = time.monotonic()
-                        if now - last_progress >= _progress_interval:
-                            _log_transfer_progress(
-                                "upload",
-                                key,
-                                bytes_so_far=bytes_sent,
-                                elapsed_ms=(now - started) * 1000.0,
-                                total_bytes=file_size,
-                            )
-                            last_progress = now
-    return h, bytes_sent
-
-
-async def _stream_upload(
-    key: str,
-    source: Path | bytes,
-    resolved: ObjectStore,
-    put_attributes: dict[str, str] | None,
-    *,
-    file_size: int,
-    chunk_size: int | None,
-    compute_hash: bool,
-) -> tuple[str | None, int]:
-    """Stream *source* to *key*; return ``(digest, bytes_sent)``.
-
-    The transport shared by :func:`upload_file` (a file) and
-    :func:`upload_bytes` (bytes in memory): part sizing and the deployment
-    override, the transfer-budget reservation, per-part progress marks, the
-    gateway no-route retry, storage telemetry and error translation. The
-    integrity checks after it are the caller's.
-    """
-    part_size_bytes = _settings.upload_part_size_bytes()
-    part_size_overridden = _settings.upload_part_size_overridden()
-
-    # A deployment that sets the part size overrides the caller. The size that
-    # keeps a completion inside the destination's idle timeout depends on where
-    # the deployment writes; an app cannot know which tenant it lands on, so it
-    # must not be able to pin a value the operator then cannot correct.
-    if (
-        part_size_overridden
-        and chunk_size is not None
-        and chunk_size != part_size_bytes
-    ):
-        logger.debug(
-            "Using deployment part size %d instead of the requested %d for key '%s'",
-            part_size_bytes,
-            chunk_size,
-            key,
-        )
-    requested_chunk = (
-        part_size_bytes if (part_size_overridden or chunk_size is None) else chunk_size
-    )
-
-    effective_chunk = _compute_part_size(file_size, requested_chunk)
-
-    if file_size == 0:
-        logger.warning(
-            "Uploading zero-byte object to key '%s' — "
-            "some S3-style backends silently drop empty objects; "
-            "verify the object exists after upload if your store requires it.",
-            key,
-        )
-
-    # Each attempt re-reads the file from the start, so the hash, byte count and
-    # clock restart with it; only the gateway's transient no-route 404 retries.
-    started = time.monotonic()
-
-    async def _attempt() -> tuple[hashlib._Hash | None, int]:
-        nonlocal started
-        started = time.monotonic()
-        return await _upload_once(
-            resolved,
-            key,
-            source,
-            effective_chunk=effective_chunk,
-            put_attributes=put_attributes,
-            compute_hash=compute_hash,
-            started=started,
-            file_size=file_size,
-        )
-
-    try:
-        h, bytes_sent = await _past_gateway_no_route("upload", key, _attempt)
-    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-    except BaseException as exc:
-        # BaseException is the umbrella for Exception and its siblings
-        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
-        # ensures cancellation mid-writer-close is logged rather than silently
-        # discarding the buffer and leaving no object in the store. A retried
-        # gateway 404 never reaches here: the upload has not failed yet.
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
-            redact_secrets,
-        )
-
-        _log_storage_event(
-            logging.WARNING,
-            "upload",
-            key,
-            outcome="failure",
-            elapsed_ms=elapsed_ms,
-            size_bytes=file_size,
-            error_class=_exc_class_name(exc),
-            error_message=redact_secrets(str(exc)),
-        )
-        if isinstance(exc, Exception):
-            raise _storage_error_for(
-                exc, key, f"Failed to upload file to key '{key}'", resolved
-            ) from exc
-        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
-
-    elapsed_ms = (time.monotonic() - started) * 1000.0
-    _log_storage_event(
-        logging.DEBUG,
-        "upload",
-        key,
-        outcome="success",
-        elapsed_ms=elapsed_ms,
-        size_bytes=bytes_sent,
-    )
-    digest = h.hexdigest() if h is not None else None
-    return digest, bytes_sent
 
 
 async def upload_file(
@@ -1465,145 +652,17 @@ async def download_file(
     h = hashlib.sha256() if (compute_hash or verifying) else None
     started = time.monotonic()
 
-    try:
-        result = await _past_gateway_no_route(
-            "download", key, lambda: obstore.get_async(resolved, key)
-        )
-    # conformance: ignore[E004] download error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-    except Exception as exc:
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        if _is_not_found(exc):
-            _log_storage_event(
-                logging.WARNING,
-                "download",
-                key,
-                outcome="failure",
-                elapsed_ms=elapsed_ms,
-                error_class="StorageNotFoundError",
-            )
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                StorageNotFoundError,
-            )
+    result = await _open_download(resolved, key, started)
 
-            raise StorageNotFoundError(
-                f"Key not found in store: {key}", key=key
-            ) from exc
-        _log_storage_event(
-            logging.WARNING,
-            "download",
-            key,
-            outcome="failure",
-            elapsed_ms=elapsed_ms,
-            error_class=_exc_class_name(exc),
-        )
-        raise _storage_error_for(
-            exc, key, f"Failed to download key '{key}'", resolved
-        ) from exc
-
-    bytes_written = 0
-    tmp_name: str | None = None
-    published = False
-    try:
-        try:
-            # A full volume is its own failure, not a generic storage one: it
-            # names the volume to resize, where StorageError reads as the store.
-            # The declared size is known before the first byte arrives, so a
-            # volume that plainly cannot hold the object fails here, in seconds,
-            # and the message can say what was needed.
-            declared = result.meta["size"]
-            ensure_free_space(path, declared, operation="download")
-            with disk_full_guard(path, operation="download", required_bytes=declared):
-                # Inside the guard: a missing parent needs room for its own
-                # directory entry, and a full volume there is the same failure.
-                path.parent.mkdir(parents=True, exist_ok=True)
-                staging_dir = path.parent / PARTIAL_DIRNAME
-                # mode hardens only the first creation (ignored when the directory
-                # exists) — it keeps a staging dir under a shared temp root private.
-                os.makedirs(staging_dir, mode=0o700, exist_ok=True)
-                fd, tmp_name = tempfile.mkstemp(
-                    dir=str(staging_dir), prefix=path.name + "."
-                )
-                _progress_interval = _settings.progress_log_interval_seconds()
-
-                last_progress = started
-                # The stream holds up to one min_chunk_size buffer on the Rust
-                # side and its copy as Python bytes; the budget bounds that
-                # across every concurrent transfer (FND-4082).
-                stream_bytes = 2 * min(declared, min_chunk_size)
-                with os.fdopen(fd, "wb") as fh:
-                    async with transfer_budget().reserve(stream_bytes):
-                        async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                            raw = bytes(chunk)
-                            fh.write(raw)
-                            bytes_written += len(raw)
-                            if h is not None:
-                                h.update(raw)
-                            # One streamed chunk landed on disk — see the
-                            # matching mark in upload_file for why this is per
-                            # chunk and ungated.
-                            current_progress_tracker().mark_progress(
-                                "storage.download_chunk"
-                            )
-                            if _progress_interval > 0:
-                                now = time.monotonic()
-                                if now - last_progress >= _progress_interval:
-                                    _log_transfer_progress(
-                                        "download",
-                                        key,
-                                        bytes_so_far=bytes_written,
-                                        elapsed_ms=(now - started) * 1000.0,
-                                    )
-                                    last_progress = now
-                    # fsync before the publish: on a delayed-allocation filesystem
-                    # ENOSPC can surface only at writeback, and without this a
-                    # short file would be published as complete (the FND-318
-                    # argument). Offloaded so a large flush does not hold the
-                    # event loop and the activity heartbeat with it.
-                    fh.flush()
-                    await run_in_thread(os.fsync, fh.fileno())
-                os.replace(tmp_name, path)
-                published = True
-        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and the exception is re-raised as StorageDiskFullError or StorageError
-        except Exception as exc:
-            elapsed_ms = (time.monotonic() - started) * 1000.0
-            _log_storage_event(
-                logging.WARNING,
-                "download",
-                key,
-                outcome="failure",
-                elapsed_ms=elapsed_ms,
-                size_bytes=bytes_written,
-                error_class=_exc_class_name(exc),
-            )
-            from application_sdk.errors import DiskFullError  # noqa: PLC0415
-
-            if isinstance(exc, DiskFullError):
-                # Also a StorageError, so `except StorageError:` and the
-                # fan-out unwrapping in `_run_bounded` still see it.
-                from application_sdk.storage.errors import (  # noqa: PLC0415
-                    StorageDiskFullError,
-                )
-
-                raise StorageDiskFullError.from_disk_full(exc, key=key) from (
-                    exc.__cause__ or exc
-                )
-            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-            raise StorageError(
-                f"Failed to write downloaded file to '{local_path}'", key=key, cause=exc
-            ) from exc
-    finally:
-        # BaseException-safe: a Temporal cancel or worker shutdown must not
-        # strand a uniquely-named staging file per attempt.
-        #
-        # Suppressed, like common.atomic._discard and the chunked path's
-        # _discard_transfer_state: `missing_ok` covers only FileNotFoundError,
-        # and a raise out of this `finally` would replace whatever the caller
-        # was about to receive — a completed download, or the typed
-        # StorageError above — with a bare OSError about the temp file.
-        if not published and tmp_name is not None:
-            with contextlib.suppress(OSError):
-                Path(tmp_name).unlink(missing_ok=True)
+    bytes_written = await _write_download(
+        result,
+        path,
+        key,
+        local_path,
+        digest=h,
+        min_chunk_size=min_chunk_size,
+        started=started,
+    )
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
@@ -2060,49 +1119,6 @@ async def exists(
 # the fleet's gateway logs show no more no-route 404s, remove these two and
 # point their callers back at ``exists`` / ``get_file_meta``. They are private
 # so that removal needs no deprecation cycle.
-
-
-async def _confirm_head_miss(
-    resolved: ObjectStore,
-    key: str,
-    listing_cache: dict[str, dict[str, tuple[int, str | None]]] | None,
-) -> tuple[int, str | None] | None:
-    """Look *key* up in a listing of its parent, after a HEAD said it is absent.
-
-    It lists the parent folder because a listing prefix matches whole path
-    segments: listing the key itself never returns the key. A root-level key
-    has no parent segment, so it lists the bucket root (no prefix) rather than
-    ``"/"``, which only means the root because obstore's path parsing happens
-    to strip it.
-
-    The listing is raw (``include_markers=True``). The question is whether an
-    object sits at exactly *key*, and the directory-marker filter answers a
-    different one: it drops a zero-byte key that has children, and decides
-    which zero-byte keys are phantom markers by HEADing them — the very HEAD a
-    gateway without routes answers with a bodiless 404. Filtered, a real
-    zero-byte ``dir`` beside ``dir/child`` would still read as absent.
-    """
-    parent = key.rpartition("/")[0]
-    list_prefix = parent + "/" if parent else ""
-    found = listing_cache.get(list_prefix) if listing_cache is not None else None
-    if found is None:
-        try:
-            items = await _list_items(
-                resolved, list_prefix or None, include_markers=True
-            )
-        # conformance: ignore[E004] always re-raises as StorageError; a listing that fails is not evidence the key is absent
-        except Exception as exc:
-            raise _storage_error_for(
-                exc,
-                list_prefix,
-                f"Failed to list prefix '{list_prefix}' to confirm a HEAD miss "
-                f"on key '{key}'",
-                resolved,
-            ) from exc
-        found = {path: (size, etag) for path, size, etag in items}
-        if listing_cache is not None:
-            listing_cache[list_prefix] = found
-    return found.get(key)
 
 
 async def _get_file_meta_confirmed(

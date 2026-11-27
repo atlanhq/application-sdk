@@ -222,7 +222,7 @@ class TestRunVerifiesTransformedDeclaration:
         }
         verify = AsyncMock()
 
-        with patch("application_sdk.templates.sql_app.logger") as logger:
+        with patch("application_sdk.templates._sql_app_finalize.logger") as logger:
             result = await _run(outputs, verify)
 
         assert result.transformed_files == []
@@ -476,7 +476,7 @@ class TestFinalizeExtractionVerifiesTheAddedEntity:
 
         with (
             patch.object(SqlApp, "verify_refs", new=verify),
-            patch("application_sdk.templates.sql_app.logger") as log,
+            patch("application_sdk.templates._sql_app_finalize.logger") as log,
         ):
             out = await app.finalize_extraction(base, [])
 
@@ -564,7 +564,7 @@ class TestVerificationIsSkippedWithoutAWorker:
 
         with (
             patch.object(SqlApp, "verify_refs", new=AsyncMock()),
-            patch("application_sdk.templates.sql_app.logger") as log,
+            patch("application_sdk.templates._sql_app_finalize.logger") as log,
         ):
             await app.finalize_extraction(base, [])
 

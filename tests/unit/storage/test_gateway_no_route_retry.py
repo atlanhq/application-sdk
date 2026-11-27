@@ -5,8 +5,9 @@ instance that joins the load balancer before its route table has synced
 answers every request with ``404 {"message":"no Route matched with those
 values"}`` for a few seconds. The Rust object_store client never retries a 404,
 so without a Python-level retry that single blip fails the request. The retry
-sits at the store seam (``ops._past_gateway_no_route``), so the upload, its
-post-upload HEAD, the integrity sidecar PUT, downloads and listings share it.
+sits at the store seam (``storage._ops_seam._past_gateway_no_route``), so the
+upload, its post-upload HEAD, the integrity sidecar PUT, downloads and listings
+share it.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE
-from application_sdk.storage import ops
+from application_sdk.storage import _ops_listing, _ops_seam, ops
 from application_sdk.storage.errors import StorageError, StorageGatewayNoRouteError
 from application_sdk.storage.ops import upload_file
 
@@ -76,7 +77,7 @@ def sleeps(monkeypatch) -> list[float]:
     async def fake_sleep(delay: float) -> None:
         recorded.append(delay)
 
-    monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake_sleep)
+    monkeypatch.setattr("application_sdk.storage._ops_seam._retry_sleep", fake_sleep)
     _pin_spread(monkeypatch, 1.0)
     return recorded
 
@@ -92,8 +93,8 @@ def _pin_spread(monkeypatch, factor: float) -> None:
 def storage_events():
     """Spy on ``_log_storage_event`` while still running it."""
     with patch(
-        "application_sdk.storage.ops._log_storage_event",
-        wraps=ops._log_storage_event,
+        "application_sdk.storage._ops_stream._log_storage_event",
+        wraps=_ops_seam._log_storage_event,
     ) as spy:
         yield spy
 
@@ -137,8 +138,8 @@ async def test_persistent_gateway_no_route_raises_after_retry_budget(
     ):
         await upload_file("k", src, MagicMock(), normalize=False, verify=False)
 
-    assert opener.call_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
-    assert sleeps == list(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS)
+    assert opener.call_count == len(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+    assert sleeps == list(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS)
     assert isinstance(excinfo.value, StorageGatewayNoRouteError)
     assert excinfo.value.http_status == 404
     assert len(_failure_events(storage_events)) == 1
@@ -151,7 +152,7 @@ async def test_retry_delays_are_scaled_by_jitter(src, monkeypatch, factor) -> No
     async def fake_sleep(delay: float) -> None:
         recorded.append(delay)
 
-    monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake_sleep)
+    monkeypatch.setattr("application_sdk.storage._ops_seam._retry_sleep", fake_sleep)
     _pin_spread(monkeypatch, factor)
     opener = _writer_factory([_GATEWAY_NO_ROUTE, _GATEWAY_NO_ROUTE, None])
     with patch("application_sdk.storage.ops.obstore.open_writer_async", opener):
@@ -207,8 +208,8 @@ async def test_request_path_raises_gateway_no_route_instead_of_absent(
     ):
         await call()
 
-    assert failing.await_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
-    assert sleeps == list(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS)
+    assert failing.await_count == len(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+    assert sleeps == list(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS)
 
 
 @_READ_PATHS
@@ -316,9 +317,9 @@ async def test_marker_head_probe_does_not_read_exhausted_gateway_404_as_absent(
     when obstore types it as not-found."""
     head = AsyncMock(side_effect=FileNotFoundError(_GATEWAY_NO_ROUTE))
     with patch("application_sdk.storage.ops.obstore.head_async", head):
-        assert await ops._head_not_found(MagicMock(), "p") is False
+        assert await _ops_listing._head_not_found(MagicMock(), "p") is False
 
-    assert head.await_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+    assert head.await_count == len(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
 
 
 async def test_marker_list_probe_rides_out_gateway_no_route(sleeps) -> None:
@@ -334,7 +335,7 @@ async def test_marker_list_probe_rides_out_gateway_no_route(sleeps) -> None:
         return _pages()
 
     with patch("application_sdk.storage.ops.obstore.list", _list):
-        assert await ops._lists_under_itself(MagicMock(), "p") is True
+        assert await _ops_listing._lists_under_itself(MagicMock(), "p") is True
 
     assert calls["n"] == 2
     assert sleeps == [5.0]

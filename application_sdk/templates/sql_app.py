@@ -77,76 +77,84 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import os
-import time
-from collections.abc import Callable, Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, Union
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
-import orjson
-from pydantic import ValidationError
 from temporalio import workflow as _temporal_workflow
 from typing_extensions import deprecated
 
+# The names marked ``noqa: F401`` below are used by the mixins this class now
+# inherits (FND-4267), not here, but were importable from this module in past
+# releases, so they stay bound (docs/standards/symbols.md).
 from application_sdk import _deprecation
-from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread
-from application_sdk._runtime.progress import current_progress_tracker
+from application_sdk._runtime.offload import raise_if_offload_abandoned, run_in_thread  # noqa: F401
+from application_sdk._runtime.progress import current_progress_tracker  # noqa: F401
 from application_sdk.app._app_config_validation import warn_config_problem
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.clients._sql_failure_classifier import (
-    SqlFailureKind,
-    classify_sql_failure,
-    exception_class_names,
+    SqlFailureKind,  # noqa: F401
+    classify_sql_failure,  # noqa: F401
+    exception_class_names,  # noqa: F401
     root_cause,
 )
-from application_sdk.common.asset_serialization import entity_bytes
-from application_sdk.common.asset_serialization import orjson_default as _orjson_default
+from application_sdk.common.asset_serialization import entity_bytes  # noqa: F401
+from application_sdk.common.asset_serialization import orjson_default as _orjson_default  # noqa: F401
 from application_sdk.common.entity_envelope import (
     DEFAULT_ENVELOPE,
     EntityDecorations,
     EntityEnvelopePolicy,
 )
-from application_sdk.common.last_sync import resolve_last_sync_details
+from application_sdk.common.last_sync import resolve_last_sync_details  # noqa: F401
 from application_sdk.common.sql_filters import (
-    normalize_filters,
-    safe_substitute_placeholders,
-    strip_sql_block_comments,
+    normalize_filters,  # noqa: F401
+    safe_substitute_placeholders,  # noqa: F401
+    strip_sql_block_comments,  # noqa: F401
 )
 from application_sdk.constants import TEMPORARY_PATH as _TEMPORARY_PATH
 from application_sdk.constants import _run_prefix
-from application_sdk.contracts.base import OutputStatus
-from application_sdk.contracts.storage import VerifyRefsInput
-from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.credentials import CredentialResolver
-from application_sdk.credentials.ref import CredentialRef, _guid_credential_ref
+from application_sdk.contracts.base import OutputStatus  # noqa: F401
+from application_sdk.contracts.storage import VerifyRefsInput  # noqa: F401
+from application_sdk.contracts.types import FileReference, StorageTier  # noqa: F401
+from application_sdk.credentials import CredentialResolver  # noqa: F401
+from application_sdk.credentials.ref import CredentialRef
 from application_sdk.errors import (
-    AppError,
-    redact_secrets,
-    safe_traceback,
+    AppError,  # noqa: F401
+    redact_secrets,  # noqa: F401
+    safe_traceback,  # noqa: F401
 )
 
 # ``AppTimeoutError`` is re-exported: importable from here before FND-4687 moved
 # the wire-envelope rebuild into ``errors.wire`` (Symbol Removal Check).
 from application_sdk.errors.leaves import AppTimeoutError as AppTimeoutError
 from application_sdk.errors.leaves import (
-    AuthError,
-    InternalError,
-    SourceUnavailableError,
+    AuthError,  # noqa: F401
+    InternalError,  # noqa: F401
+    SourceUnavailableError,  # noqa: F401
 )
 from application_sdk.errors.wire import (
-    FailureDetails,
-    degraded_failure_details,
-    error_from_failure_details,
-    redact_evidence_value,
-    redacted_validation_reason,
-    register_wire_leaf,
+    FailureDetails,  # noqa: F401
+    degraded_failure_details,  # noqa: F401
+    error_from_failure_details,  # noqa: F401
+    redact_evidence_value,  # noqa: F401
+    redacted_validation_reason,  # noqa: F401
+    register_wire_leaf,  # noqa: F401
 )
-from application_sdk.execution import build_output_path, get_object_store_prefix
-from application_sdk.infrastructure.context import get_infrastructure
+from application_sdk.execution import build_output_path, get_object_store_prefix  # noqa: F401
+from application_sdk.infrastructure.context import get_infrastructure  # noqa: F401
 from application_sdk.observability.logger_adaptor import get_logger
+
+# The prime task, the per-entity I/O and the run()-override helpers are
+# mixins (FND-4267); ``SqlApp`` inherits them, so every name is still
+# ``SqlApp.<name>``. ``_EXTRACT_BATCH_SIZE`` and ``_MapperFn`` are bound here
+# under the names this module has always had.
+from application_sdk.templates._sql_app_entity import (
+    _EXTRACT_BATCH_SIZE,  # noqa: F401 — importable from here in past releases
+    _MapperFn,
+)
+from application_sdk.templates._sql_app_finalize import _SqlFinalizeMixin
+from application_sdk.templates._sql_app_prime import _SqlPrimeAuthMixin
 from application_sdk.templates._template_errors import (
     SqlTreeFilterInputUnsupportedError,
 )
@@ -154,7 +162,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
     ExtractionTaskOutput,
-    PrimeAuthOutput,
+    PrimeAuthOutput,  # noqa: F401
     TransformInput,
     TransformOutput,
     TreeSelectionExtractionInput,
@@ -163,8 +171,8 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionOutput as _ExtractionOutput,
 )
 from application_sdk.templates.sql_app_errors import (
-    SqlProbeTimeoutError,
-    TransformedFileMissingError,
+    SqlProbeTimeoutError,  # noqa: F401
+    TransformedFileMissingError,  # noqa: F401
 )
 
 if TYPE_CHECKING:
@@ -182,33 +190,6 @@ __all__ = [
 logger = get_logger(__name__)
 
 _ET = TypeVar("_ET", bound=ExtractionTaskInput)
-
-#: Mapper-function signature: takes a raw record dict + connection
-#: qualified name, returns a pyatlan_v9 Asset (preferred) or a plain dict
-#: (legacy / connector-specific shapes the v3 publisher accepts).
-_MapperFn = Callable[[dict[str, Any], str], Union["Asset", dict[str, Any]]]
-
-#: SQL row batch size used by ``extract_entity`` when streaming results
-#: through ``client.run_query()``. Caps the in-flight set at
-#: ``_EXTRACT_BATCH_SIZE * row_size`` regardless of total result size.
-_EXTRACT_BATCH_SIZE: int = 10_000
-
-# ``_classify_probe_strings`` emits this leaf; registering it lets the verdict
-# rebuild as itself on the far side of the activity boundary, where only the
-# ``FailureDetails`` envelope survives. The generic leaves it can also emit
-# (``AuthError``, ``SourceUnavailableError``, ``InternalError``) are registered
-# by ``errors.wire``. A verdict recorded before FND-4298 carries
-# ``TIMEOUT_SQL_PROBE``, which has no leaf any more; it rebuilds on the generic
-# envelope-routed leaf with the category the envelope recorded.
-register_wire_leaf(SqlProbeTimeoutError)
-
-# Field names every ``AppError`` declares on the base dataclass — the typed-error
-# redactor skips these (they are handled individually) and redacts only the
-# per-leaf custom fields, mirroring what ``to_failure_details()`` treats as
-# evidence.
-_BASE_ERROR_FIELD_NAMES: frozenset[str] = frozenset(
-    f.name for f in dataclasses.fields(AppError)
-)
 
 # Re-exported under its historical private name; the one implementation lives
 # with the shared SQL failure classifier.
@@ -256,7 +237,7 @@ def _check_sql_client_class(cls: type[SqlApp]) -> None:
     warn_config_problem(cls, "sql_client_class", client_class, problem)
 
 
-class SqlApp(App):
+class SqlApp(_SqlPrimeAuthMixin, _SqlFinalizeMixin, App):
     """Consolidated SQL metadata extraction App.
 
     Subclass and set:
@@ -429,379 +410,9 @@ class SqlApp(App):
     # @task: SQL auth cache pre-warm — Argo parity (BLDX-1295)
     # =====================================================================
 
-    # retry_max_attempts=1 is load-bearing: the body's try/except only
-    # catches Python exceptions, NOT Temporal-level failures (start-to-close
-    # timeout, worker eviction, heartbeat timeout, OOM). Any of those
-    # triggers activity-level retry, which re-runs
-    # ``_init_sql_client → load → auth handshake`` — re-stacking
-    # ``failed_login_attempts`` on the source, i.e. the exact lockout-cycle
-    # this task exists to prevent. ``@task()`` defaults to
-    # ``retry_max_attempts=3`` (application_sdk/app/task.py), so we MUST
-    # override explicitly. See application-sdk#1835 mothership review
-    # comment-3287629972.
-    # The budget is 120s because the activity has to cover credential
-    # resolution (which can be slow on some deployments) as well as the probe,
-    # and retry_max_attempts=1 makes a timeout terminal for the workflow attempt.
-    @task(timeout_seconds=120, retry_max_attempts=1)
-    async def prime_sql_auth(self, input: ExtractionTaskInput) -> PrimeAuthOutput:
-        """Single sequential probe that primes the SQL server's auth cache
-        before the parallel ``extract_entity`` burst.
-
-        Background — why this exists (BLDX-1295):
-            v3's parallel-activity execution model fans out
-            ``extract_databases / extract_schemas / extract_tables /
-            extract_columns`` (and on subclasses, ``extract_procedures``)
-            as concurrent Temporal activities. Each one creates its own
-            ``SQLClient`` instance and opens its own connections to the
-            source — roughly simultaneously when the workflow first
-            starts.
-
-            MySQL 8's default auth plugin ``caching_sha2_password`` has a
-            server-side cache keyed by ``(user, password_hash)``. The
-            *first* auth for a given user is cache-cold and requires
-            either (a) a TLS-encrypted connection or (b) an RSA key
-            exchange between client and server. Without either — which
-            is the default for ``aiomysql`` against a typical customer
-            MySQL — a cache-cold auth attempt fails with
-            ``Access denied (1045)``. When N parallel activities all hit
-            cold-cache simultaneously, each independently tries full
-            auth, each fails, and those failures stack on the server's
-            ``failed_login_attempts`` counter — tripping the
-            ``FAILED_LOGIN_ATTEMPTS`` lockout policy if the customer has
-            one set (most do). The lockout then poisons every subsequent
-            scheduled run until it auto-expires, at which point a manual
-            "Test Authentication" works briefly, the next cron burst
-            re-trips it, repeat.
-
-            The Argo-era extract ran phases serially — only one
-            connection at a time — so the cache had time to prime
-            between phases and the race never occurred. v3's parallel
-            model exposes it.
-
-            This task is the Argo-parity fix: ``run()`` awaits it
-            *once*, sequentially, before the ``asyncio.gather(...)`` of
-            extract activities. It opens one connection, runs
-            ``SELECT 1``, closes. That populates MySQL's
-            ``caching_sha2_password`` cache; subsequent parallel
-            connections take the fast path and never need full auth.
-
-            For SQL servers without this auth-cache concept (Postgres,
-            MSSQL, Snowflake on most setups), this is harmless overhead
-            — a single ~100ms probe round-trip per workflow run.
-
-        Failure semantics (return-not-raise + zero Temporal retries):
-            If the probe fails (auth rejected, network unreachable,
-            wrong host, etc.) this task catches the exception, classifies
-            it *here* — while the live exception and its ``__cause__``
-            chain are still available — and returns the verdict as
-            ``failure`` (plus ``success=False`` and the root cause's
-            ``error_type`` / ``error_message``) on the returned
-            ``PrimeAuthOutput``. ``run()`` rebuilds that typed error
-            (``AuthError``, ``SqlProbeTimeoutError`` or
-            ``SourceUnavailableError``) and raises it.
-
-            Classification has to happen here, not in ``run()``: only two
-            strings cross the activity boundary, and
-            ``BaseSQLClient.get_results`` rewraps every driver exception as
-            ``SqlPandasResultError`` with one fixed message, so those two
-            strings are identical for every failure mode (CNCT-197).
-
-            Why return failure instead of raising and letting Temporal
-            retry: the failure mode this task was added to prevent is
-            cache-cold auth rejection. Retrying it via Temporal's
-            activity-level retry stacks the source's
-            ``failed_login_attempts`` counter on each attempt — i.e. it
-            accelerates the very lockout cycle the prime exists to
-            avoid. The ``retry_max_attempts=1`` override on the ``@task``
-            decorator above is load-bearing: the body try/except only
-            catches Python exceptions, not Temporal-level failures
-            (start-to-close timeout, worker eviction, heartbeat timeout,
-            OOM) — those would re-run the activity even with this body
-            structure, re-stacking the counter. Workflow-level retry
-            (re-running the whole extraction after operator action)
-            remains available and is the correct retry layer for
-            transient blips.
-        """
-        start = time.perf_counter()
-        try:
-            client = await self._init_sql_client(input)
-            try:
-                # ``SELECT 1`` is a no-op for query semantics; what we
-                # actually care about is that the client opened a
-                # connection + completed the auth handshake. The cache
-                # is populated as a side effect of that handshake.
-                await client.get_results("SELECT 1")
-            finally:
-                await client.close()
-        except Exception as exc:  # noqa: BLE001 — exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
-            duration_ms = (time.perf_counter() - start) * 1000.0
-            # Report the ROOT cause, not whatever wrapper reached this
-            # clause. ``BaseSQLClient.get_results`` rewraps every driver
-            # exception as ``SqlPandasResultError`` with one fixed message, so
-            # the wrapper's class name and message are identical for a DNS
-            # failure, a TLS error and a credential rejection — nothing
-            # downstream can tell them apart. See CNCT-197.
-            root = _root_cause(exc)
-            # Redact here, not downstream: the root driver message can embed a
-            # connection string, and this value lands in the activity result,
-            # the classified error's evidence, and the logs.
-            error_message = redact_secrets(str(root))
-            if len(error_message) > 500:
-                error_message = error_message[:500] + "…"
-            classified = self._classify_probe_exception(exc)
-            # Serialising the verdict must never turn a probe failure into a
-            # crashed activity — a crash is retried, and retrying this task is
-            # what stacks failed_login_attempts on the source. A
-            # connector-defined AppError can carry an evidence key the
-            # FailureDetails denylist rejects, so degrade the evidence while
-            # keeping the typed verdict: dropping to the
-            # error_type / error_message path instead would re-derive routing
-            # from a class name no string hint matches, inverting the
-            # connector's explicit verdict (CNCT-197 all over again).
-            failure: FailureDetails | None
-            try:
-                failure = classified.to_failure_details()
-            except ValidationError as verdict_error:
-                try:
-                    failure = degraded_failure_details(classified)
-                    outcome = "kept the typed verdict with degraded evidence"
-                except ValidationError as degrade_error:
-                    failure = None
-                    outcome = (
-                        "falling back to error_type/error_message classification "
-                        "(degraded verdict also refused: %s)"
-                        % redacted_validation_reason(degrade_error)
-                    )
-                logger.warning(
-                    "Could not serialise the prime failure verdict (%s) as-is; %s. %s",
-                    type(classified).__name__,
-                    outcome,
-                    redacted_validation_reason(verdict_error),
-                )
-            # We want the traceback frames in worker logs — the long-tail
-            # (TLS negotiation, driver bugs, version skew) is only diagnosable
-            # from the original frames. But exc_info=True would render the
-            # SQLAlchemy cause's message verbatim, and that embeds the full
-            # connection string incl. password. safe_traceback preserves the
-            # frames and strips credentials before logging.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; safe_traceback redacts secrets from the frames
-                "SQL auth cache prime FAILED after %.1fms (%s → %s) — short-circuiting "
-                "before parallel extract burst to avoid stacking failed_login_attempts "
-                "on the source.\n%s",
-                duration_ms,
-                type(root).__name__,
-                classified.qualified_code,
-                safe_traceback(exc),
-            )
-            return PrimeAuthOutput(
-                status=OutputStatus.FAILURE,
-                duration_ms=duration_ms,
-                success=False,
-                failure=failure,
-                error_type=type(root).__name__,
-                error_message=error_message,
-            )
-        duration_ms = (time.perf_counter() - start) * 1000.0
-        logger.info(
-            "SQL auth cache primed in %.1fms before parallel extract fan-out",
-            duration_ms,
-        )
-        return PrimeAuthOutput(duration_ms=duration_ms, success=True)
-
     # =====================================================================
     # prime_sql_auth failure classifier (BLDX-1295)
     # =====================================================================
-
-    @staticmethod
-    def _classify_prime_failure(prime_result: PrimeAuthOutput) -> Exception:
-        """Rebuild the typed error for a failed ``PrimeAuthOutput``.
-
-        ``prime_sql_auth`` already classified the failure against the live
-        exception, so the work here is reconstruction, not classification —
-        one classifier, one implementation, no chance of the two diverging.
-
-        The string-matching fallback stays for outputs that carry no
-        ``failure``: activity results produced by an older SDK and replayed
-        from Temporal history, and connectors that build a
-        ``PrimeAuthOutput`` by hand.
-        """
-        if prime_result.failure is not None:
-            return error_from_failure_details(prime_result.failure)
-        # Defence-in-depth: the fallback trusts a hand-built or pre-redaction-era
-        # replayed output whose producer may not have redacted. Re-redact at this
-        # trust boundary so a secret in error_message never reaches the verdict.
-        return SqlApp._classify_probe_strings(
-            prime_result.error_type or "",
-            redact_secrets(prime_result.error_message or ""),
-        )
-
-    @staticmethod
-    def _classify_probe_exception(exc: BaseException) -> AppError:
-        """Classify a live probe exception, cause chain included.
-
-        Classifying here rather than at the activity boundary is the whole
-        point: ``BaseSQLClient.get_results`` rewraps every driver exception as
-        ``SqlPandasResultError``, so by the time only a class name and a
-        message survive there is nothing left to discriminate on (CNCT-197).
-
-        An already-typed root cause keeps its verdict — if a connector took
-        the trouble to raise a typed ``AppError``, that beats anything string
-        matching can infer. But the typed path reaches ``to_failure_details()``
-        without the redaction the plain-driver path gets, so a connection
-        string in the message or a custom evidence field would serialise onto
-        the wire verbatim. Redact before returning, as the sibling string path
-        already does.
-        """
-        root = _root_cause(exc)
-        if isinstance(root, AppError):
-            return SqlApp._redact_typed_error(root)
-        # Classify on the base class names too, as ``load()`` does: a driver's
-        # per-SQLSTATE subclass is named for the code, not the failure kind.
-        return SqlApp._classify_probe_strings(
-            type(root).__name__,
-            redact_secrets(str(root)),
-            cause=root,
-            class_names=exception_class_names(type(root)),
-        )
-
-    @staticmethod
-    def _redact_typed_error(err: AppError) -> AppError:
-        """Redact everything on a typed error that serialises onto the wire.
-
-        Only ``cause_repr`` is sanitised by ``to_failure_details()``; the
-        ``message``, ``suggested_action`` and per-leaf evidence fields are
-        not. Redact them in place so the wire envelope (and the Temporal
-        payload) never carries a secret the producer embedded in any field —
-        a base wire field or a nested evidence structure alike.
-        """
-        err.message = redact_secrets(err.message)
-        if err.suggested_action is not None:
-            err.suggested_action = redact_secrets(err.suggested_action)
-        for f in dataclasses.fields(err):
-            if f.name in _BASE_ERROR_FIELD_NAMES:
-                continue
-            setattr(err, f.name, redact_evidence_value(getattr(err, f.name)))
-        return err
-
-    @staticmethod
-    def _classify_probe_strings(
-        error_type: str,
-        error_message: str,
-        cause: BaseException | None = None,
-        *,
-        class_names: str | None = None,
-    ) -> AppError:
-        """Map a probe failure's class name and message to a typed error.
-
-        Painting every probe failure as ``AuthError`` would mis-direct
-        on-call: a DBA who follows the lockout-specific
-        ``suggested_action`` for a DNS misconfiguration wastes time on
-        a non-existent account-lockout. We discriminate based on
-        ``error_type`` / ``error_message`` and return:
-
-        - ``AuthError`` for actual credential rejections
-          (``Access denied``, MySQL code 1045,
-          ``AuthenticationError`` class names).
-        - ``SqlProbeTimeoutError`` for probe timeouts (``TimeoutError`` /
-          ``asyncio.TimeoutError`` / message contains ``timed out``, and the
-          ODBC login-timeout shape ``HYT00`` / ``login timeout`` /
-          ``timeout expired``). A ``SourceUnavailableError`` (USER): the
-          only timeouts that can reach here are the driver's and the
-          socket's, so the clock always ran out waiting for the customer's
-          source.
-        - ``SourceUnavailableError`` for network / DNS / TLS /
-          connection-refused failures — the customer-owned source is
-          presumed reachable but didn't respond cleanly, so the failure
-          routes to the connector owner (USER), not Atlan infra ops.
-        - ``InternalError`` as the last-resort fallback so we never
-          return ``None`` and never accidentally swallow an unknown
-          driver exception class.
-
-        ``error_message`` must already be secret-redacted — it is copied
-        verbatim into the returned error's evidence fields.
-
-        ``class_names`` is what the classifier matches when the live exception
-        is at hand (its class and non-builtin base names); ``error_type`` stays
-        the single name shown in messages. Without it, ``error_type`` is matched.
-        """
-        kind = classify_sql_failure(class_names or error_type, error_message)
-        if kind is SqlFailureKind.TIMEOUT:
-            return SqlProbeTimeoutError(
-                message=(
-                    "SQL auth-cache prime probe timed out before parallel "
-                    f"extract burst ({error_type}): {error_message}"
-                ),
-                cause=cause,
-                suggested_action=(
-                    "Check network reachability and source health: the probe "
-                    "did not get an auth response within the 120s task "
-                    "deadline. Verify the source listener is up and the "
-                    "worker → source network path is healthy before "
-                    "retrying the workflow."
-                ),
-            )
-
-        if kind is SqlFailureKind.AUTH:
-            return AuthError(
-                message=(
-                    "SQL auth-cache prime rejected by source before parallel "
-                    f"extract burst ({error_type}). Skipping extract fan-out "
-                    "to avoid stacking failed_login_attempts on the source's "
-                    "lockout counter."
-                ),
-                auth_method="sql_client",
-                cause=cause,
-                failure_reason=error_message,
-                suggested_action=(
-                    "Verify the SQL connection credentials. If the source is "
-                    "MySQL 8 and credentials are correct, also confirm the "
-                    "user is not currently locked out by "
-                    "FAILED_LOGIN_ATTEMPTS policy — wait for auto-unlock or "
-                    "have a DBA run ALTER USER … ACCOUNT UNLOCK before "
-                    "retrying the workflow."
-                ),
-            )
-
-        # The customer owns the source system, and the actionable guidance is
-        # "fix the network path, the source itself may be fine."
-        if kind is SqlFailureKind.SOURCE_UNAVAILABLE:
-            return SourceUnavailableError(
-                message=(
-                    "SQL auth-cache prime could not reach the source before "
-                    f"parallel extract burst ({error_type})."
-                ),
-                source_type="sql",
-                cause=cause,
-                network_error=error_message,
-                suggested_action=(
-                    "Check DNS resolution, NAT/firewall rules, TLS "
-                    "configuration, and that the source listener is "
-                    "accepting connections from the worker network. The "
-                    "credentials path was not exercised, so this is not a "
-                    "lockout situation — do not run ACCOUNT UNLOCK."
-                ),
-            )
-
-        # Last-resort: never swallow an unknown driver error class.
-        # ``classification_pending=True`` flags this to wire/log
-        # consumers that the on-call should help refine the classifier
-        # rather than treat the category at face value.
-        return InternalError(
-            message=(
-                "SQL auth-cache prime failed before parallel extract burst "
-                f"with an unclassified error ({error_type}): {error_message}"
-            ),
-            component="sql_app.prime_sql_auth",
-            cause=cause,
-            classification_pending=True,
-            suggested_action=(
-                "Inspect the worker logs (the prime task logs the original "
-                "traceback, with secrets redacted, via safe_traceback). The "
-                "error type was not recognised as auth / timeout / network — "
-                "please file a ticket so the classifier in "
-                "SqlApp._classify_probe_strings can be extended."
-            ),
-        )
 
     # =====================================================================
     # @task: Metadata extraction — SQL stream → raw JSONL
@@ -1220,331 +831,6 @@ class SqlApp(App):
     # Public helpers for ``run()`` overrides
     # =====================================================================
 
-    async def finalize_extraction(
-        self,
-        base: _ExtractionOutput,
-        extra: Sequence[TransformOutput] = (),
-    ) -> _ExtractionOutput:
-        """Fold extra transforms into ``base``'s declaration and verify it all.
-
-        Call this from a ``run()`` override that adds entities the default
-        ``run()`` does not drive — procedures, say. It is the whole tail of
-        such an override: concatenate, assert, return.
-
-        **Why a helper and not a documented recipe.** ``super().run()`` calls
-        ``App.verify_refs`` on the four refs it drove and then returns, so an
-        override that concatenates a fifth ref and returns a ``model_copy``
-        ships it unverified while looking, at the call site, exactly like it
-        verified everything — the same silent shortfall FND-1790 is about, one
-        layer up. Documenting the extra ``verify_refs`` call would leave a step
-        that is invisible when omitted; this method removes the chance to omit
-        it.
-
-        **Using ``App.upload_refs`` is not a substitute.** It gives partial
-        cover — it fails if a declared ref cannot be materialised, and it
-        verifies the copies it delivered — but it checks the *destination*
-        after the fact. It does not assert the declaration against the
-        deployment store before delivery starts, and it does not check
-        containment in ``transformed_data_prefix``. So a missing ref surfaces
-        as a materialisation failure part-way through a delivery rather than as
-        a ``StorageHandoffIncompleteError`` naming the key, and a ref that
-        landed outside the prefix is not caught at all. Call this first and
-        hand ``upload_refs`` the finalised declaration.
-
-        Verifies the **whole** declaration, not just *extra*. The four default
-        refs were already checked inside ``super().run()``, so those HEADs are
-        redundant — but the thing being handed downstream is the concatenated
-        list, and asserting exactly what is handed on is cheaper to reason
-        about than a split proof, at four metadata lookups.
-
-        **Verification is skipped when there is no app context**, i.e. when
-        ``run()`` was called directly rather than by a worker. Without a worker
-        there is no activity interceptor, so nothing was persisted and there is
-        nothing in the store to check. This is what lets a connector's existing
-        ``run()`` unit tests keep passing unchanged: the declaration is still
-        assembled and returned, only the store assertion is skipped. It logs a
-        warning, so if it ever happens under a worker it is visible.
-
-        Args:
-            base: The ``ExtractionOutput`` returned by ``super().run()``.
-            extra: ``TransformOutput`` values for the entities this override
-                drove itself. Empty is valid and means "verify what base
-                declared", which is a no-op assertion rather than an error.
-
-        Returns:
-            ``base`` with ``transformed_files`` extended by *extra*'s refs.
-
-        Raises:
-            TransformedFileMissingError: If a result in *extra* reports records
-                but carries no ``transformed_file``.
-            StorageHandoffIncompleteError: If any declared ref is missing from
-                the store or resolves outside ``base.transformed_data_prefix``.
-        """
-        declaration = [
-            *base.transformed_files,
-            *self.collect_transformed_files(extra),
-        ]
-
-        # No app context means ``run()`` was invoked directly rather than by a
-        # worker: the workflow wrapper binds ``_context`` before ``run()`` and
-        # clears it after, so its absence is structural, not incidental.
-        #
-        # Skipping the check there is correct rather than a concession. Without
-        # a worker there is no activity interceptor, so no ``transformed_file``
-        # ref was ever persisted — there is nothing in the object store to
-        # verify, and asserting against a store nothing wrote to would fail on
-        # the absence of data that was never supposed to be there yet.
-        #
-        # It is also what keeps this change backwards compatible. Every SQL
-        # connector has ``run()`` unit tests that drive the real ``run()`` with
-        # the tasks mocked out and no infrastructure bound; before FND-1790
-        # ``run()`` performed no I/O, so those tests needed none. Failing them
-        # would force a test-only edit on every connector in the fleet to buy
-        # an assertion that cannot mean anything in that context.
-        #
-        # The declaration is still assembled and still returned on
-        # ``transformed_files``, so a connector's own ``upload_refs`` /
-        # ``verify_refs`` call is unaffected — only the pre-delivery assertion
-        # is skipped, and only where nothing was delivered.
-        if self._context is None:
-            logger.warning(
-                "Skipping transformed-declaration verification: no app context, "
-                "so run() is not executing under a worker and nothing was "
-                "persisted to verify (%d ref(s) declared)",
-                len(declaration),
-            )
-            return base.model_copy(update={"transformed_files": declaration})
-
-        if declaration:
-            await self.verify_refs(
-                VerifyRefsInput(
-                    # auto_materialize=False: this is a HEAD per ref, not a
-                    # reason to pull every transformed file onto this pod.
-                    refs=[
-                        ref.model_copy(update={"auto_materialize": False})
-                        for ref in declaration
-                    ],
-                    prefix=base.transformed_data_prefix,
-                )
-            )
-        else:
-            logger.warning(
-                "No entity produced transformed output; transformed_data_prefix "
-                "%s names an empty tree",
-                base.transformed_data_prefix,
-            )
-        return base.model_copy(update={"transformed_files": declaration})
-
-    @staticmethod
-    def collect_transformed_files(
-        results: Sequence[TransformOutput],
-    ) -> list[FileReference]:
-        """Return the ``transformed_file`` refs a set of transforms declared.
-
-        This is the producer's declaration of what the transform step wrote —
-        the expected set ``transformed_data_prefix`` gets checked against
-        before it is handed downstream (FND-1790).
-
-        **Public because a ``run()`` override needs it.** The class docstring
-        already directs connectors that need their own sequencing to override
-        ``run()`` and drive ``extract_*`` / ``transform_*`` themselves, and
-        those methods are public for exactly that. A connector adding an entity
-        the default ``run()`` does not know about — procedures, say — holds a
-        ``TransformOutput`` that never passed through ``run()``, so its ref is
-        absent from :attr:`ExtractionOutput.transformed_files`. Its refs have
-        to be folded into that list, or every asset of that entity is dropped
-        from the upload silently, because the ref-based path has no directory
-        listing to fall back on.
-
-        **Most overrides should call :meth:`finalize_extraction` instead**,
-        which uses this and then verifies the combined declaration.
-        Concatenating this return value by hand and returning it leaves the
-        extra entity unasserted: ``super().run()`` verified the four refs it
-        drove and then returned, so nothing checks the fifth. Reach for this
-        method directly only when you are assembling a declaration you will
-        verify yourself — ``App.upload_refs`` verifies its own delivery, so
-        handing it the concatenated list also covers you.
-
-        A transform that mapped zero records legitimately contributes no ref;
-        that is the "genuine zero-row entity" signal publish already relies on
-        and it is skipped silently. A transform that mapped records and still
-        returned no ref is a hole, not a quiet day: its assets exist but
-        nothing can point at them, so they will be missing from the tree
-        publish walks and archived as removed-from-source. That case raises.
-
-        Args:
-            results: The ``TransformOutput`` values returned by the
-                ``transform_*`` tasks, in any order.
-
-        Returns:
-            One ``FileReference`` per entity that produced output.
-
-        Raises:
-            TransformedFileMissingError: If any result reports records but
-                carries no ``transformed_file``.
-        """
-        refs: list[FileReference] = []
-        for result in results:
-            if result.transformed_file is not None:
-                refs.append(result.transformed_file)
-            elif result.total_record_count > 0:
-                raise TransformedFileMissingError(
-                    message=(
-                        f"transform_{result.typename or '<unknown>'} reported "
-                        f"{result.total_record_count} records but returned no "
-                        "transformed_file reference"
-                    ),
-                    typename=result.typename or None,
-                    record_count=result.total_record_count,
-                    expectation="a FileReference for the transformed output",
-                    observed="transformed_file=None",
-                )
-        return refs
-
-    @staticmethod
-    def build_transform_input(
-        base: ExtractionTaskInput,
-        raw_file: FileReference | None,
-    ) -> TransformInput:
-        """Build a ``TransformInput`` from ``base`` carrying ``raw_file``.
-
-        Part of the supported ``run()``-override surface (see the class
-        docstring). ``transform_*`` is public, and this is the only thing that
-        builds its input correctly — an override that adds an entity the
-        default ``run()`` does not drive needs both.
-
-        Called by ``run()`` to thread the durable ``FileReference``
-        returned by each ``extract_*`` activity (as
-        ``ExtractionTaskOutput.raw_file``) into the matching
-        ``transform_*`` activity's input. The resulting ``TransformInput``
-        inherits every field from ``base`` plus the new ``raw_file``
-        ref; the activity interceptor will materialise the ref on
-        whichever worker pod ends up running the transform, with
-        SHA-256 sidecar verification — see ``storage.file_ref_sync``.
-        """
-        return TransformInput(
-            **base.model_dump(exclude_none=False),
-            raw_file=raw_file,
-        )
-
-    @staticmethod
-    def resolve_output_path(input: ExtractionTaskInput) -> str:
-        """Return the local directory this task writes under.
-
-        ``input.output_path`` when the caller set one; otherwise the run's
-        path under ``TEMPORARY_PATH``, from ``build_output_path()``, which
-        reads the activity context — so call this inside a task, not in
-        ``run()``.
-
-        Public because connectors that write their own files beside the
-        template's (a custom extract, a miner) need the same directory
-        :meth:`extract_entity` and :meth:`transform_entity` use, or their
-        output lands outside the tree the upload walks.
-        """
-        if not input.output_path:
-            resolved = build_output_path()
-            logger.info("Auto-resolved output_path: %s", resolved)
-            return os.path.join(_TEMPORARY_PATH, resolved)
-        return input.output_path
-
-    async def _init_sql_client(self, input: ExtractionTaskInput) -> BaseSQLClient:
-        """Initialize and return a SQL client from credentials.
-
-        ``ExtractionTaskInput`` only carries ``credential_ref`` / ``credential_guid``
-        (no ``agent_json`` / ``extraction_method``). The SDR/direct routing
-        decision happens upstream in ``_resolve_credential_ref(ExtractionInput)``
-        which populates ``credential_ref`` on the task input via
-        ``build_task_input``. So here we just consume that ref.
-        """
-        if self.sql_client_class is None:
-            from application_sdk.templates.sql_app_errors import (  # noqa: PLC0415
-                SqlClientClassNotSetError,
-            )
-
-            raise SqlClientClassNotSetError()
-
-        client = self.sql_client_class()
-        creds: dict[str, Any] = {}
-
-        ref: CredentialRef | None = input.credential_ref
-        if ref is None and input.credential_guid:
-            ref = _guid_credential_ref(input.credential_guid)
-
-        if ref is not None:
-            infra = get_infrastructure()
-            secret_store = infra.secret_store if infra else None
-            if secret_store:
-                resolver = CredentialResolver(secret_store)
-                creds = await resolver.resolve_raw(ref) or {}
-
-        await client.load(credentials=creds)
-        return client
-
-    def _temp_table_regex_fragment(self, sql: str) -> str:
-        """Pick the temp-table fragment for *sql*.
-
-        The column query gets ``extract_temp_table_regex_column_sql`` when the
-        app declares one: it filters on the column table's own name
-        (``C.TABLE_NAME``) rather than a joined table alias the column query
-        may not have. Every other query, and apps without a column fragment,
-        get ``extract_temp_table_regex_table_sql``. The query is recognised by
-        comparing against ``fetch_column_sql`` so ``_prepare_sql``'s signature,
-        which connector overrides mirror, is unchanged.
-        """
-        column_fragment = self.extract_temp_table_regex_column_sql
-        if (
-            column_fragment
-            and self.fetch_column_sql
-            and sql.strip() == self.fetch_column_sql.strip()
-        ):
-            return column_fragment
-        return self.extract_temp_table_regex_table_sql
-
-    def _prepare_sql(self, sql: str, input: ExtractionTaskInput) -> str:
-        """Substitute filter placeholders in SQL template."""
-        exclude_filter = input.exclude_filter or ""
-        include_filter = input.include_filter or ""
-
-        # Handle dict filters (from AE) — normalize to regex
-        if isinstance(exclude_filter, dict):
-            normalized = normalize_filters(exclude_filter, False)
-            exclude_regex = "|".join(normalized) if normalized else "^$"
-        else:
-            exclude_regex = exclude_filter or "^$"
-
-        if isinstance(include_filter, dict):
-            normalized = normalize_filters(include_filter, True)
-            include_regex = "|".join(normalized) if normalized else ".*"
-        else:
-            include_regex = include_filter or ".*"
-
-        # Temp table regex. The fragment's own ``/* ... */`` header is stripped
-        # first: full templates often mention ``{temp_table_regex_sql}`` inside
-        # their header comment, and a nested block comment closes it early
-        # (FND-2733).
-        temp_table_sql = ""
-        if hasattr(input, "temp_table_regex") and input.temp_table_regex:
-            fragment = self._temp_table_regex_fragment(sql)
-            if fragment:
-                temp_table_sql = strip_sql_block_comments(fragment).replace(
-                    "{exclude_table_regex}", input.temp_table_regex
-                )
-
-        # Single-pass substitution via safe_substitute_placeholders prevents
-        # cascading: three chained str.replace() calls processed the mutating
-        # string, so a replacement value containing another placeholder's text
-        # would be re-substituted by the next call.  safe_substitute_placeholders
-        # scans the original positions exactly once — replacement values are
-        # never re-scanned (APP-2291).
-        return safe_substitute_placeholders(
-            sql,
-            {
-                "{normalized_exclude_regex}": exclude_regex,
-                "{normalized_include_regex}": include_regex,
-                "{temp_table_regex_sql}": temp_table_sql,
-            },
-        )
-
     def resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
 
@@ -1729,338 +1015,6 @@ class SqlApp(App):
     # mappers calls these from its own extract_* / transform_* tasks rather
     # than re-implementing the streaming, the offload and the FileReference
     # pinning below.
-
-    async def extract_entity(
-        self,
-        *,
-        entity_type: str,
-        sql_template: str,
-        input: ExtractionTaskInput,
-    ) -> ExtractionTaskOutput:
-        """Stream SQL rows verbatim into ``raw/<entity>/records.json`` JSONL.
-
-        The body of every ``extract_*`` task. Call it from your own override
-        to extract an entity with different SQL, or one the template does not
-        know about::
-
-            @task()
-            async def extract_functions(
-                self, input: ExtractionTaskInput
-            ) -> ExtractionTaskOutput:
-                return await self.extract_entity(
-                    entity_type="function",
-                    sql_template=self.fetch_function_sql,
-                    input=input,
-                )
-
-        1. Open SQL client, render the template with the input filters.
-        2. Stream rows in batches of ``_EXTRACT_BATCH_SIZE`` via the
-           server-side cursor that ``client.run_query`` exposes — each
-           batch is a ``list[dict[str, Any]]`` keyed by lower-cased column
-           names. Memory stays bounded regardless of total result size.
-        3. Write each row to JSONL. Mapping is deliberately *not* done
-           here — it runs in the matching ``transform_*`` activity so the
-           activity boundary stays a durable retry point and so future
-           change-detection can compare raw streams between runs.
-        """
-        if not sql_template:
-            logger.warning("No SQL configured for %s — skipping", entity_type)
-            return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
-
-        output_path = self.resolve_output_path(input)
-        if not output_path:
-            return ExtractionTaskOutput(typename=entity_type, total_record_count=0)
-
-        output_dir = Path(output_path) / "raw" / entity_type
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / "records.json"
-
-        client = await self._init_sql_client(input)
-        count = 0
-        try:
-            sql = self._prepare_sql(sql_template.strip(), input)
-
-            def _serialize_batch(batch: list[dict[str, Any]]) -> bytes:
-                return b"".join(
-                    orjson.dumps(
-                        record,
-                        default=_orjson_default,
-                        option=orjson.OPT_APPEND_NEWLINE,
-                    )
-                    for record in batch
-                )
-
-            with open(output_file, "wb") as f:
-                async for batch in client.run_query(
-                    sql, batch_size=_EXTRACT_BATCH_SIZE
-                ):
-                    # Only the serialisation is offloaded — 10k orjson.dumps
-                    # calls per batch is the part that outlasts the heartbeat
-                    # interval on wide rows (ADR-0010). The write stays on the
-                    # loop as one buffered call, which costs microseconds.
-                    #
-                    # Deliberately NOT passing `f` into the thread: if the
-                    # activity is cancelled at this await, the `with` block
-                    # unwinds and closes the handle while a worker thread is
-                    # still writing to it — and per ADR-0010 that thread cannot
-                    # be killed, so it would write on into a closed (or
-                    # retry-reopened) file. Serialise off-loop, write on-loop:
-                    # the handle never crosses the thread boundary, so the
-                    # single-handle streaming loop stays cancellation-safe.
-                    payload = await run_in_thread(_serialize_batch, batch)
-                    f.write(payload)
-                    count += len(batch)
-                    # One fetched page serialised and written is one observable
-                    # unit (ADR-0018). Marked here rather than per record: one
-                    # page is already the unit, and a mark per record would be a
-                    # hot-path cost for no extra signal.
-                    #
-                    # This is the whole reason the read side needs no hold — the
-                    # fetch → serialise → write cycle marks on every page, so
-                    # only a *single* cycle slower than max_no_progress_seconds
-                    # needs an explicit hold from the app. (FND-290's auto-hold
-                    # around the `run_in_thread` above already covers the
-                    # serialise leg of that cycle.)
-                    current_progress_tracker().mark_progress("extract.page")
-        finally:
-            await client.close()
-
-        logger.info("Extracted %s: %d raw records", entity_type, count)
-        # Emit a ``FileReference`` so the activity interceptor uploads the
-        # raw JSONL to the object store after the extract activity
-        # completes and marks the ref durable. ``run()`` then threads
-        # this durable ref into the matching transform's
-        # ``TransformInput`` — the interceptor re-downloads it onto
-        # whichever worker pod picks up the transform (with SHA-256
-        # sidecar verification, so a transform that lands on a
-        # different pod than the extract still sees a verified-fresh
-        # local copy). This is how cross-worker fault tolerance for
-        # the raw → transform handoff is provided without any explicit
-        # ``download_file`` plumbing in the template (BLDX-1281).
-        #
-        # ``storage_path`` is pinned to the canonical run-scoped key
-        # ``<run_prefix>/raw/<entity>/records.json`` rather than the
-        # default UUID-named ``<run_prefix>/file_refs/<uuid>.json``.
-        # ``get_object_store_prefix`` strips ``TEMPORARY_PATH`` from the
-        # local path to derive the matching object-store key — same
-        # shape ``upload_to_atlan``'s legacy directory walk would have
-        # produced. Pinning the key on the ref itself makes the upload
-        # work even when ``upload_to_atlan`` runs on a different pod
-        # than this extract and finds the local FS empty (the
-        # cross-pod failure mode that caused silent asset archival in
-        # production — publish reads from canonical paths and would
-        # miss any entity whose transformed-side upload only landed
-        # under ``file_refs/<uuid>.json``).
-        #
-        # TRANSIENT tier — the raw file is purely intermediate
-        # (extract → transform within the same run); ``cleanup_storage``
-        # auto-deletes tracked TRANSIENT refs at run end.
-        raw_ref = (
-            FileReference(
-                local_path=str(output_file),
-                storage_path=get_object_store_prefix(str(output_file)),
-                tier=StorageTier.TRANSIENT,
-            )
-            if count > 0
-            else None
-        )
-        return ExtractionTaskOutput(
-            typename=entity_type,
-            total_record_count=count,
-            raw_file=raw_ref,
-        )
-
-    async def transform_entity(
-        self,
-        *,
-        entity_type: str,
-        mapper_fn: _MapperFn,
-        input: TransformInput,
-    ) -> TransformOutput:
-        """Read raw JSONL → mapper → transformed JSONL.
-
-        The body of every ``transform_*`` task. Call it from your own override
-        to run an entity through a different mapper::
-
-            @task()
-            async def transform_functions(
-                self, input: TransformInput
-            ) -> TransformOutput:
-                return await self.transform_entity(
-                    entity_type="function",
-                    mapper_fn=self.map_function,
-                    input=input,
-                )
-
-        It also applies ``entity_envelope``, :meth:`decorate_entity`, and the
-        ``connectionName`` / ``lastSync*`` attributes to every line, so going
-        through it is how a custom entity's output matches the rest.
-
-        Reads the raw records.json via the ``FileReference`` threaded
-        through from the matching ``extract_*`` activity, runs each
-        record through ``mapper_fn``, and writes the resulting Atlan
-        asset to ``transformed/<entity>/entities.json``.
-
-        Cross-worker contract (BLDX-1281 / PR #1787):
-            ``run()`` populates ``input.raw_file`` with the durable
-            ``FileReference`` returned by the matching extract activity.
-            The activity interceptor materialises that ref onto this
-            worker's local FS BEFORE this method runs (SHA-256 sidecar
-            verification → fresh local copy even if extract and
-            transform landed on different pods). The method below just
-            opens ``input.raw_file.local_path`` directly.
-
-            When ``input.raw_file is None`` (extract returned zero rows
-            or the caller didn't thread a ref), this is a clean no-op
-            returning ``total_record_count=0`` — matches the historical
-            contract that the publish step relies on.
-        """
-        output_path = self.resolve_output_path(input)
-        if not output_path:
-            return TransformOutput(typename=entity_type, total_record_count=0)
-
-        # Resolve the raw file via the threaded FileReference. The
-        # interceptor has already materialised it; we just consume the
-        # local_path. Fall back to the legacy local path lookup so
-        # callers that don't thread a ref (e.g. unit tests that seed
-        # raw files directly under tmp_path) still work.
-        if input.raw_file is not None and input.raw_file.local_path:
-            raw_file = Path(input.raw_file.local_path)
-        else:
-            raw_file = Path(output_path) / "raw" / entity_type / "records.json"
-        if not raw_file.exists() or raw_file.stat().st_size == 0:
-            return TransformOutput(typename=entity_type, total_record_count=0)
-
-        connection_qn = ""
-        connection_name = ""
-        if hasattr(input, "connection") and input.connection:
-            attrs = getattr(input.connection, "attributes", None)
-            if attrs:
-                connection_qn = getattr(attrs, "qualified_name", "") or ""
-                connection_name = getattr(attrs, "name", "") or ""
-
-        # Resolved once, here, for two reasons (FND-2097).
-        #
-        # Once, not per record: ``lastSyncRunAt`` is a property of the *run*,
-        # so every asset this activity writes must carry the same value. A
-        # per-record ``time.time()`` — what connectors hand-rolling this did —
-        # gives every row in one crawl a different "last synced at".
-        #
-        # Here, not inside ``_map_records``: the resolver reads the execution
-        # and correlation contextvars the Temporal interceptor populates.
-        # ``run_in_thread`` does propagate them (it runs the callable under
-        # ``contextvars.copy_context()``), so resolving in the thread would
-        # also work today — but that correctness would rest on an offload
-        # implementation detail rather than on where the call sits.
-        last_sync = resolve_last_sync_details()
-
-        output_dir = Path(output_path) / "transformed" / entity_type
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_dir / "entities.json"
-
-        def _map_records() -> int:
-            written = 0
-            with open(raw_file, "rb") as r, open(output_file, "wb") as w:
-                for line in r:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    record = orjson.loads(line)
-                    asset = mapper_fn(record, connection_qn)
-                    # One seam owns the framework-injected attributes —
-                    # connectionName (FND-2056) and lastSync* (FND-2097) —
-                    # the asset → wire-shape dispatch, and the envelope the
-                    # finished line takes (FND-2137), for every template that
-                    # runs the mapper pattern. A return value it does not
-                    # recognise raises rather than falling back to writing
-                    # ``record`` — that fallback published unmapped source rows
-                    # as entities under a SUCCESS status.
-                    #
-                    # ``decorate_entity`` is called per record because that is
-                    # its aperture: its inputs are the row and the stream, and
-                    # a connector that owes no decorations returns None from
-                    # the base implementation at the cost of one call.
-                    w.write(
-                        entity_bytes(
-                            asset,
-                            connection_name=connection_name,
-                            last_sync=last_sync,
-                            entity_type=entity_type,
-                            envelope=self.entity_envelope,
-                            decorations=self.decorate_entity(
-                                entity_type=entity_type, record=record
-                            ),
-                        )
-                    )
-                    w.write(b"\n")
-                    written += 1
-                    # Every 1,024 records: a cancelled transform stops here
-                    # instead of writing on into entities.json after the
-                    # activity has gone — where a retry on this pod reopens
-                    # and truncates the same file under it.
-                    if not written % 1024:
-                        raise_if_offload_abandoned()
-            return written
-
-        # Offloaded as one hop: this maps every raw record for the entity —
-        # JSON parse, the connector's mapper_fn (which builds pyatlan asset
-        # objects), serialise, write — with no await anywhere in the loop.
-        # A large table's records.json therefore holds the event loop for the
-        # whole transform, which stops the auto-heartbeat and gets a healthy
-        # activity killed on heartbeat_timeout. Every SQL connector inherits
-        # this method, so the fix applies fleet-wide (ADR-0010).
-        #
-        # No framework progress hook inside `_map_records`, deliberately
-        # (ADR-0018). The loop is line-by-line with no batch boundary to mark
-        # at, and the never-per-record rule forbids the only boundary it has.
-        # It does not need one: the whole map is a single `run_in_thread` hop,
-        # which FND-290 wraps in an unbounded auto-hold — so the stall watchdog
-        # is vouched for across the entire transform by mechanism 2 rather than
-        # mechanism 1. That leaves the 24h backstop as its only bound, which is
-        # the ADR's accepted residual for opaque offloaded work and is exactly
-        # what warn mode is meant to surface with an observed duration.
-        count = await run_in_thread(_map_records)
-
-        logger.info("Transformed %s: %d records", entity_type, count)
-        # Emit a FileReference to entities.json so the activity
-        # interceptor uploads it after the transform activity finishes.
-        # Downstream publish / upload tasks then consume the durable ref
-        # via the same materialise contract — no local-FS coupling.
-        #
-        # ``storage_path`` is pinned to the canonical
-        # ``<run_prefix>/transformed/<entity>/entities.json`` so the
-        # downstream publish step finds the file at the entity-typed
-        # path it expects. Without this pin the interceptor would
-        # auto-generate a ``file_refs/<uuid>.json`` key — publish
-        # discovers transformed assets by walking
-        # ``transformed/<entity>/`` prefixes, so anything that only
-        # lands under ``file_refs/`` is invisible to it and the
-        # entity gets archived as "removed from source" on the next
-        # publish run. ``get_object_store_prefix`` strips
-        # ``TEMPORARY_PATH`` from the local path to derive the
-        # matching object-store key; see ``extract_entity`` for the
-        # corresponding canonical key on the raw side.
-        #
-        # Tier = RETAINED (vs. TRANSIENT on raw_file): the
-        # transform → publish handoff can span an SDR → in-tenant
-        # deployment boundary, so the ref must survive the SDR-side
-        # workflow's auto-cleanup at run end. RETAINED keeps the
-        # object-store key under the run-scoped ``artifacts/`` prefix
-        # but skips ``cleanup_storage``'s tracked-TRANSIENT sweep.
-        transformed_ref = (
-            FileReference(
-                local_path=str(output_file),
-                storage_path=get_object_store_prefix(str(output_file)),
-                tier=StorageTier.RETAINED,
-            )
-            if count > 0
-            else None
-        )
-        return TransformOutput(
-            typename=entity_type,
-            total_record_count=count,
-            transformed_file=transformed_ref,
-        )
 
 
 if TYPE_CHECKING:
