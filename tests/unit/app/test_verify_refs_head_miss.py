@@ -8,7 +8,7 @@ from obstore.store import MemoryStore
 
 from application_sdk.contracts.storage import VerifyRefsInput
 from application_sdk.contracts.types import FileReference, StoreTarget
-from application_sdk.storage import ops
+from application_sdk.storage import _ops_seam, ops
 from application_sdk.storage.errors import (
     StorageGatewayNoRouteError,
     StorageHandoffIncompleteError,
@@ -65,7 +65,7 @@ async def test_bodiless_head_misses_in_24_file_handoff_are_confirmed_by_listing(
     with (
         _head_misses(misses),
         patch.object(ops.obstore, "list", side_effect=listing),
-        patch.object(ops, "_retry_sleep", sleep),
+        patch.object(_ops_seam, "_retry_sleep", sleep),
     ):
         out = await _make_app(upstream=store).verify_refs(
             VerifyRefsInput(refs=refs, prefix=PREFIX, store=StoreTarget.UPSTREAM)
@@ -111,14 +111,14 @@ async def test_persistent_listing_gateway_error_remains_retryable():
     with (
         patch.object(ops.obstore, "head_async", side_effect=RuntimeError(HEAD_404)),
         patch.object(ops.obstore, "list", side_effect=listing) as lists,
-        patch.object(ops, "_retry_sleep", sleep),
+        patch.object(_ops_seam, "_retry_sleep", sleep),
         pytest.raises(StorageGatewayNoRouteError) as exc,
     ):
         await _make_app().verify_refs(VerifyRefsInput(refs=[ref], prefix=PREFIX))
 
     assert exc.value.effective_retryable is True
-    assert lists.call_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
-    assert sleep.await_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS)
+    assert lists.call_count == len(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+    assert sleep.await_count == len(_ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS)
 
 
 async def test_successful_head_does_not_list():

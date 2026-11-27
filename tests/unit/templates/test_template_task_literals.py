@@ -40,12 +40,12 @@ DEPRECATED_MODULES = frozenset(
 
 #: ``(module, task, keyword) -> reason``. Each entry is a deliberate exception.
 ALLOWED: dict[tuple[str, str, str], str] = {
-    ("sql_app.py", "prime_sql_auth", "timeout_seconds"): (
+    ("_sql_app_prime.py", "prime_sql_auth", "timeout_seconds"): (
         "fixed work — one SELECT 1 plus credential resolution, independent of "
         "source size — and retry_max_attempts=1 makes a hung probe terminal, so "
         "the 24h backstop would hold the workflow a day on a dead endpoint"
     ),
-    ("sql_app.py", "prime_sql_auth", "retry_max_attempts"): (
+    ("_sql_app_prime.py", "prime_sql_auth", "retry_max_attempts"): (
         "load-bearing: an activity retry re-runs the auth handshake and "
         "re-stacks failed_login_attempts on the source (BLDX-1295)"
     ),

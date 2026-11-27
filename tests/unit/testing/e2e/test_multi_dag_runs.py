@@ -168,7 +168,9 @@ class _AtlasCalls:
         monkeypatch.setattr(atlas_api, "count_lineage", _count_lineage)
         monkeypatch.setattr(atlas_api, "sample_located_names", _sample)
         monkeypatch.setattr(atlas_api, "create_connection", _create_connection)
-        monkeypatch.setattr("application_sdk.testing.e2e.base.purge_connection", _purge)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_teardown.purge_connection", _purge
+        )
         monkeypatch.setattr(
             BaseE2ETest, "_atlas_client", lambda _self: _null_atlas_client()
         )

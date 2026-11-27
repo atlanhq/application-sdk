@@ -27,6 +27,10 @@ import pytest
 from obstore.store import GCSStore, S3Store
 
 from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.storage._ops_errors import (
+    _obstore_http_evidence,
+    _storage_error_for,
+)
 from application_sdk.storage.errors import (
     StorageBucketRelocationError,
     StorageConfigError,
@@ -36,7 +40,6 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
     StoragePermissionError,
 )
-from application_sdk.storage.ops import _obstore_http_evidence, _storage_error_for
 
 
 class _GenericError(Exception):

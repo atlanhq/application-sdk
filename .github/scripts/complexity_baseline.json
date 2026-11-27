@@ -267,14 +267,6 @@
       "JsonFileReader._get_batched_dataframe"
     ]
   },
-  "application_sdk/storage/ops.py": {
-    "C901": [
-      "download_file"
-    ],
-    "PLR0915": [
-      "download_file"
-    ]
-  },
   "application_sdk/storage/reference.py": {
     "C901": [
       "_materialize_directory",

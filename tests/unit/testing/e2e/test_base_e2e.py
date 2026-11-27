@@ -7,6 +7,7 @@ Covers the two methods the review flagged as uncovered (TEST-001/G4):
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -396,7 +397,9 @@ class TestTwoStoreDirectModeWarning:
         self._bootstrap_env(monkeypatch)
         monkeypatch.setenv("TWO_STORE", "true")
         mock_logger = MagicMock()
-        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_tenant.logger", mock_logger
+        )
 
         class _DirectModeTest(_ConcreteE2ETest):
             connection_admin_roles = ("test-admin-role-guid",)
@@ -416,7 +419,9 @@ class TestTwoStoreDirectModeWarning:
         self._bootstrap_env(monkeypatch)
         monkeypatch.setenv("TWO_STORE", "true")
         mock_logger = MagicMock()
-        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_tenant.logger", mock_logger
+        )
 
         _AgentModeE2ETest().setup_method()
 
@@ -428,7 +433,9 @@ class TestTwoStoreDirectModeWarning:
         self._bootstrap_env(monkeypatch)
         monkeypatch.delenv("TWO_STORE", raising=False)
         mock_logger = MagicMock()
-        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_tenant.logger", mock_logger
+        )
 
         class _DirectModeTest(_ConcreteE2ETest):
             connection_admin_roles = ("test-admin-role-guid",)
@@ -715,7 +722,9 @@ class TestStallGuardDirectModeWarning:
     ) -> None:
         self._bootstrap_env(monkeypatch)
         mock_logger = MagicMock()
-        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_tenant.logger", mock_logger
+        )
 
         class _DirectGuarded(_ConcreteE2ETest):  # DIRECT + default grace 180
             connection_admin_roles = ("test-admin-role-guid",)
@@ -731,7 +740,9 @@ class TestStallGuardDirectModeWarning:
     ) -> None:
         self._bootstrap_env(monkeypatch)
         mock_logger = MagicMock()
-        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_tenant.logger", mock_logger
+        )
 
         class _DirectUnguarded(_ConcreteE2ETest):
             connection_admin_roles = ("test-admin-role-guid",)
@@ -746,7 +757,9 @@ class TestStallGuardDirectModeWarning:
     ) -> None:
         self._bootstrap_env(monkeypatch)
         mock_logger = MagicMock()
-        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+        monkeypatch.setattr(
+            "application_sdk.testing.e2e._base_tenant.logger", mock_logger
+        )
 
         # AGENT + default grace 180 → the stall guard is fine (dedicated worker).
         _AgentModeE2ETest().setup_method()
@@ -1824,7 +1837,7 @@ class TestTeardownFallsBackToTheHarnessPurge:
         # FND-1873.
         harness._submitted_connection_qns = [self._QN]
         monkeypatch.setattr(
-            "application_sdk.testing.e2e.base.purge_connection", _record
+            "application_sdk.testing.e2e._base_teardown.purge_connection", _record
         )
         monkeypatch.setattr(
             _ConcreteE2ETest, "_atlas_client", lambda self: _null_atlas_client()
@@ -1893,6 +1906,22 @@ class TestTeardownFallsBackToTheHarnessPurge:
         harness._ae = SimpleNamespace(aclose=_aclose)
         harness.teardown_method(method=None)  # must not raise
         # ...and the purge still ran: closing is the second, independent phase.
+        assert purged == [self._QN]
+
+    def test_a_pool_close_that_hangs_is_bounded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stalled transport close times out instead of holding teardown."""
+        from application_sdk.testing.e2e import _base_teardown
+
+        monkeypatch.setattr(_base_teardown, "_AE_CLOSE_TIMEOUT_SECONDS", 0.05)
+        harness, purged = self._harness(monkeypatch)
+
+        async def _aclose() -> None:
+            await asyncio.Event().wait()  # never set: a close that never returns
+
+        harness._ae = SimpleNamespace(aclose=_aclose)
+        harness.teardown_method(method=None)  # must return, and must not raise
         assert purged == [self._QN]
 
 

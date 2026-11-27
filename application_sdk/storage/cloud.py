@@ -86,6 +86,7 @@ from application_sdk.storage._classify import (  # noqa: F401 — _DENIED_* impo
     _DENIED_STATUSES,
 )
 from application_sdk.storage._classify import denied_evidence as _denied_evidence
+from application_sdk.storage._ops_errors import _store_target
 from application_sdk.storage.batch import DataObject, _download_listed, _upload_tree
 from application_sdk.storage.binding import _with_gcs_adc_provider
 from application_sdk.storage.errors import (
@@ -101,7 +102,6 @@ from application_sdk.storage.ops import (
     BoundStore,
     _get_bytes,
     _list_items,
-    _store_target,
     download_file_chunked,
     upload_bytes,
     upload_file,

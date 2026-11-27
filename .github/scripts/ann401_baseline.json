@@ -77,7 +77,7 @@
   "application_sdk/testing/_mustache.py": 2,
   "application_sdk/testing/_scale_data_generator/data_generator.py": 4,
   "application_sdk/testing/e2e/__init__.py": 1,
-  "application_sdk/testing/e2e/base.py": 5,
+  "application_sdk/testing/e2e/base.py": 4,
   "application_sdk/testing/fake_source.py": 5,
   "application_sdk/testing/full_dag/base.py": 1,
   "application_sdk/testing/full_dag/sql_app.py": 1,

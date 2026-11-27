@@ -713,7 +713,7 @@ class TestCloudStoreOps:
                 new=_async_return(None),
             ),
             patch(
-                "application_sdk.storage.ops._list_items",
+                "application_sdk.storage._ops_listing._list_items",
                 new=_async_return([]),
             ),
             pytest.raises(StorageError, match="absent from the store"),

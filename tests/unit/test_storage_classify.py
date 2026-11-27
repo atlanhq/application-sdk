@@ -124,12 +124,15 @@ def test_evidence_parsing_never_raises() -> None:
 
 
 def test_the_worker_routes_through_the_same_table() -> None:
-    from application_sdk.storage import integrity, ops
+    from application_sdk.storage import _ops_errors, _ops_seam, integrity
 
-    assert ops._obstore_http_evidence(RuntimeError(_GATEWAY_AUTH)) == (401, "1005")
-    assert ops._is_gateway_no_route(RuntimeError(_NO_ROUTE))
-    assert ops._is_not_found(RuntimeError(_NO_SUCH_KEY))
-    assert ops._GATEWAY_NO_ROUTE_RETRY_DELAYS == GATEWAY_NO_ROUTE_RETRY_DELAYS
+    assert _ops_errors._obstore_http_evidence(RuntimeError(_GATEWAY_AUTH)) == (
+        401,
+        "1005",
+    )
+    assert _ops_seam._is_gateway_no_route(RuntimeError(_NO_ROUTE))
+    assert _ops_errors._is_not_found(RuntimeError(_NO_SUCH_KEY))
+    assert _ops_seam._GATEWAY_NO_ROUTE_RETRY_DELAYS == GATEWAY_NO_ROUTE_RETRY_DELAYS
     assert integrity.sidecar_key("a/b.csv") == "a/b.csv.sha256"
     assert integrity.SIDECAR_SUFFIX == _storage_classify.SIDECAR_SUFFIX
 

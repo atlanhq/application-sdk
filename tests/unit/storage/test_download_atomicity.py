@@ -838,7 +838,7 @@ class TestDiskFullDuringDownload:
                 "application_sdk.storage.ops.obstore.get_async",
                 new=AsyncMock(return_value=_Result()),
             ),
-            private_stdlib("application_sdk.storage.ops", "os") as local_os,
+            private_stdlib("application_sdk.storage._ops_stream", "os") as local_os,
             patch.object(
                 local_os, "fsync", side_effect=OSError(errno.ENOSPC, "no space")
             ),

@@ -443,7 +443,11 @@ def _check_e2e_names(names: _SdkNames) -> list[str]:
         set(names["sqlMustacheSubstitutionFields"]),
         set(SQLMustacheSubstitutions.model_fields),
     )
-    declared = set(vars(BaseE2ETest)) | set(inspect.get_annotations(BaseE2ETest))
+    # Walk the MRO: BaseE2ETest is composed from private mixin layers, and its
+    # class attributes are declared on the lowest one (FND-4267).
+    declared: set[str] = set()
+    for klass in BaseE2ETest.__mro__:
+        declared |= set(vars(klass)) | set(inspect.get_annotations(klass))
     if undeclared := sorted(set(names["e2eBaseAttributes"]) - declared):
         errors.append(
             f"e2eBaseAttributes: SdkNames.pkl lists {undeclared}, "
