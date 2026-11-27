@@ -10,6 +10,8 @@ from unittest import mock
 import pydantic
 import pytest
 from temporalio.exceptions import ActivityError
+from temporalio.worker.workflow_sandbox import RestrictedWorkflowAccessError
+from temporalio.workflow import NondeterminismError
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
@@ -1566,7 +1568,9 @@ class TestWorkflowFailureExceptionTypes:
     """Pre-user-code failures must fail the run, not retry the task forever."""
 
     @staticmethod
-    def _declared_types() -> tuple[type[BaseException], ...]:
+    def _declared_types(
+        fail_run_on_nondeterminism: bool = False,
+    ) -> tuple[type[BaseException], ...]:
         class _FailureTypesApp(App):
             @task(timeout_seconds=60)
             async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
@@ -1585,7 +1589,10 @@ class TestWorkflowFailureExceptionTypes:
             "application_sdk.execution._temporal.worker.Worker",
             side_effect=capture_worker,
         ):
-            create_worker(_make_mock_client())
+            create_worker(
+                _make_mock_client(),
+                fail_run_on_nondeterminism=fail_run_on_nondeterminism,
+            )
 
         return tuple(captured["workflow_failure_exception_types"])
 
@@ -1609,6 +1616,20 @@ class TestWorkflowFailureExceptionTypes:
         declared = self._declared_types()
         assert not issubclass(asyncio.CancelledError, declared)
         assert not issubclass(ActivityError, declared)
+
+    def test_production_retries_a_sandbox_refusal(self) -> None:
+        """By default a non-deterministic workflow task waits for a fixed build."""
+        declared = self._declared_types()
+        assert not issubclass(RestrictedWorkflowAccessError, declared)
+        assert not issubclass(NondeterminismError, declared)
+
+    def test_opt_in_fails_the_run_on_nondeterminism(self) -> None:
+        """A test worker fails the run, so its caller sees the error (FND-5513)."""
+        declared = self._declared_types(fail_run_on_nondeterminism=True)
+        assert issubclass(RestrictedWorkflowAccessError, declared)
+        assert issubclass(NondeterminismError, declared)
+        # Additive: the terminal input-decode failure is still declared.
+        assert issubclass(pydantic.ValidationError, declared)
 
 
 class TestDescribeExceptionChain:
