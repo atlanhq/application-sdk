@@ -28,6 +28,7 @@ from application_sdk.observability.logger_adaptor import (
     _PREFIXES_PASSTHROUGH,
     CHECK_MATRIX_KEY,
     GATE_MODE_KEY,
+    SEVERITY_MAPPING,
     AtlanLoggerAdapter,
     _build_extra_dict,
     _extract_exception_attributes,
@@ -35,6 +36,7 @@ from application_sdk.observability.logger_adaptor import (
     _format_printf_args,
     _has_remote_otlp_endpoint,
     _LazyLoggerProxy,
+    _level_registered,
     _make_log_record_dict,
     _normalize_log_extra_value,
     _redact_exception_records,
@@ -2221,6 +2223,37 @@ class TestLevelFiltering:
     ):
         logger_adapter.logger = mock.MagicMock()
         assert logger_adapter._is_enabled(10)
+
+    def test_logging_still_works_when_loguru_drops_core(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        """A loguru release that renames the private ``_core`` must not make
+        every log call raise: the level guard fails open and the record still
+        reaches the sinks."""
+
+        class _LoggerWithoutCore:
+            def __getattr__(self, name: str) -> Any:
+                if name == "_core":
+                    raise AttributeError(name)
+                return getattr(logger, name)
+
+        logger_adapter.logger = _LoggerWithoutCore()  # type: ignore[assignment]
+        assert logger_adapter._is_enabled(SEVERITY_MAPPING["INFO"])
+
+        lines: list[str] = []
+        sink_id = logger.add(lines.append, format="{message}", level="INFO")
+        try:
+            t = self._Tracker()
+            logger_adapter.info("survives: %s", t)
+        finally:
+            logger.remove(sink_id)
+        assert t.calls == 1
+        assert [line.strip() for line in lines] == ["survives: tracked"]
+
+
+def test_level_registered_uses_public_probe():
+    assert _level_registered("INFO")
+    assert not _level_registered("NO_SUCH_LEVEL")
 
 
 class TestProcessV3CorrelationBridge:

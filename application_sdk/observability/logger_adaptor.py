@@ -497,6 +497,19 @@ DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 _OTEL_SELF_LOGGER = "opentelemetry"
 
 
+def _level_registered(name: str) -> bool:
+    """Return True if loguru already has a level called *name*.
+
+    Uses the public ``logger.level(name)`` probe (raises ``ValueError`` for an
+    unknown level) rather than the private ``logger._core.levels`` table.
+    """
+    try:
+        logger.level(name)
+    except ValueError:
+        return False
+    return True
+
+
 def _is_otel_self_log(logger_name: str) -> bool:
     """True for records the OTel SDK logs about itself.
 
@@ -1154,19 +1167,19 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         logger.remove()
 
         # Register custom log level for activity
-        if "ACTIVITY" not in logger._core.levels:
+        if not _level_registered("ACTIVITY"):
             logger.level(
                 "ACTIVITY", no=SEVERITY_MAPPING["ACTIVITY"], color="<cyan>", icon="🔵"
             )
 
         # Register custom log level for metrics
-        if "METRIC" not in logger._core.levels:
+        if not _level_registered("METRIC"):
             logger.level(
                 "METRIC", no=SEVERITY_MAPPING["METRIC"], color="<yellow>", icon="📊"
             )
 
         # Register custom log level for tracing
-        if "TRACING" not in logger._core.levels:
+        if not _level_registered("TRACING"):
             logger.level(
                 "TRACING", no=SEVERITY_MAPPING["TRACING"], color="<magenta>", icon="🔍"
             )
@@ -1468,9 +1481,12 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         the same laziness stdlib logging.Logger provides for free.
         """
         try:
+            # loguru exposes no public minimum level; ``_core`` is private, so
+            # the pyproject.toml loguru cap pins it. AttributeError covers a
+            # loguru that renames it: fail open, never raise from a log call.
             return level_no >= self.logger._core.min_level
-        except TypeError:
-            # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError here would recurse, so it defaults to enabled
+        except (TypeError, AttributeError):
+            # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError/AttributeError here would recurse, so it defaults to enabled
             return True
 
     def _emit(

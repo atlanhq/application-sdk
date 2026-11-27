@@ -155,6 +155,22 @@ under the pod limit before decoding any data, held until the pod restarted.
   decode path — and with reaping, keeping isolation costs spawn latency rather
   than resident memory.
 
+## Addendum: killing a hung child (FND-5477)
+
+`shutdown()` never kills a running child, so a call that hits its `timeout`
+kills the pool's children itself before discarding the pool:
+
+- **CPython 3.14+: `ProcessPoolExecutor.kill_workers()`.** The public API. It
+  cancels still-queued futures, so a concurrent caller queued on the same pool
+  sees `CancelledError`; `run_fault_isolated` converts that to
+  `BrokenProcessPool`, which keeps the caller's contract.
+- **Older Pythons: the private `_processes` table.** Children are killed before
+  `shutdown(wait=False)`, never after: the reverse order strands a pool thread
+  and hangs interpreter exit.
+- **Neither present:** the child runs until it finishes and the SDK warns once.
+  `test_isolation_pool_exposes_a_kill` fails on any matrix Python that has
+  neither, and the timeout test asserts the hung child's `exitcode` is set.
+
 ## References
 - [ADR-0010: Async-First Design and Blocking Code Pitfalls](0010-async-first-blocking-code.md)
 - Conformance rule **P036** — `packages/conformance/conformance/docs/rules/prescriptions.md#p036`

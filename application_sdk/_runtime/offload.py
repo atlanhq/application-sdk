@@ -1422,22 +1422,52 @@ def _discard_process_pool(max_workers: int, pool: _IsolationPool) -> None:
         if _PROCESS_POOLS.get(max_workers) is pool:
             del _PROCESS_POOLS[max_workers]
         pool.stop_idle_timer()
-    executor = pool.executor
-    # Kill the children BEFORE shutdown(): a dead child is the pool's
-    # well-trodden unwind path — the manager thread sees it, marks the pool
-    # broken, resolves every still-queued work item with BrokenProcessPool,
-    # and every internal thread exits. The reverse order (shutdown, then kill)
-    # strands a manager/feeder thread on a lock and hangs interpreter exit.
-    # No cancel_futures=True: cancelling a *foreign* caller's queued future
-    # would surface as CancelledError (a BaseException) in that innocent
-    # caller; the broken-pool resolution reaches it as a catchable
-    # BrokenProcessPool instead. shutdown() never kills a *running* child
-    # (e.g. one hung past a timeout) and ProcessPoolExecutor exposes no
-    # supported kill, so reach for the internal process table (None once the
-    # pool is broken); on a future CPython that renames it, the child leaks
-    # until it finishes — degraded, not fatal.
-    for process in list((getattr(executor, "_processes", None) or {}).values()):
-        process.kill()
+    _kill_pool_children(pool.executor)
+
+
+# Set once _kill_pool_children has warned that it found no way to kill a hung
+# child, so a long-lived worker does not repeat the warning on every timeout.
+_KILL_UNSUPPORTED_WARNED = threading.Event()
+
+
+def _kill_pool_children(executor: concurrent.futures.ProcessPoolExecutor) -> None:
+    """Kill every child of ``executor`` (a hung one included), then shut it down.
+
+    ``shutdown()`` never kills a *running* child (e.g. one hung past a
+    timeout), so this reaches for a kill:
+
+    * ``kill_workers()`` (public since CPython 3.14). It cancels still-queued
+      futures, which a foreign caller sees as ``CancelledError``;
+      ``run_fault_isolated`` converts that back to ``BrokenProcessPool``, so
+      the caller still gets the catchable exception the contract promises.
+    * Otherwise the internal ``_processes`` table (``None`` once the pool is
+      broken). Kill the children BEFORE ``shutdown()``: a dead child is the
+      pool's well-trodden unwind path — the manager thread sees it, marks the
+      pool broken, resolves every still-queued work item with
+      ``BrokenProcessPool``, and every internal thread exits. The reverse
+      order (shutdown, then kill) strands a manager/feeder thread on a lock
+      and hangs interpreter exit. No ``cancel_futures=True``, for the same
+      reason as above.
+
+    If neither exists (a CPython that renamed the private table, before the
+    public API), the hung child keeps running until it finishes — warned once
+    rather than silent. ``test_isolation_pool_exposes_a_kill`` fails by name on
+    such a Python.
+    """
+    kill_workers = getattr(executor, "kill_workers", None)
+    if callable(kill_workers):
+        kill_workers()
+        return
+    if hasattr(executor, "_processes"):
+        for process in list((executor._processes or {}).values()):
+            process.kill()
+    elif not _KILL_UNSUPPORTED_WARNED.is_set():
+        _KILL_UNSUPPORTED_WARNED.set()
+        logger.warning(
+            "ProcessPoolExecutor has neither kill_workers() nor _processes on "
+            "this Python; a timed-out isolated child keeps running until it "
+            "finishes"
+        )
     executor.shutdown(wait=False)
 
 
