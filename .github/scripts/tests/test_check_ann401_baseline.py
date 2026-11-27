@@ -157,11 +157,17 @@ class TestCompare:
 
 class TestParseBaseline:
     @pytest.mark.parametrize(
-        "text",
-        ["[]", '{"a.py": "1"}', '{"a.py": 0}', '{"a.py": -1}', '{"a.py": true}'],
+        ("text", "match"),
+        [
+            ("[]", "not a JSON object"),
+            ('{"a.py": "1"}', "positive count map"),
+            ('{"a.py": 0}', "positive count map"),
+            ('{"a.py": -1}', "positive count map"),
+            ('{"a.py": true}', "positive count map"),
+        ],
     )
-    def test_rejects_malformed(self, text: str) -> None:
-        with pytest.raises(ValueError):
+    def test_rejects_malformed(self, text: str, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
             cab.parse_baseline(text)
 
     def test_round_trips(self) -> None:

@@ -139,12 +139,9 @@ class TestSslContextWithPrivateServer:
         """Test that connection fails when custom CA is not loaded."""
 
         with https_server("Hello!") as port:
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(httpx.ConnectError, match="CERTIFICATE_VERIFY_FAILED"):
                 async with httpx.AsyncClient(verify=True) as client:
                     await client.get(f"https://localhost:{port}/", timeout=10)
-
-            error_message = str(exc_info.value).lower()
-            assert "certificate" in error_message or "ssl" in error_message
 
     async def test_private_and_public_certs_work_simultaneously(
         self, trustme_ca, https_server

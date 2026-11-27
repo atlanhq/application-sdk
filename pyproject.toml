@@ -636,6 +636,8 @@ extend-select = [
     "BLE001",  # blind `except Exception` / `except BaseException` (FND-4294)
     "RUF100",  # unused `noqa` — keeps every suppression live (FND-4294)
     "DTZ",     # naive datetime: now()/fromtimestamp()/strptime() without a tz read host-local time (FND-5226)
+    "B017",    # `pytest.raises(Exception)`: passes whatever went wrong (FND-5483)
+    "PT011",   # `pytest.raises(ValueError)` etc. with no `match=`: passes on the wrong ValueError (FND-5483)
 ]
 # ANN401 (`typing.Any` in a signature) is deliberately NOT selected here: ~490
 # existing sites would make every run red. .github/scripts/check_ann401_baseline.py

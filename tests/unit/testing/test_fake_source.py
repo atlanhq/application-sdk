@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import errno
 import http.client
 import http.server
 import ipaddress
@@ -45,6 +46,10 @@ from application_sdk.testing.fake_source import (
     cursor_page,
 )
 from tests.unit.private_stdlib import private_stdlib
+
+# What a bind on a port another socket holds exclusively fails with: EADDRINUSE
+# on POSIX, WSAEACCES on Windows (CPython reports Winsock codes as the errno).
+_PORT_TAKEN = {errno.EADDRINUSE, getattr(errno, "WSAEACCES", errno.EADDRINUSE)}
 
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1"])
 
@@ -269,8 +274,13 @@ class TestLifecycle:
             intruder = socket.socket()
             try:
                 intruder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                with pytest.raises(OSError):
+                # The refusal is the port being taken: EADDRINUSE on POSIX,
+                # WSAEACCES on Windows under the fake's exclusive claim. Any
+                # other OSError (a bad address, say) is not that refusal. The
+                # OS words the two differently, so the errno is the check.
+                with pytest.raises(OSError) as refused:  # noqa: PT011
                     intruder.bind(("127.0.0.1", source.port))
+                assert refused.value.errno in _PORT_TAKEN, refused.value
             finally:
                 intruder.close()
 

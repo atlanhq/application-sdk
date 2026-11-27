@@ -73,21 +73,21 @@ class TestBackoffShape:
         assert Backoff(budget_seconds=10).retries is None
 
     @pytest.mark.parametrize(
-        "kwargs",
+        ("kwargs", "match"),
         [
-            {"max_attempts": 0},
-            {"base": -1.0},
-            {"factor": -1.0},
-            {"steps": (1.0, -1.0)},
-            {"cap": -1.0},
+            ({"max_attempts": 0}, "max_attempts must be >= 1"),
+            ({"base": -1.0}, "delays and factor must be non-negative"),
+            ({"factor": -1.0}, "delays and factor must be non-negative"),
+            ({"steps": (1.0, -1.0)}, "delays and factor must be non-negative"),
+            ({"cap": -1.0}, "cap must be non-negative"),
         ],
     )
-    def test_invalid_shapes_are_rejected(self, kwargs) -> None:
-        with pytest.raises(ValueError):
+    def test_invalid_shapes_are_rejected(self, kwargs, match) -> None:
+        with pytest.raises(ValueError, match=match):
             Backoff(**kwargs)
 
     def test_retry_number_is_one_based(self) -> None:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="retry is 1-based"):
             Backoff(base=1.0).delay(0)
 
 
@@ -185,6 +185,6 @@ class TestRetryAsync:
 
     async def test_an_unbounded_backoff_is_refused(self) -> None:
         call, calls = _failing(0)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="needs a bounded Backoff"):
             await retry_async(call, backoff=Backoff(base=1.0), retry_if=lambda _e: True)
         assert calls["n"] == 0

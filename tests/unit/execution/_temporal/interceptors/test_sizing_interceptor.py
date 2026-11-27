@@ -887,7 +887,7 @@ class TestConcurrencyAttribution:
             patch(_RECORD_TARGET),
         ):
             mock_act.info.return_value = MockActivityInfo(activity_type="merge")
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError, match="boom"):
                 await interceptor.execute_activity(ExecuteInput())
 
         assert CENSUS.active() == 0

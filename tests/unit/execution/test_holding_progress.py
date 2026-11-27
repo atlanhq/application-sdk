@@ -226,7 +226,7 @@ class TestEveryExitPathReleases:
         self, tracker: ProgressTracker, clock: FakeClock, closed: list[ClosedHold]
     ) -> None:
         """A site that fails is a site the work-list needs most."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="source refused"):
             async with holding_progress("snapshot metadata query", timeout=1800):
                 clock.advance(120.0)
                 raise ValueError("source refused")

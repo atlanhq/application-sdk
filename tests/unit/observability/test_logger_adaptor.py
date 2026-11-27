@@ -318,34 +318,29 @@ def test_get_logger_with_various_names(logger_name: str):
     assert logger1.logger_name == logger_name
 
 
-def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter, mock_logger):
-    """Test that the logger can handle dictionaries and lists without formatting errors."""
-    # Replace the internal logger with our mock for assertion
+def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter):
+    """A dict or list argument is rendered into the message, not a format error."""
+    rendered: list[str] = []
+    sink_logger = logger.bind()
+    sink_logger.remove()
+    sink_logger.add(
+        lambda message: rendered.append(str(message)),
+        format="{level}|{message}",
+        level="DEBUG",
+    )
     original_logger = logger_adapter.logger
-    logger_adapter.logger = mock_logger
+    logger_adapter.logger = sink_logger
 
     try:
-        # Test with dictionary
-        test_dict = {"key1": "value1", "key2": 123}
-        logger_adapter.info("Message with dict: {}", test_dict)
-
-        # Test with list
-        test_list = ["item1", "item2", 123]
-        logger_adapter.debug("Message with list: {}", test_list)
-
-        # Verify the mock was called with the correct parameters
-        # The error was here - we need to access the handlers differently
-        # Loguru's handler structure might be different from what we expected
-        # Instead, let's just verify that we didn't get any exceptions
-
-        # If we're here, it means no exception was raised when logging complex types
-        # Which is what we're testing - the ability to log dictionaries and lists
-        # We can consider this test passed if no exception is raised
-        assert True
-
+        logger_adapter.info("Message with dict: {}", {"key1": "value1", "key2": 123})
+        logger_adapter.debug("Message with list: {}", ["item1", "item2", 123])
     finally:
-        # Restore the original logger
         logger_adapter.logger = original_logger
+
+    assert rendered == [
+        "INFO|Message with dict: {'key1': 'value1', 'key2': 123}\n",
+        "DEBUG|Message with list: ['item1', 'item2', 123]\n",
+    ]
 
 
 @pytest.fixture(autouse=True)

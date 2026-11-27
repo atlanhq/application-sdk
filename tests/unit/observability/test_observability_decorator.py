@@ -118,7 +118,7 @@ class TestSyncWrapper:
         def boom() -> None:
             raise ValueError("kaput")
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="kaput"):
             boom()
 
         assert [c.args for c in logger.error.call_args_list] == [

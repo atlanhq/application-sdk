@@ -410,7 +410,7 @@ async def test_a_non_apperror_propagates_from_both_loops() -> None:
     async def probe() -> DAGRunResult:
         return primitive.next()
 
-    with fake_clock(), pytest.raises(ValueError):
+    with fake_clock(), pytest.raises(ValueError, match="a bug in the probe"):
         await poll_until(
             probe,
             settled=_ae_settled,
@@ -439,7 +439,7 @@ async def test_a_non_apperror_propagates_from_both_loops() -> None:
     with (
         patch.object(client._ae, "get_native_status", side_effect=_read),
         fake_clock(),
-        pytest.raises(ValueError),
+        pytest.raises(ValueError, match="a bug in the probe"),
     ):
         await client._ae.poll_native_status(
             _RUN_ID,

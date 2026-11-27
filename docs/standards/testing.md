@@ -114,6 +114,7 @@
   - Use descriptive test names
   - Include docstrings for test functions
   - Mock external dependencies
+  - Assert the failure you expect, not just that something raised. `pytest.raises(Exception)` is refused by ruff (`B017`), and `pytest.raises(ValueError)`, `OSError` or another broad type with no `match=` by `PT011`. Name the concrete type, or add `match=` with the part of the message that names the cause; for a wrapped failure, also check `.cause` / `__cause__`. Where the message differs by platform (an `OSError` from the OS), assert `errno` instead and mark the line `# noqa: PT011`
 
 - **Test Categories**
   - Unit Tests: Test individual components in isolation

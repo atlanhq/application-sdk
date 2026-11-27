@@ -12,6 +12,7 @@ from uuid import UUID
 import pytest
 from temporalio import workflow as _wf  # _wf._Definition used for relay assertions
 from temporalio.common import RawValue as _RawValue
+from temporalio.exceptions import FailureError as _FailureError
 
 from application_sdk.app import query, signal, update
 from application_sdk.app.base import (
@@ -1479,7 +1480,6 @@ class TestGenerateWorkflowClass:
 
             await wf_cls.run(wf_self, _BLDXInput())
             wrap_mock = _base._wrap_instance_tasks
-            assert isinstance(wrap_mock, mock.MagicMock)
             wrap_mock.assert_not_called()
 
         assert context_data["correlation_id"] == "corr"
@@ -1808,7 +1808,7 @@ class TestGenerateWorkflowClass:
                 mock.AsyncMock(return_value=None),
             ),
             mock.patch.object(GatedApp, "run", side_effect=failure),
-            pytest.raises(BaseException) as excinfo,
+            pytest.raises(_FailureError) as excinfo,
         ):
             await wf_cls.run(mock.MagicMock(), _BLDXInput())
         return excinfo.value

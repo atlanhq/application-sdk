@@ -858,7 +858,7 @@ class TestTheIsolatedOffloadHold:
         Entering first would report a zero-duration hold for a call that never
         reached a child — noise in the audit for a programming error.
         """
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="max_workers must be >= 1"):
             await run_fault_isolated(_echo, "hi", max_workers=0)
 
         assert tracker.holds == []

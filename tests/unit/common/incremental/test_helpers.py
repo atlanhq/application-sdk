@@ -195,7 +195,7 @@ class TestPreponeMarkerTimestamp:
 
     def test_invalid_format_raises(self):
         """Invalid timestamp format raises ValueError."""
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="does not match format"):
             prepone_marker_timestamp("not-a-timestamp", 1)
 
 
