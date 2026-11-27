@@ -20,6 +20,7 @@ from unittest import mock
 
 import pytest
 from pydantic import Field
+from temporalio.exceptions import ActivityError
 
 from application_sdk.app.base import App
 from application_sdk.app.registry import TaskRegistry
@@ -278,7 +279,7 @@ class TestEvictionRetryHelper:
         exec_mock, exec_patch, logger_patch = self._patch_workflow(
             [evict, evict, evict, evict]
         )
-        with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+        with exec_patch, logger_patch, pytest.raises(ActivityError) as exc_info:
             await execute_activity_with_eviction_retry(
                 "act-name", max_eviction_retries=3
             )
@@ -290,7 +291,7 @@ class TestEvictionRetryHelper:
             app_error_type="ValueError"
         )
         exec_mock, exec_patch, logger_patch = self._patch_workflow([non_evict])
-        with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+        with exec_patch, logger_patch, pytest.raises(ActivityError) as exc_info:
             await execute_activity_with_eviction_retry("act-name")
         assert not _is_worker_evicted(exc_info.value)
         assert exec_mock.await_count == 1
@@ -307,10 +308,11 @@ class TestEvictionCapFollowsHistory:
     ) -> None:
         evict = _make_activity_error_with_app_error_cause()
         _, exec_patch, logger_patch = self._patch_workflow([evict, evict])
-        with exec_patch, logger_patch, pytest.raises(Exception):
+        with exec_patch, logger_patch, pytest.raises(ActivityError) as exc_info:
             await execute_activity_with_eviction_retry(
                 "act-name", max_eviction_retries=1
             )
+        assert exc_info.value is evict
         # One re-dispatch recorded nothing; the stop recorded one marker,
         # keyed by the failed activity's scheduled event.
         assert history.recorded == [f"{EVICTION_CAP_MARKER_PREFIX}1"]
@@ -333,7 +335,7 @@ class TestEvictionCapFollowsHistory:
         history.markers = {f"{EVICTION_CAP_MARKER_PREFIX}1"}
         evict = _make_activity_error_with_app_error_cause()
         exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, "ok"])
-        with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+        with exec_patch, logger_patch, pytest.raises(ActivityError) as exc_info:
             await execute_activity_with_eviction_retry(
                 "act-name", max_eviction_retries=10
             )
@@ -356,7 +358,7 @@ class TestEvictionCapFollowsHistory:
         evict = _make_activity_error_with_app_error_cause()
         exec_mock, exec_patch, logger_patch = self._patch_workflow([evict, evict])
         try:
-            with exec_patch, logger_patch, pytest.raises(Exception) as exc_info:
+            with exec_patch, logger_patch, pytest.raises(ActivityError) as exc_info:
                 await execute_activity_with_eviction_retry(
                     "act-name", max_eviction_retries=cap
                 )

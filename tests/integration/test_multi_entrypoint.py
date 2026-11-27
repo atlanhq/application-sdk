@@ -11,6 +11,8 @@ Requires a running Temporal dev server (see conftest.py).
 from uuid import uuid4
 
 import pytest
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError
 
 from application_sdk.app.base import App, NonRetryableError
 from application_sdk.app.context import AppContext
@@ -207,7 +209,7 @@ async def test_non_retryable_error_from_entrypoint_app(
     reregister_app(NRMultiApp)
     async with run_worker():
         context = AppContext(app_name=NRMultiApp._app_name, app_version="1.0.0")
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(WorkflowFailureError) as exc_info:
             await executor.execute(
                 NRMultiApp,
                 NRMultiInput(),
@@ -255,7 +257,7 @@ async def test_on_complete_called_after_entrypoint_failure(
     reregister_app(LifecycleMultiApp)
     async with run_worker(passthrough_modules={__name__}):
         context = AppContext(app_name=LifecycleMultiApp._app_name, app_version="1.0.0")
-        with pytest.raises(Exception):
+        with pytest.raises(WorkflowFailureError) as exc_info:
             await executor.execute(
                 LifecycleMultiApp,
                 LifecycleInput(),
@@ -263,6 +265,11 @@ async def test_on_complete_called_after_entrypoint_failure(
                 retry_policy=NO_RETRY,
                 entry_point="run-fail",
             )
+    # The run failed because the run-fail entrypoint raised, not elsewhere.
+    entrypoint_error = exc_info.value.cause
+    assert isinstance(entrypoint_error, ApplicationError), repr(entrypoint_error)
+    assert entrypoint_error.type == "ValueError"
+    assert "intentional failure in run_fail" in str(entrypoint_error)
     assert _lifecycle_log == ["called"]
 
 

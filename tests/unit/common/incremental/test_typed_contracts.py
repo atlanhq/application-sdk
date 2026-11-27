@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 import orjson
 import pytest
+from pydantic import ValidationError
 
 from application_sdk.common.incremental import helpers, marker
 from application_sdk.common.incremental.models import EntityType, TableScope, TableState
@@ -134,7 +135,9 @@ async def test_column_batch_status_round_trips_through_the_temporal_converter() 
 
 
 def test_column_batch_output_rejects_an_unknown_status() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValidationError, match="Input should be 'success' or 'not_found'"
+    ):
         ExecuteColumnBatchOutput(status="done")  # type: ignore[arg-type]
 
 

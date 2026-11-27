@@ -20,7 +20,7 @@ from typing import Any
 
 import orjson
 import pytest
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, ValidationError
 
 from application_sdk.credentials.agent import (
     check_secret_store_access,
@@ -284,7 +284,7 @@ class TestPublishedSchema:
         # runtime rejects them, so the schema must too.
         with pytest.raises(jsonschema.ValidationError):
             self._validate(StrictAppSpec.model_json_schema(), FORM_PAYLOAD)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             StrictAppSpec.model_validate(FORM_PAYLOAD)
 
     @pytest.mark.parametrize(
@@ -305,7 +305,7 @@ class TestPublishedSchema:
         payload = {**FORM_PAYLOAD, field: bad}
         with pytest.raises(jsonschema.ValidationError):
             self._validate(AgentCredentialSpec.model_json_schema(), payload)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError, match=field):
             AgentCredentialSpec.model_validate(payload)
 
     @pytest.mark.parametrize(

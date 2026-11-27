@@ -474,7 +474,7 @@ class TestDownloadDaprd:
         monkeypatch.setattr(_dapr, "_fetch_archive", _truncated)
         target = tmp_path / _daprd_binary_name()
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises((EOFError, zipfile.BadZipFile)) as exc_info:
             _download_daprd(target)
 
         assert _dapr._is_retryable_download_error(exc_info.value)

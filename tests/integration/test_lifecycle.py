@@ -7,6 +7,8 @@ Requires a running Temporal dev server (see conftest.py).
 """
 
 import pytest
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from application_sdk.app.base import App
 from application_sdk.app.context import AppContext
@@ -119,7 +121,7 @@ async def test_on_complete_called_after_failure(run_worker, executor, reregister
     reregister_app(FailLifecycleApp)
     async with run_worker(passthrough_modules={__name__}):
         context = AppContext(app_name=FailLifecycleApp._app_name, app_version="1.0.0")
-        with pytest.raises(Exception):
+        with pytest.raises(WorkflowFailureError) as exc_info:
             await executor.execute(
                 FailLifecycleApp,
                 FailInput(),
@@ -127,6 +129,13 @@ async def test_on_complete_called_after_failure(run_worker, executor, reregister
                 retry_policy=NO_RETRY,
             )
 
+    # The run failed because run()'s task raised, not for an unrelated reason.
+    activity_error = exc_info.value.cause
+    assert isinstance(activity_error, ActivityError), repr(activity_error)
+    task_error = activity_error.cause
+    assert isinstance(task_error, ApplicationError), repr(task_error)
+    assert task_error.type == "ValueError"
+    assert "intentional failure" in str(task_error)
     assert _on_complete_log == ["called"]
 
 

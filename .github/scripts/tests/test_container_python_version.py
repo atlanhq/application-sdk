@@ -77,7 +77,7 @@ def test_normalize(raw: str, expected: str) -> None:
 
 
 def test_normalize_rejects_garbage() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="could not parse a Python version"):
         cpv.normalize("not-a-version")
 
 

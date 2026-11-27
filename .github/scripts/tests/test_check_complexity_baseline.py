@@ -247,19 +247,25 @@ class TestCompare:
 
 class TestParseBaseline:
     @pytest.mark.parametrize(
-        "text",
+        ("text", "match"),
         [
-            "[]",
-            '{"application_sdk/a.py": {}}',
-            '{"application_sdk/a.py": {"E501": ["f"]}}',
-            '{"application_sdk/a.py": {"C901": []}}',
-            '{"application_sdk/a.py": {"C901": "f"}}',
-            '{"application_sdk/a.py": {"C901": [1]}}',
-            '{"application_sdk/a.py": {"C901": 1}}',
+            ("[]", "not a JSON object"),
+            ('{"application_sdk/a.py": {}}', "does not map to a non-empty rule table"),
+            ('{"application_sdk/a.py": {"E501": ["f"]}}', "'E501' is not one of"),
+            ('{"application_sdk/a.py": {"C901": []}}', "not a non-empty list of names"),
+            (
+                '{"application_sdk/a.py": {"C901": "f"}}',
+                "not a non-empty list of names",
+            ),
+            (
+                '{"application_sdk/a.py": {"C901": [1]}}',
+                "not a non-empty list of names",
+            ),
+            ('{"application_sdk/a.py": {"C901": 1}}', "not a non-empty list of names"),
         ],
     )
-    def test_rejects_malformed(self, text: str) -> None:
-        with pytest.raises(ValueError):
+    def test_rejects_malformed(self, text: str, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
             ccb.parse_baseline(text)
 
     @pytest.mark.parametrize(

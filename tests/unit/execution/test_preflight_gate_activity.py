@@ -1645,7 +1645,9 @@ class TestHeartbeatCleanupCannotOutrankTheVerdict:
             ),
             mock.patch(f"{_GATE}.gate_heartbeat_timings", return_value=(60.0, 0.01)),
         ):
-            with pytest.raises(BaseException) as excinfo:
+            with pytest.raises(
+                ApplicationError, match="Preflight check failed"
+            ) as excinfo:
                 await gate(PreflightGateInput())
         assert is_preflight_block(excinfo.value) is True
         assert not isinstance(excinfo.value, asyncio.CancelledError)

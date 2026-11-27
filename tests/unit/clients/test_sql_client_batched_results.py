@@ -17,6 +17,7 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.storage.formats.format_errors import FormatWriteError
 
 _ROWS = 10
 _CHUNK = 3
@@ -204,7 +205,7 @@ async def test_a_failed_write_releases_the_connection(
     writer = make_writer(fail)  # type: ignore[operator]
     batches = await client.get_batched_results("SELECT a FROM t ORDER BY a")
 
-    with pytest.raises(Exception) as raised:
+    with pytest.raises((FormatWriteError, _WriteFails)) as raised:
         await writer._write_batched_dataframe(batches)
     assert isinstance(raised.value, _WriteFails) or isinstance(
         raised.value.__cause__, _WriteFails

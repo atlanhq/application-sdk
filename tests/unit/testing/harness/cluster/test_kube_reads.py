@@ -326,7 +326,7 @@ async def test_a_read_that_failed_is_never_cached_as_absent(status: int):
 async def test_a_non_api_error_on_a_custom_read_propagates_unwrapped():
     apis = FakeApis(resources=ValueError("bad ref"))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bad ref"):
         await reader_over(apis).custom_resources(_TWD, namespace="conn")
 
 

@@ -152,7 +152,7 @@ class TestRunBounded:
         async def fail() -> None:
             raise ValueError("not a storage failure") from root
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="not a storage failure") as exc_info:
             await _run_bounded([fail()], 2, unwrap_lone_failure=True)
 
         assert exc_info.value.__cause__ is root

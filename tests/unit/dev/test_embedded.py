@@ -82,7 +82,7 @@ class TestEmbeddedRuntimeLifecycle:
                 "temporalio.testing.WorkflowEnvironment.start_local",
                 AsyncMock(return_value=fake_env),
             ),
-            pytest.raises(ValueError),
+            pytest.raises(ValueError, match="boom"),
         ):
             async with embedded_runtime() as _rt:
                 raise ValueError("boom")

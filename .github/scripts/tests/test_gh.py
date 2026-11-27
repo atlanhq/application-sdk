@@ -219,17 +219,26 @@ def test_flatten_pages_keyed_objects() -> None:
 
 
 @pytest.mark.parametrize(
-    ("pages", "key"),
+    ("pages", "key", "match"),
     [
-        ({"check_runs": []}, "check_runs"),  # not slurped
-        ([{"check_runs": [{"id": 1}]}, {"message": "oops"}], "check_runs"),  # page lost
-        ([{"items": [{"id": 1}]}], None),  # wrapped page, no key given
-        ([[{"id": 1}]], "check_runs"),  # bare page, key given
-        ([[1, 2]], None),  # items that are not objects
+        # not slurped
+        ({"check_runs": []}, "check_runs", "expected a list of pages"),
+        # page lost
+        (
+            [{"check_runs": [{"id": 1}]}, {"message": "oops"}],
+            "check_runs",
+            "page has no 'check_runs' array",
+        ),
+        # wrapped page, no key given
+        ([{"items": [{"id": 1}]}], None, "expected an array page"),
+        # bare page, key given
+        ([[{"id": 1}]], "check_runs", "page has no 'check_runs' array"),
+        # items that are not objects
+        ([[1, 2]], None, "expected an object item"),
     ],
 )
-def test_flatten_pages_refuses_a_page_of_the_wrong_shape(pages, key) -> None:
-    with pytest.raises(ValueError):
+def test_flatten_pages_refuses_a_page_of_the_wrong_shape(pages, key, match) -> None:
+    with pytest.raises(ValueError, match=match):
         _gh.flatten_pages(pages, key)
 
 

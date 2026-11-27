@@ -27,7 +27,10 @@ from application_sdk.common.sql_filters import (
     strip_sql_block_comments,
     validate_filter_no_sql_injection,
 )
-from application_sdk.common.sql_filters_errors import InvalidSqlFilterValueError
+from application_sdk.common.sql_filters_errors import (
+    InvalidSqlFilterError,
+    InvalidSqlFilterValueError,
+)
 from application_sdk.errors import Audience, FailureCategory
 
 # ---------------------------------------------------------------------------
@@ -291,7 +294,9 @@ class TestRawEntryPointLegacyNormalisation:
         # normalised raw-regex shape — that's the pre-existing behaviour
         # for raw-string filters and orthogonal to this PR. The contract
         # this test pins: the legacy shape no longer fails the deny-list.
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(
+            InvalidSqlFilterError, match="Invalid filter JSON"
+        ) as exc_info:
             prepare_filters('"A","B"', '{"^temp$": ["^staging$"]}')
         assert "SQL-unsafe sequence" not in str(exc_info.value)
 
@@ -303,7 +308,9 @@ class TestRawEntryPointLegacyNormalisation:
         sql_client = MagicMock()
         sql_client.get_results = AsyncMock(return_value={"database_name": ["x"]})
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(
+            InvalidSqlFilterError, match="Invalid filter JSON"
+        ) as exc_info:
             await get_database_names(
                 sql_client,
                 {"metadata": {"include-filter": '"db_a","db_b"'}},
@@ -415,7 +422,9 @@ class TestTrailingBackslash:
             validate_filter_no_sql_injection('{"^db$": ["^public\\\\"]}')
 
     def test_message_does_not_echo_value(self) -> None:
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(
+            ValueError, match="SQL-unsafe trailing backslash"
+        ) as exc_info:
             validate_filter_no_sql_injection("secret_marker\\")
         assert "secret_marker" not in str(exc_info.value)
 
