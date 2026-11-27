@@ -406,7 +406,9 @@ class TestSandboxReimport:
     def test_reimport_installs_workflow_classes_built_from_the_copy(self) -> None:
         import sys
 
-        from application_sdk.app.base import _workflow_class_cache
+        from application_sdk.execution._temporal.app_workflow import (
+            _workflow_class_cache,
+        )
 
         self._define_app()
         cache_before = dict(_workflow_class_cache)

@@ -78,7 +78,7 @@ What this means in practice:
   Temporal reads `non_retryable` only on a workflow's *top-level* failure, and
   a task's error arrives wrapped in an `ActivityError`. So the generated
   workflow (`_lift_non_retryable_activity_failure()` in
-  `application_sdk/app/base.py`) re-raises a non-retryable cause as a
+  `application_sdk/execution/_temporal/app_workflow.py`) re-raises a non-retryable cause as a
   top-level `ApplicationError` with the same `type`, `message` and `details`,
   `non_retryable=True`, chained `from` the `ActivityError`. A workflow-level
   `RetryPolicy` then stops after one attempt instead of re-running a run that
@@ -192,7 +192,7 @@ it is read instead of listing the prefix.
 
 | | |
 |---|---|
-| **Produced by** | `App.download()` / `App.upload()` in `application_sdk/app/base.py` (`_tag_ref_store`), which set `StoreTarget.UPSTREAM` when they read from or wrote to a distinct upstream store |
+| **Produced by** | `App.download()` / `App.upload()` (`_tag_ref_store` in `application_sdk/storage/_app_tasks.py`), which set `StoreTarget.UPSTREAM` when they read from or wrote to a distinct upstream store |
 | **Served at** | `FileReference.store` in Temporal payloads, as `"deployment"` or `"upstream"` |
 | **Read by** | `materialize_file_refs()` / `fetch()` (via `_resolve_ref_store` in `application_sdk/storage/file_ref_sync.py`), which pick the store a ref is materialised from |
 | **Pinned by** | `tests/unit/app/test_transfer_ref_store.py` |

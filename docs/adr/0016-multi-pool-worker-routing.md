@@ -57,7 +57,8 @@ Temporal's official `worker_specific_task_queues` Python sample uses exactly thi
 ### SDK feasibility (confirmed, change is small)
 
 The routing seam in the SDK is one call in `_create_task_activity_wrapper`
-(`application_sdk/app/base.py`):
+(`application_sdk/execution/_temporal/app_workflow.py`; it lived in
+`application_sdk/app/base.py` when this ADR was written):
 
 ```python
 await execute_activity_with_eviction_retry(

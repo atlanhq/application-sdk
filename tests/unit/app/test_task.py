@@ -731,13 +731,15 @@ class TestTaskPool:
         """
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from application_sdk.app.base import _create_task_activity_wrapper
+        from application_sdk.execution._temporal.app_workflow import (
+            _create_task_activity_wrapper,
+        )
 
         monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.app_workflow.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -763,13 +765,15 @@ class TestTaskPool:
         """Explicit ATLAN_POOL_<POOL>_QUEUE takes precedence over derived queue."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from application_sdk.app.base import _create_task_activity_wrapper
+        from application_sdk.execution._temporal.app_workflow import (
+            _create_task_activity_wrapper,
+        )
 
         monkeypatch.setenv("ATLAN_POOL_HEAVY_QUEUE", "custom-heavy-queue")
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.app_workflow.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -793,10 +797,12 @@ class TestTaskPool:
         """Wrapper without pool passes no task_queue kwarg (backward-compatible)."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from application_sdk.app.base import _create_task_activity_wrapper
+        from application_sdk.execution._temporal.app_workflow import (
+            _create_task_activity_wrapper,
+        )
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.app_workflow.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -878,13 +884,15 @@ class TestTaskPool:
         """pool='cold-tier' resolves ATLAN_POOL_COLD_TIER_QUEUE, not ATLAN_POOL_COLD-TIER_QUEUE."""
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from application_sdk.app.base import _create_task_activity_wrapper
+        from application_sdk.execution._temporal.app_workflow import (
+            _create_task_activity_wrapper,
+        )
 
         monkeypatch.setenv("ATLAN_POOL_COLD_TIER_QUEUE", "explicit-cold-queue")
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "base-queue")
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.app_workflow.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()
@@ -1017,12 +1025,14 @@ class TestTaskPoolChartEnv:
         """
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from application_sdk.app.base import _create_task_activity_wrapper
+        from application_sdk.execution._temporal.app_workflow import (
+            _create_task_activity_wrapper,
+        )
 
         self._chart_env(monkeypatch)
 
         with patch(
-            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            "application_sdk.execution._temporal.app_workflow.execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:
             mock_exec.return_value = MagicMock()

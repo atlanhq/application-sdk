@@ -31,13 +31,15 @@ from temporalio.workflow import NondeterminismError
 
 from application_sdk.app import query, signal, update, wait_condition
 from application_sdk.app.base import (
-    _EARLY_RUN_BINDING_PATCH,
     App,
-    generate_workflow_class,
 )
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.execution._temporal.app_workflow import (
+    _EARLY_RUN_BINDING_PATCH,
+    generate_workflow_class,
+)
 from application_sdk.execution._temporal.worker import build_interceptors
 from application_sdk.execution.sandbox import SandboxConfig
 from application_sdk.execution.settings import InterceptorSettings

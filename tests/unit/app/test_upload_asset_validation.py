@@ -38,15 +38,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table
 
-from application_sdk.app import base as base_module
-from application_sdk.app.base import (
-    ASSET_VALIDATION_EVENT,
-    _warn_on_invalid_transformed_assets,
-)
+from application_sdk.observability.events import ASSET_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import (
     ASSET_VALIDATION_MATRIX_KEY,
     ASSET_VALIDATION_SUMMARY_KEY,
 )
+from application_sdk.storage import _app_tasks as base_module
+from application_sdk.storage._app_tasks import _warn_on_invalid_transformed_assets
 from application_sdk.validation import AssetCreationRules
 
 APP = "test-app"
@@ -177,7 +175,7 @@ class TestWarnOnInvalidTransformedAssets:
 
     async def test_disabled_flag_is_noop(self, tmp_path: Path) -> None:
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with patch("application_sdk.constants.VALIDATE_ASSETS_ON_UPLOAD", False):
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             # Nothing validated -> no event, no denominator noise, no warning.
@@ -187,13 +185,13 @@ class TestWarnOnInvalidTransformedAssets:
     async def test_non_transformed_dir_is_noop(self, tmp_path: Path) -> None:
         # A directory with no transformed/ subtree — e.g. a raw upload.
         (tmp_path / "raw").mkdir()
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_not_called()
             logger.info.assert_not_called()
 
     async def test_empty_path_is_noop(self) -> None:
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets("", APP)
             logger.warning.assert_not_called()
             logger.info.assert_not_called()
@@ -205,7 +203,7 @@ class TestWarnOnInvalidTransformedAssets:
         raw_file = tmp_path / "raw" / "data.json"
         raw_file.parent.mkdir(parents=True, exist_ok=True)
         raw_file.write_bytes(_invalid_table().to_nested_bytes() + b"\n")
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(str(raw_file), APP)
             logger.warning.assert_not_called()
             logger.info.assert_not_called()
@@ -216,7 +214,7 @@ class TestWarnOnInvalidTransformedAssets:
         # Emit-always: a clean batch still emits the structured event (the
         # denominator) but logs no human WARNING.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_not_called()
             ev = _outcome_event(logger)
@@ -234,7 +232,7 @@ class TestWarnOnInvalidTransformedAssets:
         self, tmp_path: Path
     ) -> None:
         _write_transformed(tmp_path, "Table", [_invalid_table()])
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             # human WARNING for flagged batches still fires
             logger.warning.assert_called_once()
@@ -268,10 +266,10 @@ class TestWarnOnInvalidTransformedAssets:
                 )
             ],
         )
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             assert _outcome_event(logger)["outcome"] == "clean"
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(
                 str(tmp_path),
                 APP,
@@ -302,7 +300,7 @@ class TestWarnOnInvalidTransformedAssets:
                 )
             ],
         )
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             # Must not raise.
             await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
@@ -338,7 +336,7 @@ class TestWarnOnInvalidTransformedAssets:
             str(tmp_path / "transformed" / entity / "entities.json")
             for entity in ("Database", "Schema", "Table", "Column")
         ]
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(parts, APP)
             logger.warning.assert_not_called()
             ev = _outcome_event(logger)
@@ -358,7 +356,7 @@ class TestWarnOnInvalidTransformedAssets:
         # the false positive; per-asset validation of the local parts still runs.
         _write_transformed(tmp_path, "Table", [_invalid_table()])
         parts = [str(tmp_path / "transformed" / "Table" / "entities.json")]
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(
                 parts, APP, not_local=["run/transformed/Schema/entities.json"]
             )
@@ -375,7 +373,7 @@ class TestWarnOnInvalidTransformedAssets:
     ) -> None:
         # Every declared part was written on another pod: there is nothing local
         # to scan, and that must be said rather than skipped without a trace.
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(
                 [],
                 APP,
@@ -392,7 +390,7 @@ class TestWarnOnInvalidTransformedAssets:
     async def test_remote_raw_parts_do_not_warn(self) -> None:
         # Only transformed parts make an asset batch incomplete; a raw part
         # delivered by the same declaration is not an asset file.
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(
                 [], APP, not_local=["run/raw/table/chunk-0.json"]
             )
@@ -405,7 +403,7 @@ class TestWarnOnInvalidTransformedAssets:
         # local_path IS the transformed/ dir (not its parent). The "transformed"
         # in root.parts branch must still target and scan it.
         _write_transformed(tmp_path, "Table", [_invalid_table()])
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(
                 str(tmp_path / "transformed"), APP
             )
@@ -416,7 +414,7 @@ class TestWarnOnInvalidTransformedAssets:
         # local_path is a single file whose path contains a transformed/ segment.
         _write_transformed(tmp_path, "Table", [_invalid_table()])
         entities = tmp_path / "transformed" / "Table" / "entities.json"
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             await _warn_on_invalid_transformed_assets(str(entities), APP)
             logger.warning.assert_called_once()
             assert _outcome_event(logger)["outcome"] == "flagged"
@@ -427,7 +425,7 @@ class TestWarnOnInvalidTransformedAssets:
         # runs in a spawn child, so the failing double is a picklable module-level
         # function, not a MagicMock.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with patch(
                 "application_sdk.validation.validate_artifact",
                 _raise_runtime_error,
@@ -445,7 +443,7 @@ class TestWarnOnInvalidTransformedAssets:
         # child (FND-4088), so what can still fail in this process is the log
         # call itself.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             logger.info.side_effect = RuntimeError("emit boom")
             await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
@@ -458,7 +456,7 @@ class TestWarnOnInvalidTransformedAssets:
         # The projection runs in the child alongside the scan, so a raise there
         # reaches run_best_effort like any scan error: warn, no event, no raise.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with patch(
                 "application_sdk.validation.validate_artifact",
                 _report_whose_projection_raises,
@@ -476,7 +474,7 @@ class TestWarnOnInvalidTransformedAssets:
         # asset-vocabulary counts. Emitting zeros there would put a fabricated
         # denominator on the board, so the hook names the skip and emits nothing.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with patch(
                 "application_sdk.validation.validate_artifact",
                 _absent_report,
@@ -492,7 +490,7 @@ class TestWarnOnInvalidTransformedAssets:
         # the worker. run_best_effort logs and the handoff proceeds; the scan
         # produced no report, so no outcome event is emitted.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with patch("application_sdk.validation.validate_artifact", _segfault):
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             logger.warning.assert_called_once()
@@ -505,7 +503,7 @@ class TestWarnOnInvalidTransformedAssets:
         # Warn-only validation must not be able to stall a handoff: a hung scan
         # is killed at the timeout and the upload proceeds; no report, no event.
         _valid_hierarchy(tmp_path)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with (
                 patch("application_sdk.validation.validate_artifact", _hang),
                 patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
@@ -529,7 +527,7 @@ class TestWarnOnInvalidTransformedAssets:
         dir_b = tmp_path / "b"
         for base in (dir_a, dir_b):
             _valid_hierarchy(base)
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             with (
                 patch("application_sdk.validation.validate_artifact", _hang),
                 patch("application_sdk.constants.VALIDATE_ASSETS_TIMEOUT_SECONDS", 1.0),
@@ -582,7 +580,7 @@ class TestWarnOnInvalidTransformedAssets:
             _valid_hierarchy_wide(batch_dir)
             dirs.append(batch_dir)
 
-        with patch.object(base_module, "_task_logger") as logger:
+        with patch.object(base_module, "logger") as logger:
             results = await asyncio.gather(
                 *(_warn_on_invalid_transformed_assets(str(d), APP) for d in dirs)
             )
@@ -597,7 +595,7 @@ class TestWarnOnInvalidTransformedAssets:
         # The parent process survived the concurrent burst: a fresh real
         # validation still works. (Pre-fix, a segfault in a worker thread would
         # have killed the whole worker, and there would be no "after".)
-        with patch.object(base_module, "_task_logger") as logger_after:
+        with patch.object(base_module, "logger") as logger_after:
             await _warn_on_invalid_transformed_assets(str(dirs[0]), APP)
             logger_after.warning.assert_not_called()
 
@@ -618,7 +616,7 @@ class TestWarnOnInvalidTransformedAssets:
 
         tracemalloc.start()
         try:
-            with patch.object(base_module, "_task_logger") as logger:
+            with patch.object(base_module, "logger") as logger:
                 await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
             _, peak = tracemalloc.get_traced_memory()
         finally:

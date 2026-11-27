@@ -372,7 +372,7 @@ Three details that matter:
 
 - **Flag-check order.** A stall and a SIGTERM can coincide. The stall branch must
   come first, or a stalled activity is mislabelled `WorkerEvicted` and re-dispatched
-  by the eviction-retry loop (`app/base.py:2447`) *outside* the normal retry budget.
+  by the eviction-retry loop (`execution/_temporal/eviction_retry.py`) *outside* the normal retry budget.
 - **Cancel and return.** The watchdog *is* `heartbeat_task`, and the activity's
   `finally` (`activities.py:334-347`) sets `stop_event` and awaits it with a 1s
   bound. The watchdog must return immediately after cancelling, not keep looping.
@@ -641,7 +641,7 @@ the ADR must say what replaces it — "nothing" is not an answer that survives a
 incident.
 
 **Retries multiply the backstop, and we are accepting that product as-is to start.**
-The activity dispatch path (`_create_task_activity_wrapper` in `app/base.py`) passes only
+The activity dispatch path (`_create_task_activity_wrapper`, now in `execution/_temporal/app_workflow.py`) passes only
 `start_to_close_timeout` and a retry policy — **no `schedule_to_close`**. With the
 default `retry_max_attempts=3`, a 24h backstop is a **72h worst case per activity,
 where today that product is 30 minutes.** A `StartToClose` timeout is retryable in

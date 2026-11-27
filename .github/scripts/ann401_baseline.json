@@ -2,7 +2,7 @@
   "application_sdk/_install.py": 1,
   "application_sdk/_loop_stall_watchdog.py": 1,
   "application_sdk/_runtime/offload.py": 11,
-  "application_sdk/app/base.py": 22,
+  "application_sdk/app/base.py": 4,
   "application_sdk/app/context.py": 2,
   "application_sdk/clients/_interface.py": 4,
   "application_sdk/clients/azure/client.py": 1,

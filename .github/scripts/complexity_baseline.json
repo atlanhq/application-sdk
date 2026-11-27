@@ -16,23 +16,11 @@
   },
   "application_sdk/app/base.py": {
     "C901": [
-      "App._upload_impl",
-      "App._verify_refs_impl",
-      "App.cleanup_files",
-      "App.cleanup_storage",
-      "_collect_interaction_relays",
-      "_demote",
       "_release_slot",
-      "_run_preflight_gate",
-      "generate_workflow_class",
-      "generate_workflow_class._run"
+      "_run_preflight_gate"
     ],
     "PLR0915": [
-      "App._verify_refs_impl",
-      "App.cleanup_storage",
-      "_run_preflight_gate",
-      "generate_workflow_class",
-      "generate_workflow_class._run"
+      "_run_preflight_gate"
     ]
   },
   "application_sdk/app/context.py": {
@@ -111,6 +99,11 @@
     "PLR0915": [
       "create_activity_from_task",
       "create_activity_from_task.activity_fn"
+    ]
+  },
+  "application_sdk/execution/_temporal/app_workflow.py": {
+    "C901": [
+      "_demote"
     ]
   },
   "application_sdk/execution/_temporal/interceptors/events.py": {

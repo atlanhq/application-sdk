@@ -17,23 +17,23 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from application_sdk.app import base as app_base
 from application_sdk.credentials import utils as credential_utils
-from application_sdk.execution._temporal import credential_sweep
+from application_sdk.execution._temporal import credential_sweep, run_scope
 from application_sdk.execution._temporal.worker import AppWorker
 
 
 @pytest.fixture(autouse=True)
 def _clean_registry(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(credential_utils, "_DEFAULT_CREDENTIAL_FILE_DIR", str(tmp_path))
-    with app_base._credential_dirs_lock:
-        app_base._credential_dirs_by_run.clear()
+    with run_scope._credential_dirs_lock:
+        run_scope._credential_dirs_by_run.clear()
     yield
-    with app_base._credential_dirs_lock:
-        app_base._credential_dirs_by_run.clear()
+    with run_scope._credential_dirs_lock:
+        run_scope._credential_dirs_by_run.clear()
 
 
 def _dir_of(run: tuple[str, str]) -> str:
     """A credential_dir() made by a task of *run* on this worker, with a secret in it."""
-    with mock.patch.object(app_base, "_current_run_key", return_value=run):
+    with mock.patch.object(run_scope, "_current_run_key", return_value=run):
         d = credential_utils.credential_dir()
     with open(os.path.join(d, "keytab"), "wb") as f:
         f.write(b"secret")
@@ -75,7 +75,7 @@ class TestSweepClosedRuns:
 
         assert not os.path.lexists(done) and not os.path.lexists(failed)
         assert os.path.isdir(live)
-        assert app_base._runs_with_credential_dirs() == [("wf-c", "run-live")]
+        assert run_scope._runs_with_credential_dirs() == [("wf-c", "run-live")]
         assert done not in credential_utils._issued_dirs
         assert live in credential_utils._issued_dirs
 
@@ -92,7 +92,7 @@ class TestSweepClosedRuns:
             _client({"run-x": RPCError("unavailable", RPCStatusCode.UNAVAILABLE, b"")})
         )
         assert os.path.isdir(kept)
-        assert app_base._runs_with_credential_dirs() == [("wf-a", "run-x")]
+        assert run_scope._runs_with_credential_dirs() == [("wf-a", "run-x")]
 
     async def test_nothing_tracked_means_no_temporal_calls(self) -> None:
         client = _client({})
@@ -121,7 +121,7 @@ class TestWorkerLifecycle:
         assert sweeper.done()
         assert app_worker._credential_sweeper is None
         assert not os.path.lexists(live)
-        assert app_base._runs_with_credential_dirs() == []
+        assert run_scope._runs_with_credential_dirs() == []
 
     async def test_run_removes_everything_when_the_worker_stops(self) -> None:
         live = _dir_of(("wf-a", "run-live"))

@@ -303,7 +303,9 @@ class TestBuildIdentityInLifecycleMessage:
         # Start alone is not enough: a run whose logs are truncated from the top
         # still has to answer which build produced it, and a failed run may
         # never reach the end. Both boundaries carry the same marker.
-        source = pathlib.Path("application_sdk/app/base.py").read_text()
+        source = pathlib.Path(
+            "application_sdk/execution/_temporal/app_workflow.py"
+        ).read_text()
         assert 'f"App started {_BUILD_IDENTITY}"' in source
         assert 'f"App completed {_BUILD_IDENTITY}"' in source
 

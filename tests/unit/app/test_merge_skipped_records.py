@@ -11,6 +11,7 @@ from application_sdk.contracts.skipped_records import (
     MergeSkippedRecordsInput,
     MergeSkippedRecordsOutput,
 )
+from application_sdk.execution._temporal import app_workflow
 from application_sdk.outputs import Metric, OutputCollector, current_outputs
 from application_sdk.outputs.skipped import (
     SKIPPED_RECORDS_METRIC,
@@ -39,14 +40,14 @@ def app():
 
 async def test_no_skips_schedules_nothing(collector, app):
     collector.add_metric(Metric(name="tables", value=5))
-    await base._merge_skipped_records(app)
+    await app_workflow._merge_skipped_records(app)
     app.merge_skipped_records.assert_not_awaited()
 
 
 async def test_skips_schedule_the_merge_with_counts(collector, app):
     collector.add_metric(Metric(name=SKIPPED_RECORDS_METRIC, value=7))
     collector.add_metric(Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=2))
-    await base._merge_skipped_records(app)
+    await app_workflow._merge_skipped_records(app)
     app.merge_skipped_records.assert_awaited_once_with(
         MergeSkippedRecordsInput(skipped_count=7, unpersisted_count=2)
     )
@@ -56,8 +57,8 @@ async def test_merge_failure_fails_open_and_counts_the_rest(collector, app):
     collector.add_metric(Metric(name=SKIPPED_RECORDS_METRIC, value=7))
     collector.add_metric(Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=2))
     app.merge_skipped_records.side_effect = RuntimeError("store down")
-    with mock.patch.object(base, "_safe_log") as safe_log:
-        await base._merge_skipped_records(app)
+    with mock.patch.object(app_workflow, "_safe_log") as safe_log:
+        await app_workflow._merge_skipped_records(app)
 
     assert safe_log.call_args.args[0] == "error"
     assert collector.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC) == 7

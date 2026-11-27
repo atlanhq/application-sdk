@@ -6,16 +6,14 @@ import inspect
 import os
 import re
 import shutil
-import sys
 import threading
 import types
 import warnings
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path, PurePosixPath
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,23 +21,17 @@ from typing import (
     Literal,
     Never,
     ParamSpec,
-    Sequence,
     TypeVar,
-    cast,
-    get_type_hints,
 )
 from uuid import UUID
 
-from pydantic import BaseModel
 from temporalio import activity, workflow
-from temporalio.exceptions import ActivityError, FailureError
-from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 
 from application_sdk import _deprecation
 from application_sdk._context_errors import (  # re-exported; defined in the api distribution
     AppContextError,
 )
-from application_sdk._runtime.offload import run_best_effort, run_in_thread
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app._app_config_validation import validate_app_config
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
@@ -51,8 +43,6 @@ from application_sdk.app._ep_registration import (
 from application_sdk.app._run_scratch import run_scratch_dir as _run_scratch_dir
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
-    ObjectStoreNotConfiguredError,
-    UpstreamObjectStoreNotConfiguredError,
 )
 from application_sdk.app.context import (
     AppContext,
@@ -61,19 +51,13 @@ from application_sdk.app.context import (
 )
 from application_sdk.app.entrypoint import (
     EntryPointDeclarationError,
-    EntryPointMetadata,
-    canonical_workflow_type,
-    workflow_type_class_segment,
 )
-from application_sdk.app.registry import AppMetadata, resolve_pool_queue
-from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.app.registry import AppMetadata
+from application_sdk.app.task import task
 from application_sdk.common._env import env_bool
 from application_sdk.constants import (
     APPLICATION_VERSION,
-    ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
     COMMIT_SHA,
-    LOCAL_WORKFLOW_ID,
-    _run_prefix,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -100,51 +84,32 @@ from application_sdk.contracts.storage import (
     VerifyRefsInput,
     VerifyRefsOutput,
 )
-from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.errors._legacy_codes import ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.base import _LegacyErrorCodeMixin
-from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
-from application_sdk.errors.leaves import InternalError as _InternalError
-from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
-from application_sdk.execution._temporal._activity_errors import RunTempDirEscapeError
-from application_sdk.execution.errors import ApplicationError
-from application_sdk.execution.retry import RetryPolicy as _RP
-from application_sdk.execution.retry import (
-    _to_temporal_retry_policy,
-    resolve_activity_time_bounds,
+from application_sdk.execution._temporal.run_scope import (
+    _current_run_key,
 )
 from application_sdk.handler.contracts import PreflightGateMode
 
-# Fixed event name for the structured, queryable transformed-asset validation
-# outcome. Emitted on every upload from inside the upload activity, so the
-# Temporal activity context (workflow_id/run_id/app_name) is auto-stamped and the
-# row joins to the workflow outcome in ClickHouse — mirrors the preflight gate's
-# outcome event. Scalar counts land as top-level LogAttributes; the per-failure
-# drill-down rides in the ``asset_validation_matrix`` JSON attribute. The name now
-# lives in the shared event-name registry alongside the preflight gate's two and
-# the generic artifact-validation one; its value is **unchanged** by that move,
-# because shipped dashboards and alert rules key off the exact string.
-from application_sdk.observability.events import ASSET_VALIDATION_EVENT
+# Kept importable from here: the event's emitter lived in this module, and v3
+# has shipped that import site (tests/unit/observability/test_event_registry.py).
+from application_sdk.observability.events import (  # noqa: F401
+    ASSET_VALIDATION_EVENT,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.outputs import Metric, get_outputs
 from application_sdk.outputs.fetch_failures import (
     FETCH_FAILURES_LAYOUT,
-    FETCH_FAILURES_METRIC,
     FETCH_FAILURES_TRUNCATED_METRIC,
-    FETCH_FAILURES_UNPERSISTED_METRIC,
 )
-from application_sdk.outputs.skipped import (
-    SKIPPED_RECORDS_METRIC,
-    SKIPPED_RECORDS_UNPERSISTED_METRIC,
-)
+from application_sdk.storage import _app_tasks
+from application_sdk.storage._app_tasks import _cleanup_ref_key
 from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
-    from obstore.store import ObjectStore
-
-    from application_sdk.execution.progress import ProgressWatchdogMode
     from application_sdk.validation.asset_rules import AssetCreationRules
 
 _task_logger = get_logger(__name__)
@@ -153,19 +118,6 @@ try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
 except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
-
-# Cap on how many failure/orphan rows the event's drill-down matrix carries, and how
-# many the human-readable ``format_report()`` lists, from the single source of truth
-# in ``constants`` so the two can never drift. The event's scalar counts always
-# reflect the full batch; the matrix is a bounded drill-down sample so a pathological
-# batch can't produce an unbounded LogAttributes value. Passed explicitly to
-# ``format_report(max_items=...)`` below to make the shared cap obvious at the call
-# site.
-#
-# The matrix builder itself, and the whole event attribute map, moved to
-# ``validation.assets`` with the fold-in (FND-690): the event and the check that
-# feeds it now live in one module. The emitted row is unchanged by that move.
-_VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 
 #: Retry shape for the four framework tasks that move bytes across a store
 #: boundary — ``upload``, ``download``, ``verify_refs``, ``upload_refs``.
@@ -199,267 +151,6 @@ _VALIDATION_MATRIX_MAX_ROWS = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 _STORE_TRANSFER_MAX_ATTEMPTS = 4
 _STORE_TRANSFER_INITIAL_INTERVAL_SECONDS = 10
 _STORE_TRANSFER_MAX_INTERVAL_SECONDS = 60
-
-
-def _resolve_transformed_target(local_path: str) -> "Path | None":
-    """Locate the ``transformed/`` asset subtree under ``local_path``, if any.
-
-    Returns the path to validate, or ``None`` when there is nothing to validate
-    (``local_path`` is not a ``transformed/`` asset subtree — e.g. a raw upload).
-    """
-    if not local_path:
-        return None
-    root = Path(local_path)
-    if root.is_dir():
-        transformed = root / "transformed"
-        if transformed.is_dir():
-            return transformed
-        if "transformed" in root.parts:
-            return root
-        return None
-    if "transformed" in root.parts:
-        return root
-    return None
-
-
-async def _warn_on_invalid_transformed_assets(
-    local_path: str | Sequence[str],
-    app_name: str,
-    *,
-    not_local: Sequence[str] = (),
-    creation_rules: "frozenset[AssetCreationRules]" = frozenset(),
-) -> None:
-    """Best-effort, warn-only validation of transformed asset NDJSON before upload.
-
-    BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
-    holds transformed asset output, every record is validated against the
-    pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass). On
-    **every** upload a structured :data:`ASSET_VALIDATION_EVENT` is emitted with
-    the per-axis counts, a compact per-failure ``asset_validation_matrix`` JSON
-    attribute (a bounded sample) and an ``asset_validation_summary`` JSON attribute
-    (complete per-type, per-rule counts), all allowlisted for OTLP so they reach ClickHouse and join to the
-    workflow outcome by Temporal run id (mirrors the preflight gate's outcome
-    event). A ``clean`` outcome is emitted too, so there is a denominator to rank
-    flag-rate against. A human-readable WARNING with the full ``format_report()``
-    is additionally logged only when the batch is flagged. Extracts and transforms
-    are full by design by default, so the batch — the whole hand-off, see below —
-    is complete and the orphan pass is accurate. This **never** blocks the upload
-    and **never** raises — a defect in the scaffold must not break a real handoff
-    — and it scans every record (no sampling) so the summary is accurate.
-
-    **The check is reached through the generic wrapper** (ADR-0020, FND-690):
-    ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x
-    ``ModelSource`` cell, and that cell *is*
-    :func:`~application_sdk.validation.assets.validate_transformed_dir` — same walk,
-    same decode, same referential pass. What the wrapper adds is a second, generic
-    outcome vocabulary over the same findings, and a guarantee this hook used to
-    provide itself: every path through it resolves to a report rather than an
-    exception.
-
-    ``ASSET_VALIDATION_EVENT`` is emitted exactly as before. Its name and every
-    attribute key are a shipped contract — dashboards, the
-    ``asset_validation_matrix`` attribute and alert rules key off those exact
-    strings — so the row is built by
-    :func:`~application_sdk.validation.assets.asset_validation_event_fields` from the
-    asset-vocabulary report the cell carries, i.e. from the same object this hook
-    emitted from before the fold-in. This hook does **not** additionally emit
-    ``ARTIFACT_VALIDATION_EVENT``: one hand-off, one row.
-
-    **Only a bounded outcome comes back from the scan** (FND-4088). The full
-    report is unbounded — every failure, twice — so the event's attribute map and
-    the capped ``format_report()`` text are built inside the isolated child by
-    :func:`~application_sdk.validation.assets.summarize_asset_validation`, and only
-    that :class:`~application_sdk.validation.assets.AssetValidationOutcome` is
-    pickled back. A batch that fails on every record costs this worker the cap,
-    not the batch.
-
-    The scan runs via
-    :func:`application_sdk._runtime.offload.run_best_effort`, for two reasons.
-    It keeps the event loop and the activity's auto-heartbeat free while a large
-    batch is validated (ADR-0010). More importantly, it makes the never-raises
-    contract hold even against *native* faults: the decode exercises third-party
-    C extensions (msgspec via pyatlan_v9), and a segfault there is not a Python
-    exception — in-process it would kill the whole Temporal worker (as one did,
-    CNCT-85). ``run_best_effort`` isolates the scan in a child process, so a
-    crash kills only the child; it then logs the warning and the handoff
-    proceeds. The timeout bounds the scan for the same reason — a hung
-    validation must not stall an upload forever. The wrapper is synchronous by
-    design precisely so this caller owns that decision.
-
-    **The batch is the whole hand-off, not one file** (FND-3414). The orphan pass
-    is only accurate over everything delivered together: a fanned-out connector
-    writes one file per typename, so a child's parent is routinely in a sibling
-    file. ``local_path`` is therefore either one path (``upload``) or every
-    declared part of a fan-in delivery (``upload_refs``), validated as one batch
-    with one :data:`ASSET_VALIDATION_EVENT`. One part goes through the wrapper as
-    above; several go straight to
-    :func:`~application_sdk.validation.assets.validate_assets_as_artifact` — the
-    cell the wrapper dispatches that one part to — because the wrapper's unit is
-    a single artifact path and the parts share no local root to hand it.
-
-    A declared part that is not on this pod (a distributed fan-in, where the
-    upload streams it from the deployment store) makes the batch incomplete.
-    ``upload_refs`` passes those parts' store keys as ``not_local``. When any of
-    them is a transformed part, the orphan pass is skipped with a warning, and
-    per-asset validation still runs over the parts that are local — reporting a
-    parent as missing because it was written on another pod would be the false
-    positive this fixes. When *no* transformed part is local, the same warning
-    says validation was skipped entirely, so a fully distributed fan-in is never
-    silent.
-
-    ``creation_rules`` (the app's :attr:`App.asset_validation_rules`) adds the
-    opt-in create-time checks pyatlan no longer runs. The wrapper's
-    ``ModelSource`` carries no asset-specific options, so a non-empty rule set
-    goes straight to the cell, as a multi-part batch already does.
-    """
-    from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
-        VALIDATE_ASSETS_ON_UPLOAD,
-        VALIDATE_ASSETS_TIMEOUT_SECONDS,
-    )
-
-    # Cheap checks stay in-parent so a disabled feature or a raw upload never
-    # pays for a child-process dispatch.
-    if not VALIDATE_ASSETS_ON_UPLOAD:
-        return
-    paths = [local_path] if isinstance(local_path, str) else list(local_path)
-    targets = [
-        str(target)
-        for target in map(_resolve_transformed_target, paths)
-        if target is not None
-    ]
-    remote = [key for key in not_local if "transformed" in PurePosixPath(key).parts]
-    if remote:
-        _task_logger.warning(
-            "Transformed-asset validation: %d of %d declared transformed file(s) "
-            "are not on this pod, so the batch is incomplete; %s",
-            len(remote),
-            len(remote) + len(targets),
-            (
-                "skipping the referential (orphan) check"
-                if targets
-                else "skipping validation"
-            ),
-        )
-    if not targets:
-        return
-    check_referential_integrity = not remote
-
-    from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off the import path of an app that never uploads transformed assets
-        Asset,
-    )
-
-    from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
-        AssetBatchScope,
-        ModelSource,
-        summarize_asset_validation,
-        validate_artifact,
-        validate_assets_as_artifact,
-    )
-
-    # One path is ``upload``; a list is every declared part of an ``upload_refs``
-    # fan-in (see the docstring).
-    scope = AssetBatchScope(
-        upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
-        parts_validated=len(targets),
-        parts_not_local=len(remote),
-    )
-    # Best-effort: run_best_effort isolates the scan in a child process and, on
-    # any native crash / timeout / error, logs a warning and returns None — the
-    # upload is never blocked, failed, or crashed by the validation scaffold.
-    # summarize_asset_validation builds the event and the capped report text in
-    # the child, so only that bounded outcome is pickled back into this worker,
-    # never the full report (FND-4088).
-    if len(targets) == 1 and check_referential_integrity and not creation_rules:
-        outcome = await run_best_effort(
-            summarize_asset_validation,
-            validate_artifact,
-            targets[0],
-            ModelSource(model=Asset),
-            app_name=app_name,
-            scope=scope,
-            max_items=_VALIDATION_MATRIX_MAX_ROWS,
-            label="Transformed-asset validation",
-            logger=_task_logger,
-            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
-        )
-    else:
-        outcome = await run_best_effort(
-            summarize_asset_validation,
-            validate_assets_as_artifact,
-            targets,
-            app_name=app_name,
-            scope=scope,
-            max_items=_VALIDATION_MATRIX_MAX_ROWS,
-            check_referential_integrity=check_referential_integrity,
-            creation_rules=creation_rules,
-            label="Transformed-asset validation",
-            logger=_task_logger,
-            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
-        )
-
-    if outcome is None:
-        # run_best_effort swallowed a native crash / timeout / error (it already
-        # logged a warning). The "nothing to validate" cases (flag off, not a
-        # transformed/ subtree) already returned above, so reaching here with
-        # None means the scan itself failed — no counts to emit.
-        return
-
-    if outcome.event_fields is None:
-        # The wrapper resolved to an outcome without running the cell — it never
-        # raises, so a broken plug-in or an unreadable artifact arrives as a plain
-        # report instead of an exception. There are no asset-vocabulary counts to
-        # project, and inventing zeros would put a fabricated denominator on the
-        # board. The wrapper has already logged the cause with a traceback; name the
-        # skip so the gap in the event stream is explicable.
-        _task_logger.warning(
-            "Transformed-asset validation produced no counts (%s: %s); "
-            "handoff continues",
-            outcome.outcome,
-            outcome.reason or "no reason recorded",
-        )
-        return
-
-    # Emit the structured outcome on every validated upload (clean + flagged) so
-    # the row is queryable and gives a denominator. Wrapped: a defect in the
-    # emit path must never break a real handoff.
-    try:
-        _task_logger.info(ASSET_VALIDATION_EVENT, **outcome.event_fields)
-        if outcome.flagged:
-            _task_logger.warning(
-                "Transformed-asset validation flagged issues before upload "
-                "(handoff continues): %s",
-                outcome.flagged_report,
-            )
-    except Exception:  # defense-in-depth must never break the upload
-        _task_logger.warning(
-            "Transformed-asset validation outcome emission failed (handoff continues)",
-            exc_info=True,
-        )
-
-
-_TransferOutput = TypeVar("_TransferOutput", UploadOutput, DownloadOutput)
-
-
-def _tag_ref_store(
-    out: _TransferOutput,
-    store: "ObjectStore",
-    deployment: "ObjectStore | None",
-) -> _TransferOutput:
-    """Record on *out*'s ref which store its bytes are in.
-
-    ``App.upload`` / ``App.download`` route to the upstream store when one is
-    bound, but the interceptor materialises a ref into the next task from the
-    deployment store unless the ref says otherwise. In a two-store deployment
-    those are different buckets: the downstream task lists an empty prefix and
-    fails AAF-STR-009 (FND-3795). Compared by identity, the same test
-    ``single_store`` uses — the in-cluster wiring aliases one store under both
-    names, and that stays ``DEPLOYMENT``.
-    """
-    if store is deployment or not out.ref.is_durable:
-        return out
-    return out.model_copy(
-        update={"ref": out.ref.model_copy(update={"store": StoreTarget.UPSTREAM})}
-    )
 
 
 # Type variable for require() method
@@ -503,26 +194,6 @@ def _safe_uuid() -> UUID:
     Always runs in Temporal workflow context.
     """
     return UUID(str(workflow.uuid4()))
-
-
-def _run_started_at_epoch() -> float:
-    """When this run started, in wall-clock seconds since the epoch.
-
-    Deterministic for replay: ``workflow.info().start_time`` comes from the
-    run's own history, so every replay of a run reads the same instant and the
-    run-length observation measures the run rather than the attempt that
-    happens to be replaying it.
-
-    Returns ``0.0`` outside a workflow context — a task invoked directly in a
-    test or a local run has no run to measure. Never raises: this value only
-    feeds an alert, so failing to read it must cost the observation and nothing
-    else.
-    """
-    try:
-        start_time = workflow.info().start_time
-    except Exception:  # noqa: BLE001 — probe for Temporal workflow context; the value only feeds an observability signal, so any failure degrades to "unknown run start"
-        return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
-    return start_time.timestamp() if start_time is not None else 0.0
 
 
 def _format_build_identity() -> str:
@@ -776,100 +447,6 @@ def _get_execution_id_from_task() -> str:
     return wid
 
 
-#: Credential file directories this worker process wrote, by the run that
-#: wrote them: ``(workflow_id, run_id) -> paths``. Process-wide, not in
-#: ``_app_state``, because the files sit on this worker's disk while the run's
-#: ``cleanup_files`` may run on another worker and its state slot is pruned on
-#: whichever worker ran the workflow. Whatever the run's own cleanup does not
-#: reach, the worker's sweeper removes once Temporal reports the run closed
-#: (``execution._temporal.credential_sweep``), and the rest at worker shutdown.
-_credential_dirs_by_run: dict[tuple[str, str], set[str]] = {}
-_credential_dirs_lock = threading.Lock()
-
-
-def _current_run_key() -> tuple[str, str]:
-    """``(workflow_id, run_id)`` of the run the current task belongs to.
-
-    Raises:
-        AppContextError: If called outside a task.
-    """
-    # One guarded probe for both ids: outside an activity, temporalio raises a
-    # bare RuntimeError, which must surface as the AppContextError documented
-    # here and on get_app_state / set_app_state.
-    try:
-        info = activity.info()
-        workflow_id = info.workflow_id
-        run_id = info.workflow_run_id
-    # conformance: ignore[E004] probe for Temporal activity context; broad catch is intentional, exception re-raised as typed AppContextError
-    except Exception as e:
-        raise AppContextError("Cannot access app state outside of task context") from e
-    if not workflow_id:
-        raise AppContextError("activity workflow_id is empty")
-    if not run_id:
-        raise AppContextError("activity workflow_run_id is empty")
-    return workflow_id, run_id
-
-
-def _track_credential_dir(path: str) -> None:
-    """SDK-internal: register a credential file directory with the current run.
-
-    Called by ``credentials.utils`` from inside a task for each private
-    directory it makes. The run's ``cleanup_files`` removes it when it runs
-    on this worker, whatever ``extra_paths`` or ``CLEANUP_BASE_PATHS`` say;
-    otherwise this worker's sweeper does once the run has closed, so a keytab
-    or private key does not outlive the run on a long-lived worker.
-
-    Raises:
-        AppContextError: If called outside a task.
-    """
-    run = _current_run_key()
-    with _credential_dirs_lock:
-        _credential_dirs_by_run.setdefault(run, set()).add(path)
-
-
-def _runs_with_credential_dirs() -> list[tuple[str, str]]:
-    """The runs that still have credential directories on this worker."""
-    with _credential_dirs_lock:
-        return list(_credential_dirs_by_run)
-
-
-async def _remove_run_credential_dirs(run: tuple[str, str]) -> dict[str, bool]:
-    """Remove *run*'s credential directories on this worker.
-
-    Returns each directory's outcome. A removed one is untracked and dropped
-    from ``credentials.utils``' issued set; one that could not be removed is
-    logged and stays tracked, so a later cleanup or sweep retries it.
-    """
-    with _credential_dirs_lock:
-        dirs = sorted(_credential_dirs_by_run.get(run, ()))
-    results: dict[str, bool] = {}
-    for path in dirs:
-        try:
-            if os.path.lexists(path):
-                await run_in_thread(shutil.rmtree, path)
-            results[path] = True
-        except OSError:
-            _task_logger.warning(
-                "Failed to delete credential file directory", exc_info=True
-            )
-            results[path] = False
-    removed = [path for path, ok in results.items() if ok]
-    with _credential_dirs_lock:
-        remaining = _credential_dirs_by_run.get(run)
-        if remaining is not None:
-            remaining.difference_update(removed)
-            if not remaining:
-                del _credential_dirs_by_run[run]
-    if removed:
-        from application_sdk.credentials.utils import (  # noqa: PLC0415 — lazy: only needed once a run made a credential directory; keeps credentials.utils off app.base's import path
-            _forget_credential_dir,
-        )
-
-        for path in removed:
-            _forget_credential_dir(path)
-    return results
-
-
 def _runs_with_app_state() -> list[tuple[str, str]]:
     """The runs that still hold an app-state slot on this worker."""
     with _app_state_lock:
@@ -1014,25 +591,6 @@ async def _release_slot(slot: dict[str, Any]) -> None:
                 key,
                 exc_info=True,
             )
-
-
-def _cleanup_ref_key(ref: FileReference) -> tuple[object, ...]:
-    """Identity of the stored object(s) a ref names, for cleanup dedup."""
-    return (ref.storage_path, ref.store, ref.tier, ref.manifest_path)
-
-
-def _merge_cleanup_refs(
-    tracked: Iterable[FileReference], carried: Iterable[FileReference]
-) -> list[FileReference]:
-    """Combine this worker's tracked refs with the workflow's carried ones.
-
-    Keeps one ref per stored object, so a key reaching ``cleanup_storage`` by
-    both routes is deleted and counted once. Tracked refs come first.
-    """
-    merged: dict[tuple[object, ...], FileReference] = {}
-    for ref in (*tracked, *carried):
-        merged.setdefault(_cleanup_ref_key(ref), ref)
-    return list(merged.values())
 
 
 class _RunStoredRefs:
@@ -1610,8 +1168,12 @@ class App(ABC):
             # contract and must not propagate to subclasses through the MRO.
             legacy_workflow_types=cls.__dict__.get("legacy_workflow_types", {}),
         )
-        if workflow.unsafe.in_sandbox():
-            _install_workflow_classes(cls)
+        # Rebuild the generated workflow classes on the sandbox's copy of the
+        # app module. ``application_sdk.app`` and ``application_sdk.execution``
+        # are passed through the sandbox, so the installer is the host's,
+        # registered when the worker imported the generation module.
+        if workflow.unsafe.in_sandbox() and _sandbox_workflow_installer is not None:
+            _sandbox_workflow_installer(cls)
 
     @property
     def context(self) -> AppContext:
@@ -2075,146 +1637,7 @@ class App(ABC):
         ``validate_assets=False`` because it validates its whole declaration as
         one batch instead of one file at a time (FND-3414).
         """
-        from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
-            DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
-            DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
-            ENABLE_ATLAN_UPLOAD,
-        )
-        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
-            normalize_key,
-        )
-        from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
-            upload as _upload,
-        )
-
-        deployment = self.context.storage
-        upstream = self.context.upstream_storage
-
-        # BLDX-1619: a deployment that set ENABLE_ATLAN_UPLOAD expects artifacts
-        # in Atlan's bucket. Falling back to the deployment store here returns a
-        # positive file count for a write publish will never see, so fail before
-        # doing any work rather than after.
-        if ENABLE_ATLAN_UPLOAD and upstream is None:
-            raise UpstreamObjectStoreNotConfiguredError()
-
-        # BLDX-1555 defense-in-depth: validate transformed assets against the
-        # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
-        # run in an isolated child process (CNCT-85) so a native decode fault
-        # kills only the child and never blocks or crashes the event loop.
-        if validate_assets:
-            await _warn_on_invalid_transformed_assets(
-                input.local_path,
-                self._app_name,
-                creation_rules=self.asset_validation_rules,
-            )
-
-        # Build the ordered list of (store, label, fatal) upload targets.
-        # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
-        if (
-            DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED
-            and upstream is not None
-            and deployment is not None
-            and upstream is not deployment
-        ):
-            targets = [
-                (deployment, "deployment", DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED),
-                (upstream, "upstream", True),
-            ]
-        else:
-            single = upstream or deployment
-            if single is None:
-                raise ObjectStoreNotConfiguredError()
-            targets = [
-                (single, "upstream" if single is upstream else "deployment", True)
-            ]
-
-        run_prefix = _run_prefix(
-            self._app_name, self.context.workflow_id, self.context.run_id
-        )
-        app_prefix = input.tier.upload_prefix(
-            run_prefix=run_prefix, app_name=self._app_name
-        )
-
-        # Derive the FileReference for cross-store dedup / deployment-store fallback.
-        # normalize_key strips TEMPORARY_PATH → canonical deployment-store key.
-        # Guard: "" means local_path resolved to the store root — skip source_ref.
-        _store_key = normalize_key(input.local_path) if input.local_path else ""
-        source_ref = input.ref or (
-            FileReference(local_path=input.local_path, storage_path=_store_key)
-            if _store_key
-            else None
-        )
-
-        # Fan-out: iterate targets in order. Fatal failures are deferred until all
-        # remaining targets complete so the upstream write always runs and a copy
-        # lands somewhere. If both writes fail the deployment error is chained as
-        # __cause__ of the upstream error so neither traceback is lost.
-        result: UploadOutput | None = None
-        deferred_required_error: Exception | None = None
-        for target_store, label, fatal in targets:
-            # FND-536: every leg — including the deployment leg — gets the
-            # deployment store as its fallback source. Withholding it there made
-            # a deployment→deployment copy inexpressible: with ``local_path``
-            # absent (cross-pod / ref-only, the shape the P042 bridges use)
-            # ``transfer.upload`` could not take its deployment-store fallback
-            # branch and raised "local_path does not exist", which is a spurious
-            # WARNING under ``best_effort`` and fails the run under ``required``.
-            # Passing it costs nothing on the local-present paths: the directory
-            # reconcile is gated on a *distinct* source store, the single-file
-            # path never reads it, and ``_upload_from_store`` short-circuits a
-            # same-store copy of an identical key without any sidecar GET.
-            source_store = self.context.storage
-            try:
-                out = await _upload(
-                    input.local_path,
-                    input.storage_path,
-                    storage_subdir=input.storage_subdir,
-                    skip_if_exists=input.skip_if_exists,
-                    raise_on_empty=input.raise_on_empty,
-                    store=target_store,
-                    _source_ref=source_ref,
-                    _source_store=source_store,
-                    _app_prefix=app_prefix,
-                    _tier=input.tier,
-                    _output_path=run_prefix,
-                )
-            except Exception as exc:
-                if fatal:
-                    _task_logger.error(
-                        "Object-store upload to %s store failed for prefix %s; "
-                        "will fail run after remaining targets complete",
-                        label,
-                        app_prefix,
-                        exc_info=True,
-                    )
-                    if deferred_required_error is not None:
-                        # Both writes failed: chain the earlier error as __cause__ so
-                        # neither traceback is lost when the exception is surfaced.
-                        exc.__cause__ = deferred_required_error
-                    deferred_required_error = exc
-                else:
-                    _task_logger.warning(
-                        "Object-store upload to %s store failed for prefix %s "
-                        "(non-fatal); continuing to next target",
-                        label,
-                        app_prefix,
-                        exc_info=True,
-                    )
-                continue
-            result = _tag_ref_store(
-                out, target_store, deployment
-            )  # last successful write is authoritative (upstream in SDR)
-
-        if deferred_required_error is not None:
-            raise deferred_required_error
-        if result is None:
-            # Unreachable under current target-construction logic (the single-target
-            # branch is always fatal=True), but guards against future changes.
-            raise _InternalError(
-                message="App.upload fan-out captured no result — this is a programming error",
-                invariant="upload fan-out must produce at least one result",
-            )
-        return result
+        return await _app_tasks.upload(self, input, validate_assets=validate_assets)
 
     # No ``timeout_seconds``, for the same reason as ``upload`` — symmetric knob,
     # symmetric problem, and ``transfer.download`` marks progress per file and
@@ -2269,33 +1692,7 @@ class App(ABC):
 
             dl = await self.download(DownloadInput(ref=input.model_ref))
         """
-        from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
-            download as _download,
-        )
-
-        store = self.context.upstream_storage or self.context.storage
-        if store is None:
-            raise ObjectStoreNotConfiguredError()
-        # Resolve storage_path: explicit field takes precedence over ref.storage_path
-        storage_path = input.storage_path
-        if not storage_path and input.ref is not None:
-            storage_path = input.ref.storage_path or ""
-
-        # A ref this run produced keeps its tier, so its TRANSIENT output is
-        # still cleaned up; any other key is not the run's to delete (FND-3815).
-        tier = input.tier
-        if tier is None:
-            ref = input.ref
-            from_ref = ref is not None and storage_path == ref.storage_path
-            tier = ref.tier if ref is not None and from_ref else StorageTier.RETAINED
-        out = await _download(
-            storage_path,
-            input.local_path,
-            skip_if_exists=input.skip_if_exists,
-            store=store,
-            tier=tier,
-        )
-        return _tag_ref_store(out, store, self.context.storage)
+        return await _app_tasks.download(self, input)
 
     # No ``timeout_seconds``: the work here is one store round-trip per declared
     # ref, so any number picked would scale with the size of the declaration —
@@ -2369,156 +1766,7 @@ class App(ABC):
         :meth:`upload_refs` uses it to check its own delivery without calling a
         ``@task`` from inside a ``@task``.
         """
-        from application_sdk._runtime.progress import (  # noqa: PLC0415 — circular: _runtime imports app contracts
-            current_progress_tracker,
-        )
-        from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            list_data_keys,
-        )
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            StorageHandoffIncompleteError,
-        )
-        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            _exists_confirmed,
-        )
-        from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-            _fetch_manifest,
-        )
-
-        if input.store is StoreTarget.UPSTREAM:
-            store = self.context.upstream_storage or self.context.storage
-        else:
-            store = self.context.storage
-        if store is None:
-            raise ObjectStoreNotConfiguredError()
-
-        prefix = input.prefix.strip("/")
-        missing: list[str] = []
-        outside: list[str] = []
-        verified_file_count = 0
-        # Parent listings taken to confirm a HEAD miss, keyed by listing
-        # prefix. Sibling refs share a parent, so during a gateway outage that
-        # fails many HEADs one listing answers all of them instead of
-        # re-enumerating the same folder once per ref.
-        parent_listings: dict[str, dict[str, tuple[int, str | None]]] = {}
-
-        for ref in input.refs:
-            raw_key = ref.storage_path or ""
-            key = raw_key.strip("/")
-            if not key:
-                # A producer that cannot say where it wrote has declared
-                # nothing — that is the hole, not a reason to skip the check.
-                missing.append("<no storage_path>")
-                continue
-            if prefix and not (key == prefix or key.startswith(prefix + "/")):
-                outside.append(key)
-                continue
-
-            # Directory or single file? Two independent signals, because
-            # neither alone is sufficient:
-            #
-            # * The trailing slash is what ``persist_file_reference``'s
-            #   directory branch writes (``_make_storage_prefix`` always ends
-            #   in ``/``), and it survives a directory holding exactly one
-            #   file — which ``file_count`` does not.
-            # * ``file_count`` catches a directory ref whose key was pinned by
-            #   hand without the slash.
-            #
-            # Getting this wrong is not a near-miss: a one-file directory ref
-            # HEADed as an object key 404s on a prefix that is perfectly
-            # intact, so the run fails claiming data is lost when it is not.
-            if ref.manifest_path is not None:
-                # The producer wrote the manifest last, so it names exactly the
-                # objects the hand-off covers; stray objects under a reused
-                # prefix cannot pad the count.
-                manifest = await _fetch_manifest(store, ref.manifest_path)
-                if manifest is None:
-                    missing.append(f"{ref.manifest_path} (manifest)")
-                    continue
-                listed = len(manifest.files)
-                if listed < max(ref.file_count, 1):
-                    missing.append(
-                        f"{key}/ (manifest lists {listed}/{ref.file_count} files)"
-                    )
-                    continue
-                # The manifest proves every object landed when it was written,
-                # not that they are still there. One listing answers that for
-                # every entry; it is a subset check, so stray objects under a
-                # reused prefix still cannot stand in for a missing one.
-                present = set(
-                    await list_data_keys(key + "/", store=store, normalize=False)
-                )
-                absent = [
-                    e.path for e in manifest.files if f"{key}/{e.path}" not in present
-                ]
-                if absent:
-                    missing.append(
-                        f"{key}/ ({listed - len(absent)}/{listed} manifest objects)"
-                    )
-                    continue
-            elif raw_key.endswith("/") or ref.file_count != 1:
-                if ref.file_count < 1:
-                    # ``len(found) < 0`` is false for every listing, so a
-                    # zero-count ref would otherwise pass without checking
-                    # anything — a vacuous pass is indistinguishable from a
-                    # real one, which is the failure mode this task exists to
-                    # remove. A producer declaring zero files has declared
-                    # nothing to verify.
-                    missing.append(f"{key}/ (declared 0 files)")
-                    continue
-                # ``list_data_keys``, not ``list_keys``: every uploaded object
-                # carries a ``{key}.sha256`` sidecar, so a raw listing returns
-                # roughly 2N keys for N files and a tree missing half its data
-                # objects would still clear ``file_count``.
-                #
-                # The trailing slash is added explicitly. ``list_keys`` only
-                # appends one when ``normalize=True``, and this call passes
-                # ``normalize=False`` to match the key the writer used — so
-                # without it the listing would also match sibling prefixes
-                # (``transformed/table`` picking up ``transformed/table_v2/``)
-                # and count their objects toward this ref.
-                found = await list_data_keys(key + "/", store=store, normalize=False)
-                if len(found) < ref.file_count:
-                    missing.append(f"{key}/ ({len(found)}/{ref.file_count} objects)")
-                    continue
-            elif not await _exists_confirmed(
-                key, store=store, normalize=False, listing_cache=parent_listings
-            ):
-                # Confirmed, not a bare HEAD: a gateway replica without routes
-                # answers HEAD with a bodiless 404 for an existing object, so a
-                # miss is checked against a (cached) listing of the parent.
-                missing.append(key)
-                continue
-            verified_file_count += ref.file_count
-            # One store round-trip completed. A file boundary, not a record
-            # boundary (ADR-0018) — and without it this loop is a run of bare
-            # awaits with no progress signal, so a wedged HEAD against an
-            # unreachable store would hold silently to the backstop instead of
-            # being caught by the watchdog in minutes.
-            current_progress_tracker().mark_progress("storage.verify_ref")
-
-        if missing or outside:
-            raise StorageHandoffIncompleteError(
-                "Declared outputs are not all present in the object store: "
-                f"{len(missing)} missing, {len(outside)} outside the handoff "
-                f"prefix, out of {len(input.refs)} declared",
-                missing_keys=missing,
-                outside_prefix_keys=outside,
-                prefix=prefix or None,
-                declared_count=len(input.refs),
-            )
-
-        _task_logger.info(
-            "Verified %d declared file reference(s) (%d object(s)) under prefix %s",
-            len(input.refs),
-            verified_file_count,
-            prefix or "<any>",
-        )
-        return VerifyRefsOutput(
-            verified_count=len(input.refs),
-            verified_file_count=verified_file_count,
-            prefix=prefix,
-        )
+        return await _app_tasks.verify_refs(self, input)
 
     # No ``timeout_seconds``, for the same reason as ``verify_refs`` — more
     # sharply here, because a declared ref can point at a directory of any size.
@@ -2611,97 +1859,7 @@ class App(ABC):
                 )
             )
         """
-        prefix = input.prefix.strip("/")
-        if not input.files:
-            _task_logger.warning(
-                "upload_refs called with an empty declaration; returning an empty "
-                "prefix instead of %s, which names an empty tree",
-                prefix or "<run prefix>",
-            )
-            return UploadRefsOutput()
-
-        source_prefix = input.source_prefix.strip("/")
-
-        # Validate the declaration as one batch, not per file (FND-3414): a
-        # fanned-out connector writes one file per typename, so a child's parent
-        # is usually in a sibling file and a per-file orphan pass flags nearly
-        # every cross-typename reference. A part this pod never held is passed
-        # by store key, so the hook can say the batch is incomplete.
-        local: list[str] = []
-        not_local: list[str] = []
-        for declared in input.files:
-            path = declared.ref.local_path
-            if path and Path(path).exists():
-                local.append(path)
-            else:
-                not_local.append(declared.ref.storage_path or "")
-        await _warn_on_invalid_transformed_assets(
-            local,
-            self._app_name,
-            not_local=not_local,
-            creation_rules=self.asset_validation_rules,
-        )
-
-        delivered: list[FileReference] = []
-        file_count = 0
-        for declared in input.files:
-            source_key = (declared.ref.storage_path or "").strip("/")
-            leaf = declared.label
-            if (
-                not leaf
-                and source_prefix
-                and source_key.startswith(source_prefix + "/")
-            ):
-                leaf = source_key[len(source_prefix) + 1 :].strip("/")
-            if not leaf:
-                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
-                    UnplaceableDeclaredFileError,
-                )
-
-                raise UnplaceableDeclaredFileError(
-                    "upload_refs cannot place a declared file: it carries no "
-                    f"label and its storage_path {source_key!r} does not sit "
-                    f"under source_prefix {source_prefix!r}. Set one or the "
-                    "other — the SDK does not guess a leaf, because a guess "
-                    "that works for four entities and flattens one is worse "
-                    "than an error",
-                    storage_path=source_key,
-                    source_prefix=source_prefix,
-                )
-            out = await self._upload_impl(
-                UploadInput(
-                    ref=declared.ref,
-                    local_path=declared.ref.local_path or "",
-                    storage_path=f"{prefix}/{leaf}" if prefix else leaf,
-                    tier=input.tier,
-                    # A declared file that contributes zero objects is a hole in
-                    # the tree the consumer will walk — fail here, loudly.
-                    raise_on_empty=True,
-                ),
-                validate_assets=False,
-            )
-            delivered.append(out.ref)
-            file_count += out.ref.file_count
-
-        if input.verify:
-            await self._verify_refs_impl(
-                VerifyRefsInput(
-                    refs=[
-                        r.model_copy(update={"auto_materialize": False})
-                        for r in delivered
-                    ],
-                    prefix=prefix,
-                    store=StoreTarget.UPSTREAM,
-                )
-            )
-
-        _task_logger.info(
-            "Delivered %d declared file(s) (%d object(s)) to prefix %s",
-            len(delivered),
-            file_count,
-            prefix or "<store root>",
-        )
-        return UploadRefsOutput(prefix=prefix, refs=delivered, file_count=file_count)
+        return await _app_tasks.upload_refs(self, input)
 
     # Keeps its ``timeout_seconds``, unlike upload/download/verify_refs/upload_refs.
     # The ADR-0018 backstop only replaces a duration bound where the work emits
@@ -2731,86 +1889,7 @@ class App(ABC):
         Call this from ``on_complete()`` (the default implementation does so
         automatically).  Do not call it directly from ``run()``.
         """
-
-        from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
-            CLEANUP_BASE_PATHS,
-            TRACKED_FILE_REFS_KEY,
-        )
-        from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            run_temp_dir,
-        )
-
-        path_results: dict[str, bool] = {}
-
-        async def _remove_path(path: str) -> None:
-            """Delete ``path`` (file or directory) off the event loop.
-
-            Offloaded because ``rmtree``/``remove`` over a large tracked
-            directory is syscall-bound and can run long enough to starve the
-            auto-heartbeat if it ran directly on the event loop.
-            """
-            if os.path.isdir(path):
-                await run_in_thread(shutil.rmtree, path)
-            else:
-                await run_in_thread(os.remove, path)
-
-        # 1. Delete tracked FileReference local paths (+ .sha256 sidecars).
-        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
-        if tracked_refs:
-            for ref in tracked_refs:
-                if ref.local_path:
-                    for p in (ref.local_path, ref.local_path + ".sha256"):
-                        try:
-                            if os.path.exists(p):
-                                await _remove_path(p)
-                            path_results[p] = True
-                        except Exception:
-                            _task_logger.warning(
-                                "Failed to delete local path during cleanup",
-                                exc_info=True,
-                            )
-                            path_results[p] = False
-
-        # 2. Delete this run's credential file directories on this worker.
-        #    Tracked separately because they hold secrets and live outside
-        #    the run scratch dir, so no convention-based sweep below reaches
-        #    them. Ones written on another worker are removed there, by its
-        #    sweeper, once the run has closed.
-        path_results.update(await _remove_run_credential_dirs(_current_run_key()))
-
-        # 3. Delete convention-based temp directories.
-        if input.extra_paths:
-            dir_paths: list[str] = input.extra_paths
-        elif CLEANUP_BASE_PATHS:
-            dir_paths = CLEANUP_BASE_PATHS
-        else:
-            # The same directory a path-less FileReference materialises into
-            # (storage/reference.py ``_default_materialize_dir``), so those
-            # downloads go with the run instead of piling up on the pod.
-            try:
-                dir_paths = [run_temp_dir()]
-            except RunTempDirEscapeError:
-                # A workflow ID with ``..`` segments: deleting what it points
-                # at would reach outside TEMPORARY_PATH, so sweep nothing.
-                _task_logger.warning(
-                    "Skipping the run scratch directory sweep: it resolves "
-                    "outside TEMPORARY_PATH"
-                )
-                dir_paths = []
-
-        for base_path in dir_paths:
-            try:
-                if os.path.exists(base_path):
-                    await _remove_path(base_path)
-                path_results[base_path] = True
-            except Exception:
-                _task_logger.warning(
-                    "Failed to delete temp directory during cleanup",
-                    exc_info=True,
-                )
-                path_results[base_path] = False
-
-        return CleanupOutput(path_results=path_results)
+        return await _app_tasks.cleanup_files(self, input, state=TaskStateAccessor())
 
     # Keeps its ``timeout_seconds`` for the same reason as ``cleanup_files``, and
     # more strongly: heartbeating is disabled on this task outright, so there is
@@ -2856,192 +1935,7 @@ class App(ABC):
         zero counts.  Individual delete errors increment ``error_count`` but
         never abort the task.
         """
-        from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
-            PROTECTED_STORAGE_PREFIXES,
-            TRACKED_FILE_REFS_KEY,
-        )
-        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            build_output_path,
-        )
-        from application_sdk.storage.ops import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
-            _resolve_store,
-            delete,
-        )
-
-        store = self.context.storage if self._context is not None else None
-        if store is None:
-            return StorageCleanupOutput()
-
-        resolved = _resolve_store(store)
-
-        deleted = 0
-        skipped = 0
-        errors = 0
-
-        MAX_CONCURRENT_DELETES = 20
-        sem = asyncio.Semaphore(MAX_CONCURRENT_DELETES)
-
-        async def _delete_one(key: str) -> bool:
-            async with sem:
-                try:
-                    await delete(key, store, normalize=False)
-                    return True
-                except Exception:
-                    _task_logger.warning(
-                        "Object store delete failed during cleanup",
-                        exc_info=True,
-                    )
-                    return False
-
-        # 1. Delete tracked transient objects: the refs this worker tracked,
-        # plus the refs the workflow read off every task's input and result
-        # (``input.file_refs``), which cover the tasks that ran on other
-        # workers. One entry per stored object, this worker's copy first.
-        tracked_refs = _merge_cleanup_refs(
-            TaskStateAccessor().get(TRACKED_FILE_REFS_KEY) or (), input.file_refs
-        )
-
-        # Keys a RETAINED/PERSISTENT ref in this run points at. A TRANSIENT ref
-        # can alias one of them (an app that hand-builds a TRANSIENT ref on a key
-        # ``upload_refs`` delivered as RETAINED), and deleting through the alias
-        # would destroy what the durable ref promises downstream. The durable
-        # tier wins: such keys are skipped, never deleted, by this pass.
-        durable_keys: set[str] = set()
-        durable_prefixes: list[str] = []
-        for ref in tracked_refs:
-            durable_path: str | None = getattr(ref, "storage_path", None)
-            if not durable_path:
-                continue
-            if getattr(ref, "tier", StorageTier.TRANSIENT) == StorageTier.TRANSIENT:
-                continue
-            if durable_path.endswith("/"):
-                durable_prefixes.append(durable_path)
-            else:
-                durable_keys.update((durable_path, durable_path + ".sha256"))
-            durable_manifest: str | None = getattr(ref, "manifest_path", None)
-            if durable_manifest:
-                durable_keys.add(durable_manifest)
-
-        def _is_durable(key: str) -> bool:
-            return key in durable_keys or any(
-                key.startswith(p) for p in durable_prefixes
-            )
-
-        def _warn_durable_alias(storage_path: str, count: int) -> None:
-            _task_logger.warning(
-                "Not deleting %d key(s) of TRANSIENT ref %s: a RETAINED or "
-                "PERSISTENT ref in this run points at the same key(s). Track "
-                "each key under a single tier",
-                count,
-                storage_path,
-            )
-
-        if tracked_refs:
-            for ref in tracked_refs:
-                storage_path: str | None = getattr(ref, "storage_path", None)
-                if not storage_path:
-                    continue
-                if any(storage_path.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
-                    skipped += 1
-                    continue
-                # The ref names the upstream store; this task deletes only from
-                # the deployment store, where the same key is not this ref's.
-                if (
-                    getattr(ref, "store", StoreTarget.DEPLOYMENT)
-                    == StoreTarget.UPSTREAM
-                ):
-                    skipped += 1
-                    continue
-                tier = getattr(ref, "tier", StorageTier.TRANSIENT)
-                if tier != StorageTier.TRANSIENT:
-                    skipped += 1
-                    continue
-                if storage_path.endswith("/"):
-                    # Directory ref — stream-and-delete sub-keys.
-                    import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
-
-                    aliased = 0
-                    # async for: each page is fetched off the loop. A plain
-                    # ``for`` drives the same ListStream synchronously, blocking
-                    # the loop on every page's round trip (FND-4084).
-                    async for batch in obs.list(resolved, prefix=storage_path):
-                        tasks = []
-                        for item in batch:
-                            key = str(item["path"])
-                            if any(
-                                key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES
-                            ):
-                                skipped += 1
-                                continue
-                            if _is_durable(key):
-                                skipped += 1
-                                aliased += 1
-                                continue
-                            tasks.append(_delete_one(key))
-                        results = await asyncio.gather(*tasks)
-                        for ok in results:
-                            if ok:
-                                deleted += 1
-                            else:
-                                errors += 1
-                    # The manifest sits outside the prefix by design, so the
-                    # listing above never reaches it.
-                    manifest_key: str | None = getattr(ref, "manifest_path", None)
-                    if manifest_key:
-                        if any(
-                            manifest_key.startswith(p)
-                            for p in PROTECTED_STORAGE_PREFIXES
-                        ):
-                            skipped += 1
-                        elif _is_durable(manifest_key):
-                            skipped += 1
-                            aliased += 1
-                        elif await _delete_one(manifest_key):
-                            deleted += 1
-                        else:
-                            errors += 1
-                    if aliased:
-                        _warn_durable_alias(storage_path, aliased)
-                else:
-                    # Single file — delete key and .sha256 sidecar.
-                    aliased = 0
-                    for key in (storage_path, storage_path + ".sha256"):
-                        if _is_durable(key):
-                            skipped += 1
-                            aliased += 1
-                            continue
-                        if await _delete_one(key):
-                            deleted += 1
-                        else:
-                            errors += 1
-                    if aliased:
-                        _warn_durable_alias(storage_path, aliased)
-
-        # 2. Delete run-scoped prefix (opt-in).
-        if input.include_prefix_cleanup:
-            prefix = build_output_path() + "/"
-            import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
-
-            async for batch in obs.list(resolved, prefix=prefix):
-                tasks = []
-                for item in batch:
-                    key = str(item["path"])
-                    if any(key.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
-                        skipped += 1
-                        continue
-                    tasks.append(_delete_one(key))
-                results = await asyncio.gather(*tasks)
-                for ok in results:
-                    if ok:
-                        deleted += 1
-                    else:
-                        errors += 1
-
-        return StorageCleanupOutput(
-            deleted_count=deleted,
-            skipped_count=skipped,
-            error_count=errors,
-        )
+        return await _app_tasks.cleanup_storage(self, input, state=TaskStateAccessor())
 
     # A bounded merge of at most MAX_SKIPPED_RECORDS lines; the duration bound
     # is enough, as for cleanup_files.
@@ -3188,327 +2082,20 @@ class App(ABC):
             _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
+#: Rebuilds an app's generated workflow classes inside the Temporal sandbox.
+#: Set by ``execution._temporal.app_workflow`` when it is imported, which the
+#: worker does before any workflow runs, so this module never imports the
+#: execution runtime (FND-4263). ``None`` only in a process that has not built
+#: a worker, where nothing runs in a sandbox.
+_sandbox_workflow_installer: "Callable[[type[App]], None] | None" = None
+
+
 # =============================================================================
 # Registration helpers — see application_sdk/app/_ep_registration.py
 # =============================================================================
 # _register_tasks, _collect_implicit_ep, _scan_entrypoints,
 # _build_entry_points, _apply_app_registration are imported at the top of this
 # module from _ep_registration and re-exported via __all__ for backward compat.
-
-
-# Cache generated workflow classes keyed by (app_cls, entry_point_name,
-# workflow_type) so generate_workflow_class() is idempotent across repeated
-# calls (e.g. tests or worker re-creation) and never registers the same Temporal
-# workflow twice.
-_workflow_class_cache: dict[tuple[type, str, str], type] = {}
-
-_EARLY_RUN_BINDING_PATCH = "atlan-sdk/early-run-binding"
-"""``workflow.patched`` marker recorded by every run whose generated
-``__init__`` binds the App instance to the run (FND-5219). A history without it
-was written before that change and binds in ``_run``, as it did then."""
-
-
-def _validate_interaction_signature(
-    fn: Callable[..., Any],
-    kind: Literal["signal", "query", "update"],
-    fn_name: str,
-) -> None:
-    """Validate that a @signal / @query / @update method satisfies the interaction contract.
-
-    Rules enforced at class-definition time:
-    - ``@signal``: no params besides ``self`` (pure trigger, no payload).
-    - ``@query``: no params besides ``self``; return type must be a subclass of Output.
-    - ``@update``: exactly one param besides ``self`` that is a subclass of Input;
-      return type must be a subclass of Output.
-
-    Dynamic interactions (``name is None``) are skipped — callers must check before
-    calling this function.
-
-    Args:
-        fn: The original (undecorated) interaction function.
-        kind: One of ``"signal"``, ``"query"``, or ``"update"``.
-        fn_name: Human-readable name used in error messages.
-
-    Raises:
-        _InvalidInputError: If the signature does not satisfy the contract.
-    """
-    sig = inspect.signature(fn)
-    params = [p for p in sig.parameters.values() if p.name != "self"]
-
-    try:
-        hints: dict[str, Any] = get_type_hints(fn)
-    # conformance: ignore[E004,E009] get_type_hints probe; broad catch intentional — falls back to __annotations__ when forward refs are unresolvable
-    except Exception:  # noqa: BLE001 — get_type_hints probe; falls back to __annotations__ (see directive above)
-        hints = getattr(fn, "__annotations__", {})
-
-    if kind == "signal":
-        if params:
-            raise _InvalidInputError(
-                message=(
-                    f"@signal '{fn_name}' must have no parameters besides self "
-                    f"(signals are pure triggers — they carry no payload). "
-                    f"Got {len(params)} extra parameter(s): "
-                    f"{[p.name for p in params]}. "
-                    f"To carry data into a running workflow, use @update instead."
-                )
-            )
-
-    elif kind == "query":
-        if params:
-            raise _InvalidInputError(
-                message=(
-                    f"@query '{fn_name}' must have no parameters besides self. "
-                    f"Got {len(params)} extra parameter(s): "
-                    f"{[p.name for p in params]}. "
-                    f"Queries are read-only probes; pass context via instance fields set "
-                    f"by an earlier @update if needed."
-                )
-            )
-        return_type = hints.get("return")
-        if not (
-            return_type is not None
-            and isinstance(return_type, type)
-            and issubclass(return_type, Output)
-        ):
-            raise _InvalidInputError(
-                message=(
-                    f"@query '{fn_name}' return type must be a subclass of Output, "
-                    f"got {return_type!r}. "
-                    f"Define a dataclass that extends Output and annotate the return type."
-                )
-            )
-
-    else:  # kind == "update"
-        if len(params) != 1:
-            raise _InvalidInputError(
-                message=(
-                    f"@update '{fn_name}' must have exactly one parameter besides self "
-                    f"(a subclass of Input), got {len(params)}. "
-                    f"Wrap multiple values in a single Input dataclass."
-                )
-            )
-        param = params[0]
-        input_type = hints.get(param.name)
-        if not (
-            input_type is not None
-            and isinstance(input_type, type)
-            and issubclass(input_type, Input)
-        ):
-            raise _InvalidInputError(
-                message=(
-                    f"@update '{fn_name}' parameter '{param.name}' must be a subclass "
-                    f"of Input, got {input_type!r}. "
-                    f"Define a dataclass that extends Input and use it as the parameter type."
-                )
-            )
-        return_type = hints.get("return")
-        if not (
-            return_type is not None
-            and isinstance(return_type, type)
-            and issubclass(return_type, Output)
-        ):
-            raise _InvalidInputError(
-                message=(
-                    f"@update '{fn_name}' return type must be a subclass of Output, "
-                    f"got {return_type!r}. "
-                    f"Define a dataclass that extends Output and annotate the return type."
-                )
-            )
-
-
-def _collect_interaction_relays(
-    app_cls: "type[App]", cls_name: str
-) -> dict[str, Callable[..., Any]]:
-    """Scan the App class for @signal / @query / @update runtime interactions and
-    synthesize per-interaction relay methods bound to the generated wf_cls.
-
-    Each relay extracts the per-run App instance from ``wf_self._app_instance`` and
-    delegates the call. The synthesized relay carries Temporal's discovery metadata
-    (rebound to point at the relay), so @workflow.defn(wf_cls) registers the
-    interaction against the generated class — which is what Temporal requires.
-
-    Returns a mapping of method name -> relay callable, ready to be placed on wf_cls.
-    """
-    relays: dict[str, Callable[..., Any]] = {}
-
-    def _build_relay(
-        method_name: str, is_coroutine: bool, *, external_payload: bool = False
-    ) -> Callable[..., Any]:
-        """Construct a wf_cls-level method that delegates to self._app_instance.
-
-        ``external_payload`` marks an ``@update``: its argument comes from
-        outside the run, like a start payload, so any ``store=UPSTREAM`` ref in
-        it is demoted before app code sees it (see ``_demote_upstream_refs``).
-        """
-        if is_coroutine:
-
-            async def _async_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
-                bound = getattr(wf_self._app_instance, method_name)
-                if external_payload:
-                    args, kwargs = _demote_args(args, kwargs)
-                return await bound(*args, **kwargs)
-
-            _async_relay.__name__ = method_name
-            _async_relay.__qualname__ = f"{cls_name}.{method_name}"
-            _async_relay.__module__ = app_cls.__module__
-            return _async_relay
-
-        def _sync_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
-            bound = getattr(wf_self._app_instance, method_name)
-            if external_payload:
-                args, kwargs = _demote_args(args, kwargs)
-            return bound(*args, **kwargs)
-
-        _sync_relay.__name__ = method_name
-        _sync_relay.__qualname__ = f"{cls_name}.{method_name}"
-        _sync_relay.__module__ = app_cls.__module__
-        return _sync_relay
-
-    def _build_validator_relay(
-        orig_validator: Callable[..., Any],
-    ) -> Callable[..., Any]:
-        def vrelay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
-            return orig_validator(wf_self._app_instance, *args, **kwargs)
-
-        return vrelay
-
-    for member_name, member in inspect.getmembers(app_cls):
-        if member_name == "run":
-            # The entry method is handled separately; never relay it as an interaction.
-            continue
-
-        signal_defn = getattr(member, "__temporal_signal_definition", None)
-        query_defn = getattr(member, "__temporal_query_definition", None)
-        update_defn = getattr(member, "_defn", None)
-
-        # @workflow.update returns a callable with both `_defn` and `validator`
-        # (Temporal's runtime_checkable UpdateMethodMultiParam Protocol). The
-        # `validator` attribute distinguishes it from arbitrary objects that
-        # might happen to carry a `_defn` field.
-        is_update = update_defn is not None and hasattr(member, "validator")
-
-        if not (signal_defn or query_defn or is_update):
-            continue
-
-        # Contract enforcement — skip dynamic interactions (name is None).
-        if signal_defn is not None and signal_defn.name is not None:
-            _validate_interaction_signature(signal_defn.fn, "signal", member_name)
-        elif query_defn is not None and query_defn.name is not None:
-            _validate_interaction_signature(query_defn.fn, "query", member_name)
-        elif is_update and update_defn is not None and update_defn.name is not None:
-            _validate_interaction_signature(update_defn.fn, "update", member_name)
-
-        relay = _build_relay(
-            member_name, inspect.iscoroutinefunction(member), external_payload=is_update
-        )
-
-        if signal_defn is not None:
-            # Rebind the definition's fn to the relay so Temporal's _bind_method
-            # passes wf_self (not an App instance) as the first arg.
-            relay.__temporal_signal_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
-                signal_defn, fn=relay
-            )
-        elif query_defn is not None:
-            relay.__temporal_query_definition = replace(  # pyright: ignore[reportFunctionMemberAccess]
-                query_defn, fn=relay
-            )
-        else:
-            # update_defn is _UpdateDefinition (asserted above by `is_update`).
-            assert update_defn is not None
-            new_validator: Callable[..., Any] | None = None
-            if update_defn.validator is not None:
-                new_validator = _build_validator_relay(update_defn.validator)
-
-            relay._defn = replace(  # pyright: ignore[reportFunctionMemberAccess]
-                update_defn, fn=relay, validator=new_validator
-            )
-            # Temporal's @workflow.update decorator also sets a `.validator`
-            # attribute on the decorated fn (partial(_update_validator, defn)).
-            # We don't need it for runtime dispatch — Temporal reads the
-            # validator off the definition — but provide one so the relay
-            # structurally matches UpdateMethodMultiParam.
-            relay.validator = lambda fn: fn  # pyright: ignore[reportFunctionMemberAccess]
-
-        relays[member_name] = relay
-
-    return relays
-
-
-async def _merge_skipped_records(app_instance: "App") -> None:
-    """Schedule ``merge_skipped_records`` when the run skipped anything (FND-4881).
-
-    Workflow code. Reads the run's summed skip metrics from the workflow's
-    output collector, which already holds every completed activity's carried
-    outputs. A run with no skips schedules nothing, so its history — and the
-    replay of any run started before this path existed — is unchanged.
-    Fails open: a merge failure is logged and every skip not already counted
-    as unpersisted is recorded as ``skipped-records-unpersisted``.
-    """
-    outputs = get_outputs()
-    skipped = int(outputs.numeric_metric(SKIPPED_RECORDS_METRIC))
-    if skipped <= 0:
-        return
-    unpersisted = int(outputs.numeric_metric(SKIPPED_RECORDS_UNPERSISTED_METRIC))
-    try:
-        await app_instance.merge_skipped_records(
-            MergeSkippedRecordsInput(
-                skipped_count=skipped, unpersisted_count=unpersisted
-            )
-        )
-    except Exception:  # noqa: BLE001 — fail-open by design (FND-4881): logged via _safe_log with exc_info=True and counted in skipped-records-unpersisted
-        _safe_log(
-            "error",
-            "Failed to merge skipped-record parts; the run has no "
-            "skipped-records artifact (parts remain under the run prefix)",
-            skipped_count=skipped,
-            exc_info=True,
-        )
-        lost = skipped - unpersisted
-        if lost > 0:
-            outputs.add_metric(
-                Metric(name=SKIPPED_RECORDS_UNPERSISTED_METRIC, value=lost)
-            )
-
-
-async def _merge_fetch_failures(app_instance: "App") -> None:
-    """Schedule ``merge_fetch_failures`` when the run recorded any (FND-5294).
-
-    Workflow code, the sibling of :func:`_merge_skipped_records`. A run with
-    no fetch failures schedules nothing, and ``workflow.patched`` keeps any
-    run started before this path existed replaying unchanged, even one whose
-    app emitted a ``fetch-failures`` metric of its own. Fails open: a
-    merge failure is logged and every failure not already counted as
-    unpersisted is recorded as ``fetch-failures-unpersisted``.
-    """
-    outputs = get_outputs()
-    failures = int(outputs.numeric_metric(FETCH_FAILURES_METRIC))
-    if failures <= 0:
-        return
-    # An app on an older SDK may have emitted its own ``fetch-failures``
-    # metric. Replaying that history must not gain the new activity, so the
-    # command is versioned rather than relying on the name being unused.
-    if not workflow.patched("fetch-failures-merge"):
-        return
-    unpersisted = int(outputs.numeric_metric(FETCH_FAILURES_UNPERSISTED_METRIC))
-    try:
-        await app_instance.merge_fetch_failures(
-            MergeFetchFailuresInput(
-                failure_count=failures, unpersisted_count=unpersisted
-            )
-        )
-    except Exception:  # noqa: BLE001 — fail-open by design (FND-5294): logged via _safe_log with exc_info=True and counted in fetch-failures-unpersisted
-        _safe_log(
-            "error",
-            "Failed to merge fetch-failure parts; the run has no "
-            "fetch-failures artifact (parts remain under the run prefix)",
-            fetch_failure_count=failures,
-            exc_info=True,
-        )
-        lost = failures - unpersisted
-        if lost > 0:
-            outputs.add_metric(
-                Metric(name=FETCH_FAILURES_UNPERSISTED_METRIC, value=lost)
-            )
 
 
 async def _run_preflight_gate(
@@ -4012,826 +2599,6 @@ def _set_health_line(text: str) -> None:
         _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
-_ModelT = TypeVar("_ModelT", bound=BaseModel)
-
-
-def _demote_upstream_refs(model: _ModelT) -> _ModelT:
-    """Reset ``store=UPSTREAM`` to ``DEPLOYMENT`` on every ref in an external payload.
-
-    Applied at both places a payload enters a run from outside it: the start
-    input (``_validate_workflow_input``, which also covers ``continue_with``)
-    and every ``@update`` argument (the interaction relay). Signals and queries
-    carry no payload.
-
-    ``FileReference.store`` decides which bucket the interceptor reads a ref
-    from, so it is only trusted when this run set it: ``App.download`` /
-    ``App.upload`` tag the refs they return. A workflow's start payload comes
-    from outside the run, and honouring the tag there would let whoever
-    starts the workflow aim a materialise at any key in the upstream bucket
-    (FND-3795). Demoting restores exactly the pre-tag behaviour for those refs:
-    they are read from the deployment store, as every ref was before.
-    """
-    return cast("_ModelT", _demote(model))
-
-
-def _demote_args(
-    args: tuple[Any, ...], kwargs: dict[str, Any]
-) -> tuple[tuple[Any, ...], dict[str, Any]]:
-    """Apply :func:`_demote` to an ``@update`` relay's call arguments."""
-    return tuple(_demote(a) for a in args), {k: _demote(v) for k, v in kwargs.items()}
-
-
-_REF_DUMP_KEYS = frozenset({"storage_path", "is_durable", "store"})
-
-
-def _log_demoted(storage_path: object) -> None:
-    _safe_log(
-        "warning",
-        "Ignoring store=upstream on a FileReference in the workflow input; "
-        "only refs App.download/App.upload return in this run read the "
-        "upstream store",
-        storage_path=storage_path,
-    )
-
-
-def _demote(node: object) -> object:
-    """Tree walk for :func:`_demote_upstream_refs`; returns *node* itself if unchanged.
-
-    Reaches every place a ref can ride in a payload: typed fields, model
-    extras (an ``extra="allow"`` input carrying app state), and plain dicts
-    shaped like a dumped ``FileReference``. That last one is how an app
-    round-trips refs through untyped state (``model_dump()`` out,
-    ``FileReference(**raw)`` back in after ``continue_with``); left alone, the
-    rebuilt ref would carry a tag nobody in this run set.
-    """
-    if isinstance(node, FileReference):
-        if node.store is not StoreTarget.UPSTREAM:
-            return node
-        _log_demoted(node.storage_path)
-        return node.model_copy(update={"store": StoreTarget.DEPLOYMENT})
-    if isinstance(node, BaseModel):
-        changes: dict[str, object] = {}
-        for name in type(node).model_fields:
-            old = getattr(node, name)
-            new = _demote(old)
-            if new is not old:
-                changes[name] = new
-        for name, old in (node.model_extra or {}).items():
-            new = _demote(old)
-            if new is not old:
-                changes[name] = new
-        return node.model_copy(update=changes) if changes else node
-    if isinstance(node, (list, tuple)):
-        items = [_demote(v) for v in node]
-        if all(a is b for a, b in zip(items, node)):
-            return node
-        return items if isinstance(node, list) else tuple(items)
-    if isinstance(node, dict):
-        mapped = {k: _demote(v) for k, v in node.items()}
-        if _REF_DUMP_KEYS <= mapped.keys() and mapped["store"] == StoreTarget.UPSTREAM:
-            _log_demoted(mapped.get("storage_path"))
-            mapped["store"] = StoreTarget.DEPLOYMENT.value
-        if all(mapped[k] is node[k] for k in node):
-            return node
-        return mapped
-    return node
-
-
-def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
-    """Validate a decoded workflow payload against the entry point's typed contract.
-
-    The generated workflow declares its argument to Temporal with a permissive
-    ``Any`` annotation (see ``generate_workflow_class``). That is deliberate: if the
-    argument were annotated as ``input_type``, Temporal's pydantic data converter
-    would validate the payload while *decoding the workflow task*, and a bad payload
-    would surface as a Workflow *Task* failure — which Temporal retries with backoff
-    **indefinitely** (there is no max-attempts for workflow tasks). A permanently
-    invalid input (e.g. a required object field sent as ``""``) would then retry
-    forever instead of failing.
-
-    Validating here, inside the workflow body, converts that into a clean,
-    non-retryable workflow *execution* failure that fails fast.
-
-    This does **not** loosen or bypass the typed contract. The payload is validated
-    against exactly ``input_type`` — the same model the entry point declares — before
-    any app code runs, and the fully typed, validated model is what every downstream
-    caller (preflight gate, ``_log_summary``, the entry point method) receives. The
-    permissive annotation is confined to this generated wire boundary; there is no
-    path by which a raw payload reaches app code, and app authors cannot opt into it.
-
-    Note that this validates in pydantic's python/lax mode (``model_validate`` on a
-    decoded dict) rather than the json mode the removed typed annotation gave Temporal's
-    data converter. The two are equivalent for every field type a permitted ``Input``
-    tree allows — ``bytes``/``bytearray``, the one genuinely mode-divergent type, is
-    forbidden by ``validate_payload_safety`` (contracts/base.py). A maintainer adding a
-    custom, mode-sensitive pydantic type to a contract should re-check that equivalence.
-
-    Args:
-        raw_input: The decoded payload — a dict from the wire, or (unit tests / the
-            in-process ``/start`` path) an already-constructed ``input_type``.
-        input_type: The entry point's typed input contract.
-
-    Returns:
-        A validated ``input_type`` instance.
-
-    Raises:
-        ApplicationError: non-retryable, if the payload does not satisfy ``input_type``.
-    """
-    if isinstance(raw_input, input_type):
-        # Already the typed model (constructed by the SDK /start path or a test);
-        # it was validated at construction, so re-validation would be redundant.
-        return _demote_upstream_refs(raw_input)
-
-    try:
-        return _demote_upstream_refs(input_type.model_validate(raw_input))
-    # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
-    except Exception as e:
-        _safe_log(
-            "error",
-            "Workflow input failed validation against its typed contract",
-            input_type=input_type.__name__,
-            exc_info=True,
-        )
-        # Non-retryable: a payload that fails schema validation is deterministic —
-        # retrying the same input can never succeed. Failing the execution now
-        # avoids the indefinite Workflow Task retry loop that a decode-time failure
-        # would cause.
-        raise ApplicationError(
-            f"Invalid workflow input for {input_type.__name__}: {e}",
-            type="InputValidationError",
-            non_retryable=True,
-        ) from e
-
-
-def _lift_non_retryable_activity_failure(
-    exc: BaseException,
-) -> _TemporalApplicationError | None:
-    """The non-retryable failure a task raised, lifted to the workflow's top level.
-
-    A ``@task`` that raises a non-retryable error reaches the workflow as
-    ``ActivityError(cause=ApplicationError(non_retryable=True))``. Temporal reads
-    ``non_retryable`` only on the *top-level* failure of a workflow execution, so
-    re-raising the ``ActivityError`` unchanged lets the workflow-level
-    ``RetryPolicy`` re-run the whole workflow, which fails the same way each
-    time. Lifting the cause's type, message and ``details`` onto a top-level
-    non-retryable ``ApplicationError`` ends the run after one attempt; the
-    caller raises it ``from`` the ``ActivityError``, so the original chain (and
-    ``details[0]`` on the cause) is still there for anything that walks it.
-
-    ``WorkerEvicted`` is excluded: it is non-retryable only so the eviction
-    re-dispatch loop sees it at once. An eviction that outlasts that loop is
-    infrastructure, not a deterministic failure, so a workflow retry may still
-    rescue it.
-
-    Returns:
-        The lifted error, or ``None`` when ``exc`` is not an ``ActivityError``
-        whose direct cause is a non-retryable, non-eviction ``ApplicationError``.
-    """
-    if not isinstance(exc, ActivityError):
-        return None
-    cause = exc.cause
-    if not isinstance(cause, _TemporalApplicationError) or not cause.non_retryable:
-        return None
-    if cause.type == WORKER_EVICTED_TYPE:
-        return None
-    return ApplicationError(
-        cause.message,
-        *cause.details,
-        type=cause.type,
-        non_retryable=True,
-    )
-
-
-def generate_workflow_class(
-    app_cls: "type[App]",
-    ep: "EntryPointMetadata",
-    workflow_name: str | None = None,
-) -> type:
-    """Generate a Temporal workflow class for one entry point.
-
-    Creates a @workflow.defn-decorated class whose run() sets up App context,
-    then calls the entry point method on a fresh App instance.
-
-    Args:
-        app_cls: The App subclass.
-        ep: The entry point to generate a workflow class for.
-        workflow_name: The Temporal workflow type to register this class under.
-            An entry point carrying ``legacy_workflow_types`` aliases registers
-            under more than one name, so the caller picks; defaults to the
-            canonical type.
-
-    Returns:
-        A Temporal workflow class decorated with @workflow.defn.
-    """
-    if workflow_name is None:
-        workflow_name = canonical_workflow_type(app_cls._app_name, ep)
-
-    cache_key = (app_cls, ep.name, workflow_name)
-    if cache_key in _workflow_class_cache:
-        return _workflow_class_cache[cache_key]
-
-    entry_method_name = ep.method_name
-    entrypoint_name = ep.name
-    input_type = ep.input_type
-    output_type = ep.output_type
-    app_name = app_cls._app_name
-    app_version = app_cls._app_version
-    # Read once here, outside the workflow body: it is an image ENV, constant for
-    # the life of the process, and reading it inside _run would be a non-
-    # deterministic os.environ touch in the Temporal sandbox.
-    app_build_id = app_cls._app_build_id
-
-    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
-        input_type_supports_gate,
-    )
-
-    canonical_type = canonical_workflow_type(app_name, ep)
-    alias_of_canonical = None if workflow_name == canonical_type else canonical_type
-    # Boot-time advice, said once by the host. The sandbox rebuilds this class
-    # for every run (see _install_workflow_classes) and must not repeat it.
-    if (
-        alias_of_canonical is None
-        and not workflow.unsafe.in_sandbox()
-        and not input_type_supports_gate(input_type)
-    ):
-        _task_logger.warning(
-            "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
-            "not declare the credential-routing fields (extraction_method, "
-            "credential_guid, agent_json) top-level. Expected for source-less "
-            "entrypoints; if this entrypoint verifies a data source, declare those "
-            "fields (e.g. via the contract toolkit's ExtractionInput) so source "
-            "verification runs before extraction.",
-            entrypoint_name,
-            workflow_name,
-            input_type.__name__,
-        )
-
-    # input_data is annotated ``Any`` (not ``input_type``) so Temporal's data
-    # converter decodes the payload without validating it — validation happens
-    # below via _validate_workflow_input so a bad payload fails the workflow
-    # execution (fast, non-retryable) instead of failing the workflow *task*
-    # (retried by the server indefinitely). See _validate_workflow_input.
-    async def _run(self, input_data: Any) -> Output:
-        if alias_of_canonical:
-            _safe_log(
-                "warning",
-                f"Workflow started on legacy type '{workflow_name}'; the "
-                f"canonical type is '{alias_of_canonical}'. This alias is a "
-                f"temporary migration surface — move the caller to the "
-                f"canonical type.",
-                legacy_workflow_type=workflow_name,
-                canonical_workflow_type=alias_of_canonical,
-            )
-
-        # Fail fast on a malformed / wrong-typed payload, before any setup runs.
-        # Enforces the entry point's typed contract at the workflow boundary.
-        #
-        # Placement is deliberate — this MUST stay above the setup and the outer
-        # try/except below, for two reasons:
-        #   1. Downstream code (the preflight gate, _log_summary, the entry method)
-        #      requires a validated typed model; it must never see the raw dict the
-        #      Any-annotated argument decodes to.
-        #   2. It preserves pre-PR behavior: previously a bad payload failed during
-        #      Temporal's decode, so neither the _run body nor the on_complete()
-        #      finally ran. Moving this into the try/except would run on_complete()
-        #      for an input that never entered the workflow proper.
-        # (Retryability is not the reason: the raised ApplicationError is a
-        # FailureError subclass, so the outer handler's `isinstance(e, FailureError)`
-        # branch would bare re-raise it, preserving non_retryable=True either way.)
-        input_data = _validate_workflow_input(input_data, input_type)
-
-        start_time = _safe_now()
-        run_id = workflow.info().run_id
-        workflow_id = workflow.info().workflow_id
-
-        try:
-            with workflow.unsafe.imports_passed_through():
-                from application_sdk.observability.correlation import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-                    get_correlation_context,
-                )
-
-            _corr_ctx = get_correlation_context()
-            correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
-        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-            _safe_log(
-                "warning",
-                "Failed to read correlation context, falling back to run_id",
-                exc_info=True,
-            )
-            correlation_id = run_id
-
-        # wf_cls.__init__ builds the App instance and binds it to the run
-        # (context, stored refs, @task wrapping) before Temporal applies any
-        # @signal / @update delivered in the run's first activation, which
-        # runs before this coroutine starts. See _bind_app_instance_to_run.
-        # The correlation id needs the start input, so __init__ binds a
-        # provisional one; set the resolved one here, in the same dict the
-        # task wrappers hold. Fall back to binding here when ``self`` is a
-        # stand-in (e.g. MagicMock from unit tests) where ``__init__`` didn't run.
-        existing = getattr(self, "_app_instance", None)
-        context_data = getattr(self, "_run_context_data", None)
-        if isinstance(existing, app_cls) and isinstance(context_data, dict):
-            app_instance = existing
-        else:
-            app_instance = existing if isinstance(existing, app_cls) else app_cls()
-            self._app_instance = app_instance
-            context_data = _bind_app_instance_to_run(app_instance, start_time)
-        context_data["correlation_id"] = correlation_id
-        context = AppContext(
-            app_name=app_name,
-            app_version=app_version,
-            build_id=app_build_id,
-            run_id=run_id,
-            workflow_id=workflow_id,
-            correlation_id=correlation_id,
-            started_at=start_time,
-        )
-        app_instance._context = context
-
-        _safe_log(
-            "info",
-            f"App started {_BUILD_IDENTITY}",
-            app_name=app_name,
-            run_id=str(run_id),
-            correlation_id=context.correlation_id,
-        )
-
-        try:
-            if hasattr(input_data, "_log_summary"):
-                # The summary itself is not attached: ``_log_summary`` drops
-                # fields by name only, so a value such as a URL carrying
-                # userinfo would pass through unredacted to OTLP and the
-                # object-store log sink. It was never exported before either.
-                input_summary = input_data._log_summary()
-                if input_summary:
-                    _safe_log(
-                        "info",
-                        "App input",
-                        app_name=app_name,
-                        run_id=str(run_id),
-                        correlation_id=context.correlation_id,
-                    )
-        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-            _safe_log("warning", "Failed to log input summary", exc_info=True)
-
-        try:
-            await _run_preflight_gate(
-                input_data,
-                app_name,
-                entrypoint_name,
-                getattr(app_cls, "preflight_gate_timeout_seconds", None),
-                getattr(app_cls, "preflight_gate_max_attempts", None),
-                getattr(app_cls, "preflight_gate_mode", None),
-                getattr(app_cls, "preflight_warmup_ceiling_seconds", None),
-                getattr(app_cls, "preflight_warmup_probe_timeout_seconds", None),
-                getattr(app_cls, "preflight_warmup_mode", None),
-            )
-            entry_method = getattr(app_instance, entry_method_name)
-            result = await entry_method(input_data)
-            await _merge_skipped_records(app_instance)
-            await _merge_fetch_failures(app_instance)
-            return cast("Output", result)
-
-        # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
-        except Exception as e:
-            # Non-determinism (a sandbox RestrictedWorkflowAccessError, e.g. a
-            # datetime.now() in run()) is a fault in the code, not in the run:
-            # let it fail the workflow TASK, which Temporal retries, so a fixed
-            # deployment resumes the run. Wrapping it below would fail the run
-            # for good and lose it.
-            if isinstance(e, workflow.NondeterminismError):
-                raise
-            with workflow.unsafe.imports_passed_through():
-                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-                    is_preflight_block,
-                    preflight_block_message,
-                )
-            # A deliberate preflight-gate block logs terse (classification already
-            # on the error's FailureDetails); the marker may sit on a cause, so
-            # the reason is read off the block itself, not Temporal's wrapper.
-            if is_preflight_block(e):
-                _safe_log(
-                    "warning",
-                    "App blocked by preflight gate",
-                    app_name=app_name,
-                    run_id=str(run_id),
-                    correlation_id=context.correlation_id,
-                    reason=preflight_block_message(e) or str(e),
-                )
-            else:
-                _safe_log(
-                    "error",
-                    "App failed",
-                    app_name=app_name,
-                    run_id=str(run_id),
-                    correlation_id=context.correlation_id,
-                    error_type=type(e).__name__,
-                    exc_info=True,
-                )
-
-            lifted = _lift_non_retryable_activity_failure(e)
-            if lifted is not None:
-                raise lifted from e
-            if isinstance(e, FailureError):
-                raise
-            if isinstance(e, _NewAppError):
-                raise ApplicationError(
-                    str(e),
-                    e.to_failure_details(),
-                    type=type(e).__name__,
-                    non_retryable=not e.effective_retryable,
-                ) from e
-            raise ApplicationError(
-                str(e),
-                type=type(e).__name__,
-                non_retryable=not isinstance(e, RetryableError),
-            ) from e
-
-        finally:
-            try:
-                await app_instance.on_complete()
-            except Exception:  # noqa: BLE001 — finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
-                _safe_log(
-                    "warning",
-                    "on_complete() hook raised an unexpected exception",
-                    exc_info=True,
-                )
-
-            end_time = _safe_now()
-            duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
-            _safe_log(
-                "info",
-                f"App completed {_BUILD_IDENTITY}",
-                app_name=app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                duration_ms=duration_ms,
-            )
-
-            # The run's app-state slots are not touched here. They live on
-            # the workers that ran its tasks, which release them (and close
-            # what they hold) once Temporal reports the run closed. This block
-            # can neither await a close nor tell a finished run from a cache
-            # eviction of a running one, where a task on this worker may
-            # still be using what the slot holds.
-            app_instance._context = None
-            app_instance._run_stored_refs = None
-            # BLDX-878: inter-app calls deactivated pending review.
-            # app_instance._client = None
-
-    cls_name = f"_Workflow_{workflow_type_class_segment(workflow_name)}"
-
-    # Temporal's _is_unbound_method_on_cls checks:
-    #   fn.__qualname__.rsplit(".", 1)[0] == cls.__name__
-    # so we must set __qualname__ BEFORE applying @workflow.run.
-    _run.__name__ = "run"
-    _run.__qualname__ = f"{cls_name}.run"
-    _run.__module__ = app_cls.__module__
-    # input_data is decoded as ``Any`` on purpose: this is the annotation Temporal's
-    # pydantic data converter reads to decode the workflow task. Decoding as ``Any``
-    # keeps validation out of the converter (where a failure = an indefinitely
-    # retried Workflow Task failure) and defers it to _validate_workflow_input inside
-    # the run body, which enforces ``input_type`` and fails fast on a bad payload.
-    # The return type stays typed so results are still validated/serialized normally.
-    _run.__annotations__ = {"input_data": Any, "return": output_type}
-
-    decorated_run = workflow.run(_run)
-
-    # Collect any @signal / @query / @update runtime interactions declared on
-    # the App subclass. Each is rewritten into a relay whose Temporal-discovery
-    # metadata points at the relay (so the wf_cls is what's registered, not the
-    # App class) and whose body delegates to ``self._app_instance.<method>``
-    # — sharing state with _run.
-    interaction_relays = _collect_interaction_relays(app_cls, cls_name)
-
-    def _bind_app_instance_to_run(
-        app_instance: "App", started_at: datetime
-    ) -> dict[str, Any]:
-        """Give ``app_instance`` this run's context, stored refs and task wrappers.
-
-        Returns the context dict the task wrappers hold. Its ``correlation_id``
-        starts as the run id; ``_run`` sets the resolved one, which needs the
-        start input.
-        """
-        info = workflow.info()
-        context_data: dict[str, Any] = {
-            "run_id": info.run_id,
-            "workflow_id": info.workflow_id,
-            "correlation_id": info.run_id,
-        }
-        app_instance._context = AppContext(
-            app_name=app_name,
-            app_version=app_version,
-            build_id=app_build_id,
-            run_id=info.run_id,
-            workflow_id=info.workflow_id,
-            correlation_id=info.run_id,
-            started_at=started_at,
-        )
-        app_instance._run_stored_refs = _RunStoredRefs()
-        # BLDX-878: inter-app calls deactivated pending review.
-        # app_instance._client = WorkflowAppClient(context_data)
-        _wrap_instance_tasks(app_instance, context_data)
-        return context_data
-
-    def _wf_init(self: Any) -> None:
-        # Build the per-run App instance and bind it to the run here, not in
-        # _run. Temporal applies the @signal / @update jobs of the run's first
-        # activation (signal-with-start, update-with-start) after __init__ but
-        # before the run coroutine starts, so a handler there must already see
-        # @task methods wrapped as activities. Unwrapped, the task body would
-        # run inline on the workflow thread: no retries, no timeouts, and
-        # re-run on every replay.
-        self._app_instance = app_cls()
-        # Outside a workflow (unit tests constructing wf_cls directly) there
-        # is no run to bind to; _run binds on its fallback path instead.
-        #
-        # The patch marker keeps runs started before this change replaying
-        # their own history: there a first-activation handler ran its task
-        # inline and recorded no activity, so binding here would schedule one
-        # on replay and fail the run with a nondeterminism error. Live,
-        # ``patched`` is True and records the marker; on replay it is True only
-        # when the history has it, so such runs keep binding in _run.
-        if workflow.in_workflow() and workflow.patched(_EARLY_RUN_BINDING_PATCH):
-            self._run_context_data = _bind_app_instance_to_run(
-                self._app_instance, _safe_now()
-            )
-
-    _wf_init.__name__ = "__init__"
-    _wf_init.__qualname__ = f"{cls_name}.__init__"
-    _wf_init.__module__ = app_cls.__module__
-
-    wf_methods: dict[str, Any] = {"run": decorated_run, "__init__": _wf_init}
-    wf_methods.update(interaction_relays)
-
-    wf_cls = type(cls_name, (), wf_methods)
-    wf_cls.__module__ = app_cls.__module__
-    wf_cls.__qualname__ = cls_name
-
-    workflow.defn(name=workflow_name)(wf_cls)
-
-    # Temporal's sandbox runner imports the workflow class by name from its
-    # __module__.  Since this class is generated dynamically it's never added
-    # to the module's namespace automatically, so we do it here.
-
-    _src_module = sys.modules.get(app_cls.__module__)
-    if _src_module is not None:
-        setattr(_src_module, cls_name, wf_cls)
-
-    # Inside the sandbox, app_cls is the run's own re-imported copy, and so is
-    # the module above (sys.modules is the sandbox's while it imports). The
-    # cache is host state: an entry would keep every run's sandbox alive.
-    if not workflow.unsafe.in_sandbox():
-        _workflow_class_cache[cache_key] = wf_cls
-    return wf_cls
-
-
-def _install_workflow_classes(app_cls: "type[App]") -> None:
-    """Rebuild an app's generated workflow classes on its sandbox copy.
-
-    Temporal's sandbox runs a workflow by re-importing the module named by the
-    workflow class's ``__module__`` (the app's module) and reading the class
-    from it by name. The host built those classes after import and attached
-    them to the host module, so the fresh copy does not have them. Building
-    them again from the re-imported App class, during that import, puts them
-    where the sandbox looks, and makes ``run()`` and every helper it calls
-    sandboxed code that Temporal checks for non-determinism.
-
-    Called only inside the sandbox, from ``App.__init_subclass__``.
-    """
-    for workflow_type, ep in app_cls._app_metadata.workflow_types.items():
-        generate_workflow_class(app_cls, ep, workflow_type)
-
-
-def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> None:
-    """Wrap @task methods on an instance to execute as Temporal activities.
-
-    Args:
-        app_instance: The app instance.
-        context_data: Context dict with run_id, workflow_id, and correlation_id.
-    """
-    for attr_name in dir(app_instance):
-        if attr_name.startswith("_"):
-            continue
-
-        attr = getattr(type(app_instance), attr_name, None)
-        if attr is None:
-            continue
-
-        if is_task(attr):
-            task_meta = get_task_metadata(attr)
-            if task_meta:
-                wrapper = _create_task_activity_wrapper(
-                    app_instance._app_name,
-                    task_meta.name,
-                    task_meta.timeout_seconds,
-                    task_meta.retry_max_attempts,
-                    task_meta.retry_max_interval_seconds,
-                    task_meta.output_type,
-                    context_data,
-                    task_meta.heartbeat_timeout_seconds,
-                    task_meta.auto_heartbeat_seconds,
-                    task_meta.retry_policy,
-                    retry_initial_interval_seconds=task_meta.retry_initial_interval_seconds,
-                    pool=task_meta.pool,
-                    schedule_to_close_seconds=task_meta.schedule_to_close_seconds,
-                    progress_watchdog=task_meta.progress_watchdog,
-                    max_no_progress_seconds=task_meta.max_no_progress_seconds,
-                    stored_refs=app_instance._run_stored_refs,
-                )
-                setattr(app_instance, attr_name, wrapper)
-
-
-def _create_task_activity_wrapper(
-    app_name: str,
-    task_name: str,
-    timeout_seconds: int,
-    retry_max_attempts: int,
-    retry_max_interval_seconds: int,
-    output_type: type,
-    context_data: dict[str, Any],
-    heartbeat_timeout_seconds: int | None = 60,
-    auto_heartbeat_seconds: int | None = 10,
-    retry_policy: Any = None,
-    *,
-    retry_initial_interval_seconds: int = 1,
-    pool: str | None = None,
-    schedule_to_close_seconds: int | None = None,
-    progress_watchdog: "ProgressWatchdogMode | None" = None,
-    max_no_progress_seconds: float | None = None,
-    stored_refs: _RunStoredRefs | None = None,
-) -> Any:
-    """Create a wrapper that executes a task as a Temporal activity.
-
-    Args:
-        app_name: Name of the app.
-        task_name: Name of the task (simple name, no prefix).
-        timeout_seconds: Activity timeout for one attempt (``start_to_close``).
-        retry_max_attempts: Maximum retry attempts.
-        retry_max_interval_seconds: Maximum interval between retries.
-        output_type: The typed output class for deserialization.
-        context_data: Context dict with run_id, workflow_id, and correlation_id.
-        heartbeat_timeout_seconds: Heartbeat timeout. None disables.
-        auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
-        retry_policy: Full retry policy (overrides max_attempts/interval if set).
-        retry_initial_interval_seconds: Delay before the first retry. Later
-            delays grow from it by the backoff coefficient, so this is what
-            decides how wide a window a small attempt budget spans. Keyword-only
-            and defaulting to Temporal's own 1 second, so the positional
-            signature this function has always had is unchanged.
-        pool: Logical worker-pool name. When set, the activity is routed
-            to a dedicated task queue. Queue name resolution order:
-            1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
-            2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
-               (default — ensures different apps with the same pool name get
-               different Temporal queues automatically).
-        schedule_to_close_seconds: Ceiling on the task's total time across every
-            attempt. ``None`` (the default) sends no ``schedule_to_close_timeout``
-            and leaves the retry product unbounded — ``retry_max_attempts ×
-            timeout_seconds``. Resolved against ``timeout_seconds`` by
-            :func:`~application_sdk.execution.retry.resolve_activity_time_bounds`.
-        progress_watchdog: The task's declared stall-watchdog mode, or ``None``
-            to inherit the fleet-wide setting. Forwarded verbatim onto the
-            ``TaskContext``; the activity side resolves it, so this path holds
-            no opinion about what the default is.
-        max_no_progress_seconds: The task's declared no-progress allowance in
-            seconds, or ``None`` to inherit the fleet-wide one. Forwarded
-            verbatim, for the same reason.
-        stored_refs: The run's sink for stored refs. When set, the refs in
-            each call's input and result are recorded in it, for
-            ``cleanup_storage``.
-
-    Returns:
-        Async function that executes the task as an activity.
-    """
-    # Resolve pool → task queue at construction time. Env vars are fixed for
-    # the process lifetime, so capturing the result in the closure is safe.
-    # Resolution order: explicit ATLAN_POOL_<POOL>_QUEUE override first, then
-    # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
-    # "heavy") never collide on the same Temporal queue.
-    pool_queue: str | None = resolve_pool_queue(pool) if pool else None
-
-    # Resolved once, outside the wrapper: the pair is fixed for the task's
-    # lifetime, so a dispatch does no arithmetic.
-    start_to_close_seconds, total_seconds = resolve_activity_time_bounds(
-        timeout_seconds, schedule_to_close_seconds
-    )
-    start_to_close_timeout = timedelta(seconds=start_to_close_seconds)
-    schedule_to_close_timeout = (
-        timedelta(seconds=total_seconds) if total_seconds is not None else None
-    )
-
-    with workflow.unsafe.imports_passed_through():
-        from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            TaskContext,
-        )
-        from application_sdk.execution._temporal.eviction_retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            execute_activity_with_eviction_retry,
-        )
-        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
-            _find_file_refs,
-        )
-
-    # Build the Temporal RetryPolicy once (not per invocation)
-    if retry_policy is not None:
-        temporal_retry_policy = _to_temporal_retry_policy(retry_policy)
-    else:
-        temporal_retry_policy = _to_temporal_retry_policy(
-            _RP(
-                max_attempts=retry_max_attempts,
-                initial_interval=timedelta(seconds=retry_initial_interval_seconds),
-                max_interval=timedelta(seconds=retry_max_interval_seconds),
-            )
-        )
-
-    def _record_stored_refs(data: object) -> None:
-        """Record *data*'s stored refs in the run's sink, if it has one.
-
-        *data* is the input this workflow sent or the result it decoded,
-        both from history, so recording is deterministic on replay. Never
-        fails the task: a ref left out is only one cleanup misses.
-        """
-        if stored_refs is None:
-            return
-        try:
-            stored_refs.record(_find_file_refs(data))
-        except Exception:  # noqa: BLE001 — logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
-            _safe_log(
-                "warning",
-                f"Could not record the stored refs of task {task_name} for "
-                "cleanup_storage",
-                exc_info=True,
-            )
-
-    async def wrapper(input_data: Input) -> Output:
-        # Create the task context (metadata for the activity)
-        task_context = TaskContext(
-            app_name=app_name,
-            task_name=task_name,
-            run_id=context_data.get("run_id", ""),
-            workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
-            heartbeat_timeout_seconds=heartbeat_timeout_seconds,
-            auto_heartbeat_seconds=auto_heartbeat_seconds,
-            # The workflow is the only side that knows when the *run* started —
-            # nothing in `activity.info()` carries it — and the activity needs it
-            # for the run-length SLA alert (ADR-0018 → *Bounding total time*).
-            # Sourced from history rather than a clock, so a replayed run
-            # measures its real age instead of restarting the clock.
-            run_started_at_epoch=_run_started_at_epoch(),
-            # The task's own declaration, unresolved. Both are `None` for the
-            # overwhelming majority of tasks, which is the point: nothing here
-            # has to know that the fleet default is `warn` (ADR-0018), and an
-            # operator changing it on the worker does not need every workflow to
-            # be re-dispatched to take effect.
-            progress_watchdog=progress_watchdog,
-            max_no_progress_seconds=max_no_progress_seconds,
-        )
-
-        # Build heartbeat timeout if enabled
-        heartbeat_timeout = (
-            timedelta(seconds=heartbeat_timeout_seconds)
-            if heartbeat_timeout_seconds is not None
-            else None
-        )
-
-        # Input refs first, before the activity can fail: a task that fails
-        # still received them, and cleanup_storage must still see them.
-        _record_stored_refs(input_data)
-
-        # Extract summary from input for Temporal UI display
-        summary = input_data.summary() if hasattr(input_data, "summary") else None
-
-        # Execute as activity, routed through the SDK eviction-retry loop so
-        # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
-        # attempts without burning the application-error retry budget.
-        # When a pool_queue is set the activity is dispatched to the task
-        # queue for that pool; otherwise it runs on the workflow's own queue.
-        result: Output = await execute_activity_with_eviction_retry(
-            f"{app_name}:{task_name}",
-            args=[task_context, input_data],
-            start_to_close_timeout=start_to_close_timeout,
-            heartbeat_timeout=heartbeat_timeout,
-            retry_policy=temporal_retry_policy,
-            result_type=output_type,
-            summary=summary,
-            # Sent only when the task declares a ceiling on its retry product.
-            # Passing ``schedule_to_close_timeout=None`` would be equivalent, but
-            # omitting the key keeps the call byte-identical to before this knob
-            # existed for every task that has not opted in.
-            **(
-                {"schedule_to_close_timeout": schedule_to_close_timeout}
-                if schedule_to_close_timeout is not None
-                else {}
-            ),
-            **({"task_queue": pool_queue} if pool_queue else {}),
-        )
-
-        _record_stored_refs(result)
-        return result
-
-    return wrapper
-
-
 # Keep FileReference accessible via base module for convenience
 __all__ = [
     "AppContextError",
@@ -4846,14 +2613,42 @@ __all__ = [
     "_app_state",
     "_app_state_lock",
     "_apply_app_registration",
-    "_create_task_activity_wrapper",
     "_pascal_to_kebab",
     "_register_tasks",
     "_safe_log",
     "_safe_now",
     "_safe_uuid",
     "_scan_entrypoints",
-    "_wrap_instance_tasks",
-    "generate_workflow_class",
     "task",
 ]
+
+#: Names that moved out of this module and are served, with a warning, from
+#: where they live now.
+_DEPRECATED_CONSTANTS: dict[str, str | tuple[str, str]] = {
+    "generate_workflow_class": (
+        "generate_workflow_class is deprecated with no replacement: the worker "
+        "builds every App's workflow classes, so an app has no reason to call "
+        "it. Will be removed in v4.0.0."
+    ),
+}
+
+if TYPE_CHECKING:
+    # __getattr__ can only be typed -> object; this restores the real type for
+    # type checkers without binding the name at runtime.
+    from application_sdk.execution._temporal.app_workflow import (
+        generate_workflow_class as generate_workflow_class,
+    )
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__,
+    _DEPRECATED_CONSTANTS,
+    remove_in="4.0.0",
+    resolve=_deprecation.lazy_resolver(
+        {
+            "generate_workflow_class": (
+                "application_sdk.execution._temporal.app_workflow",
+                "generate_workflow_class",
+            )
+        }
+    ),
+)

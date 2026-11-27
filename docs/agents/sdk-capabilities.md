@@ -17,7 +17,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 85 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 83 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 58 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 239 |
 | `application_sdk.constants` | Import-time configuration read from env vars once at import — paths, Dapr component names, observability and validation settings (use AppConfig for anything read after startup) | 163 |
@@ -272,7 +272,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Import:** `from application_sdk.app.base_errors import UpstreamObjectStoreNotConfiguredError`
 - **Signature:** `class UpstreamObjectStoreNotConfiguredError(*, ...)`
 - **Summary:** ENABLE_ATLAN_UPLOAD is on, but the upstream object store did not resolve.
-- **Defined in:** `application_sdk/app/base_errors.py`
+- **Defined in:** `application_sdk/_context_errors.py`
 
 #### `AppAlreadyRegisteredError` (deprecated)
 
@@ -376,13 +376,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Register an App class with the AppRegistry.
 - **Defined in:** `application_sdk/app/_ep_registration.py`
 
-#### `_create_task_activity_wrapper`
-
-- **Import:** `from application_sdk.app.base import _create_task_activity_wrapper`
-- **Signature:** `_create_task_activity_wrapper(app_name: str, *, ...)`
-- **Summary:** Create a wrapper that executes a task as a Temporal activity.
-- **Defined in:** `application_sdk/app/base.py`
-
 #### `_pascal_to_kebab`
 
 - **Import:** `from application_sdk.app.base import _pascal_to_kebab`
@@ -425,13 +418,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Summary:** Scan a class for @entrypoint-decorated methods.
 - **Defined in:** `application_sdk/app/_ep_registration.py`
 
-#### `_wrap_instance_tasks`
-
-- **Import:** `from application_sdk.app.base import _wrap_instance_tasks`
-- **Signature:** `_wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> None`
-- **Summary:** Wrap @task methods on an instance to execute as Temporal activities.
-- **Defined in:** `application_sdk/app/base.py`
-
 #### `build_workflow_type_index`
 
 - **Import:** `from application_sdk.app.entrypoint import build_workflow_type_index`
@@ -454,13 +440,6 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `entrypoint_module_segment(name: str)`
 - **Summary:** Convert a kebab-case entry-point name to its Python module segment.
 - **Defined in:** `application_sdk/app/entrypoint.py`
-
-#### `generate_workflow_class`
-
-- **Import:** `from application_sdk.app.base import generate_workflow_class`
-- **Signature:** `generate_workflow_class(app_cls: type[App], ep: EntryPointMetadata, workflow_name: str | None = None) -> type`
-- **Summary:** Generate a Temporal workflow class for one entry point.
-- **Defined in:** `application_sdk/app/base.py`
 
 #### `get_activity_name`
 
@@ -517,6 +496,14 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `workflow_type_class_segment(workflow_type: str) -> str`
 - **Summary:** Convert a Temporal workflow type into its generated-class name segment.
 - **Defined in:** `application_sdk/app/entrypoint.py`
+
+#### `generate_workflow_class` (deprecated)
+
+- **Deprecated:** generate_workflow_class is deprecated with no replacement: the worker builds every App's workflow classes, so an app has no reason to call it. Will be removed in v4.0.0. Do not use in new code.
+- **Import:** `from application_sdk.app.base import generate_workflow_class`
+- **Signature:** `generate_workflow_class(app_cls: 'type[App]', ep: 'EntryPointMetadata', workflow_name: str | None = None)`
+- **Summary:** Generate a Temporal workflow class for one entry point.
+- **Defined in:** `application_sdk/execution/_temporal/app_workflow.py`
 
 #### `get_correlation_context` (deprecated)
 

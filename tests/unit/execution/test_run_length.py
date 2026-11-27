@@ -22,7 +22,6 @@ import pytest
 
 from application_sdk.app import App
 from application_sdk.app import base as base_module
-from application_sdk.app.base import _create_task_activity_wrapper
 from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
@@ -31,6 +30,9 @@ from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     TaskContext,
     create_activity_from_task,
+)
+from application_sdk.execution._temporal.app_workflow import (
+    _create_task_activity_wrapper,
 )
 from application_sdk.execution._temporal.converter import create_data_converter
 from application_sdk.execution.heartbeat import auto_heartbeat_loop
@@ -492,7 +494,7 @@ class TestWireCompatibility:
 class TestWorkflowStampsTheRunStart:
     async def _dispatched_context(self) -> Any:
         with patch(
-            "application_sdk.execution._temporal.eviction_retry."
+            "application_sdk.execution._temporal.app_workflow."
             "execute_activity_with_eviction_retry",
             new_callable=AsyncMock,
         ) as mock_exec:

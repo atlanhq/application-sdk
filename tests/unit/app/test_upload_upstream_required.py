@@ -222,7 +222,7 @@ class TestAliasedStoreMovesNoBytes:
                 True,
             ),
             mock.patch(
-                "application_sdk.app.base._warn_on_invalid_transformed_assets",
+                "application_sdk.storage._app_tasks._warn_on_invalid_transformed_assets",
                 new_callable=mock.AsyncMock,
             ),
             # The reconcile branch's real call site (``list_data_objects``

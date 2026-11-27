@@ -560,18 +560,18 @@ class TestResolveCredentialFilePerCallPaths:
         assert os.listdir(tmp_path) == []
 
     async def test_outside_a_task_nothing_is_tracked(self, tmp_path):
-        from application_sdk.app import base as app_base
+        from application_sdk.execution._temporal import run_scope
 
-        with app_base._credential_dirs_lock:
-            before = {k: set(v) for k, v in app_base._credential_dirs_by_run.items()}
+        with run_scope._credential_dirs_lock:
+            before = {k: set(v) for k, v in run_scope._credential_dirs_by_run.items()}
         result = await resolve_credential_file(
             base64.b64encode(b"cert").decode(),
             "ca_cert.pem",
             raise_on_error=True,
         )
         assert open(result, "rb").read() == b"cert"
-        with app_base._credential_dirs_lock:
-            assert app_base._credential_dirs_by_run == before
+        with run_scope._credential_dirs_lock:
+            assert run_scope._credential_dirs_by_run == before
 
     @pytest.mark.parametrize(
         "filename",

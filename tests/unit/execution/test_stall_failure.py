@@ -44,6 +44,7 @@ from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution import progress as progress_module
 from application_sdk.execution import progress_telemetry as telemetry_module
 from application_sdk.execution import shutdown as shutdown_module
+from application_sdk.execution._temporal import _failure_wire as failure_wire_module
 from application_sdk.execution._temporal import activities as activities_module
 from application_sdk.execution._temporal.activities import (
     _WATCHDOG_ONLY_TICK_SECONDS,
@@ -366,7 +367,7 @@ class TestStallKill:
                 "to_failure_details",
                 side_effect=RuntimeError("evidence not serialisable"),
             ),
-            mock.patch.object(activities_module.logger, "warning") as warning,
+            mock.patch.object(failure_wire_module.logger, "warning") as warning,
             pytest.raises(ApplicationError) as exc_info,
         ):
             await activity_fn(_task_context("_quiet-app", "quiet"), _StallIn())
@@ -781,12 +782,12 @@ class TestDeclarationReachesTheWire:
         progress_watchdog: ProgressWatchdogMode | None = None,
         max_no_progress_seconds: float | None = None,
     ) -> TaskContext:
-        from application_sdk.app.base import (  # noqa: PLC0415 — private dispatch seam, imported where it is used
+        from application_sdk.execution._temporal.app_workflow import (
             _create_task_activity_wrapper,
         )
 
         with mock.patch(
-            "application_sdk.execution._temporal.eviction_retry."
+            "application_sdk.execution._temporal.app_workflow."
             "execute_activity_with_eviction_retry",
             new_callable=mock.AsyncMock,
         ) as dispatched:

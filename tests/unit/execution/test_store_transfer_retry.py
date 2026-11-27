@@ -26,13 +26,15 @@ from application_sdk.app.base import (
     _STORE_TRANSFER_INITIAL_INTERVAL_SECONDS,
     _STORE_TRANSFER_MAX_ATTEMPTS,
     _STORE_TRANSFER_MAX_INTERVAL_SECONDS,
-    _wrap_instance_tasks,
 )
 from application_sdk.app.task import get_task_metadata
 from application_sdk.contracts.base import Input, Output
+from application_sdk.execution._temporal.app_workflow import (
+    _wrap_instance_tasks,
+)
 
 _EVICTION_RETRY_PATH = (
-    "application_sdk.execution._temporal.eviction_retry."
+    "application_sdk.execution._temporal.app_workflow."
     "execute_activity_with_eviction_retry"
 )
 
@@ -48,7 +50,9 @@ class _Out(Output):
 async def _wrapper_dispatch_kwargs(**wrapper_kwargs: object) -> dict[str, object]:
     """Kwargs the workflow-side wrapper hands Temporal for one dispatch."""
     with patch(_EVICTION_RETRY_PATH, new_callable=AsyncMock) as mock_exec:
-        from application_sdk.app.base import _create_task_activity_wrapper
+        from application_sdk.execution._temporal.app_workflow import (
+            _create_task_activity_wrapper,
+        )
 
         mock_exec.return_value = MagicMock()
         wrapper = _create_task_activity_wrapper(
