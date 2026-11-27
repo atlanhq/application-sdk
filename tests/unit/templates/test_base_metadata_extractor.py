@@ -16,8 +16,8 @@ from application_sdk.contracts.storage import UploadOutput as StorageUploadOutpu
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.base_metadata_extraction import (
-    UploadInput,
-    UploadOutput,
+    UploadToAtlanInput,
+    UploadToAtlanOutput,
 )
 
 
@@ -47,8 +47,8 @@ class TestBaseMetadataExtractorStructure:
         from typing import get_type_hints
 
         hints = get_type_hints(BaseMetadataExtractor.upload_to_atlan)
-        assert hints.get("input") is UploadInput
-        assert hints.get("return") is UploadOutput
+        assert hints.get("input") is UploadToAtlanInput
+        assert hints.get("return") is UploadToAtlanOutput
 
 
 class TestUploadToAtlanRedirect:
@@ -68,7 +68,7 @@ class TestUploadToAtlanRedirect:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             result = await extractor.upload_to_atlan(
-                UploadInput(output_path="/tmp/test/output")
+                UploadToAtlanInput(output_path="/tmp/test/output")
             )
 
         extractor.upload.assert_awaited_once()
@@ -77,7 +77,7 @@ class TestUploadToAtlanRedirect:
         assert forwarded.local_path == "/tmp/test/output"
         assert forwarded.tier is StorageTier.RETAINED
 
-        assert isinstance(result, UploadOutput)
+        assert isinstance(result, UploadToAtlanOutput)
         assert result.migrated_files == 10
         assert result.total_files == 10
 
@@ -90,7 +90,7 @@ class TestUploadToAtlanRedirect:
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", DeprecationWarning)
-            await extractor.upload_to_atlan(UploadInput(output_path="/tmp/x"))
+            await extractor.upload_to_atlan(UploadToAtlanInput(output_path="/tmp/x"))
 
         deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
         assert deprecations, "expected upload_to_atlan to emit a DeprecationWarning"
@@ -102,7 +102,9 @@ class TestUploadToAtlanRedirect:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             with pytest.raises(RuntimeError, match="boom"):
-                await extractor.upload_to_atlan(UploadInput(output_path="/tmp/x"))
+                await extractor.upload_to_atlan(
+                    UploadToAtlanInput(output_path="/tmp/x")
+                )
 
 
 class TestSubclassDeprecationNotice:
@@ -126,3 +128,47 @@ class TestSubclassDeprecationNotice:
         assert "application_sdk.app.App" in messages[0]
         assert "application_sdk.templates.SqlApp" in messages[0]
         assert "v4.0.0" in messages[0]
+
+
+class TestDeprecatedContractNames:
+    """The old names share a name with the storage contracts; they warn and alias."""
+
+    @pytest.mark.parametrize(
+        ("module", "old", "new"),
+        [
+            (
+                "application_sdk.templates.contracts.base_metadata_extraction",
+                "UploadInput",
+                UploadToAtlanInput,
+            ),
+            (
+                "application_sdk.templates.contracts.base_metadata_extraction",
+                "UploadOutput",
+                UploadToAtlanOutput,
+            ),
+            ("application_sdk.templates.contracts", "UploadInput", UploadToAtlanInput),
+            (
+                "application_sdk.templates.contracts",
+                "UploadOutput",
+                UploadToAtlanOutput,
+            ),
+            (
+                "application_sdk.templates.base_metadata_extractor",
+                "UploadInput",
+                UploadToAtlanInput,
+            ),
+            (
+                "application_sdk.templates.base_metadata_extractor",
+                "UploadOutput",
+                UploadToAtlanOutput,
+            ),
+        ],
+    )
+    def test_old_name_warns_and_is_the_renamed_class(
+        self, module: str, old: str, new: type
+    ) -> None:
+        import importlib
+
+        mod = importlib.import_module(module)
+        with pytest.warns(DeprecationWarning, match=f"{old} is deprecated"):
+            assert getattr(mod, old) is new

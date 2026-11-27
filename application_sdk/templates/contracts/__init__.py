@@ -1,8 +1,11 @@
 """Typed contracts for built-in App implementations."""
 
+from typing import TYPE_CHECKING
+
+from application_sdk import _deprecation
 from application_sdk.templates.contracts.base_metadata_extraction import (
-    UploadInput,
-    UploadOutput,
+    UploadToAtlanInput,
+    UploadToAtlanOutput,
 )
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
@@ -60,6 +63,8 @@ __all__ = [
     # Base metadata extraction (deprecated upload_to_atlan task)
     "UploadInput",
     "UploadOutput",
+    "UploadToAtlanInput",
+    "UploadToAtlanOutput",
     # SQL metadata — base
     "ExtractionInput",
     "ExtractionOutput",
@@ -109,3 +114,24 @@ __all__ = [
     "QueryFetchInput",
     "QueryFetchOutput",
 ]
+
+
+#: name -> (replacement, why); served with a warning by ``__getattr__`` below.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "UploadInput": (
+        "application_sdk.templates.contracts.UploadToAtlanInput",
+        "the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadInput",
+    ),
+    "UploadOutput": (
+        "application_sdk.templates.contracts.UploadToAtlanOutput",
+        "the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadOutput",
+    ),
+}
+
+if TYPE_CHECKING:
+    UploadInput = UploadToAtlanInput
+    UploadOutput = UploadToAtlanOutput
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)

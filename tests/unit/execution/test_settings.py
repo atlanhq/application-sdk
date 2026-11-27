@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 from temporalio.common import VersioningBehavior
 
@@ -89,6 +91,23 @@ class TestLoadExecutionSettingsFromEnv:
         monkeypatch.delenv("ATLAN_WORKFLOW_HOST", raising=False)
         monkeypatch.setenv(key, "")
         assert getattr(load_execution_settings(), field) == default
+
+    def test_temporal_family_set_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Apps set these names for their own code; only the SDK's read is deprecated."""
+        monkeypatch.setenv("TEMPORAL_HOST", "temporal.example.com:7233")
+        monkeypatch.setenv("TEMPORAL_NAMESPACE", "production")
+        monkeypatch.setenv("TEMPORAL_TASK_QUEUE", "my-custom-queue")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            load_execution_settings()
+
+    def test_v2_host_and_port_fall_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TEMPORAL_HOST", raising=False)
+        monkeypatch.setenv("ATLAN_WORKFLOW_HOST", "temporal.internal")
+        monkeypatch.setenv("ATLAN_WORKFLOW_PORT", "7236")
+        assert load_execution_settings().host == "temporal.internal:7236"
 
     def test_empty_v2_port_keeps_the_default_port(
         self, monkeypatch: pytest.MonkeyPatch

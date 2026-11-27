@@ -117,7 +117,9 @@ where to read the code.
 
 **Group ordering:** Classes → Decorators → Functions → Constants and Enums. Empty groups are omitted.
 
-**Within each group:** alphabetical by symbol name (case-insensitive).
+**Within each group:** alphabetical by symbol name (case-insensitive), with deprecated symbols after the rest of the group.
+
+**Deprecated symbols:** a symbol whose export path or defining module has an entry in `packages/conformance/conformance/data/deprecated_symbols.json` (the table B001 reads) gets ` (deprecated)` after its heading and a first line `- **Deprecated:** <the notice>. Do not use in new code.`. It stays listed so existing code can be read and migrated, but it is never offered as the way to do something. A deprecated alias that its module keeps out of `__all__` (so a star-import does not export it, or because it is a leaf-module shim) is listed too, at the shortest public path that serves it, so the old import can be looked up. Names in private modules are not. Contract models follow the same rule. Regenerate the deprecation table (`gen-deprecations`) before the manifest, or a new deprecation is not marked.
 
 **Signature rules:**
 - Full signature if ≤ 120 characters.

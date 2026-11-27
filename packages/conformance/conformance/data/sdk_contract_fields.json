@@ -2460,6 +2460,60 @@
         "active"
       ]
     ],
+    "UploadToAtlanInput": [
+      [
+        "app_name",
+        "str",
+        "active"
+      ],
+      [
+        "correlation_id",
+        "str",
+        "active"
+      ],
+      [
+        "output_path",
+        "str",
+        "active"
+      ],
+      [
+        "workflow_id",
+        "str",
+        "active"
+      ],
+      [
+        "workflow_slug",
+        "str",
+        "active"
+      ]
+    ],
+    "UploadToAtlanOutput": [
+      [
+        "artifacts",
+        "dict[str, Any] | None",
+        "active"
+      ],
+      [
+        "metrics",
+        "dict[str, Any] | None",
+        "active"
+      ],
+      [
+        "migrated_files",
+        "int",
+        "active"
+      ],
+      [
+        "status",
+        "OutputStatus",
+        "active"
+      ],
+      [
+        "total_files",
+        "int",
+        "active"
+      ]
+    ],
     "WriteCurrentStateInput": [
       [
         "app_name",
@@ -2763,6 +2817,12 @@
       "Input"
     ],
     "UpdateMarkerOutput": [
+      "Output"
+    ],
+    "UploadToAtlanInput": [
+      "Input"
+    ],
+    "UploadToAtlanOutput": [
       "Output"
     ],
     "WriteCurrentStateInput": [

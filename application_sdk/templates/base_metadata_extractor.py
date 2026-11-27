@@ -8,22 +8,44 @@ own Input/Output contracts.
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import deprecated
 
+from application_sdk import _deprecation
 from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.contracts.storage import UploadInput as _UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.templates.contracts.base_metadata_extraction import (
-    UploadInput,
-    UploadOutput,
+    UploadToAtlanInput,
+    UploadToAtlanOutput,
 )
 
 __all__ = [
     "BaseMetadataExtractor",
 ]
+
+#: This module imported these contracts under their old names, so they were
+#: importable from here. name -> (replacement, why).
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "UploadInput": (
+        "application_sdk.templates.contracts.base_metadata_extraction.UploadToAtlanInput",
+        "the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadInput",
+    ),
+    "UploadOutput": (
+        "application_sdk.templates.contracts.base_metadata_extraction.UploadToAtlanOutput",
+        "the same class, renamed so it no longer shares a name with application_sdk.contracts.storage.UploadOutput",
+    ),
+}
+
+if TYPE_CHECKING:
+    UploadInput = UploadToAtlanInput
+    UploadOutput = UploadToAtlanOutput
+
+__getattr__ = _deprecation.deprecated_module_getattr(
+    __name__, _DEPRECATED_CONSTANTS, remove_in="4.0.0"
+)
 
 
 class BaseMetadataExtractor(App):
@@ -64,7 +86,7 @@ class BaseMetadataExtractor(App):
         "See docs/concepts/file-reference.md for migration guidance."
     )
     @task(timeout_seconds=1800)
-    async def upload_to_atlan(self, input: UploadInput) -> UploadOutput:
+    async def upload_to_atlan(self, input: UploadToAtlanInput) -> UploadToAtlanOutput:
         """Deprecated: thin redirect to :meth:`App.upload`.
 
         Forwards ``input.output_path`` as ``local_path`` on the storage
@@ -74,4 +96,4 @@ class BaseMetadataExtractor(App):
             _UploadInput(local_path=input.output_path, tier=StorageTier.RETAINED)
         )
         count = result.ref.file_count or 0
-        return UploadOutput(migrated_files=count, total_files=count)
+        return UploadToAtlanOutput(migrated_files=count, total_files=count)
