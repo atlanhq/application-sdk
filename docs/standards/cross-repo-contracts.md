@@ -634,3 +634,18 @@ marker rather than dispatching it: an older file would publish an e2e-only run
 under the required `tests / …` checks and override the PR's real results
 (FND-3839). Renaming a context or the dispatch inputs needs the old name
 accepted until every repo has resynced.
+
+## The trigger workflow slug (`trigger_workflow_slug`)
+
+| | |
+|---|---|
+| **Produced by** | Local Marketplace: `workflow_slug()` in `src/deployment_orchestrator/schedule_reconciler.py`, over `sanitize_kubernetes_name()` in `src/commons/utils.py` (`atlanhq/atlan-local-marketplace-app`) |
+| **Served at** | The slug of the AE workflow that carries an entrypoint's `triggers.schedules` / `triggers.events` |
+| **Key** | `<app name>-<entrypoint name>`, lower-cased, spaces and underscores to hyphens, anything outside `[a-z0-9.-]` dropped, runs of `-` / `.` collapsed to one `-`, at most 63 characters |
+| **Read by** | `trigger_workflow_slug()` in `application_sdk/testing/e2e/event_started.py`, which `EventStartedE2ETest` uses to find the run an event started |
+| **Pinned by** | `test_slug_matches_the_local_marketplace_rule` in `tests/unit/testing/e2e/test_event_started_e2e.py` |
+
+This one runs the other way: the SDK reads a value another repo produces. If
+Local Marketplace changes the derivation, every event-started suite fails with
+`EventTriggerNotInstalledError` on a tenant where the app is installed. A suite
+can pin `ae_workflow_slug` to carry on while the mirror here is corrected.

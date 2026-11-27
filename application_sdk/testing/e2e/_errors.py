@@ -41,6 +41,9 @@ from application_sdk.testing.harness.automation_engine._errors import (
 )
 
 __all__ = [
+    "EventGatewayRejectedError",
+    "EventRunNotStartedError",
+    "EventTriggerNotInstalledError",
     "AdminRoleNotResolvedError",
     "AmbiguousDAGRunError",
     "AgentSpecRequiredError",
@@ -353,3 +356,44 @@ class StoreAssertDisabledError(PreconditionError):
 
     code: ClassVar[str] = "PRECONDITION_STORE_ASSERT_DISABLED"
     expected_state: str | None = "ATLAN_STORE_ASSERT_ENABLED=true on the app's pod"
+
+
+@dataclass(kw_only=True)
+class EventTriggerNotInstalledError(PreconditionError):
+    """AE has no trigger workflow for the entrypoint an event-started suite names.
+
+    Local Marketplace creates that workflow when it installs an app whose
+    manifest declares triggers. Its absence means no event can start a run, so
+    this is raised before the event is sent. It says nothing about the app's
+    code.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_EVENT_TRIGGER_NOT_INSTALLED"
+    expected_state: str | None = "the app's trigger workflow exists in AE"
+    component: str | None = "e2e_harness_event_started"
+
+
+@dataclass(kw_only=True)
+class EventGatewayRejectedError(DependencyUnavailableError):
+    """The tenant's events gateway did not accept an event the suite posted.
+
+    The event never reached its topic, so no run can follow from it. Not a
+    verdict on the app.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_EVENT_GATEWAY_REJECTED"
+    component: str | None = "e2e_harness_event_started"
+
+
+@dataclass(kw_only=True)
+class EventRunNotStartedError(PreconditionError, AssertionError):
+    """An event was sent and AE started no run for it inside the budget.
+
+    Also an ``AssertionError``: when AE answered and listed no run, the trigger
+    the contract declares did not fire on a real event, which is the thing an
+    event-started suite exists to prove.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_EVENT_RUN_NOT_STARTED"
+    expected_state: str | None = "AE created a run of the trigger workflow"
+    component: str | None = "e2e_harness_event_started"

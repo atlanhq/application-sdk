@@ -28,12 +28,42 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 | SQL | `application_sdk.testing.e2e.SQLAppE2ETest` |
 | Anything else (BI, API, object-store, agent apps) | the generated `app/generated/_e2e_base.py`, which subclasses `application_sdk.testing.e2e.BaseE2ETest` |
 | A system app (connection-delete, popularity, publish, …) | `application_sdk.testing.e2e.SystemAppE2ETest` — see [System apps](#system-apps) |
+| An entrypoint an event starts (contract `events {}`) | `application_sdk.testing.e2e.EventStartedE2ETest` — see [Event-started runs](#event-started-runs) |
 
 `BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
 
 `application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Since FND-4659 every public name in it carries a marker the symbol-removal gate reads (`@deprecated`, or a PEP 562 alias), so it can be deleted in any release after 3.56 without a declared break. Suites still on it (saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
 
 The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating those suites instead.
+
+### Event-started runs
+
+An entrypoint with an `events {}` block is never submitted in production:
+Automation Engine starts a run of it when a matching event arrives. A submitted
+suite runs the entrypoint's code but not the trigger, so a wrong topic or filter
+rule passes. `EventStartedE2ETest` does the upstream action instead and adopts
+the run it causes; polling, Atlas reads, grading and teardown are unchanged.
+
+- Declare `connector_short_name`, `trigger_entrypoint` and `required_dag_nodes`,
+  and override `async def send_event()` with the real action: `post_event(path,
+  body)` for the tenant's events gateway, a change in Atlas, or a run on a source
+  that emits the event.
+- Nothing is seeded or published. The run executes the trigger workflow Local
+  Marketplace reconciled when it installed the app, so the app must be installed
+  on the tenant from this PR's build (`install-app-to-tenant`, the default). The
+  suite fails before sending when that workflow does not exist.
+- The trigger workflow belongs to the tenant, not the run. On a dedicated topic
+  the adopted run is the suite's own. On a shared topic such as
+  `ATLAS_ENTITIES` other writes fire the same trigger, so assert the effect on
+  run-scoped assets (`expected_asset_attributes_at`, `assert_dag_outcome`)
+  rather than relying on the run alone.
+- `store_expectations()` is not available: the harness cannot append a node to a
+  DAG it does not publish.
+- The class does not pick a tenant pool. A system app lists `SystemAppE2ETest`
+  after it: `class TestX(EventStartedE2ETest, SystemAppE2ETest)`.
+- A batch trigger (one with `ackPaths`) starts a run at most once every ten
+  minutes, which `event_run_timeout_seconds` (default 900) covers. A streaming
+  trigger answers in seconds.
 
 ### System apps
 

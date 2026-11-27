@@ -50,6 +50,10 @@ if TYPE_CHECKING:
         ResolvedDAG,
     )
     from application_sdk.testing.e2e.config import AppConfig
+    from application_sdk.testing.e2e.event_started import (
+        EventStartedE2ETest,
+        trigger_workflow_slug,
+    )
     from application_sdk.testing.e2e.logs import LogCollector
     from application_sdk.testing.e2e.payload import RunMode
     from application_sdk.testing.e2e.portforward import kube_http_call
@@ -85,6 +89,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "RunMode": ("application_sdk.testing.e2e.payload", "RunMode"),
     "kube_http_call": ("application_sdk.testing.e2e.portforward", "kube_http_call"),
     "SQLAppE2ETest": ("application_sdk.testing.e2e.sql_app", "SQLAppE2ETest"),
+    "EventStartedE2ETest": (
+        "application_sdk.testing.e2e.event_started",
+        "EventStartedE2ETest",
+    ),
     "FieldCondition": ("application_sdk.testing.e2e.system_app", "FieldCondition"),
     "FieldOp": ("application_sdk.testing.e2e.system_app", "FieldOp"),
     "RecordFormat": ("application_sdk.testing.e2e.system_app", "RecordFormat"),
@@ -94,6 +102,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "StorePresent": ("application_sdk.testing.e2e.system_app", "StorePresent"),
     "StoreRecords": ("application_sdk.testing.e2e.system_app", "StoreRecords"),
     "SystemAppE2ETest": ("application_sdk.testing.e2e.system_app", "SystemAppE2ETest"),
+    "trigger_workflow_slug": (
+        "application_sdk.testing.e2e.event_started",
+        "trigger_workflow_slug",
+    ),
     "TenantPool": ("application_sdk.testing.e2e.tenant_pool", "TenantPool"),
     "run_workflow": ("application_sdk.testing.e2e.workflows", "run_workflow"),
     "wait_for_workflow": ("application_sdk.testing.e2e.workflows", "wait_for_workflow"),
@@ -125,6 +137,7 @@ __all__ = [
     # Full-DAG AE harness
     "BaseE2ETest",
     "DAGSpec",
+    "EventStartedE2ETest",
     "FullDAGOutcome",
     "ResolvedDAG",
     "RunMode",
@@ -138,6 +151,7 @@ __all__ = [
     "StorePresent",
     "StoreRecords",
     "SystemAppE2ETest",
+    "trigger_workflow_slug",
     "TenantPool",
 ]
 
