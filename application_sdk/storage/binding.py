@@ -437,8 +437,9 @@ def _build_s3_config(
         credential_provider = make_s3_assume_role_provider(
             role_arn=meta["assumeRoleArn"],
             session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
-            # No region: see cloud.py's identical fix — resolved_region is for
-            # the data-plane config, not the STS session.
+            # resolved_region is a fallback STS endpoint, not the session
+            # region: see cloud.py and make_s3_assume_role_provider.
+            fallback_region=_nonempty(meta, "region") or None,
             base_access_key=access_key or None,
             base_secret_key=secret_key or None,
             base_session_token=session_token or None,

@@ -7,18 +7,38 @@ are always available regardless of which extras a connector installs.
 
 from __future__ import annotations
 
+import os
 from datetime import timezone
 from typing import TYPE_CHECKING, Any
 
 import boto3
 from azure.identity import CertificateCredential
+from botocore.exceptions import ClientError
 from obstore.auth.azure import AzureCredentialProvider
 from obstore.auth.boto3 import StsCredentialProvider
 
 from application_sdk.common.aws_utils import _normalize_external_id
 
 if TYPE_CHECKING:
+    from typing import Unpack
+
+    from obstore.auth.boto3 import AssumeRoleRequestRequestTypeDef
     from obstore.store import S3Credential
+
+# Lazy import: a module-level get_logger() would create a circular import
+# (observability -> storage -> observability), as in cloud.py.
+_logger = None
+
+
+def _log():
+    global _logger
+    if _logger is None:
+        from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — deferred to break circular import (observability ↔ storage)
+            get_logger,
+        )
+
+        _logger = get_logger(__name__)
+    return _logger
 
 
 class _UtcExpiryStsCredentialProvider(StsCredentialProvider):
@@ -52,6 +72,64 @@ class _UtcExpiryStsCredentialProvider(StsCredentialProvider):
         return credential
 
 
+#: STS error codes that mean "this endpoint cannot serve this caller", so the
+#: next endpoint may. ``InvalidClientTokenId`` is what STS in an opt-in region
+#: returns when the caller's account has not enabled that region (or the base
+#: credentials are a token that region does not accept). Any other error
+#: (``AccessDenied``, a bad ``ExternalId``) is the same on every endpoint and
+#: is raised at once.
+_STS_ENDPOINT_FALLBACK_CODES = frozenset(
+    {"InvalidClientTokenId", "RegionDisabledException"}
+)
+
+
+class _RegionFallbackStsCredentialProvider(_UtcExpiryStsCredentialProvider):
+    """``AssumeRole`` against an ordered list of STS endpoints.
+
+    Each session in *sessions* targets one STS endpoint (its region, or the
+    global endpoint when it has none). The first is tried; the next only when
+    the call fails with a code in ``_STS_ENDPOINT_FALLBACK_CODES``. The session
+    that succeeds moves to the front, so a credential refresh calls it first.
+    """
+
+    def __init__(
+        self,
+        sessions: list[boto3.Session],
+        **kwargs: Unpack[AssumeRoleRequestRequestTypeDef],
+    ) -> None:
+        super().__init__(sessions[0], **kwargs)
+        self._sessions = list(sessions)
+
+    def __call__(self) -> S3Credential:
+        """Fetch credentials from the first STS endpoint that serves the call."""
+        for index, session in enumerate(self._sessions):
+            self.session = session
+            try:
+                credential = super().__call__()
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code", "")
+                if (
+                    code not in _STS_ENDPOINT_FALLBACK_CODES
+                    or index == len(self._sessions) - 1
+                ):
+                    raise
+                _log().warning(
+                    "S3 assume-role: STS endpoint %s rejected the call (%s); "
+                    "trying the next endpoint",
+                    session.region_name or "global",
+                    code,
+                )
+                continue
+            if index:
+                self._sessions.insert(0, self._sessions.pop(index))
+                _log().info(
+                    "S3 assume-role: using STS endpoint %s",
+                    session.region_name or "global",
+                )
+            return credential
+        raise AssertionError("unreachable: the last endpoint re-raises")
+
+
 def make_s3_assume_role_provider(
     *,
     role_arn: str,
@@ -61,6 +139,7 @@ def make_s3_assume_role_provider(
     base_secret_key: str | None = None,
     base_session_token: str | None = None,
     external_id: str | None = None,
+    fallback_region: str | None = None,
 ) -> Any:
     """Return an obstore S3CredentialProvider that calls STS::AssumeRole.
 
@@ -76,6 +155,24 @@ def make_s3_assume_role_provider(
     *external_id* is sent as ``ExternalId`` after surrounding whitespace is
     stripped; a ``None`` or blank value is omitted (see
     ``_normalize_external_id``).
+
+    *fallback_region* is the bucket's region. It adds a second STS endpoint
+    for when the session's own endpoint cannot serve the call:
+
+    * The session has a region (*region*, ``AWS_DEFAULT_REGION``, config, or
+      the pod's ``AWS_REGION``): STS is
+      called there first, then in *fallback_region*.
+    * The session has no region: STS is called in *fallback_region* first,
+      then on the session default (the global endpoint). The global endpoint
+      can issue a session token that S3 in an opt-in region rejects with
+      ``InvalidToken``, while STS in an opt-in region the caller's account
+      has not enabled rejects the call with ``InvalidClientTokenId``. Trying
+      the bucket's region first and falling back covers both.
+
+    The next endpoint is tried only on ``InvalidClientTokenId`` or
+    ``RegionDisabledException``; the endpoint that works is kept for later
+    refreshes. When *fallback_region* is unset or equals the session's region,
+    the provider is the plain single-endpoint one.
     """
     session_kwargs: dict[str, Any] = {}
     if region:
@@ -96,7 +193,31 @@ def make_s3_assume_role_provider(
     if resolved_external_id:
         sts_kwargs["ExternalId"] = resolved_external_id
 
-    return _UtcExpiryStsCredentialProvider(session, **sts_kwargs)
+    if not fallback_region:
+        return _UtcExpiryStsCredentialProvider(session, **sts_kwargs)
+
+    # botocore reads AWS_DEFAULT_REGION and config, not AWS_REGION, so the
+    # pod's AWS_REGION is applied here.
+    if session.region_name is None and os.environ.get("AWS_REGION"):
+        session = boto3.Session(
+            **{**session_kwargs, "region_name": os.environ["AWS_REGION"]}
+        )
+    ambient_region = session.region_name
+    if fallback_region == ambient_region:
+        return _UtcExpiryStsCredentialProvider(session, **sts_kwargs)
+
+    regional_session = boto3.Session(
+        **{**session_kwargs, "region_name": fallback_region}
+    )
+    # With an ambient region (the pod's own region, or an explicit *region*)
+    # its regional endpoint is tried first: a caller can always reach STS in
+    # the region it runs in. Without one, the bucket's regional endpoint goes
+    # first, ahead of the session default (the global endpoint), because the
+    # global endpoint can issue a token that an opt-in region's S3 rejects.
+    sessions = (
+        [session, regional_session] if ambient_region else [regional_session, session]
+    )
+    return _RegionFallbackStsCredentialProvider(sessions, **sts_kwargs)
 
 
 def make_azure_certificate_provider(

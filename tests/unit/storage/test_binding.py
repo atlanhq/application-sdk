@@ -634,6 +634,9 @@ class TestS3BehaviorKnobs:
 
 class TestS3AssumeRole:
     @patch(
+        "application_sdk.storage._credential_providers._RegionFallbackStsCredentialProvider"
+    )
+    @patch(
         "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
     )
     @patch("boto3.Session")
@@ -643,11 +646,15 @@ class TestS3AssumeRole:
         mock_s3_cls: MagicMock,
         mock_session_cls: MagicMock,
         mock_sts_cls: MagicMock,
+        mock_fallback_cls: MagicMock,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.delenv("AWS_REGION", raising=False)
         mock_s3_cls.return_value = MagicMock()
         mock_sts_cls.return_value = MagicMock()
-        mock_session_cls.return_value = MagicMock()
+        mock_fallback_cls.return_value = MagicMock()
+        mock_session_cls.return_value = MagicMock(region_name=None)
 
         components_dir = _write_component(
             tmp_path,
@@ -662,7 +669,10 @@ class TestS3AssumeRole:
         )
         create_store_from_binding("objectstore", components_dir=components_dir)
 
-        mock_sts_cls.assert_called_once()
+        # metadata.region is the fallback STS endpoint, not the session region.
+        mock_fallback_cls.assert_called_once()
+        mock_sts_cls.assert_not_called()
+        assert "region_name" not in mock_session_cls.call_args_list[0].kwargs
         call_kwargs = mock_s3_cls.call_args.kwargs
         assert call_kwargs["credential_provider"] is not None
         config = call_kwargs.get("config") or {}
