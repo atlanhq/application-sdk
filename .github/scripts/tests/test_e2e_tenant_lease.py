@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -42,6 +43,7 @@ from _gh_refs import (
     try_create_ref,
 )
 from e2e_tenant_lease import (
+    _parse_holder,
     acquire,
     acquire_ordered,
     create_identity_blob,
@@ -77,7 +79,7 @@ class FakeHTTP:
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str], list[tuple[int, object]]] = {}
         self.calls: list[tuple[str, str]] = []
-        self.payloads: list[dict] = []
+        self.payloads: list[dict[str, Any]] = []
         # Full argv per call, so the credential-exposure canary can assert the
         # token never reaches curl's command line.
         self.cmds: list[list[str]] = []
@@ -254,6 +256,37 @@ def test_identity_blob_records_the_run_and_its_acquisition_time(
     assert create_identity_blob(REPO, 42, 2, 1234.0) == BLOB
     record = json.loads(http.payloads[0]["content"])
     assert record == {"run_id": 42, "attempt": 2, "acquired_at": 1234.0}
+
+
+def test_identity_blob_records_the_holders_repo_for_a_shared_lease(
+    http: FakeHTTP,
+) -> None:
+    # FND-5377: a waiter from another repo reads the holding run in its own repo.
+    http.route("POST", "/git/blobs", (201, {"sha": BLOB}))
+    create_identity_blob(REPO, 42, 2, 1234.0, "atlanhq/other-app")
+    create_identity_blob(REPO, 42, 2, 1234.0, REPO)
+    shared, own = (json.loads(p["content"]) for p in http.payloads)
+    assert shared == {
+        "run_id": 42,
+        "attempt": 2,
+        "acquired_at": 1234.0,
+        "repo": "atlanhq/other-app",
+    }
+    assert own == {"run_id": 42, "attempt": 2, "acquired_at": 1234.0}
+
+
+def test_the_holders_repo_is_read_back_from_its_record() -> None:
+    for record, repo in (
+        (
+            {"run_id": 42, "attempt": 2, "acquired_at": 1.0, "repo": "atlanhq/x"},
+            "atlanhq/x",
+        ),
+        ({"run_id": 42, "attempt": 2}, ""),
+        ({"run_id": 42, "attempt": 2, "repo": 5}, ""),
+    ):
+        holder = _parse_holder(record)
+        assert holder is not None
+        assert holder.repo == repo
 
 
 def test_the_lease_ref_points_at_the_identity_blob(http: FakeHTTP) -> None:
@@ -502,7 +535,7 @@ def test_a_run_with_an_unparseable_start_time_disables_the_ttl(
 
 
 def _acquire(**kwargs):
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         wait_seconds=60,
         poll_seconds=30,
         ttl_seconds=0,
@@ -1347,7 +1380,7 @@ def _path_of(ref: str) -> str:
 
 
 def _ordered(clouds: list[str], **kwargs):
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         wait_seconds=60,
         poll_seconds=30,
         ttl_seconds=0,

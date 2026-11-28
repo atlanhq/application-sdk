@@ -552,7 +552,9 @@ because the install writes it and nothing revisits it. The prior version is
 recorded by UUID even when its version string cannot be read. The step is skipped
 when the app was not installed before, because uninstall is not reliable
 (DISTR-921). It has its own 15-minute timeout on top of the install budget,
-which is why the job allows 65 minutes and the lease TTL is 16800s. The install
+which is why the job allowed 65 minutes. A hosted api app's common-app-server
+install as the e2e host (below) adds a second install of the same shape, so the job now allows
+115 minutes and the lease TTL is 21600s. The install
 step has its own 45-minute timeout so that a hung install fails the step rather
 than timing out the job: `failure()` is false on a timed-out (cancelled) job, so
 the restore would otherwise be skipped.
@@ -562,6 +564,38 @@ left installed on two pool tenants. Its own `ClusterIP` Service clashed with the
 host-side `ExternalName` left by the API server consolidation, and the vcluster
 syncer recreated the Service many times a second until it was rolled back by
 hand (CONAT-7994).
+
+### Hosted api apps run on an e2e-only common-app-server (FND-5377)
+
+An app with `deploy.routeToCommonAPIServer: true` in `atlan.yaml` serves its
+routes from common-app-server, one shared host per tenant. Its e2e runs those
+routes on a host carrying the PR's code, without touching the shared host,
+which other apps' tests on the same tenant also call:
+
+1. `prepare-host-image` checks out common-app-server at `main` and runs its
+   `scripts/e2e_host_build.py` for this app at this commit. That writes
+   `hosted-api-apps.overrides.toml` for this app only and re-stages, re-locks
+   and re-syncs the host's `atlan.yaml`. `build-host-image` builds the host's
+   Dockerfile with `ATLAN_API_APPS_ALLOW_OVERRIDES=1` per arch, and
+   `merge-host-image` joins them, tagged `e2e-<pin>-<app sha7>-<host sha7>`.
+   For any other app the first job only reads `atlan.yaml`, and the rest are
+   skipped.
+2. `lease-tenant` takes the app's own lease, then a second lease that every
+   hosted app's runs share (`refs/e2e-tenant-lease/common-app-server/<cloud>/holder`
+   in common-app-server's repo): one e2e host per tenant, so one hosted app's
+   e2e per tenant at a time. The holder record names its run's repo, and a
+   waiter checks that run with a read-only token for the hosted apps' repos
+   (`GH_RUNS_TOKEN`).
+3. `prepare-tenant` installs the build as the e2e-only host
+   `common-api-server-e2e` (its own marketplace app, whose id is in common-app-server's
+   `e2e-host.toml`), then installs the app with `--route-to-common-host`.
+   That sets `routeToCommonAPIServerOnTargetedRelease: common-api-server-e2e`,
+   which local-marketplace reads on a tenant-targeted release, and only when
+   that host is installed, to alias the app to the e2e host.
+4. Every leg checks the e2e host's version as well as the app's, on LM's
+   records only (`--records-only`): the build-identity route answers for an
+   app pod, never for a host.
+5. `release-tenant` releases the shared lease, however the legs ended.
 
 ### What the e2e registration sends
 

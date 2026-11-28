@@ -177,6 +177,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 # Sibling .github/scripts modules — imported, not copied (FND-2674). When invoked
 # as `python3 <path>/e2e_tenant_lease.py` the script's own dir is on sys.path
@@ -231,7 +232,9 @@ DEFAULT_POLL_SECONDS = 30
 # being spent: the hold this must clear is 48+120 min, and a TTL that no longer
 # cleared it by 1.5x would start breaking live holders. Raised again to 16800
 # when prepare-tenant grew a 15-min restore-on-failure step (65+120 min hold).
-DEFAULT_TTL_SECONDS = 16800
+# Raised again to 21600 when prepare-tenant grew the common-app-server install
+# for a hosted api app (FND-5377): a 115+120 min hold.
+DEFAULT_TTL_SECONDS = 21600
 
 
 def lease_ref(app: str, cloud: str) -> str:
@@ -245,7 +248,7 @@ def lease_ref(app: str, cloud: str) -> str:
 
 
 def create_identity_blob(
-    repo: str, run_id: int, attempt: int, now: float
+    repo: str, run_id: int, attempt: int, now: float, holder_repo: str = ""
 ) -> str | None:
     """Write the holder record the lease ref will point at.
 
@@ -268,6 +271,8 @@ def create_identity_blob(
         # have queued for runners first, none of which is lease-hold time.
         "acquired_at": now,
     }
+    if holder_repo and holder_repo != repo:
+        payload["repo"] = holder_repo
     return write_blob(repo, json.dumps(payload))
 
 
@@ -309,12 +314,14 @@ def _parse_holder(record: object) -> Holder | None:
         print("::warning::the tenant lease holder record names no run.")
         return None
     acquired_at = record.get("acquired_at")
+    holder_repo = cast("dict[str, object]", record).get("repo")
     return Holder(
         run_id=run_id,
         attempt=attempt,
         acquired_at=float(acquired_at)
         if isinstance(acquired_at, (int, float))
         else None,
+        repo=holder_repo if isinstance(holder_repo, str) else "",
     )
 
 
@@ -349,6 +356,7 @@ def acquire(
     ttl_seconds: int,
     sleep=time.sleep,
     clock=time.time,
+    holder_repo: str = "",
 ) -> tuple[str, Holder | None]:
     """Take the lease, or report why not.
 
@@ -378,7 +386,9 @@ def acquire(
         if target is None:
             # Looks free — mint an identity and race for it.
             try:
-                blob_sha = create_identity_blob(repo, run_id, attempt, clock())
+                blob_sha = create_identity_blob(
+                    repo, run_id, attempt, clock(), holder_repo
+                )
                 if blob_sha is None:
                     print(_DENIED_ERROR)
                     return "denied", None
@@ -464,6 +474,7 @@ def acquire_ordered(
     ttl_seconds: int,
     sleep=time.sleep,
     clock=time.time,
+    holder_repo: str = "",
 ) -> OrderedOutcome:
     """Take EVERY cloud's lease, in a fixed order, under one total budget.
 
@@ -545,6 +556,7 @@ def acquire_ordered(
             ttl_seconds=ttl_seconds,
             sleep=sleep,
             clock=clock,
+            holder_repo=holder_repo,
         )
         if state == "acquired":
             held.append(ref)
@@ -718,6 +730,14 @@ def main(argv: list[str] | None = None) -> int:
         "--mode", required=True, choices=("acquire", "verify", "release")
     )
     parser.add_argument("--repo", required=True, help="owner/repo the lease lives in.")
+    parser.add_argument(
+        "--holder-repo",
+        default="",
+        help="owner/repo this run belongs to, when the lease lives in another "
+        "repo (a lease shared by several repos' runs). Recorded with the holder so "
+        "a waiter in another repo can check the run; that waiter reads it with "
+        "GH_RUNS_TOKEN.",
+    )
     parser.add_argument("--app", required=True, help="App under test (lease key part).")
     parser.add_argument(
         "--cloud", default="", help="Cloud (lease key part); empty = single tenant."
@@ -849,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
             wait_seconds=args.wait_seconds,
             poll_seconds=args.poll_seconds,
             ttl_seconds=args.ttl_seconds,
+            holder_repo=args.holder_repo,
         )
         state, blocker, held_refs = outcome.state, outcome.blocker, list(outcome.held)
         # The ref the outcome hinged on, so the errors below name one specific
@@ -864,6 +885,7 @@ def main(argv: list[str] | None = None) -> int:
             wait_seconds=args.wait_seconds,
             poll_seconds=args.poll_seconds,
             ttl_seconds=args.ttl_seconds,
+            holder_repo=args.holder_repo,
         )
         if state == "acquired":
             held_refs = [ref]
