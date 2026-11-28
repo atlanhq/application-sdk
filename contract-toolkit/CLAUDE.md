@@ -34,7 +34,9 @@ Contracts generate — from one `pkl eval --project-dir contract -m . contract/a
 - `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`, `VpaConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
 - `src/SdkNames.pkl`: SDK names `App.pkl` copies: base-class field names and `_input.py` import names it must not shadow, the e2e substitution parents' fields, the class attributes a generated `_e2e_base.py` may assign, and the artifact type and format vocabulary. `scripts/test-sdk-import.py` compares them with the SDK; update them when the SDK's base input classes, e2e harness or artifact vocabulary change.
-- Legacy modules (reference only, not for new apps):
+- Legacy modules (reference only, not for new apps; removed in 1.0.0). Each
+  `output` calls a `@Deprecated` `legacyModuleNotice()` so `pkl eval` prints one
+  `pkl: WARN:` line; Pkl prints nothing for a module-level `@Deprecated`:
   - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`
   - `src/Config.pkl`, `src/Credential.pkl`, `src/Renderers.pkl`
 - `examples/*/app.pkl`: executable reference contracts.

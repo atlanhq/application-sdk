@@ -23,7 +23,13 @@
 /// | preview | | (Optional) Whether the package should be labeled as an early preview in the UI (true) or not (false). | `false` |
 /// | connectorType | | (Optional) If the package needs to configure a connector, specify its type here. | |
 /// | category | | Name of the pill under which the package should be categorized in the marketplace in the UI. | `custom` |
+///
+/// Deprecated: removed in app-contract-toolkit 1.0.0. Amend `App.pkl`, and use
+/// `Widgets.pkl` (re-exported by `App.pkl`) for widgets. `pkl eval` prints a
+/// `pkl: WARN:` line for a contract that amends this module (see
+/// `legacyModuleNotice`); importing it prints nothing.
 @ModuleInfo { minPklVersion = "0.33.0" }
+@Deprecated { message = "Config.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
 open module com.atlan.app.contract.Config
 
 import "pkl:semver"
@@ -339,8 +345,14 @@ const function getModuleOutput(m): ModuleOutput = new ModuleOutput {
   files = getOutputs(m)
 }
 
+/// Prints the eval-time deprecation warning for this module. Pkl prints nothing
+/// for a module-level `@Deprecated`; it warns only when a deprecated method is
+/// called, so `output` calls this one. Returns null; generated output is unchanged.
+@Deprecated { message = "Config.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
+local function legacyModuleNotice(): Null = null
+
 /// Set the output of the module to be separate files for each custom type definition in the model.
-output = getModuleOutput(this)
+output = let (_deprecation = legacyModuleNotice()) getModuleOutput(this)
 
 /// Turn the provided name into a PascalCase name.
 const function getPascalCase(name: String): String =

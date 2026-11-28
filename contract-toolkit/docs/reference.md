@@ -1406,7 +1406,7 @@ skipped by `_input.py` codegen and never redeclared from a `uiConfig` property.
 
 ## Legacy: NativeApp.pkl — Base Module (pre-v0.10.0)
 
-> **Deprecated.** New contracts should amend `App.pkl`. `NativeApp.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
+> **Deprecated.** New contracts should amend `App.pkl`. `NativeApp.pkl` remains resolvable on 0.x and is **removed in app-contract-toolkit 1.0.0**. Evaluating a contract that amends it prints one `pkl: WARN: ... NativeApp.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl` line on stderr; evaluation still succeeds and generated output is unchanged.
 
 ### Migrating `workflowType` / `workflowTypeOverride` to App.pkl
 
@@ -1492,7 +1492,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 
 ## Legacy: NativeAppBundle.pkl — Multi-Entrypoint Bundle (pre-v0.10.0)
 
-> **Deprecated.** Multi-entrypoint bundle support is now built into `App.pkl` via the `entrypoints` block. `NativeAppBundle.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
+> **Deprecated.** Multi-entrypoint bundle support is now built into `App.pkl` via the `entrypoints` block. `NativeAppBundle.pkl` remains resolvable on 0.x and is **removed in app-contract-toolkit 1.0.0**. Evaluating a bundle that amends it prints one `pkl: WARN:` line for `NativeAppBundle.pkl` and, when its entrypoints use `NativeApp.pkl` contracts, one for `NativeApp.pkl`; evaluation still succeeds and generated output is unchanged.
 
 Use `NativeAppBundle.pkl` when one deployed native app exposes multiple marketplace cards / SDK entrypoints from the same service. The bundle owns deployment and marketplace metadata, while each entrypoint still uses a normal `NativeApp.pkl` contract for workflow config, credentials, manifest, and `_input.py`. Entry contracts can be amended inline in the same `app.pkl`.
 
@@ -2143,6 +2143,8 @@ the generated credential JSON against the authoritative marketplace shape.
 ---
 
 ## Config.pkl — Widget Types
+
+> **Deprecated.** Legacy module, **removed in app-contract-toolkit 1.0.0**. Use `Widgets.pkl` (re-exported by `App.pkl`). Evaluating a contract that amends `Config.pkl` prints one `pkl: WARN:` deprecation line; importing it for widget types prints nothing.
 
 ### UIConfig
 
@@ -4420,6 +4422,8 @@ deploy = new DeployConfig {
 
 ## Credential.pkl — Legacy Module
 
+> **Deprecated.** **Removed in app-contract-toolkit 1.0.0**; use `additionalCredentialConfigs` on `App.pkl`. Evaluating a contract that amends `Credential.pkl` prints one `pkl: WARN:` deprecation line.
+
 For Argo-era apps only. Do not use for new native apps (use `FieldSpec` instead). Still used
 by CSA connector credential configs.
 
@@ -4512,6 +4516,8 @@ untyped `new Dynamic` with `new ValidationRule` — the fields (`required`, `mes
 ---
 
 ## Renderers.pkl — Legacy Renderers
+
+> **Deprecated.** **Removed in app-contract-toolkit 1.0.0**. It has no output of its own, so it prints no warning itself; `Config.pkl` and `Credential.pkl`, its only importers, do.
 
 Output generators for legacy formats. NativeApp.pkl has its own rendering pipeline.
 
