@@ -152,7 +152,7 @@ on:
         description: "API token for marketplace publish — required when publish=true"
       TWINGATE_SHARED_KEY:
         required: false
-        description: "Twingate service-account key (org secret, via `secrets: inherit`). The publish job always dials Twingate with it, so the marketplace call leaves from the VPN egress Cloudflare admits. When unset, the publish goes out directly from the runner."
+        description: "Twingate service-account key (org secret, via `secrets: inherit`). The publish job always dials Twingate with it, so the marketplace call leaves from the VPN egress Cloudflare admits. Effectively required when publish=true: an unset key fails the publish job before the POST."
       SLACK_LEAK_SCAN_WEBHOOK:
         required: false
         description: "Slack incoming-webhook URL (hooks.slack.com) for credential-leak (creds-into-logs) WARNINGS. Org-level secret, passed via `secrets: inherit` — same convention as SLACK_DEP_COOLDOWN_WEBHOOK. Warnings are non-blocking; when unset the Slack ping is skipped. Never receives secret values — only file:line locations."
@@ -1474,8 +1474,6 @@ jobs:
     # ubuntu-slim container runner does not provide.
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
 
     steps:
       - name: Checkout SDK helper scripts
@@ -1499,28 +1497,15 @@ jobs:
       # runner egress ("Sorry, you have been blocked", HTTP 403). Twingate sends
       # the publish from Atlan's VPN egress instead. The probe targets the
       # dataforge api host, which admits only VPN egress, to prove the tunnel
-      # is up; the action has no host-agnostic probe. continue-on-error: a VPN
-      # outage must not by itself block a release, so the publish is still
-      # attempted and fails on its own if the gateway rejects it.
+      # is up; the action has no host-agnostic probe. A failed connect fails
+      # the job: publishing without the tunnel would only hit the same 403.
+      # The action tears the tunnel down itself on a failed connect.
       - name: Connect to Twingate (marketplace egress)
-        id: twingate
-        if: env.HAS_TWINGATE_KEY == 'true'
-        continue-on-error: true
         timeout-minutes: 8
         uses: ./.sdk-entrypoint/.github/actions/twingate-connect
         with:
           service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
-      - name: Clean up after a stopped Twingate step
-        if: steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          echo "::warning title=Twingate::Could not connect; publishing directly from the runner, which Cloudflare may block."
-          sudo timeout -k 5 15 twingate stop || true
-          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
-          sudo rm -f /etc/apt/sources.list.d/twingate.list
-          sudo timeout -k 5 30 dpkg --configure -a || true
 
       # Resolve who GM attributes the release to. Branching logic lives in a
       # tested script per docs/standards/ci.md — see the module docstring for
