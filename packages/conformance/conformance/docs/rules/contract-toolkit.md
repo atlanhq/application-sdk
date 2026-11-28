@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**27 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**27 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl`` and every directory whose ``PklProject`` depends on the toolkit), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -49,7 +49,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
 
-> Contract amends NativeApp.pkl or NativeAppBundle.pkl — migrate to App.pkl
+> Contract is built on a legacy toolkit module (NativeApp.pkl, NativeAppBundle.pkl, Config.pkl, Credential.pkl, Renderers.pkl) — migrate to App.pkl
 
 **Rationale:** App.pkl (contract-toolkit v0.10.0+) is the canonical single entry point that supersedes
 NativeApp.pkl (single-entrypoint) and NativeAppBundle.pkl (multi-entrypoint bundle).
@@ -67,8 +67,20 @@ and aligns every app with the one supported workflow for contract evolution (BLD
   or NativeAppBundle.pkl.
 - **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
-The `contract/app.pkl` file (or any `contract/**/*.pkl` file) contains an `amends` line
-pointing at `NativeApp.pkl` or `NativeAppBundle.pkl` instead of the canonical `App.pkl`.
+A contract file builds on one of the five legacy toolkit modules (`NativeApp.pkl`,
+`NativeAppBundle.pkl`, `Config.pkl`, `Credential.pkl`, `Renderers.pkl`) instead of the
+canonical `App.pkl`.  Every shape is reported (FND-5546):
+
+* `amends "@app-contract-toolkit/NativeApp.pkl"` or the `amends
+  "package://…/app-contract-toolkit@<v>#/NativeApp.pkl"` URI form;
+* `extends "…/<legacy>.pkl"`;
+* `import "…/NativeApp.pkl" as X` followed by `(X) { … }` or `new X { … }` — each such
+  object body is one finding (the import line itself is K002).
+
+Files scanned: `contract/**/*.pkl` plus every `.pkl` file under any directory whose
+`PklProject` depends on the toolkit, wherever it sits in the repo.  `generated/`
+directories are skipped.  A `Credential.pkl` base is replaced by App.pkl's
+`additionalCredentialConfigs` rather than a new base.
 
 `App.pkl` (contract-toolkit v0.10.0+) is the single entry point for all Atlan native
 apps — both single-entrypoint and multi-entrypoint (bundle) contracts.  The legacy
@@ -112,10 +124,10 @@ migration tracked in a follow-on ticket).
 when App.pkl was designed: flatManifestArgs and manifestMetadataArgs (App.pkl always
 emits flat top-level args), workflowTypeOverride (App.pkl takes a verbatim
 workflowType), and explicit imports of Config.pkl/Credential.pkl/Renderers.pkl (Argo-era
-modules App.pkl no longer uses).  Their presence in a contract that claims to amend
-App.pkl (or that will be migrated to App.pkl) indicates that the migration is
-incomplete.  When any of these knobs remain after the amends line is changed, pkl eval
-fails, blocking CI (BLDX-1479).
+modules App.pkl no longer uses) or of the NativeApp.pkl/NativeAppBundle.pkl bases.
+Their presence in a contract that claims to amend App.pkl (or that will be migrated to
+App.pkl) indicates that the migration is incomplete.  When any of these knobs remain
+after the amends line is changed, pkl eval fails, blocking CI (BLDX-1479).
 
 ### What correct looks like
 
@@ -130,15 +142,16 @@ fails, blocking CI (BLDX-1479).
 - **Already correct when:** `Connectors.pkl` is a detector-level exemption — no directive is needed or licensed. A
   justified inline `// conformance: ignore[K002] <reason>` IS the correct end state only
   for a match the scanner actually emits: an import of `Config.pkl`, `Credential.pkl`,
-  or `Renderers.pkl`, or a NativeApp-only property (`flatManifestArgs`,
-  `manifestMetadataArgs`, `workflowTypeOverride`) — where the reason records the `pkl
-  eval` that PROVED the replacement does not supply those symbols, or the match is a
-  scanner false positive (the name appears only inside a string). A directive that only
-  states the import is still needed is unremediated — run the eval and record what it
-  said, or migrate the import.
+  `Renderers.pkl`, `NativeApp.pkl` or `NativeAppBundle.pkl`, or a NativeApp-only
+  property (`flatManifestArgs`, `manifestMetadataArgs`, `workflowTypeOverride`) — where
+  the reason records the `pkl eval` that PROVED the replacement does not supply those
+  symbols, or the match is a scanner false positive (the name appears only inside a
+  string). A directive that only states the import is still needed is unremediated — run
+  the eval and record what it said, or migrate the import.
 
-The `contract/**/*.pkl` file contains one or more NativeApp-only properties or imports
-that do not exist in `App.pkl`:
+A contract file (`contract/**/*.pkl`, or any `.pkl` file in a directory whose
+`PklProject` depends on the toolkit) contains one or more NativeApp-only properties or
+imports that do not exist in `App.pkl`:
 
 * `flatManifestArgs` / `manifestMetadataArgs` — control how workflow params are nested
   in the manifest `args` object.  App.pkl always emits flat top-level args; these flags
@@ -156,18 +169,24 @@ that do not exist in `App.pkl`:
 * `import "…Credential.pkl"` and `import "…Renderers.pkl"` (Argo-era modules) — no
   longer used by App.pkl; remove both.
 
+* `import "…NativeApp.pkl"` / `import "…NativeAppBundle.pkl"` (with or without `as X`) —
+  the import that lets a file build entrypoint contracts as `(X) { … }` on the legacy
+  base.  Each such object body is a separate K001 finding; move those contracts into
+  App.pkl's typed `entrypoints` block and remove the import.
+
 Note: `import "…Connectors.pkl"` is **not** flagged — the Connectors registry is still
 imported explicitly by App.pkl consumers (App.pkl imports it internally and types
 `connector` as `Connectors.Type` but does not re-export the constants), so the import is
 required, not legacy.
 
-Note: a contract that **amends** `Credential.pkl` (a credential-config sub-contract, not
-an App.pkl entrypoint) is **not** flagged for its `import "…Config.pkl"` line.
-Credential.pkl uses `Config.*` internally but, unlike App.pkl, does not re-export the
-widget types as unqualified typealiases, so such a contract genuinely needs the import
-for `pkl eval` to resolve `Config.TextInput` etc. — flagging it would be a false
-positive.  The exemption covers `Config.pkl` only: a credential contract carrying
-`import "…Renderers.pkl"` or `import "…Credential.pkl"` is still legacy and still fires.
+Note: a contract that **amends** `Credential.pkl` (a credential-config sub-contract,
+reported by K001 on its amends line) is **not** flagged again for its `import
+"…Config.pkl"` line.  Credential.pkl uses `Config.*` internally but, unlike App.pkl,
+does not re-export the widget types as unqualified typealiases, so such a contract
+genuinely needs the import for `pkl eval` to resolve `Config.TextInput` etc. — flagging
+it would be a false positive.  The exemption covers `Config.pkl` only: a credential
+contract carrying `import "…Renderers.pkl"` or `import "…Credential.pkl"` is still
+legacy and still fires.
 
 **Note:** if the contract also has a K001 finding (still amending a legacy module),
 address K001 first — many K002 knobs disappear automatically when the module changes,
@@ -177,11 +196,12 @@ After editing, run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) t
 regenerate `app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts —
 K004/K005 and the generated-artifact freshness gate catch staleness.
 
-**Scanner limitation:** the checker is not string-literal aware.  A property name that
-appears only inside a string literal (e.g. `description = "flatManifestArgs is removed
-in App.pkl"` on a single line) may be flagged.  Use `// conformance: ignore[K002]
-<reason>` to suppress false positives; that directive is the intended workaround for any
-case where the pattern matches non-code content.
+**Scanner limitation:** comment stripping is string-aware (a `//` inside a `package://`
+URI is code), but property matching is not.  A property name that appears only inside a
+string literal (e.g. `description = "flatManifestArgs is removed in App.pkl"` on a
+single line) may be flagged.  Use `// conformance: ignore[K002] <reason>` to suppress
+false positives; that directive is the intended workaround for any case where the
+pattern matches non-code content.
 
 **Suppress** with `// conformance: ignore[K002] <reason>` on the violating line or the
 comment-only line directly above it.

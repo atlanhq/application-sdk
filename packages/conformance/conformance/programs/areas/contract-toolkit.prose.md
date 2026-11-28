@@ -3,10 +3,12 @@ kind: responsibility
 name: contract-toolkit-area
 description: >
   Maintains the current K-series violation-set and drives remediation of
-  contract-toolkit findings.  K001 (contract amends NativeApp.pkl or
-  NativeAppBundle.pkl instead of App.pkl) and K002 (NativeApp-only APIs present:
-  flatManifestArgs, manifestMetadataArgs, workflowTypeOverride, or legacy
-  Config/Connectors/Credential/Renderers imports) are guided migration fixes.
+  contract-toolkit findings.  K001 (contract built on a legacy module --
+  NativeApp, NativeAppBundle, Config, Credential or Renderers -- by amends,
+  extends, or an imported module used as (X) { ... } / new X { ... }) and K002
+  (NativeApp-only APIs present: flatManifestArgs, manifestMetadataArgs,
+  workflowTypeOverride, or an import of any of the five legacy modules) are
+  guided migration fixes.
   K003 (stale Pkl lock), K004 (missing generated output), and K005 (stripped
   provenance banner) are generated-artifact freshness findings fixed by
   re-resolving / regenerating — all verified by the pkl-eval gate.  K006
@@ -178,8 +180,21 @@ rather than hand-editing the artifact.
 
 ---
 
-**K001 ContractAmendsLegacyModule** — the contract file's `amends` line points at
-a legacy module (`NativeApp.pkl` or `NativeAppBundle.pkl`) instead of `App.pkl`.
+**K001 ContractAmendsLegacyModule** — the contract file is built on a legacy
+module (`NativeApp.pkl`, `NativeAppBundle.pkl`, `Config.pkl`, `Credential.pkl` or
+`Renderers.pkl`) instead of `App.pkl`.  The finding's message names the shape:
+
+- `amends "…/<legacy>.pkl"` — any spelling, including the
+  `package://…/app-contract-toolkit@<v>#/<legacy>.pkl` URI form;
+- `extends "…/<legacy>.pkl"`;
+- `(X) { … }` or `new X { … }` where `X` is bound by
+  `import "…/NativeApp.pkl" as X` (or by a bare import, which binds the module
+  name) — an entrypoint contract built inline on the legacy base.  Its import
+  line is a separate K002 finding.
+
+The finding may sit in any directory whose `PklProject` depends on the toolkit,
+not only `contract/` (for example reference contracts under `docs/`).  Those
+contracts are migrated the same way; evaluate them with their own `PklProject`.
 `classification = "judgment"` (structural migration; no two contracts are
 identical).  After applying the edit, the `pkl-eval` gate determines whether the
 migration compiled.
@@ -206,6 +221,16 @@ migration compiled.
    bundle entrypoints should be collapsed into App.pkl's typed `entrypoints`
    block.  Each per-entrypoint contract file (`amends "@app-contract-toolkit/
    NativeApp.pkl"`) must also be migrated (K001 will fire for each file separately).
+   An entrypoint built inline as `(NativeApp) { … }` / `new NativeApp { … }`
+   becomes one entry in that `entrypoints` block; once none remain, remove the
+   `import "…/NativeApp.pkl"` line (its K002 finding clears with it).
+
+4a. **Credential base** (K001 on `Credential.pkl`) — a standalone credential
+   contract has no App.pkl base of its own.  Fold it into the app's
+   `contract/app.pkl` through `additionalCredentialConfigs`, then delete the
+   standalone file.  `Config.pkl` / `Renderers.pkl` bases (`amends` or
+   `extends`) migrate to `App.pkl`, with `Config.*` widgets replaced by the
+   `Widgets.*` types App.pkl re-exports.
 
 5. **Stage the `contract/*.pkl` edits** — do NOT run `pkl eval` manually; the
    `pkl-eval` gate does it and captures the result.
@@ -235,6 +260,11 @@ Read the specific knob(s) named in the `finding.message` and apply:
 
 - **`import "…Credential.pkl"`** (Argo-era) and **`import "…Renderers.pkl"`**
   (Argo-era) — remove both; these modules are no longer used by App.pkl.
+
+- **`import "…NativeApp.pkl"`** / **`import "…NativeAppBundle.pkl"`** (with or
+  without `as X`) — the import exists to build contracts on the legacy base.
+  Migrate every `(X) { … }` / `new X { … }` that uses it (each is a K001
+  finding, see K001 step 4), then remove the import.
 
   (Note: `import "…Connectors.pkl"` is NOT a K002 finding — the Connectors
   registry is still imported explicitly by App.pkl consumers, so it is not

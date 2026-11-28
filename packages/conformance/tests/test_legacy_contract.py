@@ -345,6 +345,10 @@ def test_k002_config_import_legitimate_when_amends_credential(
     findings = _scan_all(tmp_path, {"contract/csa-connectors-objectstore.pkl": content})
     k002 = [f for f in findings if f.rule_id == "K002"]
     assert k002 == [], f"Unexpected K002 firing on a credential contract: {k002}"
+    # The credential base itself is legacy: K001 reports the amends line once.
+    assert [(f.rule_id, f.line) for f in findings if f.rule_id == "K001"] == [
+        ("K001", 1)
+    ]
 
 
 def test_k002_import_fires_when_credential_amends_is_commented(
@@ -448,6 +452,213 @@ def test_k002_suppressed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The six ways a contract reaches a legacy module (FND-5546)
+# ---------------------------------------------------------------------------
+
+_PKG = (
+    "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.39.2"
+)
+
+
+def _rules(findings: list) -> list[tuple[str, int]]:
+    return sorted((f.rule_id, f.line) for f in findings)
+
+
+def test_shape1_amends_package_alias(tmp_path: Path) -> None:
+    """Shape 1: ``amends "@app-contract-toolkit/NativeApp.pkl"`` → K001."""
+    content = 'amends "@app-contract-toolkit/NativeApp.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+
+
+def test_shape2_amends_package_uri(tmp_path: Path) -> None:
+    """Shape 2: the ``package://…#/NativeApp.pkl`` URI form → K001.
+
+    The ``//`` inside ``package://`` used to be read as a line comment, which
+    cut the line before the module name.
+    """
+    content = f'amends "{_PKG}#/NativeApp.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+    assert "'NativeApp.pkl'" in findings[0].message
+
+
+def test_shape3_import_alias_amend_expression(tmp_path: Path) -> None:
+    """Shape 3: ``import … as X`` then ``(X) { … }`` → K002 import + K001 per body."""
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        import "@app-contract-toolkit/NativeApp.pkl" as Legacy
+
+        local first = (Legacy) {
+          name = "first"
+        }
+        local second = (Legacy) { name = "second" }
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 4), ("K001", 7), ("K002", 2)]
+    k001 = [f for f in findings if f.rule_id == "K001"]
+    assert all("'NativeApp.pkl'" in f.message for f in k001)
+    assert all("(Legacy)" in f.message for f in k001)
+
+
+def test_shape3_default_import_name_and_new_expression(tmp_path: Path) -> None:
+    """Without ``as``, Pkl binds the module's own name; ``new X {`` also counts.
+
+    ``new NativeApp.FieldSpec {`` instantiates a nested class, not the module,
+    and must not fire.
+    """
+    content = dedent("""\
+        import "@app-contract-toolkit/NativeApp.pkl"
+
+        local a: NativeApp = new NativeApp {
+          fields { new NativeApp.FieldSpec { name = "x" } }
+        }
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 3), ("K002", 1)]
+
+
+def test_shape3_unrelated_parenthesised_amend_not_flagged(tmp_path: Path) -> None:
+    """``(X) {`` on a name not bound to a legacy import is ordinary Pkl."""
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        import "@app-contract-toolkit/Widgets.pkl" as W
+
+        local base = (W) { }
+        local other = (NativeApp) { }
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert findings == []
+
+
+def test_shape4_amends_credential(tmp_path: Path) -> None:
+    """Shape 4: ``amends "…/Credential.pkl"`` → K001 with the credential hint."""
+    content = 'amends "@app-contract-toolkit/Credential.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/creds.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+    assert "additionalCredentialConfigs" in findings[0].message
+
+
+def test_shape5_extends_config(tmp_path: Path) -> None:
+    """Shape 5: ``extends "…/Config.pkl"`` → K001."""
+    content = 'extends "@app-contract-toolkit/Config.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+    assert "'Config.pkl'" in findings[0].message
+
+
+def test_shape6_import_nativeappbundle(tmp_path: Path) -> None:
+    """Shape 6: a bare ``import "…/NativeAppBundle.pkl"`` → K002."""
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        import "@app-contract-toolkit/NativeAppBundle.pkl"
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K002", 2)]
+    assert "NativeAppBundle.pkl is a legacy base" in findings[0].message
+
+
+def test_amends_renderers_flagged(tmp_path: Path) -> None:
+    """All five legacy modules count as a legacy base, Renderers.pkl included."""
+    content = 'amends "@app-contract-toolkit/Renderers.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+
+
+def test_current_modules_never_flagged(tmp_path: Path) -> None:
+    """Widgets, Connectors, Deployment, Inputs, InputContract are current modules."""
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        import "@app-contract-toolkit/Widgets.pkl"
+        import "@app-contract-toolkit/Connectors.pkl"
+        import "@app-contract-toolkit/Deployment.pkl" as D
+        import "@app-contract-toolkit/Inputs.pkl"
+        import "@app-contract-toolkit/InputContract.pkl"
+
+        local x = (D) { }
+        local y = new Widgets { }
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert findings == []
+
+
+def test_amends_inputs_module_not_flagged(tmp_path: Path) -> None:
+    """A generated-style ``amends "…/Inputs.pkl"`` is not a legacy base."""
+    content = f'amends "{_PKG}#/Inputs.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert findings == []
+
+
+def test_import_alias_suppressed_on_amend_line(tmp_path: Path) -> None:
+    """The ``(X) {`` K001 finding honours a directive on the line above."""
+    content = dedent("""\
+        import "@app-contract-toolkit/NativeApp.pkl" as N  // conformance: ignore[K002] phased migration
+        // conformance: ignore[K001] phased migration tracked separately
+        local c = (N) { }
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 3), ("K002", 1)]
+    assert all(f.suppressed for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# String-aware comment stripping
+# ---------------------------------------------------------------------------
+
+
+def test_line_comment_marker_inside_string_is_code(tmp_path: Path) -> None:
+    """``//`` inside a string literal does not start a comment."""
+    content = f'amends "{_PKG}#/NativeAppBundle.pkl" // trailing note\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+
+
+def test_block_comment_marker_inside_string_is_code(tmp_path: Path) -> None:
+    """``/*`` inside a string must not open a block comment that hides code."""
+    content = dedent("""\
+        prefix = "s3://bucket/*"
+        amends "@app-contract-toolkit/NativeApp.pkl"
+        suffix = "*/"
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 2)]
+
+
+def test_multiline_string_does_not_hide_or_leak(tmp_path: Path) -> None:
+    """A ``\"\"\"`` string spanning lines is skipped as one literal.
+
+    A ``//`` and a quote inside it neither start a comment nor end the string,
+    and the code after it is still scanned on the right line.
+    """
+    content = dedent('''\
+        description = """
+          see https://example.com/docs "quoted" text
+          """
+        amends "@app-contract-toolkit/NativeApp.pkl"
+    ''')
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 4)]
+
+
+def test_custom_delimiter_string_is_skipped(tmp_path: Path) -> None:
+    """``#"…"#`` raw strings can hold a bare quote without ending early."""
+    content = dedent("""\
+        note = #"a "quoted" // not a comment"#
+        amends "@app-contract-toolkit/NativeApp.pkl" // a real comment
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 2)]
+
+
+def test_block_comment_columns_preserved(tmp_path: Path) -> None:
+    """Blanking a block comment keeps the column of the code after it."""
+    content = '/* x */ amends "@app-contract-toolkit/NativeApp.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    assert _rules(findings) == [("K001", 1)]
+    assert findings[0].column == 9
+
+
+# ---------------------------------------------------------------------------
 # Combined K001 + K002 (typical legacy contract)
 # ---------------------------------------------------------------------------
 
@@ -495,6 +706,97 @@ def test_discover_finds_pkl_files(tmp_path: Path) -> None:
     assert len(paths) == 2
     assert all(p.suffix == ".pkl" for p in paths)
     assert all("contract" in str(p) for p in paths)
+
+
+_TOOLKIT_PKLPROJECT = dedent("""\
+    amends "pkl:Project"
+
+    dependencies {
+      ["app-contract-toolkit"] {
+        uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.39.2"
+      }
+    }
+""")
+
+
+def test_discover_walks_toolkit_project_outside_contract(tmp_path: Path) -> None:
+    """A second Pkl project anywhere in the repo is walked when it uses the toolkit."""
+    _write_repo(
+        tmp_path,
+        {
+            "contract/app.pkl": 'amends "@app-contract-toolkit/App.pkl"\n',
+            "docs/v1/providers/example/PklProject": _TOOLKIT_PKLPROJECT,
+            "docs/v1/providers/example/app.pkl": (
+                'amends "@app-contract-toolkit/NativeAppBundle.pkl"\n'
+            ),
+            "docs/v1/providers/example/sub/entry.pkl": "x = 1\n",
+        },
+    )
+    rels = [p.relative_to(tmp_path).as_posix() for p in discover(tmp_path)]
+    assert rels == [
+        "contract/app.pkl",
+        "docs/v1/providers/example/app.pkl",
+        "docs/v1/providers/example/sub/entry.pkl",
+    ]
+
+
+def test_discover_detects_archived_package_uri(tmp_path: Path) -> None:
+    """A dependency on the archived toolkit package URI also counts."""
+    project = (
+        'amends "pkl:Project"\ndependencies {\n  ["toolkit"] {\n'
+        '    uri = "package://atlanhq.github.io/app-contract-toolkit/'
+        'app-contract-toolkit@0.9.6"\n  }\n}\n'
+    )
+    _write_repo(tmp_path, {"ref/PklProject": project, "ref/app.pkl": "x = 1\n"})
+    rels = [p.relative_to(tmp_path).as_posix() for p in discover(tmp_path)]
+    assert rels == ["ref/app.pkl"]
+
+
+def test_discover_skips_non_toolkit_project(tmp_path: Path) -> None:
+    """A PklProject that does not depend on the toolkit is not walked."""
+    project = 'amends "pkl:Project"\n// app-contract-toolkit is not used here\n'
+    _write_repo(
+        tmp_path,
+        {
+            "tools/PklProject": project,
+            "tools/thing.pkl": 'amends "@app-contract-toolkit/NativeApp.pkl"\n',
+        },
+    )
+    assert discover(tmp_path) == []
+
+
+def test_discover_skips_toolkit_package_itself(tmp_path: Path) -> None:
+    """The toolkit's own PklProject declares a package, not a dependency on it."""
+    project = dedent("""\
+        amends "pkl:Project"
+        package {
+          name = "app-contract-toolkit"
+          baseUri = "package://atlanhq.github.io/application-sdk/contracts/\\(name)"
+        }
+    """)
+    _write_repo(
+        tmp_path,
+        {"src/PklProject": project, "src/NativeApp.pkl": "open module NativeApp\n"},
+    )
+    assert discover(tmp_path) == []
+
+
+def test_discover_skips_generated_and_hidden_dirs(tmp_path: Path) -> None:
+    """``generated/``, hidden dirs and ``node_modules`` are never walked."""
+    _write_repo(
+        tmp_path,
+        {
+            "contract/PklProject": _TOOLKIT_PKLPROJECT,
+            "contract/app.pkl": "x = 1\n",
+            "contract/generated/input.pkl": "x = 1\n",
+            ".venv/lib/PklProject": _TOOLKIT_PKLPROJECT,
+            ".venv/lib/a.pkl": "x = 1\n",
+            "node_modules/pkg/PklProject": _TOOLKIT_PKLPROJECT,
+            "node_modules/pkg/b.pkl": "x = 1\n",
+        },
+    )
+    rels = [p.relative_to(tmp_path).as_posix() for p in discover(tmp_path)]
+    assert rels == ["contract/app.pkl"]
 
 
 def test_discover_returns_empty_when_no_contract_dir(tmp_path: Path) -> None:
