@@ -69,11 +69,6 @@ on:
         required: false
         type: boolean
         default: false
-      publish_vpn:
-        description: "Route the marketplace publish through Twingate (default: true). Cloudflare in front of the marketplace gateway blocks GitHub-hosted runner egress; the tunnel sends the call from Atlan's VPN egress instead. Dialled only when TWINGATE_SHARED_KEY is visible to the caller (org secret, via `secrets: inherit`). A failed connect does not fail the job: the publish is still attempted, and fails on its own if the gateway rejects it."
-        required: false
-        type: boolean
-        default: true
       channel:
         description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
         required: false
@@ -157,7 +152,7 @@ on:
         description: "API token for marketplace publish — required when publish=true"
       TWINGATE_SHARED_KEY:
         required: false
-        description: "Twingate service-account key (org secret, via `secrets: inherit`). The publish job dials Twingate with it when publish_vpn is true, so the marketplace call leaves from the VPN egress Cloudflare admits. When unset, the publish goes out directly from the runner."
+        description: "Twingate service-account key (org secret, via `secrets: inherit`). The publish job always dials Twingate with it, so the marketplace call leaves from the VPN egress Cloudflare admits. When unset, the publish goes out directly from the runner."
       SLACK_LEAK_SCAN_WEBHOOK:
         required: false
         description: "Slack incoming-webhook URL (hooks.slack.com) for credential-leak (creds-into-logs) WARNINGS. Org-level secret, passed via `secrets: inherit` — same convention as SLACK_DEP_COOLDOWN_WEBHOOK. Warnings are non-blocking; when unset the Slack ping is skipped. Never receives secret values — only file:line locations."
@@ -1477,7 +1472,7 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
     # The Twingate client needs systemd, apt and a tun device, which the
     # ubuntu-slim container runner does not provide.
-    runs-on: ${{ inputs.publish_vpn && 'ubuntu-latest' || 'ubuntu-slim' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
@@ -1509,7 +1504,7 @@ jobs:
       # attempted and fails on its own if the gateway rejects it.
       - name: Connect to Twingate (marketplace egress)
         id: twingate
-        if: inputs.publish_vpn && env.HAS_TWINGATE_KEY == 'true'
+        if: env.HAS_TWINGATE_KEY == 'true'
         continue-on-error: true
         timeout-minutes: 8
         uses: ./.sdk-entrypoint/.github/actions/twingate-connect
