@@ -74,6 +74,11 @@ on:
         required: false
         type: boolean
         default: true
+      publish_vpn_provider:
+        description: "Which VPN the publish job dials when publish_vpn is true: 'auto' (default: Twingate, then GlobalProtect if Twingate fails), 'twingate' (Twingate only) or 'globalprotect' (GlobalProtect only)."
+        required: false
+        type: string
+        default: "auto"
       channel:
         description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
         required: false
@@ -1519,7 +1524,7 @@ jobs:
       # gateway rejects it.
       - name: Connect to Twingate (marketplace egress)
         id: twingate
-        if: inputs.publish_vpn && env.HAS_TWINGATE_KEY == 'true'
+        if: inputs.publish_vpn && inputs.publish_vpn_provider != 'globalprotect' && env.HAS_TWINGATE_KEY == 'true'
         continue-on-error: true
         timeout-minutes: 8
         uses: ./.sdk-entrypoint/.github/actions/twingate-connect
@@ -1542,7 +1547,7 @@ jobs:
       # Twingate's marketplace egress is being proven.
       - name: Connect to GlobalProtect (marketplace egress fallback)
         id: globalprotect
-        if: inputs.publish_vpn && steps.twingate.outputs.connected != 'true' && env.HAS_GLOBALPROTECT_CREDS == 'true'
+        if: inputs.publish_vpn && inputs.publish_vpn_provider != 'twingate' && steps.twingate.outputs.connected != 'true' && env.HAS_GLOBALPROTECT_CREDS == 'true'
         continue-on-error: true
         timeout-minutes: 8
         uses: ./.sdk-entrypoint/.github/actions/globalprotect-connect
