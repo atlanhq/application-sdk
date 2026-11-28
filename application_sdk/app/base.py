@@ -2626,9 +2626,9 @@ __all__ = [
 #: where they live now.
 _DEPRECATED_CONSTANTS: dict[str, str | tuple[str, str]] = {
     "generate_workflow_class": (
-        "generate_workflow_class is deprecated with no replacement: the worker "
-        "builds every App's workflow classes, so an app has no reason to call "
-        "it. Will be removed in v4.0.0."
+        "generate_workflow_class is deprecated; use create_worker "
+        "(application_sdk.execution), which builds every App's workflow "
+        "classes, instead of calling it from an app. Will be removed in v4.0.0."
     ),
 }
 

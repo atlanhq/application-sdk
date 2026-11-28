@@ -870,7 +870,8 @@ def _cleanup_dir_paths(input: CleanupInput) -> list[str]:
         # at would reach outside TEMPORARY_PATH, so sweep nothing.
         logger.warning(
             "Skipping the run scratch directory sweep: it resolves "
-            "outside TEMPORARY_PATH"
+            "outside TEMPORARY_PATH",
+            exc_info=True,
         )
         return []
 
