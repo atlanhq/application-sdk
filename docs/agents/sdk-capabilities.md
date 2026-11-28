@@ -499,7 +499,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 
 #### `generate_workflow_class` (deprecated)
 
-- **Deprecated:** generate_workflow_class is deprecated with no replacement: the worker builds every App's workflow classes, so an app has no reason to call it. Will be removed in v4.0.0. Do not use in new code.
+- **Deprecated:** generate_workflow_class is deprecated; use create_worker (application_sdk.execution), which builds every App's workflow classes, instead of calling it from an app. Will be removed in v4.0.0. Do not use in new code.
 - **Import:** `from application_sdk.app.base import generate_workflow_class`
 - **Signature:** `generate_workflow_class(app_cls: 'type[App]', ep: 'EntryPointMetadata', workflow_name: str | None = None)`
 - **Summary:** Generate a Temporal workflow class for one entry point.
