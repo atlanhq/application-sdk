@@ -1315,9 +1315,9 @@ class ConnectionTreeSelector extends UIElement {
   /// matches each name against the connector's value ignoring case. Unset (the
   /// default) emits no key and the tree shows every connector.
   ///
-  /// An empty listing, an empty name and a repeated name are rejected: an empty
-  /// listing reads like "no connectors" but shows all of them, and the other two
-  /// are typos.
+  /// An empty listing, an empty name and a repeated name (ignoring case, as the
+  /// frontend compares them) are rejected: an empty listing reads like "no
+  /// connectors" but shows all of them, and the other two are typos.
   hidden connectorNames: Listing<String>?(
     if (this == null)
       true
@@ -1325,9 +1325,11 @@ class ConnectionTreeSelector extends UIElement {
       throw("ConnectionTreeSelector `connectorNames` is empty. An empty list shows every connector, the same as leaving it unset; list at least one connector name or remove the property.")
     else if (this.toList().any((n) -> n.trim().isEmpty))
       throw("ConnectionTreeSelector `connectorNames` contains an empty connector name. Remove it or replace it with a connector name such as \"bigquery\".")
-    else if (this.toList().length != this.toList().toSet().length)
-      throw("ConnectionTreeSelector `connectorNames` lists a connector more than once: \(this.toList().filter((n) -> this.toList().filter((m) -> m == n).length > 1).toSet().toList().join(", ")). List each connector once.")
-    else true
+    else
+      let (lower = this.toList().map((n) -> n.toLowerCase()))
+        if (lower.length != lower.toSet().length)
+          throw("ConnectionTreeSelector `connectorNames` lists a connector more than once (names are compared ignoring case): \(lower.filter((n) -> lower.filter((m) -> m == n).length > 1).toSet().toList().join(", ")). List each connector once.")
+        else true
   )
 
   /// When `true`, checking a connection makes every connection under the other

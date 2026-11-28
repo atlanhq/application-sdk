@@ -110,7 +110,14 @@ facts {
 
   ["a repeated connector name is refused and named"] {
     err(withConnectorNames(new Listing { "bigquery"; "snowflake"; "bigquery" })).contains(
-      "ConnectionTreeSelector `connectorNames` lists a connector more than once: bigquery."
+      "ConnectionTreeSelector `connectorNames` lists a connector more than once (names are compared ignoring case): bigquery."
+    )
+  }
+
+  // The frontend lowercases both sides before matching, so these name one connector.
+  ["connector names that differ only in case are refused as a repeat"] {
+    err(withConnectorNames(new Listing { "BigQuery"; "bigquery" })).contains(
+      "ConnectionTreeSelector `connectorNames` lists a connector more than once (names are compared ignoring case): bigquery."
     )
   }
 }

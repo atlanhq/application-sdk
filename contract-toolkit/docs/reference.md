@@ -2376,7 +2376,7 @@ the settings an app sets.
 
 | Setting | Renders | Effect |
 |---|---|---|
-| `connectorNames` | `ui.connectorNames` | The connectors the tree shows, matched ignoring case. Unset shows every connector. An empty listing, an empty name and a repeated name are refused at eval time. |
+| `connectorNames` | `ui.connectorNames` | The connectors the tree shows, matched ignoring case. Unset shows every connector. An empty listing, an empty name and a repeated name (compared ignoring case) are refused at eval time. |
 | `restrictToSingleConnector` | `ui.shouldRestrictToSingleConnector` | `true`: once a connection is checked, every other connector's connections become uncheckable until the selection is cleared. |
 | `placeholderText` | `ui.placeholder` | Migration parity only. The current component shows its own fixed text ("Select connections") and does not read `ui.placeholder`. |
 
