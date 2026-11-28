@@ -1,0 +1,86 @@
+// FND-5552: the replacement for `emitEntrypoints = false`.
+//
+// `emitEntrypoints` is removed in 1.0.0. Every repo that sets it sets `false`,
+// to keep the `entrypoints:` block out of `atlan.yaml` (an app with the block
+// is routed down the platform's multi-entrypoint path). `packageId` and
+// `marketplaceCard = false` cannot reproduce that: a non-system app with
+// neither always renders a synthesized entrypoint. The replacement is
+//
+//   atlanYamlOverrides { ["entrypoints"] = null }
+//
+// which removes the key after rendering. These facts pin that it generates
+// every file byte for byte as `emitEntrypoints = false` does, including when
+// the contract already has an `atlanYamlOverrides` block, so the 1.0.0
+// removal cannot change a migrated repo's generated artifacts.
+
+amends "pkl:test"
+
+import "../examples/minimal/app.pkl" as minimalApp
+
+local function texts(m: Module): Map<String, String> =
+  m.output.files.toMap().mapValues((_, f) -> f.text)
+
+local withFlag = (minimalApp) {
+  emitEntrypoints = false
+}
+
+local withOverride = (minimalApp) {
+  atlanYamlOverrides { ["entrypoints"] = null }
+}
+
+// An app that already deep-overrides `atlan.yaml` keys and sets `metadata`:
+// the recipe adds one entry to the existing block.
+local mergeBase = (minimalApp) {
+  argoPackageNames { "@atlan/minimal" }
+  metadata { ["release_model"] = "semver" }
+}
+
+local mergeWithFlag = (mergeBase) {
+  emitEntrypoints = false
+  atlanYamlOverrides {
+    ["dockerfile"] = "./Dockerfile"
+    ["deploy"] = new Mapping { ["replicaCount"] = 1 }
+  }
+}
+
+local mergeWithOverride = (mergeBase) {
+  atlanYamlOverrides {
+    ["entrypoints"] = null
+    ["dockerfile"] = "./Dockerfile"
+    ["deploy"] = new Mapping { ["replicaCount"] = 1 }
+  }
+}
+
+local overrideAtlanYaml: String = withOverride.output.files["atlan.yaml"].text
+local mergeAtlanYaml: String = mergeWithOverride.output.files["atlan.yaml"].text
+
+facts {
+  ["The override generates every file exactly as emitEntrypoints = false does"] {
+    texts(withOverride) == texts(withFlag)
+  }
+
+  ["The override merged into an existing atlanYamlOverrides block generates every file exactly as emitEntrypoints = false does"] {
+    texts(mergeWithOverride) == texts(mergeWithFlag)
+  }
+
+  ["The override leaves no entrypoints key and no rendered null in atlan.yaml"] {
+    !overrideAtlanYaml.contains("entrypoints")
+    !overrideAtlanYaml.contains("null")
+    !mergeAtlanYaml.contains("entrypoints")
+    !mergeAtlanYaml.contains("null")
+    !overrideAtlanYaml.contains("package_id")
+    !overrideAtlanYaml.contains("marketplace_card")
+  }
+
+  ["The override keeps the other atlanYamlOverrides entries"] {
+    mergeAtlanYaml.contains("\ndockerfile: ./Dockerfile\n")
+    mergeAtlanYaml.contains("\n  replicaCount: 1\n")
+    mergeAtlanYaml.contains("\nrelease_model: semver\n")
+  }
+
+  // The gap the override closes: neither card control removes the block.
+  ["Without the override, a single-entrypoint app renders an entrypoints block"] {
+    minimalApp.output.files["atlan.yaml"].text.contains("\nentrypoints:\n")
+    (minimalApp) { marketplaceCard = false }.output.files["atlan.yaml"].text.contains("\nentrypoints:\n")
+  }
+}
