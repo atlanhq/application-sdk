@@ -65,6 +65,7 @@ typealias Radio = Widgets.Radio
 typealias ConnectionCreator = Widgets.ConnectionCreator
 typealias ConnectionSelector = Widgets.ConnectionSelector
 typealias ConnectionRefInput = Widgets.ConnectionRefInput
+typealias ConnectionTreeSelector = Widgets.ConnectionTreeSelector
 typealias FileUploader = Widgets.FileUploader
 typealias FileCopier = Widgets.FileCopier
 typealias NumericInput = Widgets.NumericInput
@@ -4101,7 +4102,7 @@ local function widgetInputField(u: Widgets.UIElement): InputsPkg.InputField =
     else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
       new InputsPkg.JsonObjectField { coerceJsonString = true }
     else
-      // ConnectionSelector, CredentialInput, PasswordInput, TextBoxInput,
+      // ConnectionSelector, ConnectionTreeSelector, CredentialInput, PasswordInput, TextBoxInput,
       // CloudProvider, Sage, SageV2, InfoBanner, GlossarySelector, CustomWidget, ...
       new InputsPkg.StringField { default = "" })
   (base) {
@@ -4457,7 +4458,8 @@ local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   let (pyName = toPyFieldName(k))
-  if (u is Widgets.ConnectionCreator || u is Widgets.ConnectionSelector || u is Widgets.ConnectionRefInput)
+  if (u is Widgets.ConnectionCreator || u is Widgets.ConnectionSelector || u is Widgets.ConnectionRefInput ||
+      u is Widgets.ConnectionTreeSelector)
     null
   else if (u is Widgets.BooleanInput)
     fmtSubsField(pyName, "bool", "default=\(if ((u as Widgets.BooleanInput).default) "True" else "False")", k)

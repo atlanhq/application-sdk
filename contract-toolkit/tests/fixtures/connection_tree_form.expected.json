@@ -1,0 +1,100 @@
+{
+  "id": "atlan-standard-lineage",
+  "name": "Atlan Standard Lineage",
+  "logo": "https://assets.atlan.com/assets/lineage-colored-24.svg",
+  "config": {
+    "properties": {
+      "connector": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "select",
+          "label": "Connector",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Select a connector",
+          "grid": 8,
+          "mode": ""
+        },
+        "enum": [
+          "bigquery"
+        ],
+        "enumNames": [
+          "BigQuery"
+        ]
+      },
+      "cross-connection-qualified-names": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "ConnectionTreeSelector",
+          "label": "Connections",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Select the connections to build cross-connection lineage over",
+          "grid": 8,
+          "connectorNames": [
+            "bigquery"
+          ],
+          "shouldRestrictToSingleConnector": true
+        }
+      },
+      "run-role": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Run Role",
+          "hidden": true,
+          "help": "",
+          "placeholder": "",
+          "grid": 8
+        },
+        "default": "standard-lineage"
+      },
+      "connection": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "connection",
+          "label": "Standard Lineage Connection Name",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Enter a name for the Standard Lineage connection",
+          "grid": 8,
+          "connectionOptions": false
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {},
+        "required": [
+          "connector",
+          "cross-connection-qualified-names",
+          "connection"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "Pick a connector, then the connections to build cross-connection lineage over",
+        "id": "configuration",
+        "properties": [
+          "connector",
+          "cross-connection-qualified-names",
+          "run-role"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "Name the Standard Lineage connection",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      }
+    ]
+  }
+}

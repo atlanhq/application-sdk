@@ -1,0 +1,28 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract ConnectionTree Example Metadata",
+      "app_name": "connection-tree",
+      "inputs": {
+        "workflow_type": "connection-tree",
+        "app_name": "connection-tree",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-connection-tree-{deployment_name}",
+        "args": {
+          "app_name": "connection-tree",
+          "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
+          "extraction_method": "{{extraction-method}}",
+          "connections": "{{connections}}",
+          "any_connections": "{{any_connections}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    }
+  }
+}

@@ -2316,6 +2316,7 @@ them.
 | `ConnectionCreator` | `connection` | `Connection \| None` | `placeholderText` |
 | `ConnectionSelector` | `connectionSelector` | `str` | `multiSelect`, `connectorFilter` (single), `connectorFilters` (multi — emits `connectorName` as list), `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `emitMode`, `emitStart` |
 | `ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` or `list[ConnectionRef]` | Emits `ui.shouldIncludeConnectionInfo = true`. Use when the workflow needs both `attributes.qualifiedName` and `attributes.defaultCredentialGuid` from the selected connection. Supports `multiSelect`, `connectorFilter`, `connectorFilters`, `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `displayOnlyMultiConnections`, `emitMode`, `emitStart` |
+| `ConnectionTreeSelector` | `ConnectionTreeSelector` | `str` | Pick connections from a tree grouped by connector. `connectorNames`, `restrictToSingleConnector`, `placeholderText`. Settings below. |
 | `CredentialInput` | `credential` | `str` | `credType` (required), `placeholderText`, `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
 | `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token. `placeholderText` |
 
@@ -2354,6 +2355,62 @@ Generated `_input.py`:
 ```python
 connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_factory=list)
 ```
+
+##### `ConnectionTreeSelector`
+
+`ConnectionTreeSelector` renders the frontend `ConnectionTreeSelector`
+widget: a tree with one parent node per connector and that connector's existing
+connections as checkable leaves. Use it when a workflow runs over several
+existing connections, possibly across connectors, and a flat
+`ConnectionSelector` list is too long to scan.
+
+The submitted value is a JSON-encoded array of the checked connections'
+qualified names, for example `["default/bigquery/1700000000"]`. The property is
+`type: "string"`, so the generated `_input.py` field is `str = ""` (the same as
+`ConnectionSelector`) and the app decodes the array. The manifest passes it as
+`{{<key>}}` like any other field. Like the other connection pickers, it is not
+written to `_e2e_substitutions.py`.
+
+Settings. Each one is optional; unset emits no key, so output only changes for
+the settings an app sets.
+
+| Setting | Renders | Effect |
+|---|---|---|
+| `connectorNames` | `ui.connectorNames` | The connectors the tree shows, matched ignoring case. Unset shows every connector. An empty listing, an empty name and a repeated name are refused at eval time. |
+| `restrictToSingleConnector` | `ui.shouldRestrictToSingleConnector` | `true`: once a connection is checked, every other connector's connections become uncheckable until the selection is cleared. |
+| `placeholderText` | `ui.placeholder` | Migration parity only. The current component shows its own fixed text ("Select connections") and does not read `ui.placeholder`. |
+
+```pkl
+["cross-connection-qualified-names"] = new ConnectionTreeSelector {
+  title = "Connections"
+  required = true
+  connectorNames { "bigquery" }
+  restrictToSingleConnector = true
+}
+```
+
+renders:
+
+```json
+"cross-connection-qualified-names": {
+  "type": "string",
+  "required": true,
+  "ui": {
+    "widget": "ConnectionTreeSelector",
+    "label": "Connections",
+    "hidden": false,
+    "help": "",
+    "grid": 8,
+    "connectorNames": ["bigquery"],
+    "shouldRestrictToSingleConnector": true
+  }
+}
+```
+
+Not supported: the component's `shouldIncludeConnectionInfo` setting, which
+submits full connection objects instead of qualified names. It would need a
+`ConnectionRef`-typed input field; use `ConnectionRefInput` when the workflow
+needs connection objects.
 
 #### Users & Groups
 

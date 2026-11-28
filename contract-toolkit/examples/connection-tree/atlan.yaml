@@ -1,0 +1,17 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: connection-tree
+display_name: ConnectionTree Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/lineage-colored-24.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: connection-tree
+  display_name: ConnectionTree Example
+  icon_url: https://assets.atlan.com/assets/lineage-colored-24.svg
+  type: connector
+  package_id: '@atlan/connection-tree'
+  marketplace_card: true

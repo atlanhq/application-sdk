@@ -1,0 +1,59 @@
+/// A setup form built around `ConnectionTreeSelector`, reproducing a
+/// hand-authored form that was previously copied over the generated one.
+///
+/// `connection_tree_selector_test.pkl` compares the generated workflow config
+/// with `connection_tree_form.expected.json`, the hand-authored file, byte for
+/// byte. Only the workflow config is asserted.
+amends "../../src/App.pkl"
+
+name = "standard-lineage"
+displayName = "Atlan Standard Lineage"
+workflowConfigName = "atlan-standard-lineage"
+icon = "https://assets.atlan.com/assets/lineage-colored-24.svg"
+hasCredentialConfig = false
+
+uiConfig {
+  tasks {
+    ["Configuration"] {
+      description = "Pick a connector, then the connections to build cross-connection lineage over"
+      inputs {
+        ["connector"] = new DropDown {
+          title = "Connector"
+          required = true
+          placeholderText = "Select a connector"
+          possibleValues {
+            ["bigquery"] = "BigQuery"
+          }
+        }
+        ["cross-connection-qualified-names"] = new ConnectionTreeSelector {
+          title = "Connections"
+          required = true
+          placeholderText = "Select the connections to build cross-connection lineage over"
+          connectorNames { "bigquery" }
+          restrictToSingleConnector = true
+        }
+        ["run-role"] = new TextInput {
+          title = "Run Role"
+          hide = true
+          defaultValue = "standard-lineage"
+        }
+      }
+    }
+    ["Connection"] {
+      description = "Name the Standard Lineage connection"
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          title = "Standard Lineage Connection Name"
+          required = true
+          placeholderText = "Enter a name for the Standard Lineage connection"
+          showConnectionOptions = false
+        }
+      }
+    }
+  }
+  rules {
+    new UIRule {
+      required { "connector"; "cross-connection-qualified-names"; "connection" }
+    }
+  }
+}

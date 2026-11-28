@@ -1,0 +1,116 @@
+// Tests for the typed `ConnectionTreeSelector` widget.
+//
+// The frontend component (`ConnectionTreeSelector`) reads `ui.connectorNames`,
+// `ui.shouldRestrictToSingleConnector` and `ui.shouldIncludeConnectionInfo`.
+// The widget exposes the first two; the third changes the submitted value to
+// connection objects and is not exposed. The value is a JSON-encoded array of
+// qualified names in a `type: "string"` field, so `_input.py` types it `str`,
+// the same as `ConnectionSelector`.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/connection-tree/app.pkl" as connectionTreeApp
+import "fixtures/connection_tree_form.pkl" as formFixture
+import "../src/App.pkl" as App
+
+local exampleProps = new json.Parser { useMapping = true }.parse(
+  connectionTreeApp.output.files["app/generated/connection-tree.json"].text
+)["config"]["properties"]
+
+local fullUi = exampleProps["connections"]["ui"]
+local plainUi = exampleProps["any_connections"]["ui"]
+
+local exampleInputPy: String = connectionTreeApp.output.files["app/generated/_input.py"].text
+local exampleManifest: String = connectionTreeApp.output.files["app/generated/manifest.json"].text
+
+// Renders every output file, as `pkl eval -m` does, and returns the refusal message.
+local function err(m: Module): String =
+  module.catch(() -> m.output.files.toMap().mapValues((_, f) -> f.text))
+
+local function render(m: Module) = m.output.files.toMap().mapValues((_, f) -> f.text)
+
+// A contract whose only input is a ConnectionTreeSelector with `names`.
+local function withConnectorNames(names: Listing<String>) = (App) {
+  name = "connection-tree-check"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connections"] = new App.ConnectionTreeSelector {
+            title = "Connections"
+            connectorNames = names
+          }
+        }
+      }
+    }
+  }
+}
+
+facts {
+  ["the generated form reproduces a hand-authored ConnectionTreeSelector form byte for byte"] {
+    formFixture.output.files["app/generated/atlan-standard-lineage.json"].text
+      == read("fixtures/connection_tree_form.expected.json").text
+  }
+
+  ["ConnectionTreeSelector renders every setting into the ui block"] {
+    exampleProps["connections"]["type"] == "string"
+    exampleProps["connections"]["required"] == true
+    fullUi["widget"] == "ConnectionTreeSelector"
+    fullUi["label"] == "Connections"
+    fullUi["placeholder"] == "Select the connections to run over"
+    fullUi["connectorNames"].toList() == List("bigquery", "snowflake")
+    fullUi["shouldRestrictToSingleConnector"] == true
+  }
+
+  ["ConnectionTreeSelector emits no optional key when its settings are unset"] {
+    plainUi["widget"] == "ConnectionTreeSelector"
+    !plainUi.containsKey("placeholder")
+    !plainUi.containsKey("connectorNames")
+    !plainUi.containsKey("shouldRestrictToSingleConnector")
+    !plainUi.containsKey("shouldIncludeConnectionInfo")
+    !plainUi.containsKey("mode")
+    !plainUi.containsKey("start")
+  }
+
+  ["ConnectionTreeSelector is a plain str field in _input.py and a manifest arg"] {
+    exampleInputPy.contains("    connections: str = \"\"\n")
+    exampleInputPy.contains("    any_connections: str = \"\"\n")
+    exampleManifest.contains("\"connections\": \"{{connections}}\"")
+  }
+
+  // Same treatment as ConnectionSelector: a connection picker is not an e2e
+  // substitution field.
+  ["ConnectionTreeSelector is not written to _e2e_substitutions.py"] {
+    let (subs = formFixture.output.files["app/generated/_e2e_substitutions.py"].text)
+      !subs.contains("cross_connection_qualified_names") && subs.contains("connector:")
+  }
+
+  ["a non-empty list of distinct connector names generates"] {
+    render(withConnectorNames(new Listing { "bigquery"; "snowflake" })).containsKey("app/generated/connection-tree-check.json")
+  }
+
+  ["an empty connectorNames listing is refused"] {
+    err(withConnectorNames(new Listing {})).contains(
+      "ConnectionTreeSelector `connectorNames` is empty."
+    )
+  }
+
+  ["an empty or blank connector name is refused"] {
+    err(withConnectorNames(new Listing { "bigquery"; "" })).contains(
+      "ConnectionTreeSelector `connectorNames` contains an empty connector name."
+    )
+    err(withConnectorNames(new Listing { "  " })).contains(
+      "ConnectionTreeSelector `connectorNames` contains an empty connector name."
+    )
+  }
+
+  ["a repeated connector name is refused and named"] {
+    err(withConnectorNames(new Listing { "bigquery"; "snowflake"; "bigquery" })).contains(
+      "ConnectionTreeSelector `connectorNames` lists a connector more than once: bigquery."
+    )
+  }
+}

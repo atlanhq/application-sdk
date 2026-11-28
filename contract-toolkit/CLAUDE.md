@@ -75,6 +75,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `system-bundle`: `type = "system"` with two UI-less system sub-contracts; each renders an importable `app/generated/<ep_snake>/`, `contract/generated/<ep>/input.pkl`, and a `SystemAppE2ETest` e2e base.
 - `system-triggers`: `type = "system"` bundle whose entrypoints declare `schedules` / `events`; `atlan.yaml` renders an `entrypoints` block with `marketplace_card: false` so Local Marketplace reconciles the triggers.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
+- `connection-tree`: `ConnectionTreeSelector` widget, with and without its optional settings.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - `ae-activities`: `FetchEntitiesNode`, `MergeNode` and generic `ActivityNode` in

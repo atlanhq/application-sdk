@@ -112,6 +112,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
+- [`examples/connection-tree/`](examples/connection-tree/) — `ConnectionTreeSelector` widget: connections picked from a tree grouped by connector, with and without its optional settings.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - [`examples/ae-activities/`](examples/ae-activities/) — Automation Engine activity nodes in `extraNodes`: `FetchEntitiesNode` → `MergeNode` branches fanning in to an app workflow, plus a generic `ActivityNode`.
@@ -629,8 +630,17 @@ placeholders when migrating it. See `docs/reference.md`.
 | `Widgets.ConnectionCreator` | `connection` | `Connection \| None` |
 | `Widgets.ConnectionSelector` | `connectionSelector` | `str` |
 | `Widgets.ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` |
+| `Widgets.ConnectionTreeSelector` | `ConnectionTreeSelector` | `str` |
 | `Widgets.CredentialInput` | `credential` | `str` |
 | `Widgets.APITokenSelector` | `apiTokenSelect` | `str` |
+
+`ConnectionTreeSelector` picks existing connections from a tree with one parent
+node per connector. It takes optional `connectorNames` (which connectors the
+tree shows), `restrictToSingleConnector` (once a connection is checked, other
+connectors' connections become uncheckable) and `placeholderText`; each renders
+into `ui` only when set. The value is a JSON-encoded array of qualified names,
+typed `str` in `_input.py`. See `docs/reference.md` and the
+[`connection-tree`](examples/connection-tree/) example.
 
 ### Trees & Filters
 

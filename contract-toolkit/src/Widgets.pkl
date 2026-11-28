@@ -546,7 +546,7 @@ class Widget {
   /// For custom frontend widgets — inline CSS style object.
   style: Dynamic?
 
-  /// For custom frontend widgets — plural list of connector names.
+  /// For custom frontend widgets and `ConnectionTreeSelector` — plural list of connector names.
   connectorNames: List<String>?
 
   /// For Repeater widgets — number of rows rendered for a brand-new form.
@@ -563,6 +563,10 @@ class Widget {
 
   /// For Repeater widgets — show the bulk "Import JSON" action that replaces the current rows.
   canImportJson: Boolean?
+
+  /// For ConnectionTreeSelector — once a connection is checked, connections
+  /// under every other connector become uncheckable.
+  shouldRestrictToSingleConnector: Boolean?
 }
 
 /// Widget that allows you to enter arbitrary text into a single-line text input field.
@@ -1283,6 +1287,68 @@ class ApiTreeSelect extends UIElement {
     metadataTransformerTemplateKey = metadataTransformer
     metadataTemplateKey = metadataTemplate
     placeholder = placeholderText
+  }
+}
+
+/// Widget that picks connections from a tree grouped by connector
+/// (frontend `ConnectionTreeSelector`).
+///
+/// Each connector is a parent node and its connections are the checkable
+/// leaves. The user can check any number of connections. Use it when a workflow
+/// runs over several existing connections, possibly across connectors, and the
+/// flat `ConnectionSelector` list is too long to scan.
+///
+/// The submitted value is a JSON-encoded array of the checked connections'
+/// qualified names, for example `["default/bigquery/1700000000"]`. The field
+/// is `type: "string"`, so the generated `_input.py` field is `str = ""`, the
+/// same as `ConnectionSelector`; the app decodes the array itself. Like the
+/// other connection pickers, the field is not written to
+/// `_e2e_substitutions.py`.
+///
+/// Every setting below is optional and renders a `ui` key only when set.
+class ConnectionTreeSelector extends UIElement {
+  fixed type = "string"
+  required: Boolean? = false
+
+  /// Connector names whose connections the tree shows, for example
+  /// `{ "bigquery"; "snowflake" }`. Renders as `ui.connectorNames`. The frontend
+  /// matches each name against the connector's value ignoring case. Unset (the
+  /// default) emits no key and the tree shows every connector.
+  ///
+  /// An empty listing, an empty name and a repeated name are rejected: an empty
+  /// listing reads like "no connectors" but shows all of them, and the other two
+  /// are typos.
+  hidden connectorNames: Listing<String>?(
+    if (this == null)
+      true
+    else if (this.isEmpty)
+      throw("ConnectionTreeSelector `connectorNames` is empty. An empty list shows every connector, the same as leaving it unset; list at least one connector name or remove the property.")
+    else if (this.toList().any((n) -> n.trim().isEmpty))
+      throw("ConnectionTreeSelector `connectorNames` contains an empty connector name. Remove it or replace it with a connector name such as \"bigquery\".")
+    else if (this.toList().length != this.toList().toSet().length)
+      throw("ConnectionTreeSelector `connectorNames` lists a connector more than once: \(this.toList().filter((n) -> this.toList().filter((m) -> m == n).length > 1).toSet().toList().join(", ")). List each connector once.")
+    else true
+  )
+
+  /// When `true`, checking a connection makes every connection under the other
+  /// connectors uncheckable until the selection is cleared, so one run never
+  /// mixes connectors. Renders as `ui.shouldRestrictToSingleConnector`. Unset
+  /// (the default) emits no key and any mix of connectors can be checked.
+  hidden restrictToSingleConnector: Boolean?
+
+  /// Renders as `ui.placeholder`. Unset (the default) emits no key.
+  ///
+  /// The current frontend component shows its own fixed placeholder ("Select
+  /// connections") and does not read `ui.placeholder`. The property exists so a
+  /// hand-authored form that carries the key can be generated unchanged; like
+  /// `ValidationRule.trigger`, it is a migration-parity passthrough.
+  hidden placeholderText: String?
+
+  fixed ui {
+    widget = "ConnectionTreeSelector"
+    placeholder = placeholderText
+    connectorNames = outer.connectorNames?.toList()
+    shouldRestrictToSingleConnector = restrictToSingleConnector
   }
 }
 

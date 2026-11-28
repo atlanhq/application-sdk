@@ -1,0 +1,40 @@
+/// Example demonstrating `ConnectionTreeSelector`.
+///
+/// The widget renders the frontend `ConnectionTreeSelector`: a tree with one
+/// parent node per connector and the existing connections as checkable leaves.
+/// The workflow receives a JSON-encoded array of the checked connections'
+/// qualified names in a `str` field.
+///
+/// `connections` sets every option: a connector filter, single-connector
+/// restriction and a placeholder. `any_connections` sets none, so the tree
+/// shows every connector and any mix can be checked.
+amends "../../src/App.pkl"
+
+name = "connection-tree"
+displayName = "ConnectionTree Example"
+icon = "https://assets.atlan.com/assets/lineage-colored-24.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      description = "Pick the connections to run over"
+      inputs {
+        ["connections"] = new ConnectionTreeSelector {
+          title = "Connections"
+          required = true
+          placeholderText = "Select the connections to run over"
+          connectorNames { "bigquery"; "snowflake" }
+          restrictToSingleConnector = true
+        }
+        ["any_connections"] = new ConnectionTreeSelector {
+          title = "Any connections"
+        }
+      }
+    }
+  }
+}

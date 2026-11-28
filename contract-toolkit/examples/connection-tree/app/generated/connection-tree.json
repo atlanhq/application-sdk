@@ -1,0 +1,48 @@
+{
+  "id": "connection-tree",
+  "name": "ConnectionTree Example",
+  "logo": "https://assets.atlan.com/assets/lineage-colored-24.svg",
+  "config": {
+    "properties": {
+      "connections": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "ConnectionTreeSelector",
+          "label": "Connections",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Select the connections to run over",
+          "grid": 8,
+          "connectorNames": [
+            "bigquery",
+            "snowflake"
+          ],
+          "shouldRestrictToSingleConnector": true
+        }
+      },
+      "any_connections": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "ConnectionTreeSelector",
+          "label": "Any connections",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "Pick the connections to run over",
+        "id": "configuration",
+        "properties": [
+          "connections",
+          "any_connections"
+        ]
+      }
+    ]
+  }
+}
