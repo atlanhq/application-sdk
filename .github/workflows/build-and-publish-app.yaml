@@ -150,6 +150,9 @@ on:
       APP_PUBLISH_TOKEN:
         required: false
         description: "API token for marketplace publish — required when publish=true"
+      TWINGATE_SHARED_KEY:
+        required: false
+        description: "Twingate service-account key (org secret, via `secrets: inherit`). The publish job always dials Twingate with it, so the marketplace call leaves from the VPN egress Cloudflare admits. Effectively required when publish=true: an unset key fails the publish job before the POST."
       SLACK_LEAK_SCAN_WEBHOOK:
         required: false
         description: "Slack incoming-webhook URL (hooks.slack.com) for credential-leak (creds-into-logs) WARNINGS. Org-level secret, passed via `secrets: inherit` — same convention as SLACK_DEP_COOLDOWN_WEBHOOK. Warnings are non-blocking; when unset the Slack ping is skipped. Never receives secret values — only file:line locations."
@@ -1467,7 +1470,9 @@ jobs:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan, certify]
     if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
-    runs-on: ubuntu-slim
+    # The Twingate client needs systemd, apt and a tun device, which the
+    # ubuntu-slim container runner does not provide.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
@@ -1483,8 +1488,17 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: .sdk-entrypoint
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
+
+      - name: Connect to Twingate (marketplace egress)
+        timeout-minutes: 8
+        uses: ./.sdk-entrypoint/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: ${{ inputs.base_url }}
 
       # Resolve who GM attributes the release to. Branching logic lives in a
       # tested script per docs/standards/ci.md — see the module docstring for
