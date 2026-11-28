@@ -1802,6 +1802,58 @@ class TestCheckSecretStoreAccess:
             "Check that the configured secret keys and secret-path exist in the store."
         )
 
+    async def test_single_key_flags_an_unresolved_secret_field(self) -> None:
+        # Username resolves, the password's variable name doesn't (wrong case):
+        # the row must fail and name the field, not pass with "1 retrieved".
+        class EnvStore:
+            async def get_optional(self, name: str) -> str | None:
+                return {"DB_USER": "realuser"}.get(name)
+
+        spec = AgentCredentialSpec.model_validate(
+            json.dumps(
+                {
+                    "agent-name": "t",
+                    "key-type": "single-key",
+                    "host": "db.example.com",
+                    "basic.username": "DB_USER",
+                    "basic.password": "db_pass",
+                    "extra.database": "sales",
+                }
+            )
+        )
+        r = await check_secret_store_access(spec, EnvStore())  # type: ignore[arg-type]
+        assert r.passed is False
+        assert r.fatal is False  # connectivity still runs
+        assert r.store_down is False
+        assert r.substituted == 1
+        assert "basic.password" in r.message
+        assert "basic.username" not in r.message  # resolved
+        assert "extra.database" not in r.message  # a literal, not a secret field
+        assert "db_pass" not in r.message  # ref-key values never surface
+        assert "case-sensitive" in (r.suggested_action or "")
+        assert r.resolved is not None
+
+    async def test_single_key_passes_when_all_secret_fields_resolve(self) -> None:
+        class EnvStore:
+            async def get_optional(self, name: str) -> str | None:
+                return {"DB_USER": "u", "DB_PASS": "p"}.get(name)
+
+        spec = AgentCredentialSpec.model_validate(
+            json.dumps(
+                {
+                    "agent-name": "t",
+                    "key-type": "single-key",
+                    "host": "db.example.com",
+                    "basic.username": "DB_USER",
+                    "basic.password": "DB_PASS",
+                    "extra.database": "sales",
+                }
+            )
+        )
+        r = await check_secret_store_access(spec, EnvStore())  # type: ignore[arg-type]
+        assert r.passed is True
+        assert r.substituted == 2
+
     async def test_fails_when_no_store_configured(self) -> None:
         # No secret store configured is a permanent config gap, not a transient
         # outage: store_down is False so the row is a (non-retryable)

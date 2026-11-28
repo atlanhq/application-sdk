@@ -187,6 +187,15 @@ Each probe has one of four outcomes:
     Declared sources (`"format": 2`, below) remove both problems: plain values
     never reach the store, and refs are looked up strictly.
 
+In the SDR interactive preflight, the secret-store row also checks *which*
+fields resolved. With `key-type: single-key`, a credential field whose name
+always holds a secret (`username`, `password`, `token`, `client-secret`,
+`api-key`, `private-key`, `passphrase`, …) that the store didn't resolve
+fails the row, naming the field (never the ref-key or value), even when other
+fields resolved. It is not fatal, so connectivity still runs. Without this, a
+misspelled or uninjected key (for environment variables, a wrong-case name)
+passed the row and surfaced only as the source's login failure.
+
 What the logs tell you:
 
 - **Some fields resolved** logs INFO with the counts ("resolved N of M probed
