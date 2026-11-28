@@ -2,6 +2,28 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.63.0] - 2026-11-27
+
+### Features
+
+- flag imports inside workflow code (P069) [FND-5533] (#5165) ([aec24a7](https://github.com/atlanhq/application-sdk/commit/aec24a7))
+
+### Bug fixes
+
+- cap requires-python below 3.15 and report next-Python install blockers [FND-5476] (#5195) ([d20cd39](https://github.com/atlanhq/application-sdk/commit/d20cd39))
+- enable ruff B017 and PT011 and make every broad pytest.raises name the failure it expects [FND-5483] (#5187) ([c28df92](https://github.com/atlanhq/application-sdk/commit/c28df92))
+- rename the colliding testing.Handler and template Upload contracts, deprecate ExecutionSettings' unread Temporal fields, mark deprecated names in the capability manifest [FND-4095] (#5180) ([41dc11c](https://github.com/atlanhq/application-sdk/commit/41dc11c))
+- give DAPR_COMPONENTS_PATH, ATLAN_DEPLOYMENT_NAME and the pod name one reader and one default each [FND-4265] (#5175) ([a9ed95d](https://github.com/atlanhq/application-sdk/commit/a9ed95d))
+- drop unread freshness frontmatter and fix add-mcp-tool's tool-list check [FND-5247] (#5151) ([a54ecec](https://github.com/atlanhq/application-sdk/commit/a54ecec))
+- record a def whose first statement warns DeprecationWarning in the deprecation manifest [FND-4269] (#5152) ([4ecd5eb](https://github.com/atlanhq/application-sdk/commit/4ecd5eb))
+- remove the signal-over-noise skill, move typed-error-prescription.md into typed-failures [FND-5245] (#5150) ([f9cbe2d](https://github.com/atlanhq/application-sdk/commit/f9cbe2d))
+
+### Other changes
+
+- chore(tests): pin the asyncio fixture loop scope and fail SDK-attributed DeprecationWarnings [FND-5474] (#5194) ([789de8b](https://github.com/atlanhq/application-sdk/commit/789de8b))
+- refactor: delete the state_store= parameter and the interceptor build-constant aliases past their removal version [FND-4094] (#5178) ([46f6560](https://github.com/atlanhq/application-sdk/commit/46f6560))
+- refactor: declare __all__ on every public module so imported names stop pinning the symbol-removal gate [FND-4259] (#5174) ([19243b0](https://github.com/atlanhq/application-sdk/commit/19243b0))
+
 ## [0.62.0] - 2026-11-26
 
 ### Features
