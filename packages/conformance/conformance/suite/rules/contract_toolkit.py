@@ -141,12 +141,29 @@ RULES: tuple[RuleDefinition, ...] = (
             "for contract evolution (BLDX-1479)."
         ),
         short_description=(
-            "Contract amends NativeApp.pkl or NativeAppBundle.pkl — migrate to App.pkl"
+            "Contract is built on a legacy toolkit module (NativeApp.pkl, "
+            "NativeAppBundle.pkl, Config.pkl, Credential.pkl, Renderers.pkl) — "
+            "migrate to App.pkl"
         ),
         full_description=(
-            "The ``contract/app.pkl`` file (or any ``contract/**/*.pkl`` file) "
-            "contains an ``amends`` line pointing at ``NativeApp.pkl`` or "
-            "``NativeAppBundle.pkl`` instead of the canonical ``App.pkl``.\n"
+            "A contract file builds on one of the five legacy toolkit modules "
+            "(``NativeApp.pkl``, ``NativeAppBundle.pkl``, ``Config.pkl``, "
+            "``Credential.pkl``, ``Renderers.pkl``) instead of the canonical "
+            "``App.pkl``.  Every shape is reported (FND-5546):\n"
+            "\n"
+            '* ``amends "@app-contract-toolkit/NativeApp.pkl"`` or the '
+            '``amends "package://…/app-contract-toolkit@<v>#/NativeApp.pkl"`` '
+            "URI form;\n"
+            '* ``extends "…/<legacy>.pkl"``;\n'
+            '* ``import "…/NativeApp.pkl" as X`` followed by ``(X) { … }`` or '
+            "``new X { … }`` — each such object body is one finding (the import "
+            "line itself is K002).\n"
+            "\n"
+            "Files scanned: ``contract/**/*.pkl`` plus every ``.pkl`` file under "
+            "any directory whose ``PklProject`` depends on the toolkit, wherever "
+            "it sits in the repo.  ``generated/`` directories are skipped.  "
+            "A ``Credential.pkl`` base is replaced by App.pkl's "
+            "``additionalCredentialConfigs`` rather than a new base.\n"
             "\n"
             "``App.pkl`` (contract-toolkit v0.10.0+) is the single entry point "
             "for all Atlan native apps — both single-entrypoint and "
@@ -207,7 +224,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "`Connectors.pkl` is a detector-level exemption — no directive is needed or "
             "licensed. A justified inline `// conformance: ignore[K002] <reason>` IS the "
             "correct end state only for a match the scanner actually emits: an import of "
-            "`Config.pkl`, `Credential.pkl`, or `Renderers.pkl`, or a NativeApp-only "
+            "`Config.pkl`, `Credential.pkl`, `Renderers.pkl`, `NativeApp.pkl` or "
+            "`NativeAppBundle.pkl`, or a NativeApp-only "
             "property (`flatManifestArgs`, `manifestMetadataArgs`, `workflowTypeOverride`) "
             "— where the reason records the `pkl eval` that PROVED the replacement does "
             "not supply those symbols, or the match is a scanner false positive (the name "
@@ -229,7 +247,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "manifestMetadataArgs (App.pkl always emits flat top-level args), "
             "workflowTypeOverride (App.pkl takes a verbatim workflowType), and "
             "explicit imports of Config.pkl/Credential.pkl/Renderers.pkl "
-            "(Argo-era modules App.pkl no longer uses).  "
+            "(Argo-era modules App.pkl no longer uses) or of the "
+            "NativeApp.pkl/NativeAppBundle.pkl bases.  "
             "Their presence in a contract that claims to amend App.pkl (or that "
             "will be migrated to App.pkl) indicates that the migration is "
             "incomplete.  When any of these knobs remain after the amends line is "
@@ -240,8 +259,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "workflowTypeOverride, or legacy imports) removed in App.pkl"
         ),
         full_description=(
-            "The ``contract/**/*.pkl`` file contains one or more "
-            "NativeApp-only properties or imports that do not exist in "
+            "A contract file (``contract/**/*.pkl``, or any ``.pkl`` file in a "
+            "directory whose ``PklProject`` depends on the toolkit) contains one "
+            "or more NativeApp-only properties or imports that do not exist in "
             "``App.pkl``:\n"
             "\n"
             "* ``flatManifestArgs`` / ``manifestMetadataArgs`` — control how "
@@ -263,6 +283,12 @@ RULES: tuple[RuleDefinition, ...] = (
             '* ``import "…Credential.pkl"`` and ``import "…Renderers.pkl"`` '
             "(Argo-era modules) — no longer used by App.pkl; remove both.\n"
             "\n"
+            '* ``import "…NativeApp.pkl"`` / ``import "…NativeAppBundle.pkl"`` '
+            "(with or without ``as X``) — the import that lets a file build "
+            "entrypoint contracts as ``(X) { … }`` on the legacy base.  Each such "
+            "object body is a separate K001 finding; move those contracts into "
+            "App.pkl's typed ``entrypoints`` block and remove the import.\n"
+            "\n"
             'Note: ``import "…Connectors.pkl"`` is **not** flagged — the '
             "Connectors registry is still imported explicitly by App.pkl "
             "consumers (App.pkl imports it internally and types ``connector`` as "
@@ -270,8 +296,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "import is required, not legacy.\n"
             "\n"
             "Note: a contract that **amends** ``Credential.pkl`` (a "
-            "credential-config sub-contract, not an App.pkl entrypoint) is "
-            '**not** flagged for its ``import "…Config.pkl"`` line.  '
+            "credential-config sub-contract, reported by K001 on its amends "
+            'line) is **not** flagged again for its ``import "…Config.pkl"`` '
+            "line.  "
             "Credential.pkl uses ``Config.*`` internally but, unlike App.pkl, "
             "does not re-export the widget types as unqualified typealiases, so "
             "such a contract genuinely needs the import for ``pkl eval`` to "
@@ -290,8 +317,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``atlan.yaml``.  Never hand-edit generated artifacts — K004/K005 "
             "and the generated-artifact freshness gate catch staleness.\n"
             "\n"
-            "**Scanner limitation:** the checker is not string-literal aware.  "
-            "A property name that appears only inside a string literal "
+            "**Scanner limitation:** comment stripping is string-aware (a "
+            "``//`` inside a ``package://`` URI is code), but property matching "
+            "is not.  A property name that appears only inside a string literal "
             '(e.g. ``description = "flatManifestArgs is removed in App.pkl"`` '
             "on a single line) may be flagged.  Use "
             "``// conformance: ignore[K002] <reason>`` to suppress false "

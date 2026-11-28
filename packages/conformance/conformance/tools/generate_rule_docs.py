@@ -278,7 +278,8 @@ _SERIES_META: list[SeriesMeta] = [
         output_filename="contract-toolkit.md",
         checker=(
             "`suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans "
-            "``contract/**/*.pkl``), "
+            "``contract/**/*.pkl`` and every directory whose ``PklProject`` "
+            "depends on the toolkit), "
             "`suite.checks.generated_freshness` (K003–K005, scans "
             "``contract/PklProject``, ``contract/PklProject.deps.json``, "
             "``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), "
