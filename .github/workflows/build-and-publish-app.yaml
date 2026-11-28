@@ -1493,13 +1493,6 @@ jobs:
             .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
 
-      # Cloudflare in front of the marketplace gateway blocks GitHub-hosted
-      # runner egress ("Sorry, you have been blocked", HTTP 403). Twingate sends
-      # the publish from Atlan's VPN egress instead. The probe targets the
-      # dataforge api host, which admits only VPN egress, to prove the tunnel
-      # is up; the action has no host-agnostic probe. A failed connect fails
-      # the job: publishing without the tunnel would only hit the same 403.
-      # The action tears the tunnel down itself on a failed connect.
       - name: Connect to Twingate (marketplace egress)
         timeout-minutes: 8
         uses: ./.sdk-entrypoint/.github/actions/twingate-connect
