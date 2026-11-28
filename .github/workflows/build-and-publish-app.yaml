@@ -69,6 +69,11 @@ on:
         required: false
         type: boolean
         default: false
+      publish_vpn:
+        description: "Route the marketplace publish through a VPN (default: true). Cloudflare in front of the marketplace gateway blocks GitHub-hosted runner egress; the tunnel sends the call from Atlan's VPN egress instead. Tries Twingate first (when TWINGATE_SHARED_KEY is visible to the caller), then falls back to GlobalProtect (when GLOBALPROTECT_USERNAME/PASSWORD are visible); all are org secrets, via `secrets: inherit`. A failed connect does not fail the job: the publish is still attempted, and fails on its own if the gateway rejects it."
+        required: false
+        type: boolean
+        default: true
       channel:
         description: "Target channel (e.g. 'all' for draft release requiring approval). Ignored when tenants is set."
         required: false
@@ -150,6 +155,15 @@ on:
       APP_PUBLISH_TOKEN:
         required: false
         description: "API token for marketplace publish — required when publish=true"
+      TWINGATE_SHARED_KEY:
+        required: false
+        description: "Twingate service-account key (org secret, via `secrets: inherit`). The publish job dials Twingate with it when publish_vpn is true, so the marketplace call leaves from the VPN egress Cloudflare admits. When unset, the GlobalProtect fallback is tried instead."
+      GLOBALPROTECT_USERNAME:
+        required: false
+        description: "GlobalProtect username (org secret, via `secrets: inherit`). Fallback VPN for the publish job when Twingate is unavailable or fails to connect."
+      GLOBALPROTECT_PASSWORD:
+        required: false
+        description: "GlobalProtect password (org secret, via `secrets: inherit`). Pairs with GLOBALPROTECT_USERNAME."
       SLACK_LEAK_SCAN_WEBHOOK:
         required: false
         description: "Slack incoming-webhook URL (hooks.slack.com) for credential-leak (creds-into-logs) WARNINGS. Org-level secret, passed via `secrets: inherit` — same convention as SLACK_DEP_COOLDOWN_WEBHOOK. Warnings are non-blocking; when unset the Slack ping is skipped. Never receives secret values — only file:line locations."
@@ -1467,8 +1481,13 @@ jobs:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan, certify]
     if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
-    runs-on: ubuntu-slim
+    # The Twingate client needs systemd, apt and a tun device, which the
+    # ubuntu-slim container runner does not provide.
+    runs-on: ${{ inputs.publish_vpn && 'ubuntu-latest' || 'ubuntu-slim' }}
     timeout-minutes: 15
+    env:
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
+      HAS_GLOBALPROTECT_CREDS: ${{ secrets.GLOBALPROTECT_USERNAME != '' && secrets.GLOBALPROTECT_PASSWORD != '' }}
 
     steps:
       - name: Checkout SDK helper scripts
@@ -1483,8 +1502,58 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: .sdk-entrypoint
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/actions/twingate-connect
+            .github/actions/globalprotect-connect
           sparse-checkout-cone-mode: false
+
+      # Cloudflare in front of the marketplace gateway blocks GitHub-hosted
+      # runner egress ("Sorry, you have been blocked", HTTP 403). A VPN sends
+      # the publish from Atlan's egress instead: Twingate first, GlobalProtect
+      # as the fallback when Twingate is unavailable or fails. Both probes
+      # target the dataforge api host, which admits only VPN egress, to prove
+      # the tunnel is up; neither action has a host-agnostic probe.
+      # continue-on-error on both: a VPN outage must not by itself block a
+      # release, so the publish is still attempted and fails on its own if the
+      # gateway rejects it.
+      - name: Connect to Twingate (marketplace egress)
+        id: twingate
+        if: inputs.publish_vpn && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./.sdk-entrypoint/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          echo "::warning title=Twingate::Could not connect; falling back to GlobalProtect."
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
+
+      # Fallback. globalprotect-connect is deprecated (FND-4676) and prints a
+      # warning on every run; it is kept here only as the second route while
+      # Twingate's marketplace egress is being proven.
+      - name: Connect to GlobalProtect (marketplace egress fallback)
+        id: globalprotect
+        if: inputs.publish_vpn && steps.twingate.outputs.connected != 'true' && env.HAS_GLOBALPROTECT_CREDS == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./.sdk-entrypoint/.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Warn when no VPN connected
+        if: inputs.publish_vpn && steps.twingate.outputs.connected != 'true' && steps.globalprotect.outputs.vpn-connected != 'true'
+        run: echo "::warning title=VPN::Neither Twingate nor GlobalProtect connected; publishing directly from the runner, which Cloudflare may block."
 
       # Resolve who GM attributes the release to. Branching logic lives in a
       # tested script per docs/standards/ci.md — see the module docstring for
