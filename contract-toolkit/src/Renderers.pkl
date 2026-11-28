@@ -2,7 +2,13 @@
    Copyright 2024 Atlan Pte. Ltd. */
 
 /// Module for rendering the outputs for a custom package's configuration in Atlan.
+///
+/// Deprecated: removed in app-contract-toolkit 1.0.0. Amend `App.pkl`. This
+/// module has no `output` of its own and is imported only by `Config.pkl` and
+/// `Credential.pkl`, which print the eval-time warning; the annotation below is
+/// for pkldoc and editors (Pkl prints nothing for a module-level `@Deprecated`).
 @ModuleInfo { minPklVersion = "0.33.0" }
+@Deprecated { message = "Renderers.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
 module com.atlan.app.contract.Renderers
 
 import "Config.pkl"

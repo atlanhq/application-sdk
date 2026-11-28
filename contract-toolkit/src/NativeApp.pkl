@@ -13,7 +13,12 @@
 /// 1. Workflow config JSON — UI form schema served at GET /workflows/v1/configmap/{name}
 /// 2. Credential config JSON — auth form schema served at GET /workflows/v1/configmap/{connectorConfigName}
 /// 3. Manifest JSON — AE DAG template served at GET /manifest
+///
+/// Deprecated: removed in app-contract-toolkit 1.0.0. Amend `App.pkl` instead.
+/// `pkl eval` prints a `pkl: WARN:` line for a contract that amends this module
+/// (see `legacyModuleNotice`).
 @ModuleInfo { minPklVersion = "0.33.0" }
+@Deprecated { message = "NativeApp.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
 open module com.atlan.app.contract.NativeApp
 
 import "Config.pkl"
@@ -3555,10 +3560,22 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     streamingFieldBlock
 }
 
+/// Prints the eval-time deprecation warning for this module.
+///
+/// Pkl (0.33) prints nothing for a module-level or property-level `@Deprecated`;
+/// it warns only when a deprecated method is called. `output` calls this method,
+/// so evaluating a contract that amends this module prints one line on stderr:
+/// `pkl: WARN: Method ... is deprecated: NativeApp.pkl is removed in ...`.
+/// Pkl prints each call site once, so a bundle of several NativeApp contracts
+/// still prints one line for this module. Returns null; generated output is unchanged.
+@Deprecated { message = "NativeApp.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
+local function legacyModuleNotice(): Null = null
+
 /// Set the module output — generates all artifacts.
 /// Force-evaluate `jdbcInvariant` first so misconfigured JDBC-URL consumers
 /// fail with a clear message instead of silently skipping the credential file.
 output =
+  let (_deprecation = legacyModuleNotice())
   let (_jdbcCheck = jdbcInvariant)
   // Forced here rather than inside generateExtractNode so the check cannot be
   // skipped by a contract whose extract node is never evaluated. Mirrors App.pkl.

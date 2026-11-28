@@ -275,9 +275,23 @@ The module also holds the e2e and artifact names `App.pkl` copies from the SDK. 
 
 ### Legacy modules (reference only)
 
-The following modules are frozen and are not used by new contracts. They remain resolvable so existing apps on `NativeApp.pkl` continue to work without changes during the v0.10.x transition period.
+The following modules are frozen and are not used by new contracts. They remain resolvable on 0.x so existing apps on `NativeApp.pkl` continue to work without changes until app-contract-toolkit 1.0.0 removes them.
 
-**Removal plan.** The legacy family will be deleted once no app imports it. Each remaining app moves to `App.pkl` with the `baseline-app` skill; conformance rules K001 and K002 flag every app still on a legacy module. Fix legacy behaviour here only for backward compatibility: `NativeApp.pkl` keeps its own frozen copy of the base-class field list and does not follow `SdkNames.pkl`.
+**Removal plan.** The five legacy modules are removed in app-contract-toolkit 1.0.0; a contract that still amends or imports one fails `pkl eval` on 1.0.0. Until then, evaluating a contract that amends `NativeApp.pkl`, `NativeAppBundle.pkl`, `Config.pkl` or `Credential.pkl` prints a deprecation line on stderr, for example:
+
+```text
+pkl: WARN: Method `com.atlan.app.contract.NativeApp#legacyModuleNotice` is deprecated: NativeApp.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl (…/NativeApp.pkl, line …)
+```
+
+The warning does not fail evaluation and does not change generated output. A bundle prints one line for `NativeAppBundle.pkl` and one for `NativeApp.pkl`. `Renderers.pkl` has no output of its own, so it carries the `@Deprecated` annotation but prints nothing itself. Pkl prints nothing for a module-level `@Deprecated`, so each module's `output` calls a `@Deprecated` method instead.
+
+`App.pkl`'s `emitEntrypoints` is removed in 1.0.0 too. A contract that sets `emitEntrypoints = false` prints one line, the same way and with no change to generated output:
+
+```text
+pkl: WARN: Method `com.atlan.app.contract.App#emitEntrypointsNotice` is deprecated: emitEntrypoints is removed in app-contract-toolkit 1.0.0; replace `emitEntrypoints = false` with `atlanYamlOverrides { ["entrypoints"] = null }` (…/App.pkl, line …)
+```
+
+The override generates identical output. An explicit `emitEntrypoints = true` equals the default and prints nothing. Each remaining app moves to `App.pkl` with the `baseline-app` skill; conformance rules K001 and K002 flag every app still on a legacy module. Fix legacy behaviour here only for backward compatibility: `NativeApp.pkl` keeps its own frozen copy of the base-class field list and does not follow `SdkNames.pkl`.
 
 | Module | Status |
 |---|---|

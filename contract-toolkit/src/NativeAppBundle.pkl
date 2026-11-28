@@ -12,7 +12,12 @@
 /// - `name` is the deployment/runtime identity (`teradata`)
 /// - `entrypoints[*].name` is the SDK entrypoint and generated folder (`crawler`)
 /// - the imported entrypoint contract owns workflow config, manifest, and input
+///
+/// Deprecated: removed in app-contract-toolkit 1.0.0. Amend `App.pkl` and list
+/// the entrypoints in its `entrypoints`. `pkl eval` prints a `pkl: WARN:` line
+/// for a contract that amends this module (see `legacyModuleNotice`).
 @ModuleInfo { minPklVersion = "0.33.0" }
+@Deprecated { message = "NativeAppBundle.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
 open module com.atlan.app.contract.NativeAppBundle
 
 // ---------------------------------------------------------------------------
@@ -305,7 +310,14 @@ hidden _credentialConflictCheck: Any =
       + "Use unique connectorConfigName values for different credentials, or share one identical config definition.")
   else null
 
+/// Prints the eval-time deprecation warning for this module. Pkl prints nothing
+/// for a module-level `@Deprecated`; it warns only when a deprecated method is
+/// called, so `output` calls this one. Returns null; generated output is unchanged.
+@Deprecated { message = "NativeAppBundle.pkl is removed in app-contract-toolkit 1.0.0; amend App.pkl" }
+local function legacyModuleNotice(): Null = null
+
 output =
+  let (_deprecation = legacyModuleNotice())
   let (_ = _credentialConflictCheck)
   let (_inputNameCheck = _inputClassNameCheck)
   new ModuleOutput {

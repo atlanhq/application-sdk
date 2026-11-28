@@ -5879,7 +5879,16 @@ hidden _credentialConflictCheck: Any =
 // OUTPUT BLOCK
 // ────────────────────────────────────────────────────────────────────────────
 
+/// Prints the eval-time deprecation warning for `emitEntrypoints = false`.
+/// Pkl (0.33) prints nothing for a `@Deprecated` property, set or read; it warns
+/// only when a deprecated method is called, so `output` calls this one when
+/// `emitEntrypoints` is false. An explicit `emitEntrypoints = true` equals the
+/// default and cannot be detected. Returns null; generated output is unchanged.
+@Deprecated { message = "emitEntrypoints is removed in app-contract-toolkit 1.0.0; replace `emitEntrypoints = false` with `atlanYamlOverrides { [\"entrypoints\"] = null }`" }
+local function emitEntrypointsNotice(): Null = null
+
 output =
+  let (_emitEntrypointsDeprecation = if (emitEntrypoints) null else emitEntrypointsNotice())
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
