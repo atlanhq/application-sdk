@@ -1498,7 +1498,7 @@ jobs:
         uses: ./.sdk-entrypoint/.github/actions/twingate-connect
         with:
           service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
-          mothership-url: https://api.dataforge.atlan.dev
+          mothership-url: ${{ inputs.base_url }}
 
       # Resolve who GM attributes the release to. Branching logic lives in a
       # tested script per docs/standards/ci.md — see the module docstring for
