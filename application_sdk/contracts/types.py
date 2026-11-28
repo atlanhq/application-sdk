@@ -303,7 +303,7 @@ class AssetArtifact:
         this module is on the import path of every contract in the SDK, and
         ``pyatlan_v9`` must stay off the import path of an app that never
         touches transformed assets (the same rule
-        :func:`application_sdk.app.base._warn_on_invalid_transformed_assets`
+        :func:`application_sdk.storage._app_tasks._warn_on_invalid_transformed_assets`
         follows at the upload boundary).
 
         Raises:

@@ -49,18 +49,6 @@ _PKG = "application_sdk"
 #: piece down to a module both sides can import, or pass the dependency in.
 _DEFERRED_CYCLE_EDGES: dict[tuple[str, str], str] = {
     (
-        "application_sdk.app.base",
-        "application_sdk.execution._temporal.activities",
-    ): "app.base generates the workflow and activity classes; moving that into execution._temporal is FND-4263",
-    (
-        "application_sdk.execution._temporal.preflight_gate",
-        "application_sdk.execution._temporal.activities",
-    ): "the gate glue sits between app.base and the activities; FND-4263 moves it",
-    (
-        "application_sdk.credentials.utils",
-        "application_sdk.app.base",
-    ): "the run's credential-directory registry lives in app.base, which imports the credentials package; FND-4263 splits app.base",
-    (
         "application_sdk.contracts.base",
         "application_sdk.app.registry",
     ): "contract validation looks up the running app; the registry validates contracts from this module",

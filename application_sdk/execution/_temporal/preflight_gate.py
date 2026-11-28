@@ -1482,7 +1482,7 @@ def _plumbing_error(
     serialised, which is why ``details[0]`` is built here and never left empty.
     ``status`` is ``None``: no verdict was reached and the run proceeds.
     """
-    from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — avoid import cycle at module load
+    from application_sdk.execution._temporal._failure_wire import (  # noqa: PLC0415 — keeps the gate's import list light at worker boot
         _to_application_error,
     )
     from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415

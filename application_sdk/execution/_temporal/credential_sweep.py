@@ -28,6 +28,10 @@ from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.service import RPCError, RPCStatusCode
 
 from application_sdk._logging import get_logger
+from application_sdk.execution._temporal.run_scope import (
+    _remove_run_credential_dirs,
+    _runs_with_credential_dirs,
+)
 
 logger = get_logger(__name__)
 
@@ -67,9 +71,7 @@ async def sweep_closed_runs(client: Client) -> None:
     """
     from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports the execution package
         _release_run_state,
-        _remove_run_credential_dirs,
         _runs_with_app_state,
-        _runs_with_credential_dirs,
     )
 
     runs = dict.fromkeys([*_runs_with_credential_dirs(), *_runs_with_app_state()])
@@ -81,11 +83,6 @@ async def sweep_closed_runs(client: Client) -> None:
 
 async def remove_all_credential_dirs() -> None:
     """Remove every credential directory this worker still tracks."""
-    from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports the execution package
-        _remove_run_credential_dirs,
-        _runs_with_credential_dirs,
-    )
-
     for run in _runs_with_credential_dirs():
         await _remove_run_credential_dirs(run)
 

@@ -14,7 +14,6 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.app import base as base_module
 from application_sdk.app.base import App
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import (
@@ -23,6 +22,7 @@ from application_sdk.contracts.storage import (
     UploadRefsInput,
 )
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
+from application_sdk.storage import _app_tasks as base_module
 from application_sdk.storage.errors import UnplaceableDeclaredFileError
 from application_sdk.validation import AssetCreationRules
 

@@ -508,9 +508,10 @@ def _track_call_dir(call_dir: str) -> None:
 
     The narrowest scope wins. Inside a handler call (HTTP, SDR, the preflight
     gate) the handler context removes it when the handler returns. Otherwise,
-    inside a task, the run does, via ``cleanup_files``: ``app.base`` owns both
-    the run state and the task-context probe, so this module never touches
-    the execution runtime itself. Elsewhere (scripts) the caller owns it.
+    inside a task, the run does, via ``cleanup_files``: the registry and the
+    task-context probe live in ``execution._temporal.run_scope``, which this
+    module reaches only from inside a call. Elsewhere (scripts) the caller
+    owns it.
     """
     from application_sdk._context_errors import (  # noqa: PLC0415 — lazy: keeps the module-level import list unchanged for the api distribution
         AppContextError,
@@ -525,7 +526,7 @@ def _track_call_dir(call_dir: str) -> None:
         return
 
     try:
-        from application_sdk.app.base import (  # noqa: PLC0415 — lazy: worker-only module, and circular (app.base imports the credentials package)
+        from application_sdk.execution._temporal.run_scope import (  # noqa: PLC0415 — lazy: worker-only module, absent from the api distribution
             _track_credential_dir,
         )
     # conformance: ignore[E008] api-only install (the API host): it has no tasks, so there is no run to track the directory for
@@ -534,7 +535,7 @@ def _track_call_dir(call_dir: str) -> None:
             raise
         return
     try:
-        _track_credential_dir(call_dir)
+        _track_credential_dir(call_dir, _forget_credential_dir)
     # conformance: ignore[E002] not inside a task: the caller owns the directory, as documented on resolve_credential_file
     except AppContextError:
         return

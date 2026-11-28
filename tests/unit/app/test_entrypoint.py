@@ -238,7 +238,9 @@ class TestEntrypointAppRegistration:
 
     def test_implicit_entry_point_workflow_name_has_no_colon(self) -> None:
         """Implicit (run-based) single entry point generates workflow name without colon."""
-        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class ImplicitWfApp(App):
             async def run(self, input: _EpInput) -> _EpOutput:
@@ -253,7 +255,9 @@ class TestEntrypointAppRegistration:
 
     def test_explicit_entrypoint_workflow_name_uses_colon(self) -> None:
         """Explicit @entrypoint generates workflow name with colon separator."""
-        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class ExplicitWfApp(App):
             @entrypoint
@@ -269,7 +273,9 @@ class TestEntrypointAppRegistration:
 
     def test_multi_entrypoint_workflow_names_use_colon(self) -> None:
         """Multi-entry-point App generates 'app-name:ep-name' workflow names."""
-        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class ColonWfApp(App):
             @entrypoint

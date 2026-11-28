@@ -17,10 +17,15 @@ from unittest import mock
 import pytest
 from pydantic import ConfigDict
 
-from application_sdk.app.base import App, _validate_workflow_input
+from application_sdk.app.base import (
+    App,
+)
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import DownloadInput, UploadInput
 from application_sdk.contracts.types import FileReference, MaxItems, StoreTarget
+from application_sdk.execution._temporal.app_workflow import (
+    _validate_workflow_input,
+)
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.file_ref_sync import materialize_file_refs
@@ -424,7 +429,9 @@ class TestStartPayloadCannotChooseUpstream:
 
     @pytest.fixture(autouse=True)
     def _no_workflow_logger(self):
-        with mock.patch("application_sdk.app.base._safe_log") as log:
+        with mock.patch(
+            "application_sdk.execution._temporal.app_workflow._safe_log"
+        ) as log:
             self.log = log
             yield
 
@@ -471,7 +478,9 @@ class TestRefsRoundTrippedThroughUntypedState:
 
     @pytest.fixture(autouse=True)
     def _no_workflow_logger(self):
-        with mock.patch("application_sdk.app.base._safe_log") as log:
+        with mock.patch(
+            "application_sdk.execution._temporal.app_workflow._safe_log"
+        ) as log:
             self.log = log
             yield
 

@@ -26,17 +26,12 @@ from application_sdk.app.base import (
     TaskStateAccessor,
     _app_state,
     _app_state_lock,
-    _create_task_activity_wrapper,
     _get_execution_id_from_task,
     _pascal_to_kebab,
     _safe_log,
     _safe_now,
     _safe_uuid,
     _scan_entrypoints,
-    _validate_workflow_input,
-    _workflow_class_cache,
-    _wrap_instance_tasks,
-    generate_workflow_class,
 )
 from application_sdk.app.entrypoint import (
     EntryPointDeclarationError,
@@ -48,6 +43,13 @@ from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StoreTarget
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
+from application_sdk.execution._temporal.app_workflow import (
+    _create_task_activity_wrapper,
+    _validate_workflow_input,
+    _workflow_class_cache,
+    _wrap_instance_tasks,
+    generate_workflow_class,
+)
 from application_sdk.handler.contracts import PreflightGateMode
 
 # =============================================================================
@@ -928,7 +930,7 @@ class TestScanAndWrap:
         # Stub out the wrapper factory so we don't pull in Temporal RetryPolicy.
         sentinel = object()
         with mock.patch(
-            "application_sdk.app.base._create_task_activity_wrapper",
+            "application_sdk.execution._temporal.app_workflow._create_task_activity_wrapper",
             return_value=sentinel,
         ) as factory:
             _wrap_instance_tasks(instance, {"run_id": "r", "correlation_id": "c"})
@@ -952,7 +954,7 @@ class TestScanAndWrap:
 
         instance = _UApp()
         with mock.patch(
-            "application_sdk.app.base._create_task_activity_wrapper"
+            "application_sdk.execution._temporal.app_workflow._create_task_activity_wrapper"
         ) as factory:
             _wrap_instance_tasks(instance, {"run_id": "", "correlation_id": ""})
         # We can't assert exact set, but it must not blow up on private attrs.
@@ -1184,7 +1186,7 @@ class TestRunStoredRefs:
         instance = _SinkApp()
         instance._run_stored_refs = _RunStoredRefs()
         with mock.patch(
-            "application_sdk.app.base._create_task_activity_wrapper"
+            "application_sdk.execution._temporal.app_workflow._create_task_activity_wrapper"
         ) as factory:
             _wrap_instance_tasks(instance, {"run_id": "r", "correlation_id": "c"})
 
@@ -1248,7 +1250,9 @@ class TestGenerateWorkflowClass:
                 "application_sdk.app.base.workflow.defn",
                 side_effect=lambda **_: lambda c: c,
             ),
-            mock.patch("application_sdk.app.base._task_logger") as log,
+            mock.patch(
+                "application_sdk.execution._temporal.app_workflow._task_logger"
+            ) as log,
         ):
             generate_workflow_class(_NotResolvableApp, ep)
 
@@ -1269,7 +1273,9 @@ class TestGenerateWorkflowClass:
                 "application_sdk.app.base.workflow.defn",
                 side_effect=lambda **_: lambda c: c,
             ),
-            mock.patch("application_sdk.app.base._task_logger") as log,
+            mock.patch(
+                "application_sdk.execution._temporal.app_workflow._task_logger"
+            ) as log,
         ):
             generate_workflow_class(_ResolvableApp, ep)
 
@@ -1430,14 +1436,23 @@ class TestGenerateWorkflowClass:
         stack.enter_context(
             mock.patch("application_sdk.app.base.workflow.patched", return_value=False)
         )
+        # The generated _run and the gate glue it calls each log through
+        # their own module's binding of _safe_log.
+        stack.enter_context(
+            mock.patch("application_sdk.execution._temporal.app_workflow._safe_log")
+        )
         stack.enter_context(mock.patch("application_sdk.app.base._safe_log"))
         stack.enter_context(
             mock.patch(
-                "application_sdk.app.base._safe_now",
+                "application_sdk.execution._temporal.app_workflow._safe_now",
                 return_value=datetime(2025, 1, 1, tzinfo=UTC),
             )
         )
-        stack.enter_context(mock.patch("application_sdk.app.base._wrap_instance_tasks"))
+        stack.enter_context(
+            mock.patch(
+                "application_sdk.execution._temporal.app_workflow._wrap_instance_tasks"
+            )
+        )
         return stack
 
     async def test_run_wraps_raw_exceptions_in_application_error(self) -> None:
@@ -1510,10 +1525,10 @@ class TestGenerateWorkflowClass:
                 return_value=mock.MagicMock(correlation_id="corr"),
             ),
         ):
-            from application_sdk.app import base as _base
+            from application_sdk.execution._temporal import app_workflow
 
             await wf_cls.run(wf_self, _BLDXInput())
-            wrap_mock = _base._wrap_instance_tasks
+            wrap_mock = app_workflow._wrap_instance_tasks
             wrap_mock.assert_not_called()
 
         assert context_data["correlation_id"] == "corr"
@@ -1687,14 +1702,17 @@ class TestGenerateWorkflowClass:
         )
         with (
             self._patched_workflow_layer(info_mock),
-            mock.patch("application_sdk.app.base._safe_log", safe_log_mock),
+            mock.patch(
+                "application_sdk.execution._temporal.app_workflow._safe_log",
+                safe_log_mock,
+            ),
             mock.patch.object(BlockedApp, "on_complete", new_callable=mock.AsyncMock),
             mock.patch(
                 "application_sdk.observability.correlation.get_correlation_context",
                 return_value=None,
             ),
             mock.patch(
-                "application_sdk.app.base._run_preflight_gate",
+                "application_sdk.execution._temporal.app_workflow._run_preflight_gate",
                 side_effect=preflight_error,
             ),
             pytest.raises(ApplicationError),
@@ -1794,7 +1812,8 @@ class TestGenerateWorkflowClass:
                 return_value=None,
             ),
             mock.patch(
-                "application_sdk.app.base._run_preflight_gate", side_effect=block
+                "application_sdk.execution._temporal.app_workflow._run_preflight_gate",
+                side_effect=block,
             ),
             pytest.raises(ApplicationError) as excinfo,
         ):
@@ -1838,7 +1857,7 @@ class TestGenerateWorkflowClass:
                 return_value=None,
             ),
             mock.patch(
-                "application_sdk.app.base._run_preflight_gate",
+                "application_sdk.execution._temporal.app_workflow._run_preflight_gate",
                 mock.AsyncMock(return_value=None),
             ),
             mock.patch.object(GatedApp, "run", side_effect=failure),
@@ -1911,7 +1930,10 @@ class TestGenerateWorkflowClass:
                 "application_sdk.observability.correlation.get_correlation_context",
                 return_value=None,
             ),
-            mock.patch("application_sdk.app.base._run_preflight_gate", gate),
+            mock.patch(
+                "application_sdk.execution._temporal.app_workflow._run_preflight_gate",
+                gate,
+            ),
         ):
             out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
@@ -2073,7 +2095,9 @@ class TestWorkflowInteractionRelay:
             )
         )
 
-        with mock.patch("application_sdk.app.base._safe_log") as log:
+        with mock.patch(
+            "application_sdk.execution._temporal.app_workflow._safe_log"
+        ) as log:
             await wf_cls.take_ref(wf_inst, payload)
 
         assert seen[0].store is StoreTarget.DEPLOYMENT
@@ -2342,7 +2366,7 @@ class TestWorkflowInteractionRelay:
                 "application_sdk.app.base.workflow.patched", return_value=True
             ) as patched,
             mock.patch(
-                "application_sdk.app.base._safe_now",
+                "application_sdk.execution._temporal.app_workflow._safe_now",
                 return_value=datetime(2025, 1, 1, tzinfo=UTC),
             ),
         ):

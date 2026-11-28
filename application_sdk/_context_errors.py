@@ -42,6 +42,21 @@ class SecretStoreNotConfiguredError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class UpstreamObjectStoreNotConfiguredError(PreconditionError):
+    """ENABLE_ATLAN_UPLOAD is on, but the upstream object store did not resolve."""
+
+    code: ClassVar[str] = "PRECONDITION_UPSTREAM_OBJECT_STORE_NOT_CONFIGURED"
+    message: str = (
+        "ENABLE_ATLAN_UPLOAD is true but no upstream object store resolved. "
+        "Falling back to the deployment store would report success while the "
+        "artifacts never reach Atlan's bucket. Check the Dapr component named "
+        "by UPSTREAM_OBJECT_STORE_NAME and the secrets it references."
+    )
+    resource: str | None = "upstream_object_store"
+    expected_state: str | None = "configured"
+
+
+@dataclass(kw_only=True)
 class AppContextError(_LegacyErrorCodeMixin, _InternalError):
     """Raised when App or task context is accessed outside of valid execution scope.
 

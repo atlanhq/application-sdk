@@ -3,7 +3,8 @@
 Determinism rules apply **only** to code that runs in the Temporal *workflow replay
 context* — never to ``@task`` activity bodies (which run once and may do I/O,
 sleep, randomness).  The SDK draws this line statically and unambiguously on every
-``App`` subclass (``application_sdk/app/base.py``):
+``App`` subclass (``application_sdk/execution/_temporal/app_workflow.py`` generates
+the workflow classes):
 
 * ``async def run`` → becomes ``@workflow.run`` (workflow context).
 * ``@entrypoint`` methods → one Temporal workflow each (workflow context).

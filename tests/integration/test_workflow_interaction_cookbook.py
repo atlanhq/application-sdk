@@ -20,9 +20,14 @@ from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from application_sdk.app import query, signal, sleep, update, wait_condition
-from application_sdk.app.base import App, generate_workflow_class
+from application_sdk.app.base import (
+    App,
+)
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.contracts.base import Input, Output
+from application_sdk.execution._temporal.app_workflow import (
+    generate_workflow_class,
+)
 from application_sdk.execution.sandbox import SandboxConfig
 
 pytestmark = pytest.mark.integration

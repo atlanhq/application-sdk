@@ -159,7 +159,7 @@ PREFLIGHT_SURFACE_KEY = "preflight_surface"
 _CONSOLE_FLUSH_TIMEOUT_SECONDS = 1.0
 
 # Transformed-asset validation outcome-event key, shared with the emitter
-# (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
+# (``application_sdk.storage._app_tasks._warn_on_invalid_transformed_assets``) so a rename
 # is a single edit that keeps the emit call-site and the allowlist below in sync.
 # The compact per-failure matrix lands as one JSON string LogAttributes value in
 # ClickHouse (JSONExtract-able); the scalar counts sit alongside it as their own

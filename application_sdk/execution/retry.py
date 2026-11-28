@@ -158,7 +158,7 @@ def resolve_activity_time_bounds(
     """Resolve one task's ``(start_to_close, schedule_to_close)`` pair.
 
     The single reader of ``TaskMetadata.schedule_to_close_seconds``, called by
-    the dispatch path (``app.base._create_task_activity_wrapper``) to build
+    the dispatch path (``execution._temporal.app_workflow._create_task_activity_wrapper``) to build
     the pair it hands Temporal.
 
     Two resolutions, and neither is a guess:

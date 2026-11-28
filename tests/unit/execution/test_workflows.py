@@ -229,18 +229,24 @@ class TestGenerateWorkflowClassBehaviour:
 
     def setup_method(self) -> None:
         # Clear the cache so tests are independent
-        from application_sdk.app.base import _workflow_class_cache
+        from application_sdk.execution._temporal.app_workflow import (
+            _workflow_class_cache,
+        )
 
         _workflow_class_cache.clear()
 
     def teardown_method(self) -> None:
-        from application_sdk.app.base import _workflow_class_cache
+        from application_sdk.execution._temporal.app_workflow import (
+            _workflow_class_cache,
+        )
 
         _workflow_class_cache.clear()
 
     def test_generate_is_idempotent(self) -> None:
         """Calling generate_workflow_class twice returns the same class object."""
-        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class IdempotentApp(App):
             async def run(self, input: _WfInput) -> _WfOutput:
@@ -254,7 +260,9 @@ class TestGenerateWorkflowClassBehaviour:
 
     def test_generated_class_has_temporal_workflow_definition(self) -> None:
         """Generated class carries Temporal's __temporal_workflow_definition."""
-        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class WfDefnApp(App):
             async def run(self, input: _WfInput) -> _WfOutput:
@@ -269,7 +277,9 @@ class TestGenerateWorkflowClassBehaviour:
         """Generated class is injected into the app's source module namespace."""
         import sys
 
-        from application_sdk.app.base import generate_workflow_class
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class ModuleInjectedApp(App):
             async def run(self, input: _WfInput) -> _WfOutput:
@@ -284,8 +294,10 @@ class TestGenerateWorkflowClassBehaviour:
 
     def test_different_entry_points_produce_different_classes(self) -> None:
         """Each entry point on a multi-EP app gets its own distinct class."""
-        from application_sdk.app.base import generate_workflow_class
         from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.execution._temporal.app_workflow import (
+            generate_workflow_class,
+        )
 
         class TwoEpApp(App):
             @entrypoint

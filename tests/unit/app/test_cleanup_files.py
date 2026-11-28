@@ -20,6 +20,8 @@ from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution._temporal import run_scope
+from application_sdk.storage import _app_tasks as app_tasks
 from tests.unit.private_stdlib import private_stdlib
 
 
@@ -51,7 +53,10 @@ class TestCleanupFiles:
     @pytest.fixture(autouse=True)
     def _in_a_run(self) -> Iterator[None]:
         # cleanup_files is a task: it reads the run it belongs to.
-        with mock.patch.object(app_base, "_current_run_key", return_value=_RUN):
+        with (
+            mock.patch.object(app_base, "_current_run_key", return_value=_RUN),
+            mock.patch.object(app_tasks, "_current_run_key", return_value=_RUN),
+        ):
             yield
 
     def setup_method(self) -> None:
@@ -260,7 +265,7 @@ class TestCleanupFiles:
             side_effect=_tracked_refs_only({ref}),
         ):
             with (
-                private_stdlib("application_sdk.app.base", "os") as local_os,
+                private_stdlib("application_sdk.storage._app_tasks", "os") as local_os,
                 mock.patch.object(
                     local_os, "remove", side_effect=OSError("permission denied")
                 ),
@@ -309,7 +314,7 @@ class TestCleanupFiles:
             target.write_text("data")
             expected_func = os.remove
 
-        real_run_in_thread = app_base.run_in_thread
+        real_run_in_thread = app_tasks.run_in_thread
         calls: list[tuple[Any, int]] = []
 
         async def recording_run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
@@ -333,7 +338,7 @@ class TestCleanupFiles:
             "application_sdk.app.base.TaskStateAccessor.get",
             side_effect=_tracked_refs_only(tracked_refs),
         ):
-            with mock.patch.object(app_base, "run_in_thread", recording_run_in_thread):
+            with mock.patch.object(app_tasks, "run_in_thread", recording_run_in_thread):
                 result = await app.cleanup_files(CleanupInput(extra_paths=extra_paths))
 
         assert not target.exists()
@@ -353,6 +358,8 @@ def _in_run(run: tuple[str, str] = _RUN) -> Iterator[None]:
     """Act as a task of *run*: both the run key and the state accessor's id."""
     with (
         mock.patch.object(app_base, "_current_run_key", return_value=run),
+        mock.patch.object(run_scope, "_current_run_key", return_value=run),
+        mock.patch.object(app_tasks, "_current_run_key", return_value=run),
         mock.patch.object(app_base, "_get_execution_id_from_task", return_value=run[0]),
     ):
         yield
@@ -370,14 +377,14 @@ class TestCleanupCredentialFiles:
     def setup_method(self) -> None:
         with _app_state_lock:
             _app_state.clear()
-        with app_base._credential_dirs_lock:
-            app_base._credential_dirs_by_run.clear()
+        with run_scope._credential_dirs_lock:
+            run_scope._credential_dirs_by_run.clear()
 
     def teardown_method(self) -> None:
         with _app_state_lock:
             _app_state.clear()
-        with app_base._credential_dirs_lock:
-            app_base._credential_dirs_by_run.clear()
+        with run_scope._credential_dirs_lock:
+            run_scope._credential_dirs_by_run.clear()
 
     async def test_same_named_files_for_two_connections_are_private_and_cleaned_up(
         self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
@@ -423,27 +430,27 @@ class TestCleanupCredentialFiles:
             call_dir = os.path.dirname(path)
             assert not os.path.exists(call_dir)
             assert result.path_results[call_dir] is True
-        assert _RUN not in app_base._credential_dirs_by_run
+        assert _RUN not in run_scope._credential_dirs_by_run
 
     async def test_failed_removal_stays_tracked(self, tmp_path: Any) -> None:
         cred_dir = tmp_path / "cred-x"
         cred_dir.mkdir()
         (cred_dir / "keytab.keytab").write_bytes(b"secret")
-        with app_base._credential_dirs_lock:
-            app_base._credential_dirs_by_run[_RUN] = {str(cred_dir)}
+        with run_scope._credential_dirs_lock:
+            run_scope._credential_dirs_by_run[_RUN] = {str(cred_dir)}
 
-        with _in_run(), private_stdlib(app_base, "shutil") as local_shutil:
+        with _in_run(), private_stdlib(run_scope, "shutil") as local_shutil:
             local_shutil.rmtree = mock.Mock(side_effect=PermissionError("denied"))
             result = await _CleanupApp().cleanup_files(
                 CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
             )
 
         assert result.path_results[str(cred_dir)] is False
-        assert app_base._credential_dirs_by_run[_RUN] == {str(cred_dir)}
+        assert run_scope._credential_dirs_by_run[_RUN] == {str(cred_dir)}
 
     def test_tracking_outside_a_task_raises(self) -> None:
         from application_sdk._context_errors import AppContextError
-        from application_sdk.app.base import _track_credential_dir
+        from application_sdk.execution._temporal.run_scope import _track_credential_dir
 
         with pytest.raises(AppContextError):
             _track_credential_dir("/somewhere")
@@ -481,4 +488,4 @@ class TestCleanupCredentialFiles:
                 CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
             )
         assert os.path.isdir(other)
-        assert app_base._credential_dirs_by_run[("wf-other", "run-other")] == {other}
+        assert run_scope._credential_dirs_by_run[("wf-other", "run-other")] == {other}
