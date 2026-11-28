@@ -82,6 +82,7 @@ from application_sdk.handler.request_contract import (
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
     _http_error_boundary,
+    _install_typed_route_error_handler,
     _wrap_response,
     entrypoint_module_segment,
 )
@@ -515,6 +516,7 @@ def credential_gaps(
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
     """Register the configmap, manifest, input-contract and validate routes on *app*."""
+    _install_typed_route_error_handler(app)
 
     def _default_entrypoint(log: SdkLogger, context: str) -> str | None:
         """The default entry point, or ``None`` (logged) when there is none."""

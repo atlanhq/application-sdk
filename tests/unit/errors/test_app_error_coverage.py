@@ -49,6 +49,12 @@ _ALLOWED_ROOTS: dict[str, str] = {
         "an internal signal that makes the HTTP transport replay a 500; it "
         "never escapes"
     ),
+    "application_sdk.handler.routes._TypedRouteError": (
+        "the HTTPException the handler route boundary answers a typed AppError "
+        "with; it carries that AppError's FailureDetails, is answered by the "
+        "handler the same route registration installs, and never escapes the "
+        "app"
+    ),
 }
 
 _OUT_OF_SCOPE_PACKAGE = "application_sdk.testing"

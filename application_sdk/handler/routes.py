@@ -185,6 +185,63 @@ def _route_failure(
     return 500
 
 
+class _TypedRouteError(HTTPException):
+    """An ``HTTPException`` for a typed ``AppError`` that carries the whole body.
+
+    ``detail`` is the message older callers read. ``body`` adds ``message``
+    (the key the platform's workflow-save path reads) and ``error``, the
+    redacted ``FailureDetails`` -- category, code, audience, retryable and
+    suggested action -- the preflight route already sends. An app with no
+    :func:`_install_typed_route_error_handler` answers ``{"detail": ...}`` as
+    before, because this is still an ``HTTPException``.
+    """
+
+    def __init__(self, status_code: int, body: dict[str, Any]) -> None:
+        super().__init__(status_code=status_code, detail=body["detail"])
+        self.body = body
+
+
+def _typed_route_error(exc: AppError, status: int, detail: str) -> _TypedRouteError:
+    """The :class:`_TypedRouteError` a route answers *exc* with.
+
+    ``cause_repr`` is dropped, as on the preflight route: after redaction it
+    still names the caller's hosts and accounts. Every other string,
+    evidence values included, goes through :func:`_redacted_error`.
+    """
+    failure = exc.to_failure_details().model_dump(
+        mode="json", exclude_none=True, exclude={"cause_repr"}
+    )
+    return _TypedRouteError(
+        status,
+        {
+            "detail": detail,
+            "message": redact_secrets(exc.message),
+            "error": _redacted_error(failure),
+        },
+    )
+
+
+def _install_typed_route_error_handler(app: FastAPI) -> None:
+    """Answer a :class:`_TypedRouteError` on *app* with its full body.
+
+    Registered by every function that mounts a route using
+    :func:`_http_error_boundary`; registering it twice is harmless.
+    """
+
+    async def _handle_typed_route_error(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        if not isinstance(exc, _TypedRouteError):  # registered for that class only
+            return JSONResponse(
+                status_code=500, content={"detail": "Internal server error"}
+            )
+        return JSONResponse(
+            status_code=exc.status_code, content=exc.body, headers=exc.headers
+        )
+
+    app.add_exception_handler(_TypedRouteError, _handle_typed_route_error)
+
+
 @contextmanager
 def _http_error_boundary(
     what: str,
@@ -195,9 +252,11 @@ def _http_error_boundary(
 ) -> Iterator[None]:
     """Turn a raise inside the block into a sanitized ``HTTPException``.
 
-    Status from :func:`_route_failure`. The detail is the redacted error message
-    for an ``AppError`` and a fixed ``"Internal server error"`` for anything
-    else, so an unexpected exception's text never reaches the caller. An
+    Status from :func:`_route_failure`. An ``AppError`` answers
+    ``{"detail", "message", "error"}`` (a :class:`_TypedRouteError`): the
+    redacted message and its redacted ``FailureDetails``. Anything else answers
+    a fixed ``{"detail": "Internal server error"}``, so an unexpected
+    exception's text never reaches the caller. An
     ``HTTPException`` raised inside the block is already client-facing and
     passes through unchanged.
 
@@ -220,12 +279,14 @@ def _http_error_boundary(
             honor_handler_error_status=honor_handler_error_status,
         )
         if not isinstance(e, AppError):
-            detail = "Internal server error"
-        elif honor_handler_error_status and isinstance(e, HandlerError):
+            raise HTTPException(
+                status_code=status, detail="Internal server error"
+            ) from None
+        if honor_handler_error_status and isinstance(e, HandlerError):
             detail = redact_secrets(str(e))
         else:
             detail = redact_secrets(e.message)
-        raise HTTPException(status_code=status, detail=detail) from None
+        raise _typed_route_error(e, status, detail) from None
 
 
 def _normalize_preflight_request(
@@ -580,6 +641,7 @@ def register_handler_routes(
         warmup_probe_timeout, _warmup_ceiling
     )
     observer = observer or LoggingPreflightObserver(app_name)
+    _install_typed_route_error_handler(app)
 
     @app.exception_handler(RequestContractError)
     async def _handle_request_contract_error(
