@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.39.3] - 2026-11-27
+
+### Bug fixes
+
+- make CLAUDE.md the one agent guide with a generated AGENTS.md pointer, state each command and prerequisite once [FND-4273] (#5168) ([898c3a8](https://github.com/atlanhq/application-sdk/commit/898c3a8))
+
+### Other changes
+
+- refactor(structure): split storage/ops.py, templates/sql_app.py and testing/e2e/base.py under 1,200 lines [FND-4267] (#5190) ([081aa3a](https://github.com/atlanhq/application-sdk/commit/081aa3a))
+
 ## [0.39.2] - 2026-11-26
 
 ### Bug fixes
