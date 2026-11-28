@@ -378,24 +378,32 @@ class TestWiring:
             # upload-artifact drop their common prefix (FND-5015).
             assert step.path == f"${{{{ runner.temp }}}}/{STAGING_DIR}", step.name
 
-    def test_the_branch_scope_is_every_renovate_branch_but_lock_maintenance(self):
+    def test_the_branch_scope_is_pyatlan_and_vulnerability_branches(self):
+        # Every other Renovate branch belongs to renovate-lock-cooldown.yaml
+        # (FND-376, FND-5472), which regenerates the table after its bound.
         assert _push_filter(WORKFLOW)["branches"] == [
-            "renovate/**",
-            "!renovate/lock-file-maintenance",
+            "renovate/pyatlan",
+            "renovate/major-pyatlan",
+            "renovate/**-vulnerability",
         ]
-
-    def test_the_excluded_branch_is_the_one_the_cooldown_lane_owns(self):
-        # Both lanes regenerate the table; on one branch they would race.
-        owned = _push_filter(COOLDOWN_WORKFLOW)["branches"]
-        branches = _push_filter(WORKFLOW)["branches"]
-        assert owned and all(not _triggers(b, branches) for b in owned)
 
     @pytest.mark.parametrize(
         "branch",
-        ["renovate/pyatlan", "renovate/major-pyatlan", "renovate/loguru-0.x"],
+        [
+            "renovate/pyatlan",
+            "renovate/major-pyatlan",
+            "renovate/pypi-urllib3-vulnerability",
+            "renovate/lock-file-maintenance",
+            "renovate/loguru-0.x",
+            "renovate/non-critical-python-dependencies",
+        ],
     )
-    def test_dependency_branches_trigger_it(self, branch: str):
-        assert _triggers(branch, _push_filter(WORKFLOW)["branches"])
+    def test_exactly_one_lane_owns_each_branch(self, branch: str):
+        # Both lanes regenerate the table; on one branch they would race, and
+        # a branch neither covers would leave a pyatlan move unregenerated.
+        ours = _triggers(branch, _push_filter(WORKFLOW)["branches"])
+        cooldown = _triggers(branch, _push_filter(COOLDOWN_WORKFLOW)["branches"])
+        assert ours != cooldown, branch
 
     def test_the_pyatlan_branch_renovate_json_groups_onto_is_in_scope(self):
         config = json.loads((REPO_ROOT / "renovate.json").read_text())

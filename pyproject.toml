@@ -167,7 +167,11 @@ distributed_lock = [
     "redis[hiredis]>=5.2.0,<9.0.0",
 ]
 mcp = [
-    "fastmcp>=3.2.0,<4.0.0",
+    # The <5 cap is a review gate, not a pin: a fastmcp major changes what apps
+    # using [mcp] serve, so Renovate raises it as a reviewed major PR. That PR
+    # can pass checks/dep-cooldown because renovate-lock-cooldown.yaml bounds
+    # its relock (FND-5472); before that, the 3.x cap sat 83 days unliftable.
+    "fastmcp>=4.2.3,<5.0.0",
     # Published CVE floor: arrives via fastmcp -> pydantic[email] ->
     # email-validator. Not core: the SDK never imports it, and only this extra
     # installs it.

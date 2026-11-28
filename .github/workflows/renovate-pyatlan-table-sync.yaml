@@ -16,19 +16,22 @@ name: Regenerate the relationship table on a Renovate pyatlan move
 # author, and the table path is in this repo's extra_dep_file_pattern in
 # renovate-auto-approve.yml, so the approval gate accepts the regenerated table.
 #
-# Scope: every Renovate branch, majors included, because any bump that relocks
-# the root can move pyatlan with it. Except renovate/lock-file-maintenance, which
-# renovate-lock-cooldown.yaml owns: it regenerates the table there after its
-# bound, and two lanes pushing to one branch would race. On a branch where
-# pyatlan did not move the script commits nothing.
+# Scope: the pyatlan branches and Renovate's vulnerability-alert branches.
+# Every other Renovate branch that relocks uv.lock belongs to
+# renovate-lock-cooldown.yaml (the lock refresh since FND-376, range bumps since
+# FND-5472), which regenerates the table itself after its bound whenever the
+# bounded lock moved pyatlan. Two lanes pushing to one branch would race, so
+# the two branch lists are disjoint (a test pins it). On a branch where pyatlan
+# did not move the script commits nothing.
 #
 # All branching logic lives in the tested .github/scripts/renovate_pyatlan_table_sync.py.
 
 on:
   push:
     branches:
-      - "renovate/**"
-      - "!renovate/lock-file-maintenance"
+      - "renovate/pyatlan"
+      - "renovate/major-pyatlan"
+      - "renovate/**-vulnerability"
     # Only a uv.lock change can move the locked pyatlan. Our own push touches
     # only packages/conformance/**, so it never matches.
     paths:

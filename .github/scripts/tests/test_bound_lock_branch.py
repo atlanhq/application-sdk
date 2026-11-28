@@ -9,6 +9,7 @@ an unbounded lock.
 
 from __future__ import annotations
 
+import fnmatch
 import shutil
 import subprocess
 import tomllib
@@ -105,15 +106,77 @@ class TestWorkflowGuards:
         assert self.job["with"]["script"] == ".github/scripts/bound_lock_branch.py"
         assert self.job["with"]["generate-args"] == "--window P3D"
 
-    def test_the_lane_is_scoped_to_the_lock_refresh_branch(self):
-        # Widening this to `renovate/**` would put the bound on the single-package
-        # lanes, where a deliberately chosen first-party version has no business
-        # being delayed.
+    def _route(self, ref: str) -> list[str]:
+        """The jobs whose `if:` admits a push to ``ref``, if its branch triggers."""
         workflow = yaml.safe_load(WORKFLOW.read_text())
         # YAML 1.1 resolves a bare `on` to the boolean True, so that — not the
         # string — is the key the loader produces for a workflow's trigger block.
-        triggers = workflow[True]
-        assert triggers["push"]["branches"] == ["renovate/lock-file-maintenance"]
+        if not _triggers(ref, workflow[True]["push"]["branches"]):
+            return []
+        jobs: list[str] = []
+        for job_id, job in workflow["jobs"].items():
+            condition = job["if"]
+            target = f"refs/heads/{ref}"
+            if condition == f"github.ref == '{target}'" or (
+                condition.startswith("github.ref != ")
+                and condition != f"github.ref != '{target}'"
+            ):
+                jobs.append(job_id)
+        return jobs
+
+    def test_the_lock_refresh_runs_the_upgrading_bound_alone(self):
+        assert self._route("renovate/lock-file-maintenance") == ["bound"]
+
+    @pytest.mark.parametrize(
+        "branch",
+        [
+            "renovate/fastmcp-4.x",
+            "renovate/non-critical-python-dependencies",
+            "renovate/ruff",
+        ],
+    )
+    def test_range_bump_branches_run_the_no_upgrade_bound_alone(self, branch):
+        # FND-5472: #3656 (renovate/fastmcp-4.x) failed dep-cooldown for 83
+        # days because nothing bounded a range-bump relock.
+        assert self._route(branch) == ["bound-bump"]
+
+    @pytest.mark.parametrize(
+        "branch",
+        [
+            # First-party, no window, and the table-sync lane's branches.
+            "renovate/pyatlan",
+            "renovate/major-pyatlan",
+            # Security updates bypass the cooldown.
+            "renovate/pypi-urllib3-vulnerability",
+        ],
+    )
+    def test_first_party_and_security_branches_are_never_bounded(self, branch):
+        assert self._route(branch) == []
+
+    def test_the_bump_lane_runs_this_driver_without_upgrade_and_the_same_window(self):
+        jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+        bump, refresh = jobs["bound-bump"], jobs["bound"]
+        assert bump["uses"] == refresh["uses"]
+        assert bump["with"]["script"] == refresh["with"]["script"]
+        assert bump["with"]["generate-args"] == "--window P3D --no-upgrade"
+        # Same subject: the driver writes one message, so the re-entrancy
+        # guard must match it on both lanes.
+        assert (
+            bump["with"]["own-commit-subject"] == refresh["with"]["own-commit-subject"]
+        )
+        assert bump["with"]["artifact-name"] != refresh["with"]["artifact-name"]
+        assert bump["permissions"] == refresh["permissions"]
+
+
+def _triggers(branch: str, branches: list[str]) -> bool:
+    """GitHub's branch filter: the last matching pattern wins, `!` negates."""
+    hit = False
+    for pattern in branches:
+        negated = pattern.startswith("!")
+        glob = pattern.removeprefix("!").replace("**", "*")
+        if fnmatch.fnmatchcase(branch, glob):
+            hit = not negated
+    return hit
 
 
 class TestProjects:
@@ -177,6 +240,39 @@ class TestBoundProject:
             "a",
             "b",
         ]
+
+    def test_no_upgrade_is_passed_to_the_driver(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        calls: list[list[str]] = []
+
+        def record(argv: list[str]) -> int:
+            calls.append(argv)
+            return 0
+
+        monkeypatch.setattr(orchestrator.bounded, "main", record)
+        (project,) = orchestrator.PROJECTS
+        orchestrator.bound_project(project, "P3D", "origin/main", tmp_path)
+        orchestrator.bound_project(
+            project, "P3D", "origin/main", tmp_path, no_upgrade=True
+        )
+        assert "--no-upgrade" not in calls[0]
+        assert "--no-upgrade" in calls[1]
+
+    def test_main_forwards_no_upgrade(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        seen: list[bool] = []
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            orchestrator,
+            "bound_project",
+            lambda project, window, ref, root, *, no_upgrade=False: (
+                seen.append(no_upgrade) or 1
+            ),
+        )
+        orchestrator.main(
+            ["--window", "P3D", "--baseline-ref", "origin/main", "--no-upgrade"]
+        )
+        assert seen == [True]
 
 
 class TestMain:

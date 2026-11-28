@@ -85,9 +85,9 @@ class TestToolDiscovery:
                 t for t in await client.list_tools() if t.name == "fetch_schemas"
             )
 
-        assert set(tool.inputSchema["properties"]) == {"input"}
-        assert tool.inputSchema["required"] == ["input"]
-        assert "self" not in json.dumps(tool.inputSchema)
+        assert set(tool.input_schema["properties"]) == {"input"}
+        assert tool.input_schema["required"] == ["input"]
+        assert "self" not in json.dumps(tool.input_schema)
 
     async def test_name_and_description_from_decorator(
         self, mcp_server: MCPServer
