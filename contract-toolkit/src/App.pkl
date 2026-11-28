@@ -275,9 +275,13 @@ atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 /// Whether to emit `atlan.yaml` in the output.
 emitAtlanYaml: Boolean = true
 
-/// @Deprecated — use the `entrypoints` listing with `packageId` set on those that should
-/// render as marketplace cards, rather than toggling the entire block.
-/// Will be removed in the next minor version.
+/// @Deprecated — removed in 1.0.0. Replace `emitEntrypoints = false` with
+/// `atlanYamlOverrides { ["entrypoints"] = null }` (merged into an existing
+/// `atlanYamlOverrides` block if there is one). It generates every file exactly as
+/// `emitEntrypoints = false` does; `tests/emit_entrypoints_replacement_test.pkl`
+/// pins that. `Entrypoint.packageId` and `marketplaceCard = false` are not
+/// replacements for `false`: a non-system app with no `entrypoints` listing always
+/// renders a synthesized entrypoint, and only the override removes the block.
 ///
 /// When `true` (default), all entrypoints are emitted into the `entrypoints:` block
 /// of `atlan.yaml`. When `false`, the block is suppressed entirely.
