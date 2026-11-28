@@ -971,6 +971,7 @@ class HttpFakeSourceFactory:
         warn_unmatched: bool = True,
         name: str = "fake-source",
         connection_timeout: float = _CONNECTION_TIMEOUT_SECONDS,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> HttpFakeSource:
         """Build and start one fake; the parameters are :class:`HttpFakeSource`'s."""
         source = HttpFakeSource(
@@ -981,6 +982,7 @@ class HttpFakeSourceFactory:
             warn_unmatched=warn_unmatched,
             name=name,
             connection_timeout=connection_timeout,
+            ssl_context=ssl_context,
         )
         self._sources.append(source)
         try:
